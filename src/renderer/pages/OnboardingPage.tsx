@@ -738,7 +738,7 @@ export default function OnboardingPage() {
           <span className="flex size-10 items-center justify-center rounded-full bg-card transition-colors group-hover:bg-secondary" aria-hidden="true"><ArrowLeft className="h-4 w-4" /></span> Back to dashboard
         </Link>
       )}
-      <div className="grid items-start gap-2 @5xl:grid-cols-[1fr_auto]">
+      <div className={cn("grid items-start gap-2", step < 0 ? "@5xl:grid-cols-[1fr_auto]" : "@3xl:grid-cols-[1fr_auto]")}>
       <div className="contents">
         <h1 className="whitespace-nowrap text-3xl font-medium tracking-tight text-gray-900 @5xl:text-4xl">Set up TenuVault</h1>
 

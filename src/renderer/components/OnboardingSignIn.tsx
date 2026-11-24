@@ -15,10 +15,10 @@ export type MethodAvailability = Record<"graphCli" | "tenuvaultApp", boolean | n
 export function OnboardingSignIn({ available, choice, onChoose }: { available: MethodAvailability; choice: PermissionChoice; onChoose: (method: SignInMethod) => void }) {
   const permissions = [
     { label: SIGN_IN_METHODS.ownApp, names: graphPermissions(choice, "delegated") },
-    ...(available.tenuvaultApp === true ? [{
+    {
       label: SIGN_IN_METHODS.tenuvaultApp,
       names: [...new Set(tenantPermissionPacks(choice, { azure: false, audit: false }).flatMap(pack => pack.scopes))],
-    }] : []),
+    },
   ]
   return <section className="space-y-4" aria-labelledby="setup-step--2">
     <h2 id="setup-step--2" tabIndex={-1} className="text-2xl font-medium tracking-tight text-gray-900 outline-none">How do you want to connect?</h2>
