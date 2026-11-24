@@ -858,6 +858,8 @@ export default function OnboardingPage() {
       </li>)}</ul>
     </div>}
   </div>
+  const resumeMessage = resumed && !addError && !publicError && !setupError &&
+    <p role="status" className="text-center text-xs text-muted-foreground">Welcome back. Continue where you left off.</p>
 
   return (
     <div className="flex min-h-[calc(100vh-56px)] flex-col px-4 py-6 sm:px-6">
@@ -868,7 +870,9 @@ export default function OnboardingPage() {
           <ol className="flex justify-center gap-2.5" aria-label="Setup steps">
             {STEPS.map((title, i) => (
               <li key={title} aria-current={i === stageIndex ? "step" : undefined}
-                className={cn("size-2 rounded-full", i === stageIndex ? "bg-foreground ring-1 ring-foreground ring-offset-2 ring-offset-background" : stageComplete[i] ? "bg-muted-foreground" : "bg-border")}>
+                className={cn("size-2 rounded-full",
+                  stageWarning[i] ? "bg-amber-600 dark:bg-amber-400" : i === stageIndex ? "bg-foreground" : stageComplete[i] ? "bg-muted-foreground" : "bg-border",
+                  i === stageIndex && "ring-1 ring-foreground ring-offset-2 ring-offset-background")}>
                 <span className="sr-only">{title}{stageWarning[i] ? " (needs attention)" : stageComplete[i] ? " (done)" : ""}</span>
               </li>
             ))}
@@ -900,7 +904,6 @@ export default function OnboardingPage() {
               </button>
             </div>
           )}
-          {resumed && step !== 3 && <p role="status" className="mb-3 text-center text-xs text-muted-foreground">Welcome back. Continue where you left off.</p>}
           {step === -2 && <div className="space-y-4"><OnboardingSignIn available={available} choice={services} onChoose={chooseMethod} />{openSetupAction}</div>}
           {step === -1 && <OnboardingServices choice={services} onChange={choice => { reconfirm.current = true; setServices(choice) }} onContinue={() => {
             reconfirm.current = false
@@ -1060,6 +1063,7 @@ export default function OnboardingPage() {
                     <button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={checkAgain}>Check again</button>
                   </>}
                 </div>
+                {!nothingReadable && !permissionResult?.error && resumeMessage}
                 {nothingReadable && method === "graphCli" && <StartNowAccessHelp />}
                 {readable.length > 0 && unavailable.length > 0 && <p className="text-sm text-gray-600">{needsAccessText(unavailable.map(service => service.label))} You can add it later from Services.</p>}
                 {unknownCoverage && <p className="text-sm text-gray-600">Some backup access could not be checked. You can continue and check access later.</p>}
@@ -1075,17 +1079,17 @@ export default function OnboardingPage() {
                     {!nothingReadable && method === "graphCli" && <StartNowAccessHelp />}
                     {!nothingReadable && method === "tenuvaultApp" && <p>Ask a Microsoft administrator to approve backup access, then check again.</p>}
                     {!nothingReadable && method === "ownApp" && <p>Ask your Microsoft administrator to add access to this app registration.</p>}
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-x-4 gap-y-2">
                       {!nothingReadable && method === "graphCli" && <>
-                        <Button variant="outline" size="sm" onClick={() => void chooseMethod("ownApp")}>Use your own app registration</Button>
-                        {available.tenuvaultApp === true && <Button variant="outline" size="sm" onClick={() => void chooseMethod("tenuvaultApp")}>Use the TenuVault app</Button>}
+                        <button type="button" className={onboardingLink} onClick={() => void chooseMethod("ownApp")}>Use your own app registration</button>
+                        {available.tenuvaultApp === true && <button type="button" className={onboardingLink} onClick={() => void chooseMethod("tenuvaultApp")}>Use the TenuVault app</button>}
                       </>}
-                      {!nothingReadable && method === "ownApp" && <Button variant="outline" size="sm" onClick={() => void copyAdminInstructions()}>Copy instructions for my admin</Button>}
+                      {!nothingReadable && method === "ownApp" && <button type="button" className={onboardingLink} onClick={() => void copyAdminInstructions()}>Copy instructions for my admin</button>}
                       {method === "tenuvaultApp" && <>
-                        {!nothingReadable && <Button variant="outline" size="sm" disabled={Boolean(consentBusy)} onClick={() => void adminConsent("open")}>Open admin consent</Button>}
-                        <Button variant="outline" size="sm" disabled={Boolean(consentBusy)} onClick={() => void adminConsent("handoff")}>Copy instructions for my admin</Button>
+                        {!nothingReadable && <button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("open")}>Open admin consent</button>}
+                        <button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("handoff")}>Copy instructions for my admin</button>
                       </>}
-                      {!nothingReadable && <Button variant="outline" size="sm" disabled={Boolean(consentBusy)} onClick={checkAgain}>Check again</Button>}
+                      {!nothingReadable && <button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={checkAgain}>Check again</button>}
                     </div>
                     {missing.length > 0 && <details>
                       <summary className="cursor-pointer font-medium">Show permission names</summary>
@@ -1127,6 +1131,7 @@ export default function OnboardingPage() {
                   {creating ? "Checking the license..." : "Start first backup"}
                 </Button>
                 {status?.tenantTrialsEnabled && <p className="text-xs text-muted-foreground">Eligible tenants start with a Pro trial.</p>}
+                {(choice || !storageBlocker) && resumeMessage}
               </div>
               <div className="flex flex-wrap items-start justify-center gap-x-5 gap-y-2">
                 {connectedTenant}
@@ -1231,6 +1236,7 @@ export default function OnboardingPage() {
               </div>}
             </div>
           )}
+          {step < 2 && resumeMessage && <div className="mt-4">{resumeMessage}</div>}
         </div>
         {succeeded && <SetupDiagnosticsCard />}
       </div>

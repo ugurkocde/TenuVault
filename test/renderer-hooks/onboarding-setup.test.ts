@@ -308,6 +308,8 @@ describe("OnboardingPage", () => {
     let container = await render(createElement(OnboardingPage))
     expect(container.textContent).toContain("Where should backups go?")
     expect(container.textContent).toContain("Signed in as admin@contoso.com")
+    const resumeMessage = [...container.querySelectorAll('[role="status"]')].find(item => item.textContent?.includes("Welcome back."))
+    expect(button(container, "Start first backup")!.nextElementSibling).toBe(resumeMessage)
     for (const root of roots.splice(0)) act(() => root.unmount())
 
     state.accounts.mockResolvedValueOnce([])
@@ -1287,6 +1289,7 @@ describe("onboarding service choices", () => {
     state.storageChoice = { kind: "local" }
     const container = await render(createElement(OnboardingPage))
     expect(container.textContent).toContain("Some backup access could not be checked.")
+    expect(container.textContent).not.toContain("Welcome back.")
     await continueToStorage(container)
     await act(async () => button(container, "Start first backup")!.click())
     expect(state.addTenant).toHaveBeenCalledOnce()
@@ -1301,6 +1304,9 @@ describe("onboarding service choices", () => {
     const container = await render(createElement(OnboardingPage))
     expect(container.textContent).toContain("TenuVault can't read any of the services you picked with this sign-in.")
     expect(container.textContent).toContain("Azure CLI commands")
+    expect(container.textContent).not.toContain("Welcome back.")
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toBe("Check (needs attention)")
+    expect(container.querySelector('[aria-current="step"]')?.classList.contains("bg-amber-600")).toBe(true)
     expect(checkAction(container, "Continue")).toBeUndefined()
     expect(checkAction(container, "Copy instructions for my admin")).toBeDefined()
     state.checkPermissions.mockImplementation(fullCoverage)

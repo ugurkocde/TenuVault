@@ -400,9 +400,25 @@ try {
         await showing(prompt)
       }
       if (state === "31-check-permission-names") {
-        await evaluate(`[...document.querySelectorAll("summary")].find(item => item.textContent === "Show permission names")?.parentElement.scrollIntoView({ block: "nearest" })`)
+        await evaluate(`(() => {
+          const details = [...document.querySelectorAll("summary")].find(item => item.textContent === "Show permission names")?.parentElement
+          if (details?.getBoundingClientRect().bottom > innerHeight - 24) {
+            details.scrollIntoView({ block: "end" })
+            window.scrollBy(0, 24)
+          }
+        })()`)
       }
       if (await evaluate(`document.documentElement.scrollWidth > ${width}`)) throw new Error(`Horizontal overflow: ${state}`)
+      if (sidebar && !baseline) {
+        await evaluate("document.fonts.ready.then(() => true)")
+        const truncatedRows = await evaluate(`(() => {
+          const rows = [...document.querySelectorAll('section[aria-label="Services"] [data-nav-row]')]
+          if (!rows.length) throw new Error("No sidebar service rows found")
+          return rows.filter(row => [row, ...row.querySelectorAll("span")].some(element => element.scrollWidth > element.clientWidth))
+            .map(row => row.textContent.trim())
+        })()`)
+        if (truncatedRows.length) throw new Error(`Truncated sidebar service rows: ${truncatedRows.join(", ")}`)
+      }
       const disclosures = [expanded, restore, sidebar, state === "21-own-routes", state === "25-tenuvault-app-permissions", state === "30-own-setup-details"]
       const scrollHeight = await evaluate("document.scrollingElement.scrollHeight")
       if (!baseline && !disclosures.includes(true) && scrollHeight > height + 1) {
