@@ -125,11 +125,11 @@ with, so it would reject every token the service issues from then on. Follow the
 
 Use `npm run build:lab` to compile the lab app in `out-lab`. Use `npm run dist:lab`
 to rebuild and create the unpacked app for the current platform in `dist-lab`.
-Set these variables before building:
+Set these variables before building.
 
-- `TENUVAULT_LAB_LICENSE_ORIGIN`: the local license service origin, such as `http://127.0.0.1:3000`.
-- `TENUVAULT_LAB_LICENSE_PUBLIC_KEY`: the Ed25519 public verification key matching that service.
-- `TENUVAULT_LAB_RUN`: an optional run name of up to 40 letters, digits or hyphens. Guided app setup adds unique IDs to the `TV06-TEST-` registration name.
+- Set `TENUVAULT_LAB_LICENSE_ORIGIN` to the local license service origin, such as `http://127.0.0.1:3000`.
+- Set `TENUVAULT_LAB_LICENSE_PUBLIC_KEY` to the Ed25519 public verification key matching that service.
+- Optionally set `TENUVAULT_LAB_RUN` to a run name of up to 40 letters, digits or hyphens. Guided app setup adds unique IDs to the `TV06-TEST-` registration name.
 
 The separate lab profile enables Start now and the TenuVault app independently of the
 server's availability flags. The app shows **Lab build** and has no update feed. Without
