@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     const accessToken = tokenData.access_token;
 
     // Helper function to make Graph API calls
-    const callGraphApi = async (endpoint: string, useBeta: boolean = false): Promise<GraphApiResponse | null> => {
+    const callGraphApi = async (endpoint: string, useBeta: boolean = false, logEndpoint = endpoint.split("?")[0]): Promise<GraphApiResponse | null> => {
       try {
         const apiVersion = useBeta ? "beta" : "v1.0";
         const response = await fetch(`https://graph.microsoft.com/${apiVersion}${endpoint}`, {
@@ -59,8 +59,8 @@ export async function POST(request: NextRequest) {
         });
         
         if (!response.ok) {
-          const errorText = await response.text();
-          console.error(`Graph API error for ${endpoint}: ${response.status} - ${errorText}`);
+          console.error("graph_request_failed", logEndpoint, response.status);
+          await response.body?.cancel().catch(() => undefined);
           return null;
         }
         
@@ -70,24 +70,24 @@ export async function POST(request: NextRequest) {
         
         // If no content or content-length is 0, return empty result
         if (contentLength === "0" || !contentType?.includes("application/json")) {
-          console.log(`Empty or non-JSON response for ${endpoint}`);
+          console.log(`Empty or non-JSON response for ${logEndpoint}`);
           return { value: [] };
         }
         
         const text = await response.text();
         if (!text || text.trim() === "") {
-          console.log(`Empty response body for ${endpoint}`);
+          console.log(`Empty response body for ${logEndpoint}`);
           return { value: [] };
         }
         
         try {
           return JSON.parse(text);
-        } catch (parseError) {
-          console.error(`Failed to parse JSON for ${endpoint}:`, parseError, "Response text:", text);
+        } catch {
+          console.error("graph_invalid_response", logEndpoint, response.status);
           return null;
         }
-      } catch (error) {
-        console.error(`Error calling ${endpoint}:`, error);
+      } catch {
+        console.error("graph_request_unavailable", logEndpoint);
         return null;
       }
     };
@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
       let next: string | undefined = `${endpoint}?$select=id&$top=100`;
       let total = 0;
       for (let page = 0; next && page < MAX_COUNT_PAGES; page++) {
-        const data = await callGraphApi(next, true);
+        const data = await callGraphApi(next, true, endpoint);
         if (!data || !Array.isArray(data.value)) break;
         total += data.value.length;
         const link: unknown = data["@odata.nextLink"];

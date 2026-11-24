@@ -25,3 +25,20 @@ it.each([
   else expect(result).toEqual({ error: "Failed to authenticate with Azure" })
   expect(log.mock.calls).toEqual([[`${label} auth error:`, "interaction_required"]])
 })
+
+it.each([
+  [403, '{"error":{"message":"Refused for admin@example.test"}}', "graph_request_failed"],
+  [200, '{invalid JSON with admin@example.test', "graph_invalid_response"],
+])("keeps Graph tenant detail response bodies out of HTTP %i logs", async (status, payload, code) => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => {})
+  const body = { tenantId: "tenant", appId: "app", clientSecret: "fixture" }
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+    const url = new URL(input)
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "fixture" })
+    if (url.pathname.endsWith("/organization")) return new Response(payload, { status, headers: { "content-type": "application/json" } })
+    return Response.json({ value: [], "@odata.count": 0 })
+  }))
+  const response = await tenantDetails(new Request("https://desktop.test/api", { method: "POST", body: JSON.stringify(body) }) as never)
+  expect(response.status).toBe(502)
+  expect(log.mock.calls).toEqual([[code, "/organization", status]])
+})
