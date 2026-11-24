@@ -11,6 +11,7 @@ const desktopDir = resolve(import.meta.dirname, "..")
 const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "docs-site/public/images/onboarding"))
 const width = Number(process.env.SHOT_WIDTH ?? 1024)
 const height = Number(process.env.SHOT_HEIGHT ?? 768)
+const sharedSignIn = process.env.SHOT_SHARED_SIGN_IN === "1"
 
 const NOW = Date.parse("2026-11-15T10:00:00Z")
 const DAY = 86400000
@@ -60,7 +61,14 @@ const MAIN_OVERRIDES = `(() => {
   handle("auth:connection", () => ({ tenantId: M.accounts[0].tenantId, clientId: "${restoreAppId}", graphScopes: [] }))
   handle("auth:savedDirectoryRestores", () => ({ owner: "Contoso Admin", pages: [] }))
   handle("auth:graphCliAvailable", () => true)
-  handle("auth:tenuvaultAppAvailable", () => true)
+  handle("auth:tenuvaultAppAvailable", () => false)
+  handle("auth:wizardStage", () => ({ result: {
+    id: "contoso-sign-in",
+    account: { ...M.accounts[0], clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e", username: "guest@fabrikam.example" },
+    organizationName: M.tenants[0].name,
+    coverage: [{ service: "intune", folders: ["DeviceConfigurations"], readable: ["DeviceConfigurations"] }],
+  } }))
+  handle("auth:wizardDiscard", () => undefined)
   handle("services:status", () => ({ tenantId: M.accounts[0].tenantId, modules: [{ id: "intune", enabled: true }] }))
   handle("license:checkNewTenant", () => M.license)
   handle("diagnostics:status", () => ({ state: "unasked", policy: false, reminder: { setup: false, signin: false } }))
@@ -195,7 +203,9 @@ try {
       const missing = state === "04-missing-permissions"
       const signedIn = state.startsWith("03") || missing || state.startsWith("05") || state.startsWith("06")
       const services = missing ? { entra: { access: "backup" }, conditionalAccess: { access: "backup" }, intune: { access: "backup" } } : { intune: { access: "backup" } }
-      const draft = { step: signedIn ? 4 : -1, tenant: signedIn ? TENANTS[0].guid : "", clientId: signedIn ? CLIENT_ID : "", displayName: "", signedInAt: Date.now(), account: signedIn ? MOCK.accounts[0] : null, services }
+      const stageShared = sharedSignIn && (state === "03-check" || state === "05-storage")
+      const resume = signedIn && !stageShared
+      const draft = { step: resume ? 4 : -1, tenant: resume ? TENANTS[0].guid : "", clientId: resume ? CLIENT_ID : "", displayName: "", signedInAt: Date.now(), account: resume ? MOCK.accounts[0] : null, services }
       const tenants = restore ? MOCK.tenants.map(tenant => ({ ...tenant, credentials: { ...tenant.credentials, appId: restoreAppId } })) : []
       await evaluate(`Promise.all([
         window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(tenants))}),
@@ -210,6 +220,12 @@ try {
       if (restore) {
         await click("1 items", false)
         await showing("Allow restore for Intune")
+      } else if (stageShared) {
+        await click("Continue with Intune")
+        await click("Choose Start now")
+        await click("Sign in with Microsoft")
+        await showing("Connected. Everything you picked can be backed up.")
+        if (state === "05-storage") await click("Continue to storage")
       } else if (!signedIn) {
         await showing("Which services do you want to connect?")
         const action = await evaluate(`(() => {
@@ -218,7 +234,11 @@ try {
           return { top: rect.top, bottom: rect.bottom, scrollTop: document.querySelector('main')?.scrollTop ?? 0 };
         })()`)
         if (action.top < 0 || action.bottom > height || action.scrollTop !== 0) throw new Error(`Continue needs scrolling at ${width} by ${height}: ${JSON.stringify(action)}`)
-        if (state === "02-connect") { await click("Continue with Intune"); await showing("Start now") }
+        if (state === "02-connect") {
+          await click("Continue with Intune")
+          await waitFor(`document.querySelector('[data-sign-in-method="graphCli"] button')?.disabled === false
+            && document.querySelector('[data-sign-in-method="tenuvaultApp"] [role="status"]')?.textContent.includes("Unavailable.")`)
+        }
       } else if (missing) {
         await showing("Copy instructions for my admin")
       } else {
