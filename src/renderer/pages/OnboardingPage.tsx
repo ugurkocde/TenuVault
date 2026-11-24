@@ -59,8 +59,13 @@ function currentAppearance(): AppearanceSetting {
 }
 
 const STEPS = ["Connect", "Check", "Storage", "First backup"]
-const entraBackupFolders = MODULES.filter(module => module.id === "entra" || module.id === "conditionalAccess")
+const entraBackupNames = MODULES.filter(module => module.id === "entra" || module.id === "conditionalAccess")
   .flatMap(module => module.areas.filter(area => !area.optIn).flatMap(area => area.folders))
+  .map(folder => {
+    const type = typeForFolder(folder)
+    const name = type?.singleton?.name ?? type?.label
+    return folder === "DeviceRegistrationPolicy" ? "Device registration policy (including Windows LAPS)" : name
+  }).filter(Boolean)
 
 type JobStatus = BackupJobDisplay
 type Step = -2 | 0 | 1 | 2 | 3 | 4
@@ -1022,12 +1027,12 @@ export default function OnboardingPage() {
                   }} />
                 <details className="text-xs text-muted-foreground">
                   <summary className={cn("cursor-pointer", onboardingLink)}>What's included</summary>
-                  <p className="mx-auto mt-2 max-w-md">{entraBackupFolders.map(folder => typeForFolder(folder)?.singleton?.name ?? typeForFolder(folder)?.label).filter(Boolean).join(", ")}.</p>
-                  <p className="mt-1">Turn on groups and device inventory later in Settings.</p>
+                  <p className="mx-auto mt-2 max-w-md">{entraBackupNames.join(", ")}.</p>
+                  <p className="mt-1">Groups, group lifecycle policies, the ownerless group policy and Entra devices are available in Settings.</p>
                   {method === "tenuvaultApp" && services.entra && <div className="mt-2">
                     <details>
                       <summary className={cn("cursor-pointer", onboardingLink)}>Permissions an admin will approve ({appPermissions.length})</summary>
-                      <ul className="mt-2 space-y-1">{appPermissions.map(scope => <li key={scope}>{scope}</li>)}</ul>
+                      <ul className="mt-2 max-h-36 space-y-1 overflow-auto">{appPermissions.map(scope => <li key={scope}>{scope}</li>)}</ul>
                     </details>
                   </div>}
                 </details>

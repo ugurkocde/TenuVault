@@ -511,7 +511,7 @@ describe("a choice of services, areas and access levels", () => {
   it("prefers the registration whose consent covers more of what the manifest knows, whichever service that is", async () => {
     // The newer one also has an Entra ID permission; before, only Intune and the switches counted.
     const f = fixture({
-      appPrincipal: { id: "app-sp" }, apps: [own, { ...own, id: "other-app", appId: "other", displayName: "TenuVault Desktop (Lab)", createdDateTime: "2025-01-01" }], grants: [consent(`${INTUNE} Domain.Read.All`)],
+      appPrincipal: { id: "app-sp" }, apps: [own, { ...own, id: "other-app", appId: "other", displayName: "TenuVault Desktop (Lab)", createdDateTime: "2025-01-01" }], grants: [consent(`${INTUNE} Agreement.Read.All`)],
       fail: (url) => {
         const filter = url.searchParams.get("$filter")
         if (url.pathname.endsWith("servicePrincipals") && filter === "appId eq 'other'") return Response.json({ value: [{ id: "other-sp" }] })

@@ -230,6 +230,7 @@ const extended = [
   ["31-check-permission-names", "Expand technical names for access that is missing."],
   ["32-consent-wait", "Wait for administrator approval in the browser."],
   ["33-restore-scope", "Review authentication flows in a lab build or see stable restore availability."],
+  ["34-check-app-permissions", "Review additional Entra backup permissions for the TenuVault app."],
 ]
 const captureScenes = process.env.SHOT_ALL || process.env.SHOT_STATES
   ? [...scenes, ...extended].sort(([a], [b]) => a.localeCompare(b)) : scenes
@@ -369,6 +370,14 @@ try {
               if (state === "31-check-permission-names") await disclose("Show permission names")
             }
           }
+        } else if (state === "34-check-app-permissions") {
+          await click("Choose TenuVault app")
+          await click("Sign in with Microsoft")
+          await showing("Also back up Entra ID device and access settings")
+          await evaluate(`document.querySelector('input[role="switch"][aria-label^="Also back up Entra ID"]').click()`)
+          await disclose("What's included")
+          await disclose("Permissions an admin will approve")
+          await showing("Agreement.Read.All")
         } else if (["09-tenuvault-app", "12-tenuvault-app-wait", "25-tenuvault-app-permissions", "32-consent-wait"].includes(state)) {
           await click("Choose TenuVault app")
           if (state === "12-tenuvault-app-wait") {
@@ -410,6 +419,10 @@ try {
       await evaluate(`document.activeElement?.blur?.(); window.scrollTo(0, 0)`)
       await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1, y: 1 })
       await sleep(250)
+      if (restoreScope) {
+        const anchor = expandedEntra ? "Confirm and restore this policy" : "Choose what to restore"
+        await evaluate(`[...document.querySelectorAll("button, h2, h3")].find(node => node.textContent.trim().includes(${JSON.stringify(anchor)}))?.scrollIntoView({ block: "center" })`)
+      }
       if (restore) {
         await evaluate(`[...document.querySelectorAll("button")].find(button => button.textContent.includes("Allow restore for Intune"))?.scrollIntoView({ block: "center" })`)
       }
@@ -437,7 +450,7 @@ try {
         })()`)
         if (truncatedRows.length) throw new Error(`Truncated sidebar service rows: ${truncatedRows.join(", ")}`)
       }
-      const disclosures = [expanded, restore, restoreScope, sidebar, state === "21-own-routes", state === "25-tenuvault-app-permissions", state === "03-check-entra", state === "30-own-setup-details"]
+      const disclosures = [expanded, restore, restoreScope, sidebar, state === "21-own-routes", state === "25-tenuvault-app-permissions", state === "03-check-entra", state === "34-check-app-permissions", state === "30-own-setup-details"]
       const scrollHeight = await evaluate("document.scrollingElement.scrollHeight")
       if (!baseline && !disclosures.includes(true) && scrollHeight > height + 1) {
         throw new Error(`Screen needs vertical scrolling: ${state} takes ${scrollHeight}px at ${width} by ${height}`)

@@ -1,4 +1,4 @@
-import { includesEntraFolder } from "./entra-scope"
+import { expandedEntraScope, includesEntraFolder } from "./entra-scope"
 import { restoreMatrixRow } from "./restore-matrix"
 import type { Extra, IntuneType } from "./registry"
 import { ENTRA_DIRECTORY_TYPES } from "./entra-directory"
@@ -263,4 +263,12 @@ export const ENTRA_5C_TYPES: IntuneType[] = [
   },
 ]
 
-export const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES, ...ENTRA_DIRECTORY_TYPES].filter(type => includesEntraFolder(type.folder))
+const allEntraTypes = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES, ...ENTRA_DIRECTORY_TYPES]
+const stableAreas: Partial<Record<IntuneType["area"], IntuneType["area"]>> = {
+  "Tenant settings": "Device settings",
+  Governance: "Terms of use",
+  "Users and devices": "Devices",
+}
+export const ENTRA_TYPES = expandedEntraScope ? allEntraTypes : allEntraTypes
+  .filter(type => includesEntraFolder(type.folder))
+  .map(type => ({ ...type, area: stableAreas[type.area] ?? type.area }))

@@ -247,9 +247,9 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
   }, 45000)
 
   it("asks once for a permission that a service and a switch both need", async () => {
-    const result = await run("default", { Services: ["Entra"], Areas: ["UsersAndDevices"], IncludeNotifications: true, IncludeConditionalAccessRestore: true })
+    const result = await run("default", { Services: ["Entra"], Areas: ["Groups"], RestoreAccess: ["Entra"], IncludeNotifications: true, IncludeConditionalAccessRestore: true })
     expect(result.code, result.text).toBe(0)
-    const fromServices = graphPermissions({ entra: { access: "backup", areas: ["usersAndDevices"] } }, "delegated")
+    const fromServices = graphPermissions({ entra: { access: "restore", areas: ["groups"] } }, "delegated")
     expect(fromServices).toContain("User.Read.All")
     expect(fromServices).toContain("GroupMember.Read.All")
     expect(requested(result).declared).toEqual([...new Set([...fromServices, "Policy.ReadWrite.ConditionalAccess", "Mail.Send"])])

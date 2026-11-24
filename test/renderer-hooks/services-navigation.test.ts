@@ -174,7 +174,7 @@ it("narrows page contents and trends by service and restores All for an unknown 
   const contents = () => [...container.querySelectorAll("h3")].find(h => h.textContent === "Contents")!.parentElement!.textContent
   const trends = () => [...container.querySelectorAll("h2")].find(h => h.textContent === "Trends by policy type")!.parentElement!.textContent
   expect(contents()).toContain("Conditional Access")
-  expect(contents()).toContain("Organization")
+  expect(contents()).toContain("Device registration policy")
   expect(contents()).not.toContain("Device configuration")
   expect(trends()).not.toContain("Device configuration")
   const select = container.querySelector<HTMLSelectElement>("#backup-service")!
@@ -190,9 +190,9 @@ it("narrows page contents and trends by service and restores All for an unknown 
   expect(active()).toBe("Intune")
   await navigate(router, -1)
   await act(async () => { select.value = "entra"; select.dispatchEvent(new Event("change", { bubbles: true })) })
-  expect(contents()).toContain("Secure Score control states")
+  expect(contents()).toContain("Authentication contexts")
   expect(contents()).not.toContain("Device configuration")
-  expect(trends()).not.toContain("Organization")
+  expect(trends()).not.toContain("Device configuration")
   expect(active()).toBe("Entra ID")
   await act(async () => { select.value = "all"; select.dispatchEvent(new Event("change", { bubbles: true })) })
   expect(router.state.location.search).toBe("")

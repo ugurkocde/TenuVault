@@ -360,7 +360,7 @@ describe("Backup Reader roles from the manifest", () => {
   it("may hold the read permission of any area of any service, and nothing else", () => {
     const everything = readerRoles(Object.fromEntries(MODULES.map((module) => [module.id, { access: "backup" as const, areas: module.areas.filter((area) => area.optIn || area.appOnlyOptIn).map((area) => area.id) }])))
     expect([...READER_ALLOWED_ROLES].sort()).toEqual([...everything].sort())
-    for (const role of ["DeviceManagementManagedDevices.Read.All", "Policy.Read.All", "Directory.Read.All", "SecurityEvents.Read.All"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(true)
+    for (const role of ["DeviceManagementManagedDevices.Read.All", "Policy.Read.All", "Directory.Read.All", "Agreement.Read.All"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(true)
     for (const role of ["Mail.Read", "Policy.ReadWrite.ConditionalAccess", "DeviceManagementApps.ReadWrite.All", "User.Read"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(false)
   })
 
@@ -378,7 +378,7 @@ describe("Backup Reader roles from the manifest", () => {
 
   it("reads a reader's roles back as the services and areas it was set up for, for every combination", () => {
     const combinations = choices().filter((choice) => Object.values(choice).every((picked) => picked.access === "backup"))
-    expect(combinations.length).toBe(30)
+    expect(combinations.length).toBe(14)
     for (const choice of combinations) {
       const roles = readerRoles(choice)
       // The choice the roles amount to grants the same roles again, so a renewal changes nothing.

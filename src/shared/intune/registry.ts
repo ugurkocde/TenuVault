@@ -36,10 +36,9 @@ export type Area =
   | "External identities"
   | "Roles and PIM"
   | "Governance"
-  | "Detection and response"
-  | "Email and collaboration"
-  | "Identity"
-  | "Posture and access"
+  | "Device settings"
+  | "Terms of use"
+  | "Devices"
 
 /** An extra collection read after the detail GET and stored on the snapshot under `property`. */
 export interface Extra {

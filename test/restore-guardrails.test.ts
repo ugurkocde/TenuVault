@@ -34,7 +34,7 @@ function setup(count = 3) {
 describe("identity restore admission", () => {
   it("admits only verified identity capabilities and retains the journaled safety boundary", () => {
     const types = INTUNE_TYPES.filter(type => type.restoreSafety === "identity")
-    expect(types).toHaveLength(91)
+    expect(types).toHaveLength(74)
     for (const type of types) {
       expect(restoreCapability(type)).toBe(["AuthenticationFlowsPolicy", "EntraCompanyBranding", "CrossTenantAccessPolicy", "AccessReviewPolicy"].includes(type.folder) ? "singleton" : ["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs", "Users", "Groups"].includes(type.folder) ? "create" : "none")
       for (const operation of ["create", "update", "delete", "assign"] as const) expect(writeBlocker({ ...type, restore: "create" }, operation)).toContain("journaled restore safety")

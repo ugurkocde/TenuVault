@@ -220,10 +220,10 @@ describe("a failing Entra ID endpoint", () => {
 
   it("fails the backup of a tenant without Intune when nothing at all could be read", async () => {
     const down = refusal(400, "BadRequest", "Broken")
-    const { run, manifest } = fixture(tenant({ "/beta/directory/administrativeUnits": down, "/beta/policies/tokenLifetimePolicies": down }), { services: () => ({ services: ["entra"] }) })
+    const { run, manifest } = fixture(tenant({ "/beta/directory/administrativeUnits": down, "/beta/policies/tokenLifetimePolicies": down, "/beta/identity/conditionalAccess/authenticationContextClassReferences": down, "/beta/identityGovernance/termsOfUse/agreements": down }), { services: () => ({ services: ["entra"] }) })
     const job = await run()
     expect(job.status).toBe("Failed")
-    expect(await manifest(job)).toMatchObject({ Status: "Failed", Failures: 2, Coverage: "Incomplete" })
+    expect(await manifest(job)).toMatchObject({ Status: "Failed", Failures: 4, Coverage: "Incomplete" })
   })
 })
 
@@ -250,13 +250,13 @@ describe("an Entra ID endpoint that does not answer", () => {
     expect(job.exception).toBeUndefined()
     const saved = await entra.files(job)
     await intuneSaved(saved)
-    expect(saved).toContain("AuthenticationContexts/MFA.json")
-    expect(saved).toContain("TermsOfUseAgreements/Rule.json")
+    expect(saved).not.toContain("AuthenticationContexts/MFA.json")
+    expect(saved).not.toContain("TermsOfUseAgreements/Rule.json")
     // The limit is the service's own now: Entra ID stopped, and nothing more was asked of it.
     expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", error: "Microsoft Graph did not respond for 3 consecutive requests of this service, so the rest of the service was not read." })
     expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", saved: 0 })
     expect(entra.requests.filter((request) => request.path.startsWith("/beta/directory/administrativeUnits/"))).toHaveLength(0)
-    expect(await entra.manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 2, FailedTypes: ["TokenLifetimePolicies", "AdministrativeUnits"] })
+    expect(await entra.manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 4, FailedTypes: ["TokenLifetimePolicies", "AuthenticationContexts", "TermsOfUseAgreements", "AdministrativeUnits"] })
 
     const intune = fixture(tenant({ "/beta/deviceManagement/deviceCategories": noAnswer }), { concurrency: 1 })
     const stopped = await elapse(intune.run)

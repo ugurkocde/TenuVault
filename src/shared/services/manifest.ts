@@ -165,7 +165,12 @@ export function showsApproval(consented: ReadonlySet<string>): boolean {
     const own = (permissions: string[]) => unique(permissions).filter((permission) => !BASE_PERMISSIONS.includes(permission))
     const asked = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated")))
     if (asked.length < 3) return [...BASE_PERMISSIONS, ...asked].every(has)
-    const lacking = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated", consented)))
+    // Conditional Access write access also reads authentication contexts, but it does
+    // not identify an app set up for Entra ID when the device and access pack is small.
+    const evidence = module.id === "entra"
+      ? new Set([...consented].filter(scope => scope !== "Policy.ReadWrite.ConditionalAccess"))
+      : consented
+    const lacking = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated", evidence)))
     return (asked.length - lacking.length) * 2 > asked.length
   })
 }

@@ -175,7 +175,7 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
     const state = world("continuation")
     await expect(state.lab.cleanup()).rejects.toThrow("Cleanup needs attention")
     expect(state.calls.every(call => call.method === "GET")).toBe(true)
-    expect(state.calls).toHaveLength(3)
+    expect(state.calls).toHaveLength(2)
   })
   it("recovers the original after a refused recovery and stops later mutations when recovery cannot finish", async () => {
     const state = world(), durable = new Map<string, Item>()

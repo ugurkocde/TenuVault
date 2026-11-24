@@ -1,18 +1,17 @@
 import type { SkipCause } from "../../src/shared/backup-outcomes"
 
 /**
- * How Microsoft Graph refuses a read of an Entra ID or Defender endpoint.
+ * How backup classifies read refusals from Entra endpoints and synthetic fixtures.
  *
  * "lab" answers were returned by the lab tenant on 2026-11-14 to GET requests with an app-only
  * token: status, error code and message are as received, and the body is rebuilt in the shape
  * Graph sends (without innerError, which holds only request IDs and a date). "inventory" answers
- * are the ones the research recorded as text (tasks/0.6-research/entra-inventory.md and
- * defender-inventory.md), with the code a guess. "documented" is Microsoft's documented answer
- * that the lab never produced.
+ * are the ones the Entra research recorded as text. "Documented" answers are from Microsoft.
+ * Synthetic answers keep generic error shapes covered without depending on a tenant response.
  */
 export interface GraphAnswerFixture {
   name: string
-  source: "lab" | "inventory" | "documented"
+  source: "lab" | "inventory" | "documented" | "synthetic"
   endpoint: string
   status: number
   /** The response body as Graph sends it. */
@@ -30,13 +29,13 @@ const graph = (code: string, message: string) => JSON.stringify({ error: { code,
 
 const HTML_401 = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">\r\n<html xmlns="http://www.w3.org/1999/xhtml">\r\n<head>\r\n<title>401 - Unauthorized: Access is denied due to invalid credentials.</title>\r\n</head>\r\n<body>\r\n<div id="header"><h1>Server Error</h1></div>\r\n<div id="content">\r\n <div class="content-container"><fieldset>\r\n  <h2>401 - Unauthorized: Access is denied due to invalid credentials.</h2>\r\n  <h3>You do not have permission to view this directory or page using the credentials that you supplied.</h3>\r\n </fieldset></div>\r\n</div>\r\n</body>\r\n</html>\r\n`
 
-const MISSING_ROLES = "Missing application roles. API required roles: CustomDetection.ReadWrite.All,CustomDetection.Read.All, application roles: Policy.Read.ConditionalAccess,DeviceManagementManagedDevices.Read.All,Device.Read.All,SecurityEvents.Read.All,Group.Read.All,Directory.Read.All,User.Read.All,Policy.Read.All."
+const MISSING_ROLES = "Missing application roles. API required roles: Agreement.Read.All, application roles: Policy.Read.All."
 
 export const GRAPH_ANSWERS: GraphAnswerFixture[] = [
   {
-    name: "an HTML page instead of an error (user reported settings policy)",
-    source: "lab",
-    endpoint: "beta/security/threatSubmission/emailThreatSubmissionPolicies",
+    name: "an HTML page instead of an error",
+    source: "synthetic",
+    endpoint: "any",
     status: 401,
     body: HTML_401,
     answer: {},
@@ -61,27 +60,27 @@ export const GRAPH_ANSWERS: GraphAnswerFixture[] = [
     expect: { delegatedHeld: "failed", otherwise: "failed" },
   },
   {
-    name: "a refusal with no body at all (Defender unified RBAC)",
-    source: "lab",
-    endpoint: "beta/roleManagement/defender/roleDefinitions",
+    name: "a refusal with no body at all",
+    source: "synthetic",
+    endpoint: "any",
     status: 403,
     body: "",
     answer: {},
     expect: { delegatedHeld: "role", otherwise: "permission" },
   },
   {
-    name: "a tenant that never onboarded the product (Defender for Identity)",
-    source: "lab",
-    endpoint: "v1.0/security/identities/sensors",
+    name: "a tenant that never onboarded the product",
+    source: "synthetic",
+    endpoint: "any",
     status: 403,
-    body: graph("Forbidden", "Tenant is not onboarded to Microsoft Defender for Identity. After license is purchased, first login to portal and sensor are required. For more info: https://learn.microsoft.com/en-us/defender-for-identity/deploy/deploy-defender-identity"),
-    answer: { code: "Forbidden", message: "Tenant is not onboarded to Microsoft Defender for Identity. After license is purchased, first login to portal and sensor are required. For more info: https://learn.microsoft.com/en-us/defender-for-identity/deploy/deploy-defender-identity" },
+    body: graph("Forbidden", "Tenant is not onboarded to this service."),
+    answer: { code: "Forbidden", message: "Tenant is not onboarded to this service." },
     expect: { delegatedHeld: "license", otherwise: "license" },
   },
   {
-    name: "a product that is not active in the tenant (case management)",
-    source: "lab",
-    endpoint: "beta/security/caseManagement/caseTypeConfigurations",
+    name: "a product that is not active in the tenant",
+    source: "synthetic",
+    endpoint: "any",
     status: 400,
     body: graph("badRequest", "Tenant's account is not active."),
     answer: { code: "badRequest", message: "Tenant's account is not active." },
@@ -97,9 +96,9 @@ export const GRAPH_ANSWERS: GraphAnswerFixture[] = [
     expect: { delegatedHeld: "license", otherwise: "license" },
   },
   {
-    name: "application roles named in the refusal (custom detection rules)",
-    source: "lab",
-    endpoint: "v1.0/security/rules/detectionRules",
+    name: "application roles named in the refusal",
+    source: "synthetic",
+    endpoint: "any",
     status: 403,
     body: graph("Forbidden", MISSING_ROLES),
     answer: { code: "Forbidden", message: MISSING_ROLES },
@@ -169,12 +168,12 @@ export const GRAPH_ANSWERS: GraphAnswerFixture[] = [
     expect: { delegatedHeld: "failed", otherwise: "failed" },
   },
   {
-    name: "a path that does not exist in this Graph version (training campaigns in v1.0)",
-    source: "inventory",
-    endpoint: "v1.0/security/attackSimulation/trainingCampaigns",
+    name: "a path that does not exist in this Graph version",
+    source: "synthetic",
+    endpoint: "any",
     status: 400,
-    body: graph("BadRequest", "Resource not found for the segment 'trainingCampaigns'."),
-    answer: { code: "BadRequest", message: "Resource not found for the segment 'trainingCampaigns'." },
+    body: graph("BadRequest", "Resource not found for the segment 'examplePolicy'."),
+    answer: { code: "BadRequest", message: "Resource not found for the segment 'examplePolicy'." },
     expect: { delegatedHeld: "failed", otherwise: "failed" },
   },
   {

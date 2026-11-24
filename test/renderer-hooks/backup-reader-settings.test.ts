@@ -27,7 +27,7 @@ it("names the configured services for the selected tenant, including Conditional
   const root = createRoot(container)
   try {
     await act(async () => root.render(createElement(BackupReaderSettings)))
-    expect(container.textContent).toContain("This tenant backs up Defender and Entra ID (Conditional Access only).")
+    expect(container.textContent).toContain("This tenant backs up Entra ID (Conditional Access only).")
     const select = container.querySelector("select")!
     await act(async () => {
       select.value = "fabrikam"
@@ -35,7 +35,7 @@ it("names the configured services for the selected tenant, including Conditional
     })
     expect(container.textContent).not.toContain("This tenant backs up")
     await act(async () => finish(state(["intune", "entra"])))
-    expect(container.textContent).toContain("This tenant backs up Defender, Entra ID, and Intune.")
+    expect(container.textContent).toContain("This tenant backs up Entra ID and Intune.")
   } finally {
     act(() => root.unmount())
     container.remove()

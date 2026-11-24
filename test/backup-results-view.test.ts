@@ -68,7 +68,7 @@ describe("BackupResults", () => {
   const job = { status: "Completed", startTime: "2026-11-12T10:00:00Z", endTime: "2026-11-12T10:00:05Z", output: "[10:00:00] Found 6 compliance policies.", results, isComplete: true }
 
   it("keeps both services visible and in display order even if one service could fill the panel", () => {
-    const folders = ["ConfigurationPolicies", "NamedLocations", "AuthenticationContexts", "TermsOfUseAgreements"]
+    const folders = ["ConfigurationPolicies", "NamedLocations", "AuthenticationContexts", "TermsOfUseAgreements", "DeviceRegistrationPolicy", "MdmEnrollmentPolicies", "MamEnrollmentPolicies"]
     const types = folders.map(folder => type(folder, { label: folder, saved: 1 }))
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: { types, notices: [] } }, compact: true }))
     const positions = ["NamedLocations", "ConfigurationPolicies"].map(label => html.indexOf(label))

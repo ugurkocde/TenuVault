@@ -70,7 +70,7 @@ describe("Service modules", () => {
     // With every service on, only the opt-in areas nobody turned on are left out.
     const entra = MODULES.find((module) => module.id === "entra")!
     const optIn = entra.areas.filter((area) => area.optIn)
-    expect(optIn.map((area) => area.id)).toEqual(["groups", "usersAndDevices", "applications"])
+    expect(optIn.map((area) => area.id)).toEqual(["groups", "usersAndDevices"])
     expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra"] })).toEqual(optIn.flatMap((area) => area.folders))
     expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra"], areas: { entra: optIn.map((area) => area.id) } })).toEqual([])
     // An opt-in area follows its own switch, not only its service.

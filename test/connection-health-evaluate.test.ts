@@ -63,7 +63,7 @@ const evaluate = (connections: ConnectionRecord[], input: Partial<HealthInput> =
   evaluateHealth({ tenantId: TENANT, clientId: CLIENT, reader: null, storage: "local", settings: settings(), connections, ...input }, now)
 
 it("uses only the scheduled Backup Reader's effective coverage alongside delegated evidence", () => {
-  const roles = ["SecurityEvents.Read.All", "DeviceManagementConfiguration.Read.All"]
+  const roles = ["Agreement.Read.All", "DeviceManagementConfiguration.Read.All"]
   const connections = [delegated({ graph: healthy(["DeviceManagementConfiguration.Read.All"]) })]
   const input = {
     readerClientId: READER,
@@ -73,12 +73,11 @@ it("uses only the scheduled Backup Reader's effective coverage alongside delegat
   }
   const { report } = evaluate(connections, input)
   expect(report.readerReadableServices).toEqual(expect.arrayContaining(["entra", "intune"]))
-  expect(report.readerReadableServices).not.toContain("entra")
   expect(report.coverage?.find(row => row.service === "entra")?.readable).toEqual([])
   expect(report.coverage?.find(row => row.service === "intune")?.readable).toContain("DeviceConfigurations")
 
   const changed = evaluate(connections, { ...input, reader: {
-    ...input.reader, roleChange: { added: [], removed: ["SecurityEvents.Read.All"], at: ago(0) },
+    ...input.reader, roleChange: { added: [], removed: ["Agreement.Read.All"], at: ago(0) },
   } })
   expect(changed.report.readerReadableServices).toEqual(["intune"])
   expect(evaluate(connections, { ...input, readerScheduled: false }).report.readerReadableServices).toBeUndefined()
@@ -884,8 +883,8 @@ describe("changes since the snapshot", () => {
     const whole = evaluate([delegated({ graph: healthy([...DEFAULT_SCOPES, ...entra]), snapshot: before })], { settings: on }).report.changes
     expect(whole.filter((change) => change.kind === "becameReady")).toEqual([{ kind: "becameReady", service: "entra" }])
     // Only one of its areas: the area is named.
-    const part = evaluate([delegated({ graph: healthy([...DEFAULT_SCOPES, "IdentityProvider.Read.All", "IdentityUserFlow.Read.All", "EventListener.Read.All", "CustomAuthenticationExtension.Read.All", "APIConnectors.Read.All", "MultiTenantOrganization.Read.All", "Policy.Read.B2BManagementPolicy"]), snapshot: before })], { settings: on }).report.changes
-    expect(part).toContainEqual({ kind: "becameReady", service: "entra", area: "externalIdentities" })
+    const part = evaluate([delegated({ graph: healthy([...DEFAULT_SCOPES, "Agreement.Read.All"]), snapshot: before })], { settings: on }).report.changes
+    expect(part).toContainEqual({ kind: "becameReady", service: "entra", area: "governance" })
     expect(part).not.toContainEqual({ kind: "becameReady", service: "entra" })
   })
 
@@ -934,8 +933,7 @@ describe("tenant backup coverage", () => {
       runs: [readerRun("reader", 0, { read: ["NamedLocations", "DeviceConfigurations"] })],
     })], { settings: all, readerClientId: READER })
     expect(report.coverage?.map(row => row.issues)).toMatchObject([
-      { AuthenticationContexts: "permission" },
-      { NamedLocations: "role" },
+      { AuthenticationContexts: "permission", NamedLocations: "role" },
       { DeviceConfigurations: "unknown" },
     ])
     expect(report.coverage?.flatMap(row => row.readable ?? [])).not.toContain("DeviceConfigurations")

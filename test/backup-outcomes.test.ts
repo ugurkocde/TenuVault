@@ -26,7 +26,7 @@ describe("what a refused Microsoft Graph read means for its type", () => {
     expect(classifyAnswer({ status: fixture.status, code: "Other", message: "Something else" }, { notConfigured: fixture.declared, mode: "delegated" })).toEqual({ outcome: "failed" })
   })
 
-  it("covers every answer the live research recorded for Entra ID and Defender", () => {
+  it("covers recorded and synthetic Entra read refusals", () => {
     // 403 naming roles, an empty 403, a 401 HTML page, "tenant is not onboarded", "account is not active" and a 404 on an unset singleton (design.md).
     const names = [...GRAPH_ANSWERS, ...NOT_CONFIGURED_ANSWERS].map((fixture) => fixture.name).join("\n")
     for (const needed of ["application roles named", "no body at all", "HTML page", "never onboarded", "not active", "never set"]) expect(names).toContain(needed)
@@ -138,11 +138,11 @@ describe("a backup that read nothing", () => {
 })
 
 describe("the reason shown for a type that was left out", () => {
-  const context = { service: "Defender", roles: "Security Reader or Global Reader to back up; Security Administrator to restore.", mode: "delegated" as const, settingsPage: "Services and permissions" }
+  const context = { service: "Entra ID", roles: "Global Reader to back up.", mode: "delegated" as const, settingsPage: "Services and permissions" }
 
   it("names the cause in plain words", () => {
     expect(skipReason("license", context)).toBe("This tenant is not set up for it. Microsoft answers this when the product has no license in the tenant or was never set up.")
-    expect(skipReason("role", context)).toBe("Microsoft refused the read although the permission is granted. Your account may not have a role that can read Defender (Security Reader or Global Reader to back up).")
+    expect(skipReason("role", context)).toBe("Microsoft refused the read although the permission is granted. Your account may not have a role that can read Entra ID (Global Reader to back up.).")
     expect(skipReason("permission", context)).toBe("Microsoft refused the read. The TenuVault app registration may lack the permission or admin consent for it. Services and permissions in Settings shows what is missing.")
     expect(skipReason("permission", { ...context, mode: "app-only" })).toContain("The Backup Reader may lack the permission")
     expect(skipReason("signedIn", context)).toBe("Microsoft Graph lets only a signed-in admin read this type, so the Backup Reader leaves it out. Manual backups include it.")

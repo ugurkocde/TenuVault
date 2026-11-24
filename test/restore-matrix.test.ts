@@ -16,7 +16,7 @@ const references = async () => ({ principals: [], applications: [], complete: tr
 describe("restore write matrix", () => {
   it("has one row for each new-service type without changing capability", () => {
     expect(RESTORE_MATRIX.map(row => row.folder).sort()).toEqual(INTUNE_TYPES.filter(type => type.restoreSafety === "identity").map(type => type.folder).sort())
-    expect(new Set(RESTORE_MATRIX.map(row => row.folder)).size).toBe(91)
+    expect(new Set(RESTORE_MATRIX.map(row => row.folder)).size).toBe(74)
     for (const row of RESTORE_MATRIX) {
       expect(row.reason).not.toBe("")
       expect(row.builtIn).not.toBe("")

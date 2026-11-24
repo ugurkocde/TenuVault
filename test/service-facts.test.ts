@@ -113,7 +113,7 @@ describe("The services status reports switchable", () => {
   it("does not follow the other two facts", async () => {
     withFacts("intune", { defaultOn: false, precheck: true })
     withFacts("conditionalAccess", { defaultOn: true, precheck: false })
-    expect((await status()).modules.map((module) => module.switchable)).toEqual([true, true, true, true])
+    expect((await status()).modules.map((module) => module.switchable)).toEqual([true, true, true])
   })
 
   it("reports all three modules", async () => {

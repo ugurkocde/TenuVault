@@ -38,6 +38,8 @@ const TYPES = [
   testType("TermsOfUseAgreements", "identityGovernance/termsOfUse/agreements", { listOnly: true }),
 ]
 
+const termsOnly = { excluded: TYPES.filter(type => type.folder !== "TermsOfUseAgreements").map(type => type.folder) }
+
 let unregister: () => void
 beforeAll(() => {
   unregister = registerTestTypes(TYPES)
@@ -140,14 +142,14 @@ const ROWS: Row[] = [
     manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
 
   // A tenant that backs up a new service only. A backup that read nothing is a failure; one that read the tenant is not, whatever it found.
-  { name: "new service only: every type left out, nothing read", services: ["entra"], routes: { "/beta/identityGovernance/termsOfUse/agreements": notOnboarded },
+  { name: "new service only: every type left out, nothing read", services: ["entra"], request: { scope: termsOnly }, routes: { "/beta/identityGovernance/termsOfUse/agreements": notOnboarded },
     manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["TermsOfUseAgreements"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TermsOfUseAgreements", "skipped", "license"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
     message: "Nothing could be read. The selected type was left out because the tenant has no license for the product or never set it up." },
-  { name: "new service only: every type left out for different causes, nothing read", services: ["entra"], deps: { concurrency: 1 },
+  { name: "new service only: every type left out for different causes, nothing read", services: ["entra"], request: { scope: { excluded: ["TermsOfUseAgreements"] } }, deps: { concurrency: 1 },
     routes: { "/beta/policies/tokenLifetimePolicies": () => new Response("<html>401</html>", { status: 401 }), "/beta/policies/federatedTokenValidationPolicy": notOnboarded, "/beta/policies/mobileDeviceManagementPolicies": notOnboarded },
     manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["TokenLifetimePolicies", "FederatedTokenValidationPolicy", "MdmEnrollmentPolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "skipped", "permission"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
     message: "Nothing could be read. Every selected type was left out, most of them because the tenant has no license for the product or never set it up." },
-  { name: "new service only: every type left out because the token lacks its permission, before any request", services: ["entra"], deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All" }) },
+  { name: "new service only: every type left out because the token lacks its permission, before any request", services: ["entra"], request: { scope: termsOnly }, deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All" }) },
     manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["TermsOfUseAgreements"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TermsOfUseAgreements", "skipped", "permission"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
     message: "Nothing could be read. The selected type was left out because the TenuVault app registration may lack the permission or its admin consent. Services and permissions in Settings shows what is missing." },
   { name: "new service only: every type empty or not configured", services: ["entra"],
@@ -159,7 +161,7 @@ const ROWS: Row[] = [
   { name: "new service only: a type empty and the others left out", services: ["entra"], routes: { "/beta/policies/federatedTokenValidationPolicy": notOnboarded, "/beta/policies/mobileDeviceManagementPolicies": notOnboarded }, deps: { concurrency: 1 },
     manifest: { Status: "Success", Failures: 0, SkippedTypes: ["FederatedTokenValidationPolicy", "MdmEnrollmentPolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "saved"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true,
     message: "Backup completed successfully" },
-  { name: "new service only: the one type could not be read", services: ["entra"], routes: { "/beta/identityGovernance/termsOfUse/agreements": broken },
+  { name: "new service only: the one type could not be read", services: ["entra"], request: { scope: termsOnly }, routes: { "/beta/identityGovernance/termsOfUse/agreements": broken },
     manifest: { Status: "Failed", Failures: 1, SkippedTypes: [], FailedTypes: ["TermsOfUseAgreements"], Coverage: "Incomplete" }, outcome: ["TermsOfUseAgreements", "failed"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
     message: "Backup failed: no policies could be saved" },
   // The same rule for Intune, where it only shows when the backup scope leaves out the four types whose refusal always was a failure.
@@ -233,7 +235,7 @@ describe("every outcome combination against what reads a backup's result", () =>
     }
     // A type that is not selected has no outcome: its service is off, or the scope leaves it out.
     const selected = new Set(job.outcomes!.types.map((type) => type.folder))
-    for (const type of TYPES) expect(selected.has(type.folder)).toBe(row.services.includes("entra"))
+    for (const type of TYPES) expect(selected.has(type.folder)).toBe(row.services.includes("entra") && !row.request?.scope?.excluded.includes(type.folder))
     for (const folder of row.request?.scope?.excluded ?? []) expect(selected.has(folder)).toBe(false)
     // What the manifest says of coverage agrees with the folders retention and comparison count as covered.
     const notRead = manifestCoverage(metadata).notRead
@@ -267,7 +269,7 @@ describe("a backup that read nothing", () => {
     const setup = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": notOnboarded }), { services: () => ({ services: ["entra"] }), retentionDays: () => 30, now: () => NOW })
     // An old backup that holds nothing the tenant still backs up would be removed by a backup that worked.
     await seedOld(setup.store, setup.account, [])
-    const job = await setup.run({ trigger: "scheduled" })
+    const job = await setup.run({ trigger: "scheduled", scope: termsOnly })
     const reason = "Nothing could be read. The selected type was left out because the tenant has no license for the product or never set it up."
     expect(job).toMatchObject({ status: "Failed", failures: 0, totalPolicies: 0, coverage: "incomplete", progressMessage: "Backup failed: nothing could be read", exception: reason })
     expect(await setup.manifest(job)).toMatchObject({ Status: "Failed", Failures: 0, Error: reason, Coverage: "Incomplete", ItemCounts: { TotalPolicies: 0 } })
@@ -282,7 +284,7 @@ describe("a backup that read nothing", () => {
 
   it("fails a run when the Backup Reader is refused on its only granted type", async () => {
     const setup = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": refusal(403, "Forbidden", "Missing application roles. API required roles: Agreement.Read.All.") }), { services: () => ({ services: ["entra"] }), ...reader(["Agreement.Read.All"]) })
-    const job = await setup.run({ trigger: "scheduled" })
+    const job = await setup.run({ trigger: "scheduled", scope: termsOnly })
     expect(job.status).toBe("Failed")
     expect(job.outcomes?.types).toMatchObject([{ outcome: "failed", status: 403 }])
     expect(job.progressMessage).toBe("Backup failed: no policies could be saved")

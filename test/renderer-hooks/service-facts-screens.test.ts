@@ -70,8 +70,8 @@ describe("The Settings card reads switchable", () => {
     const container = mount(createElement(ServicesSettings))
     await act(async () => undefined)
     const governance = container.querySelector('[data-service="entra"] [data-area="governance"]')!
-    expect(governance.textContent).toContain("Some features need Entra ID P2 or ID Governance")
-    expect(governance.textContent).toContain("PDFs, review decisions and workflow history are excluded")
+    expect(governance.textContent).toContain("Agreement settings and file metadata")
+    expect(governance.textContent).toContain("PDFs and individual acceptances are excluded")
     expect(governance.textContent).not.toContain("no backup types")
   })
 
@@ -95,8 +95,8 @@ describe("The scope picker follows the tenant's selection", () => {
     expect(text).toContain("Entra ID: Authentication")
     expect(text).not.toContain("Intune: Device configuration")
     expect(text).not.toContain("Entra ID: Groups")
-    expect(text).toContain("All of 65 types")
-    expect(text).toContain("Entra ID: Governance")
+    expect(text).toContain("All of 6 types")
+    expect(text).toContain("Entra ID: Terms of use")
   })
   it("uses the explicit tenant choice even when the service defaults change", () => {
     withFacts("conditionalAccess", { defaultOn: true })
@@ -127,14 +127,13 @@ describe("Tenant backup coverage", () => {
       ...answer(), clientId,
       coverage: [
         { service: "intune", folders: ["Apps"], readable: [], issues: { Apps: "unknown" } },
-        { service: "entra", folders: ["NamedLocations", "ConditionalAccessPolicies"], readable: [], issues: { NamedLocations: "role", ConditionalAccessPolicies: "permission" } },
-        { service: "entra", folders: ["TermsOfUseAgreements"], readable: ["TermsOfUseAgreements"] },
+        { service: "entra", folders: ["NamedLocations", "ConditionalAccessPolicies", "TermsOfUseAgreements"], readable: ["TermsOfUseAgreements"], issues: { NamedLocations: "role", ConditionalAccessPolicies: "permission" } },
       ],
     })
     const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
     await act(async () => undefined)
-    expect([...container.querySelectorAll("dt")].map(heading => heading.textContent)).toEqual(["Entra ID", "Entra ID", "Intune"])
-    expect(container.querySelector('[aria-label="Entra ID backup coverage"]')?.textContent).toBe("Entra ID1 of 1 readable")
+    expect([...container.querySelectorAll("dt")].map(heading => heading.textContent)).toEqual(["Entra ID", "Intune"])
+    expect(container.querySelector('[aria-label="Entra ID backup coverage"]')?.textContent).toBe("Entra ID1 of 3 readable")
     expect(container.textContent).toContain("Permission not granted")
     expect(container.textContent).toContain("Your role can't do this")
     expect(container.textContent).toContain("Coverage unknown for 1.")

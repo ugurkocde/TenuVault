@@ -91,36 +91,28 @@ it("shows all services, Conditional Access separately and the personal data stat
   mocks.check.mockResolvedValue(healthScene("personal-data"))
   await render()
   const cards = [...container.querySelectorAll('[data-service]')].filter(card => !card.parentElement?.closest('[data-service]'))
-  expect(cards.map(card => card.querySelector("h3")?.textContent)).toEqual(["Entra ID", "Entra ID", "Intune"])
-  expect(cards[1]?.querySelector('[data-service="conditionalAccess"] h3')?.textContent).toBe("Conditional Access")
+  expect(cards.map(card => card.querySelector("h3")?.textContent)).toEqual(["Entra ID", "Intune"])
+  expect(cards[0]?.querySelector('[data-service="conditionalAccess"] h3')?.textContent).toBe("Conditional Access")
   expect(container.textContent).not.toContain("no backup types for Entra ID yet")
-  expect(container.querySelector('[data-area="externalIdentities"]')?.textContent).not.toContain("no backup types for this area yet")
-  expect(container.querySelector('[data-area="externalIdentities"]')?.textContent).toContain("API connectors require the Backup Reader")
-  expect(container.querySelector('[data-area="roles"]')?.textContent).not.toContain("no backup types for this area yet")
+  expect(container.querySelector('[data-area="externalIdentities"]')).toBeNull()
+  expect(container.querySelector('[data-service="entra"] [data-area="roles"]')).toBeNull()
   expect(container.querySelector('[data-area="governance"]')?.textContent).not.toContain("no backup types for this area yet")
-  expect(container.querySelector('[data-area="governance"]')?.textContent).toContain("Some features need Entra ID P2 or ID Governance")
+  expect(container.querySelector('[data-area="governance"]')?.textContent).toContain("Agreement settings and file metadata")
   expect(container.textContent).toContain("These identify people and their group memberships")
   await toggle("Include Groups in backups")
   expect(mocks.setArea).toHaveBeenCalledWith(HEALTH_TENANT, "entra", "groups", true)
   await toggle("Include Conditional Access in backups")
   expect(mocks.setEnabled).toHaveBeenCalledWith(HEALTH_TENANT, HEALTH_CLIENT, "conditionalAccess", false, undefined)
 })
-it("offers supported Entra restore access and shows deferred areas without repair guidance", async () => {
+it("offers eligible group restore and hides deferred areas", async () => {
   const report = healthScene("entra-all-areas")
   const entra = report.services.find(service => service.id === "entra")!
   entra.access = "restore"
-  for (const area of entra.areas.filter(area => ["applications", "roles"].includes(area.id))) {
-    Object.assign(area, { enabled: true, permissions: "present", restore: "missing", missing: [] })
-  }
   mocks.check.mockResolvedValue(report)
   await render()
   const access = container.querySelector('[aria-label="Entra ID access to request"]')
   expect(access?.textContent).toContain("Backup and restore")
-  for (const id of ["applications", "roles"]) {
-    const text = container.querySelector(`[data-area="${id}"]`)?.textContent
-    expect(text).toContain("Restore: Available in a later version.")
-    expect(text).not.toContain("Restore needs:")
-  }
+  for (const id of ["applications", "roles"]) expect(container.querySelector(`[data-service="entra"] [data-area="${id}"]`)).toBeNull()
 })
 
 it("does not turn Intune off before confirmation and leaves it on after Cancel", async () => {
