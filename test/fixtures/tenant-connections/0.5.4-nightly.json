@@ -1,0 +1,5 @@
+{
+  "renderer.tenuvault_tenants": "[{\"id\":3,\"name\":\"Fixture 3\",\"domain\":\"fixture3.example\",\"status\":\"healthy\",\"lastBackup\":\"\",\"configCount\":null,\"storageUsed\":\"\",\"client\":\"\",\"license\":\"\",\"region\":\"\",\"tags\":[],\"users\":null,\"devices\":null,\"complianceRate\":null,\"industry\":\"\",\"environment\":\"\",\"lastSync\":\"\",\"syncStatus\":\"idle\",\"policies\":{\"compliance\":null,\"configuration\":null,\"apps\":null},\"credentials\":{\"tenantId\":\"aaaaaaaa-1111-1111-1111-111111111113\",\"appId\":\"BBBBBBBB-1111-1111-1111-111111111113\",\"clientSecret\":\"Zml4dHVyZS1zZWNyZXQ=\"},\"resources\":{\"storageAccountName\":\"tvlocal-aaaaaaaa-1111-1111-1111-111111111113\",\"subscriptionId\":\"local\",\"subscriptionName\":\"\",\"resourceGroupName\":\"local\",\"automationAccountName\":\"\"},\"createdAt\":\"2026-11-21T14:00:00.000Z\",\"preferredRunbook\":\"fixture-runbook\"}]",
+  "renderer.tenuvault_selected_tenant": "3",
+  "services.modules": "{\"aaaaaaaa-1111-1111-1111-111111111113\":{\"conditionalAccess\":{\"enabled\":true,\"connection\":\"default\"}}}"
+}

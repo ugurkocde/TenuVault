@@ -321,6 +321,8 @@ export type HealthChange =
   | { kind: "lostAccess"; service: ModuleId; area: string; cause: LossCause; mode: ConnectionMode; folders: string[]; since: string }
 
 export interface ConnectionHealthReport {
+  /** The sign-in method allows backups only, regardless of delegated scopes. */
+  readOnly?: true
   /** Opaque receipt for exactly the changes shown. Pass it to health.acknowledge. */
   acknowledgement?: string | null
   tenantId: string

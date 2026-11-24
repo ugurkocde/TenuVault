@@ -74,7 +74,7 @@ describe("connection health wiring", () => {
   })
 
   it("captures identity changes where the account, reader and tenant profile are written", () => {
-    const accountMutations = main.match(/const accounts = accountStore\(appStore,([\s\S]*?)\n {2}\}\)/)?.[1] ?? ""
+    const accountMutations = main.match(/const notifyAccountChange = ([\s\S]*?)\n {2}\}/)?.[1] ?? ""
     expect(accountMutations).toContain("if (!accounts.get(tenantId)) health.signedOut(tenantId)")
     expect(accountMutations).toContain("else health.connectionsChanged(tenantId)")
     expect(main).toContain("connectionChanged: (tenantId) => health.connectionsChanged(tenantId)")

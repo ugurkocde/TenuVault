@@ -28,7 +28,7 @@ function connectedFlow(original: { accessToken: string; scopes: string[] }, refr
   const auth = { getAccessToken: vi.fn(async (_tenant: string, _client: string, _scope: string, force?: boolean) => force ? refreshed : original) }
   const signIn = vi.fn(async () => "ephemeral")
   const context = { AddPermissionsFlow, permissionAdditionScopes, verifyPermissionAdditionToken, chromiumFetch: fake.request,
-    connectedTenant: () => tenant, accounts: new Map([[tenant, additionConnection]]), tenantProfile: () => additionConnection,
+    capabilities: { requireWrite: () => undefined }, connectedTenant: () => tenant, accounts: new Map([[tenant, additionConnection]]), tenantProfile: () => additionConnection,
     moduleSettings: { get: () => ({}) }, additionPermissions: () => additionConnection.allowed, auth,
     RESOURCE_SCOPES: { graph: "https://graph.microsoft.com/.default" }, signInForPermissionAddition: signIn, shell: {}, health }
   const flow: AddPermissionsFlow = new Function(...Object.keys(context), `${transformSync(source, { loader: "ts" }).code}\nreturn permissionAdditions`)(...Object.values(context))

@@ -43,6 +43,10 @@ export function withRouteTenant<T>(tenantId: unknown, run: () => T, storageAccou
   return routeContext.run({ tenant: text(tenantId), storageAccount }, () => isLocalAccount(storageAccount ?? undefined) ? counted(run) : run())
 }
 
+export function currentRouteTenant(): string | null {
+  return routeContext.getStore()?.tenant ?? null
+}
+
 function counted<T>(run: () => T): T {
   localRoutes++
   let result: T

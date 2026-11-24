@@ -1,3 +1,4 @@
+import type { ConnectionSwitchResult, ConnectionTarget, TenantConnection } from "./tenant-connection"
 import type { PermissionAdditionPreview, PermissionAdditionResult } from "./registration-additions"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
@@ -461,6 +462,8 @@ export interface TenuVaultBridge {
     signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
+    connection: (tenantId: string) => Promise<TenantConnection | null>
+    switchConnection: (tenantId: string, target: ConnectionTarget) => Promise<ConnectionSwitchResult>
     savedDirectoryRestores: (tenantId: string) => Promise<{ owner: string; pages: Array<{ runId: string; path: string }> }>
     /** Called after an account is saved or removed, before any old verification is reused. */
     onAccountsChanged: (listener: (tenantId: string) => void) => () => void
@@ -608,7 +611,7 @@ export interface TenuVaultBridge {
     /** Retries activation for one tenant, or for every signed-in tenant without a license. */
     retry: (tenantId?: string) => Promise<LicenseStatus>
     /** The key holder lets other admins of the tenant use the license, or stops. */
-    setShared: (tenantId: string, shared: boolean) => Promise<LicenseStatus>
+    setShared: (tenantId: string, shared: boolean, allowGraphCli?: boolean) => Promise<LicenseStatus>
     /** Releases every activation of this machine and forgets the key. */
     deactivate: () => Promise<LicenseStatus>
     /**

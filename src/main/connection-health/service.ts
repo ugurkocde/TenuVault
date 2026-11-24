@@ -62,6 +62,7 @@ export interface HealthHost {
   tenant: (tenantId: string) => { clientId: string; storage: "local" | "azure"; storageId?: string } | null
   /** The ID of the account signed in to the tenant, never its name; null when nobody is. */
   account: (tenantId: string) => string | null
+  readOnly?: (tenantId: string) => boolean
   settings: (tenantId: string) => Record<ModuleId, ServiceChoice>
   /**
    * Asks Microsoft for a new token of the signed-in admin, without any window. `fromCache` has to
@@ -161,6 +162,7 @@ export class ConnectionHealth {
     this.connectionsChanged(tenantId)
     const tenant = tenantId.toLowerCase()
     const { report, current, baseline } = this.evaluate(tenant)
+    if (this.host.readOnly?.(tenant)) report.readOnly = true
     const key = this.adminKey(tenant)
     if (!key || !current || !baseline) return { ...report, acknowledgement: null }
     if (!current.account && this.host.account(tenant)) {

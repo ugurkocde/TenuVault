@@ -1,7 +1,7 @@
 import { registerStorageToken } from "../storage/azure-seal"
 import { FetchPreconditionError } from "./network-error"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { localAccountFromUrl, routeUsesLocalStorage } from "../storage/blob-emulator"
+import { currentRouteTenant, localAccountFromUrl, routeUsesLocalStorage } from "../storage/blob-emulator"
 
 export interface DelegatedToken {
   accessToken: string
@@ -19,6 +19,8 @@ export interface FetchBridgeOptions {
    * local backup store, so no path skips licensing.
    */
   authorizeTenant?: (tenant: string) => unknown
+  authorizeGraphRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void>
+  authorizeResource?: (tenant: string, scope: string) => void
   /** Serves Blob requests for local (`tvlocal-...`) storage accounts from the encrypted store. */
   handleLocalBlob?: (request: Request) => Promise<Response>
   fetch?: typeof fetch
@@ -93,6 +95,11 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
             if (form.get("client_secret") === DELEGATED_CLIENT_SECRET) {
               return await delegatedTokenResponse(options, tenant, form)
             }
+            try {
+              options.authorizeResource?.(tenant, form.get("scope") ?? "")
+            } catch (error) {
+              return tokenError(403, "unauthorized_client", error)
+            }
           }
         }
         const requestForm = request.method === "POST" ? await request.clone().text() : ""
@@ -110,6 +117,7 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
         return response
       }
 
+      if (url.origin === "https://graph.microsoft.com") await options.authorizeGraphRequest?.(url, input, init, currentRouteTenant())
       return realFetch(input, init)
     } catch (error) {
       if (networkAttempted || error instanceof FetchPreconditionError) throw error
@@ -132,6 +140,11 @@ async function delegatedTokenResponse(
   // on Azure Storage consent (the backup engine skips this token the same way).
   if (scope.includes("storage.azure.com") && routeUsesLocalStorage(tenant)) {
     return Response.json({ token_type: "Bearer", access_token: LOCAL_STORAGE_TOKEN, expires_in: 3600, ext_expires_in: 3600 })
+  }
+  try {
+    options.authorizeResource?.(tenant, scope)
+  } catch (error) {
+    return tokenError(403, "unauthorized_client", error)
   }
   try {
     const token = await options.getDelegatedToken(tenant, clientId, scope, form.get("force_refresh") === "true")

@@ -34,7 +34,7 @@ it("refuses direct services:setEnabled IPC without confirmation before persistin
 it("publishes account changes through preload so Services can invalidate old sign-in verification without consuming health acknowledgements", () => {
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
   const preload = readFileSync(new URL("../src/preload/index.ts", import.meta.url), "utf8")
-  const callback = main.slice(main.indexOf("const accounts = accountStore("), main.indexOf("// MSAL token traffic"))
+  const callback = main.slice(main.indexOf("const notifyAccountChange ="), main.indexOf("// MSAL token traffic"))
   expect(callback).toContain('mainWindow?.webContents.send("auth:accountsChanged", tenantId)')
   expect(preload).toContain('onAccountsChanged: (listener) => subscribe<string>("auth:accountsChanged", listener)')
 })

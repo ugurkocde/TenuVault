@@ -307,3 +307,15 @@ it("shows Defender coverage and opt-in directory area switches", async () => {
   const directory = container.querySelector('[data-service="entra"] [data-area="usersAndDevices"]')!
   expect(directory.querySelector('input[role="switch"]')).not.toBeNull()
 })
+
+it("shows Start now as read-only and omits permission grant instructions", async () => {
+  const report = restoreGapFixture()
+  mocks.check.mockResolvedValue({ ...report, graph: { ...report.graph, state: "consentMissing" }, readOnly: true })
+  await render()
+  expect(container.textContent).toContain("Unavailable with Start now")
+  expect(container.textContent).toContain("Start now is unavailable in this tenant")
+  expect(container.textContent).not.toContain("grant consent")
+  expect(container.textContent).not.toContain("Add the missing permissions")
+  expect(container.textContent).not.toContain("Feature permissions")
+  expect(container.querySelector('select[aria-label="Intune access to request"]')).toBeNull()
+})

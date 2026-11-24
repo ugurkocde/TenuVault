@@ -65,6 +65,9 @@ import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error
 import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
+import { TenantConnections } from "./auth/tenant-connections"
+import { ConnectionCapabilities } from "./auth/connection-capabilities"
+import { connectionCoverage } from "./auth/connection-coverage"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
@@ -94,7 +97,7 @@ import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning, withRouteTe
 import { LocalBlobStore } from "./storage/local-blob-store"
 import { setRestoreApprovalStore } from "./storage/restore-approvals"
 import { setRestoreJournalStore, setRestoreJournalAuthorization, guardedRestoreJournal } from "./storage/restore-journal"
-import { accountStore, secureCachePlugin } from "./auth/stores"
+import { accountStore, connectionCache, secureCachePlugin, stageConnectionCache } from "./auth/stores"
 import {
   LICENSE_API_BASE,
   LICENSE_BUY_URL,
@@ -276,13 +279,14 @@ async function bootstrap(): Promise<void> {
     return savedProxyAuth.list()
   })
 
-  const accounts = accountStore(appStore, (tenantId) => {
+  const notifyAccountChange = (tenantId: string) => {
     // Sign-out removes the account before MSAL finishes clearing its cache. Invalidate all pending
     // observations now, including the reader's, even when that later cache operation fails.
     if (!accounts.get(tenantId)) health.signedOut(tenantId)
     else health.connectionsChanged(tenantId)
     mainWindow?.webContents.send("auth:accountsChanged", tenantId)
-  })
+  }
+  const accounts = accountStore(appStore, notifyAccountChange)
   // MSAL token traffic goes through the bridged fetch, which is only created below (it needs
   // the license and token plumbing that auth feeds). AuthManager is handed this late-bound
   // delegate instead: it is first used for a sign-in, long after bootstrap assigns the bridge.
@@ -293,9 +297,24 @@ async function bootstrap(): Promise<void> {
     if (!bridgedFetchImpl) throw new Error("TenuVault is still starting. Try again in a moment.")
     return bridgedFetchImpl(input, init)
   }
-  const auth = new AuthManager({
+  const cache = connectionCache(appStore, tokenStore)
+  const connections = new TenantConnections({
+    store: appStore,
+    signIn: {
+      ownApp: async (tenant, clientId) => {
+        const staged = stageConnectionCache(cache, clientId)
+        return { ...(await auth.stageSignIn(tenant, clientId, staged.plugin)), cacheWrites: staged.cacheWrites }
+      },
+    },
+    coverage: (tenant, method, accessToken) => connectionCoverage(moduleSettings.get(tenant), method, accessToken),
+  })
+  connections.migrate()
+  const capabilities = new ConnectionCapabilities(tenant => connections.get(tenant))
+  const auth: AuthManager = new AuthManager({
     fetch: bridgedFetchLater,
-    cachePlugin: (clientId) => secureCachePlugin(tokenStore, clientId),
+    cachePlugin: (clientId) => secureCachePlugin(cache, clientId),
+    authorizeInteractive: tenant => capabilities.requireInteractive(tenant),
+    authorizeConnection: (tenant, client, scope) => capabilities.requireConnection(tenant, client, scope),
     openBrowser: (url) => {
       if (!isMicrosoftLoginUrl(url)) {
         console.warn("[auth] Refused to open a sign-in URL that is not on the Microsoft login host.")
@@ -331,6 +350,10 @@ async function bootstrap(): Promise<void> {
     // the app registration the tenant is signed in with.
     idToken: (tenantId) => auth.getIdToken(tenantId),
     clientId: (tenantId) => accounts.get(tenantId)?.clientId ?? null,
+    ownClientId: (tenantId) => {
+      const connection = connections.get(tenantId)
+      return connection ? connection.ownClientId ?? null : accounts.get(tenantId)?.clientId ?? null
+    },
     // Keep licensing outside the local API/storage bridge below.
     fetch: chromiumFetch,
     onChange: pushLicense,
@@ -394,6 +417,8 @@ async function bootstrap(): Promise<void> {
     // Azure backups are written as plain JSON; backups sealed by earlier versions open with the device keyring.
     fetch: legacyAzureReader(withNetworkErrors(chromiumFetch), () => backupKeys.keyring()),
     authorizeTenant,
+    authorizeGraphRequest: (url, input, init, tenant) => capabilities.authorizeGraphRequest(url, input, init, tenant),
+    authorizeResource: (tenant, scope) => capabilities.requireResource(tenant, scope),
     handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request),
     getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => {
       const result = await tokenFor(tenant, clientId, scope, forceRefresh)
@@ -493,6 +518,7 @@ async function bootstrap(): Promise<void> {
       return profile && { clientId: profile.clientId, storage: isLocalAccount(profile.storageAccountName) ? "local" : "azure", storageId: profile.storageAccountName }
     },
     account: (tenantId) => accounts.get(tenantId)?.homeAccountId ?? null,
+    readOnly: tenant => capabilities.isGraphOnly(tenant),
     settings: (tenantId) => moduleSettings.get(tenantId),
     token: (tenantId, clientId, resource) => auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES[resource], true),
     reader: (tenantId) => {
@@ -749,7 +775,7 @@ async function bootstrap(): Promise<void> {
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
-    guard: async (request) => (await checkCis(request)) ?? (await recordPlanRefusal(failedAttempts, request, await checkPlan(request))) ?? checkDisclaimer(request),
+    guard: async (request) => (await capabilities.guard(request)) ?? (await checkCis(request)) ?? (await recordPlanRefusal(failedAttempts, request, await checkPlan(request))) ?? checkDisclaimer(request),
     onHandled: createAuditRecorder((request) => host.dispatch(request), (tenantId) => accounts.get(tenantId), (notice) => {
       void emitRestoreOutcome(featureDeps, notice.tenantId, {
         status: notice.status,
@@ -1495,6 +1521,16 @@ async function bootstrap(): Promise<void> {
     pushLicense()
   })
   handleTrusted("auth:accounts", () => auth.accounts())
+  handleTrusted("auth:connection", (_event, tenantId: unknown) => {
+    if (!isGuid(tenantId) || !tenantProfile(tenantId)) return null
+    return connections.get(tenantId)
+  })
+  handleTrusted("auth:switchConnection", async (_event, tenantId: unknown, target: unknown) => {
+    const { account, ...result } = await connections.switch(tenantId, target).finally(returnToApp)
+    try { notifyAccountChange(account.tenantId) } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
+    void Promise.resolve().then(() => health.check(account.tenantId, "signIn")).catch(() => undefined)
+    return result
+  })
   handleTrusted("auth:savedDirectoryRestores", (_event, tenantId: unknown) => {
     if (typeof tenantId !== "string") throw new Error("Choose a signed-in tenant.")
     return directoryRestoreUnfinished(tenantId)
@@ -1566,10 +1602,11 @@ async function bootstrap(): Promise<void> {
     if (tenantId !== undefined && tenantId !== null && !isTenantId(tenantId)) throw new Error("Unknown tenant.")
     return withStatus(() => license.retry(tenantId ? [tenantId] : signedInTenants()))
   })
-  handleTrusted("license:setShared", (_event, tenantId: unknown, shared: unknown) => {
+  handleTrusted("license:setShared", (_event, tenantId: unknown, shared: unknown, allowGraphCli: unknown) => {
     if (!isTenantId(tenantId)) throw new Error("Unknown tenant.")
     if (typeof shared !== "boolean") throw new Error("Choose whether to share the license.")
-    return withStatus(() => license.setShared(tenantId, shared))
+    if (allowGraphCli !== undefined && (typeof allowGraphCli !== "boolean" || !shared)) throw new Error("Choose whether to allow Start now when sharing this license.")
+    return withStatus(() => license.setShared(tenantId, shared, allowGraphCli))
   })
   handleTrusted("license:deactivate", () => withStatus(() => license.deactivate()))
   handleTrusted("license:checkNewTenant", (_event, tenantId: unknown) => {
@@ -1627,14 +1664,17 @@ async function bootstrap(): Promise<void> {
     // The first tenant saved on this computer is the end of the setup.
     const firstTenant = name === "tenuvault_tenants" && connectedTenantIds().length === 0
     const previousTenants = name === "tenuvault_tenants" ? connectedTenantIds() : []
-    appStore.set(RENDERER_STORAGE_PREFIX + name, text)
+    if (name === "tenuvault_tenants") {
+      connections.saveProfiles(text)
+    } else appStore.set(RENDERER_STORAGE_PREFIX + name, text)
     if (name === "tenuvault_tenants") for (const tenant of new Set([...previousTenants, ...connectedTenantIds()])) health.connectionsChanged(tenant)
     if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
   })
   handleTrusted("storage:remove", (_event, key: unknown) => {
     const name = rendererStorageKey(key)
     const previousTenants = name === "tenuvault_tenants" ? connectedTenantIds() : []
-    appStore.delete(RENDERER_STORAGE_PREFIX + name)
+    if (name === "tenuvault_tenants") connections.saveProfiles(null)
+    else appStore.delete(RENDERER_STORAGE_PREFIX + name)
     for (const tenant of previousTenants) health.connectionsChanged(tenant)
   })
 
@@ -1699,6 +1739,7 @@ async function bootstrap(): Promise<void> {
     fetch: chromiumFetch,
     connection: async tenantId => {
       connectedTenant(tenantId)
+      capabilities.requireWrite([tenantId])
       const account = accounts.get(tenantId.toLowerCase())
       const profile = tenantProfile(tenantId)
       if (!account || !profile || account.clientId.toLowerCase() !== profile.clientId.toLowerCase()) throw new Error("Sign in to the connected registration first.")
@@ -1826,12 +1867,13 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
-    restore: (store, source, snapshot, target, name, signal, progress, operationId) => disclaimer.run([target], () =>
-      restoreAppWithAudit(store, source, snapshot, target, name, {
+    restore: (store, source, snapshot, target, name, signal, progress, operationId) => {
+      capabilities.requireWrite([target])
+      return disclaimer.run([target], () => restoreAppWithAudit(store, source, snapshot, target, name, {
         getGraphToken: async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken,
         fetch: bridgedFetch, signal, progress, operationId,
-      })
-    ),
+      }))
+    },
     ensureKeys: () => { backupKeys.keyring() },
     capture: async (tenant, appId, jobId, store, signal, progress) => {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")

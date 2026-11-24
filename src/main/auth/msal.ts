@@ -15,6 +15,7 @@ import { isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
+import type { StagedSignIn } from "./tenant-connections"
 import type { AppDeviceCode } from "../../shared/app-sources/types"
 
 export interface AuthHost {
@@ -26,6 +27,8 @@ export interface AuthHost {
   fetch: typeof fetch
   /** Encrypted per-client MSAL cache persistence. */
   cachePlugin: (clientId: string) => ICachePlugin
+  authorizeInteractive?: (tenantId: string) => void
+  authorizeConnection?: (tenantId: string, clientId: string, scope: string) => void
   /** Opens the system browser for the loopback sign-in flow. */
   openBrowser: (url: string) => Promise<void>
   /** Stores which account belongs to which tenant profile. */
@@ -187,8 +190,7 @@ export const ERROR_PAGE = page("Sign-in failed", "Go back to TenuVault for detai
 /**
  * Delegated Microsoft Entra sign-in for the admin using the app.
  *
- * Every tenant is accessed with the customer's own public client app registration
- * (no client secret). Tokens are requested as the signed-in admin, so Conditional
+ * Tenants are accessed with public client app registrations (no client secret). Tokens are requested as the signed-in admin, so Conditional
  * Access, MFA and device compliance policies apply exactly as they do for the
  * Intune portal. Sign-in always opens the system browser, on Windows as on macOS, so
  * the admin can use a separate admin account rather than the one signed in to the
@@ -218,6 +220,7 @@ export class AuthManager {
     /** Called when the browser has answered and the code is being redeemed: the browser step is over. */
     onBrowserDone?: () => void
   }): Promise<SignedInAccount> {
+    this.host.authorizeInteractive?.(tenant)
     const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone).catch((error: unknown) => {
       throw firstSignInError(error)
     })
@@ -231,8 +234,23 @@ export class AuthManager {
       name: account.name,
       homeAccountId: account.homeAccountId,
     }
+    this.host.authorizeInteractive?.(signedIn.tenantId)
+    this.host.authorizeConnection?.(signedIn.tenantId, clientId, RESOURCE_SCOPES.graph)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
+  }
+
+  /** Sign in without publishing either the profile or the token cache. */
+  async stageSignIn(tenant: string, clientId: string, cache: ICachePlugin): Promise<Pick<StagedSignIn, "account" | "accessToken">> {
+    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account", undefined, true, undefined, this.createApp(clientId, cache)).catch((error: unknown) => {
+      throw firstSignInError(error)
+    })
+    const account = result.account
+    if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
+    return {
+      account: { tenantId: account.tenantId.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId },
+      accessToken: result.accessToken,
+    }
   }
 
   async signOut(tenantId: string): Promise<void> {
@@ -270,6 +288,7 @@ export class AuthManager {
    * token. Throws SignInRequiredError when the admin has to sign in again.
    */
   async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<AuthenticationResult> {
+    this.host.authorizeConnection?.(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
     if (!stored || stored.clientId !== clientId) {
       throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.", scope)
@@ -331,7 +350,9 @@ export class AuthManager {
    * Conditional Access step that resource requires instead of succeeding for Graph alone.
    */
   async reauthenticate(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph): Promise<SignedInAccount> {
+    this.host.authorizeInteractive?.(tenantId)
     if (!isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
+    this.host.authorizeConnection?.(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
     const result = await this.acquireInteractive(clientId, tenantId, scope, undefined, stored?.username).catch((error: unknown) => {
       throw missingPermissionError(scope, error) ?? error
@@ -341,6 +362,7 @@ export class AuthManager {
     if (account.tenantId.toLowerCase() !== tenantId.toLowerCase()) {
       throw new Error("You signed in to a different tenant. Sign in with an account from this tenant.")
     }
+    this.host.authorizeInteractive?.(tenantId)
     const signedIn = {
       tenantId: tenantId.toLowerCase(),
       clientId,
@@ -348,6 +370,7 @@ export class AuthManager {
       name: account.name,
       homeAccountId: account.homeAccountId,
     }
+    this.host.authorizeConnection?.(tenantId, clientId, scope)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }
@@ -358,11 +381,15 @@ export class AuthManager {
   }
 
   async signInWithDeviceCode(tenant: string, clientId: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal): Promise<void> {
-    // Switching methods ends only this tenant's waiting browser attempts.
+    this.host.authorizeInteractive?.(tenant)
+    this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
+    // End this tenant's waiting browser attempts.
     for (const entry of this.interactiveControls.values()) if (entry.tenant.toLowerCase() === tenant.toLowerCase()) entry.controller.abort(new SignInCancelledError())
     const result = await deviceCodeSignIn(tenant, request => this.app(clientId).acquireTokenByDeviceCode(request), onCode, signal)
     signal.throwIfAborted()
     const account = result.account!
+    this.host.authorizeInteractive?.(tenant)
+    this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
     this.host.accountStore.set({ tenantId: tenant.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
   }
 
@@ -375,8 +402,9 @@ export class AuthManager {
     loginHint?: string,
     cancellable = false,
     onBrowserDone?: () => void,
+    stagedApp?: PublicClientApplication,
   ): Promise<AuthenticationResult> {
-    const key = `${clientId}|${tenant.toLowerCase()}|${scope}|${prompt ?? ""}|${loginHint ?? ""}`
+    const key = `${clientId}|${tenant.toLowerCase()}|${scope}|${prompt ?? ""}|${loginHint ?? ""}|${stagedApp ? "staged" : "normal"}`
     const pending = this.interactive.get(key)
     if (pending) return pending
 
@@ -397,7 +425,7 @@ export class AuthManager {
     // The first sign-in stops waiting after a while, like the setup sign-in.
     const deadline = cancellable ? setTimeout(() => cancel(new SignInTimeoutError(FIRST_SIGN_IN_TIMEOUT_MESSAGE)), SIGN_IN_TIMEOUT_MS) : undefined
     const promise = loopbackSignIn({
-      app: this.app(clientId),
+      app: stagedApp ?? this.app(clientId),
       scopes: [scope],
       authority: authority(tenant),
       ...(prompt ? { prompt } : {}),
@@ -446,21 +474,25 @@ export class AuthManager {
   private app(clientId: string): PublicClientApplication {
     let app = this.apps.get(clientId)
     if (!app) {
-      app = new PublicClientApplication({
-        auth: { clientId, authority: authority("organizations") },
-        cache: { cachePlugin: this.host.cachePlugin(clientId) },
-        system: {
-          networkClient: fetchNetworkClient(this.host.fetch),
-          loggerOptions: {
-            logLevel: LogLevel.Warning,
-            piiLoggingEnabled: false,
-            loggerCallback: (_level, message) => console.log(`[msal] ${message}`),
-          },
-        },
-      })
+      app = this.createApp(clientId, this.host.cachePlugin(clientId))
       this.apps.set(clientId, app)
     }
     return app
+  }
+
+  private createApp(clientId: string, cache: ICachePlugin): PublicClientApplication {
+    return new PublicClientApplication({
+      auth: { clientId, authority: authority("organizations") },
+      cache: { cachePlugin: cache },
+      system: {
+        networkClient: fetchNetworkClient(this.host.fetch),
+        loggerOptions: {
+          logLevel: LogLevel.Warning,
+          piiLoggingEnabled: false,
+          loggerCallback: (_level, message) => console.log(`[msal] ${message}`),
+        },
+      },
+    })
   }
 }
 

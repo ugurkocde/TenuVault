@@ -91,9 +91,10 @@ export class SecureStore {
   }
 
   /** Publishes a group of values with one encryption, sync and atomic rename. */
-  setMany(changes: Record<string, string>): void {
-    if (!Object.keys(changes).length) return
+  setMany(changes: Record<string, string>, removed: readonly string[] = []): void {
+    if (!Object.keys(changes).length && !removed.length) return
     const values = { ...this.load(), ...changes }
+    for (const key of removed) delete values[key]
     this.flush(values)
     this.values = values
   }

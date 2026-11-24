@@ -1,3 +1,4 @@
+import { TenantConnectionSettings } from "../components/TenantConnectionSettings"
 import { IdentityRestoreSafety } from "../components/IdentityRestoreSafety"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
@@ -473,6 +474,15 @@ function TenantSettings({ active }: { active: boolean }) {
                     <p className="truncate text-xs text-gray-500">
                       {account ? `Signed in as ${account.username}` : "Not signed in"} · Backups: {storageLabel(tenant.resources?.storageAccountName)}
                     </p>
+                    {tenant.credentials && <TenantConnectionSettings
+                      key={tenantId}
+                      tenantId={tenantId}
+                      clientId={tenant.credentials.appId}
+                      onChanged={appId => {
+                        updateTenant(tenant.id, { credentials: { ...tenant.credentials!, appId } })
+                        refresh()
+                      }}
+                    />}
                   </div>
                   <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
