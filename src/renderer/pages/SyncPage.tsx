@@ -104,13 +104,23 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   // sync, rollback or new start, so a chip never shows a state from before a change.
   const policies = useQuery({ queryKey: ["sync", "policies", sourceId, folder], queryFn: () => syncPolicies(source, folder), refetchOnWindowFocus: true })
   const options = useQuery({ queryKey: ["sync", "targets", sourceId], queryFn: () => syncTargets(source) })
-  const eligible = (options.data?.targets ?? []).filter((option) => option.eligible).map((option) => option.tenantId).slice(0, 25)
-  // A run may name more than one target only on MSP; otherwise every eligible target (several
-  // when the source and more than one other tenant run a Pro trial) is read on its own.
+  const eligibleOptions = (options.data?.targets ?? []).filter((option) => option.eligible).slice(0, 25)
+  const eligible = eligibleOptions.map((option) => option.tenantId)
+  // A request may name several targets only when the source and every named target are on MSP.
+  // MSP targets of an MSP source are read together; every other eligible target is read on its own.
   const multiple = options.data?.multiple === true
+  const batched = multiple ? eligibleOptions.filter((option) => option.multiple).map((option) => option.tenantId) : []
+  const single = eligible.filter((id) => !batched.includes(id))
   const status = useQuery({
-    queryKey: ["sync", "status", sourceId, eligible.join(), multiple],
-    queryFn: async () => multiple ? syncStatus(source, eligible) : { targets: (await Promise.all(eligible.map((id) => syncStatus(source, [id]).catch((error: unknown) => ({ targets: [{ targetTenantId: id, links: [], error: error instanceof Error ? error.message : String(error) }] }))))).flatMap((answer) => answer.targets) },
+    queryKey: ["sync", "status", sourceId, eligible.join(), batched.join()],
+    queryFn: async () => {
+      const failed = (ids: string[]) => (error: unknown) => ({ targets: ids.map((id) => ({ targetTenantId: id, links: [], error: error instanceof Error ? error.message : String(error) })) })
+      const answers = await Promise.all([
+        ...(batched.length ? [syncStatus(source, batched).catch(failed(batched))] : []),
+        ...single.map((id) => syncStatus(source, [id]).catch(failed([id]))),
+      ])
+      return { targets: answers.flatMap((answer) => answer.targets) }
+    },
     enabled: eligible.length > 0,
     staleTime: 10_000,
     refetchOnWindowFocus: true,

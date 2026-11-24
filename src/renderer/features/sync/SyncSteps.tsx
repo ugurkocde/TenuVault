@@ -157,7 +157,7 @@ const REASON: Record<NonNullable<SyncTargetOption["reason"]>, { chip: string; ti
   unavailable: { chip: "Not available", title: "Sign in to this tenant and check its license first." },
 }
 
-export const COPY_TARGET_PLAN_NOTE = "On Pro, each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run."
+export const COPY_TARGET_PLAN_NOTE = "Each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run."
 
 /** Step 2: pick eligible targets. Pro allows one target per run. */
 export function ChooseTargets({ sourceName, options, loading, error, tenantOf, linked, selected, onToggle, onBack, onNext, planning }: {

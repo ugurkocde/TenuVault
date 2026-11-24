@@ -254,7 +254,7 @@ describe("Sync page plans", () => {
     plan.current = "community"
     const container = await render()
     expect(container.querySelector('section[aria-label="Copy to Tenants preview"]')).not.toBeNull()
-    expect(container.textContent).toContain("On Pro, each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run.")
+    expect(container.textContent).toContain("Each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run.")
     expect(container.querySelector('ol[aria-label="Steps"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Recent copies"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Choose settings"]')).toBeNull()
@@ -279,7 +279,7 @@ describe("Sync page plans", () => {
     }
     await click(card(container, "Contoso Germany"))
     expect(card(container, "Contoso Germany").getAttribute("aria-pressed")).toBe("true")
-    expect(container.textContent).toContain("On Pro, each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run.")
+    expect(container.textContent).toContain("Each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run.")
     expect(container.textContent).not.toMatch(/upsell|upgrade now|unlock/i)
     await click(button(container, "See plans"))
     expect(opened).toEqual([["buy", { source: "sync-targets" }]])
@@ -304,6 +304,16 @@ describe("Sync page plans", () => {
     await click(card(container, "Contoso France"))
     expect(card(container, "Contoso France").getAttribute("aria-pressed")).toBe("true")
     expect(card(container, "Contoso Germany").getAttribute("aria-pressed")).toBe("false")
+  })
+  it("on MSP with a Pro target among MSP targets, reads the MSP targets together and the Pro target on its own", async () => {
+    plan.current = "msp"
+    scenario.targets = [{ tenantId: B, eligible: true, multiple: true, reason: null }, { tenantId: C, eligible: true, multiple: true, reason: null }, { tenantId: D, eligible: true, multiple: false, reason: null }]
+    const container = await render()
+    await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
+    await until(() => calls.filter((call) => call.action === "status").length === 2, "status reads")
+    const reads = calls.filter((call) => call.action === "status").map((call) => (call.body.targetTenants as Array<{ tenantId: string }>).map((target) => target.tenantId).sort())
+    expect(reads).toEqual(expect.arrayContaining([[B, C].sort(), [D]]))
+    expect(reads).toHaveLength(2)
   })
 })
 

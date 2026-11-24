@@ -24,7 +24,7 @@ const hashField = (body: Body, key: string): string => {
   return value
 }
 
-/** Re-checks the two-tenant rule on every paid action of an existing promotion. */
+/** Re-checks the two-tenant rule on every paid action of an existing promotion that can write (reject cannot). */
 function checkTenants(context: ActionContext, promotion: PromotionRecord): void {
   requireSourceTenant(context, promotion.sourceTenantId)
 }
@@ -125,6 +125,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const changeSet = await approvePromotion(deps, context.tenantId, promotion.id, { contentHash: hashField(context.body, "contentHash"), targetFingerprint: hashField(context.body, "targetFingerprint"), reviewer: optionalText(context.body, "reviewer", 200), note: optionalText(context.body, "note", 2000) }, context.actor)
       return { promotion: syncPromotion(deps, context.tenantId, promotion.id), changeSet }
     },
+    // Rejecting writes to neither tenant, so a pending promotion can still be cancelled after the
+    // source tenant's plan lapses; the route still checks Dev to Prod on this tenant.
     reject: async (context) => {
       const promotion = getPromotion(deps, context.tenantId, idOf(context.tenantId, context.body))
       const changeSet = promotionChangeSet(deps, context.tenantId, promotion.id)
