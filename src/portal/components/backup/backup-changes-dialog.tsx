@@ -6,7 +6,7 @@ import { BellPlus, ChevronDown, ChevronRight, Loader2, Minus, PencilLine, Plus }
 import { alertForPolicyHref } from "@desktop/lib/alert-links"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { cn } from "~/lib/utils"
-import { UnknownComparisonTypes } from "./unknown-comparison-types"
+import { NO_CHANGES_IN_COMPARED_TYPES, UnknownComparisonTypes } from "./unknown-comparison-types"
 import { formatDate, type BackupSummary, type BackupTenant } from "./types"
 
 interface ChangedItem {
@@ -98,7 +98,7 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
           </div>
         )}
         <UnknownComparisonTypes folders={unknownTypes} legacyReadFailure={legacyReadFailure} />
-        {items && items.length === 0 && <p className="py-6 text-sm text-gray-600">{(unknownTypes?.length || legacyReadFailure) ? "No changes found in the types compared." : "Nothing changed between these backups."}</p>}
+        {items && items.length === 0 && <p className="py-6 text-sm text-gray-600">{(unknownTypes?.length || legacyReadFailure) ? NO_CHANGES_IN_COMPARED_TYPES : "Nothing changed between these backups."}</p>}
         {items && items.length > 0 && (
           <ul className="divide-y divide-gray-100">
             {items.map((item) => {

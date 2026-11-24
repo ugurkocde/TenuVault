@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
+import { NO_CHANGES_IN_COMPARED_TYPES, typesNotCompared } from "~/components/backup/unknown-comparison-types"
 import { DirectoryRestore } from "~/components/backup/directory-restore"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
 import { formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, unresolvedNotice, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
@@ -58,16 +59,31 @@ const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1
 
 /** Changes since the previous backup; `first` when no older backup exists. */
 function ChangesText({ backup, first }: { backup: BackupSummary; first: boolean }) {
-  if (backup.largeInventory) return <span className="block text-sm leading-5 text-gray-600" title="Compare large inventory on the Drift Detection page.">{backup.changes ? `Policies: +${backup.changes.added}, ~${backup.changes.modified}, -${backup.changes.removed}` : "Policies not compared"}<br />Inventory: on demand</span>
-  if (!backup.changes) return <span className="text-gray-500" title={first ? undefined : "Made by an older version, or the backup before it did not finish"}>{first ? "First backup" : "Not compared"}</span>
-  const { added, modified, removed } = backup.changes
-  if (added + modified + removed === 0) return <span>None</span>
-  return (
-    <span className="flex flex-wrap gap-x-2">
-      {added > 0 && <span className="text-green-700">+{added}</span>}
-      {modified > 0 && <span className="text-amber-800">~{modified}</span>}
-      {removed > 0 && <span className="text-red-700">-{removed}</span>}
+  const unknown = backup.unknownTypes?.length ?? 0
+  const gap = unknown || backup.legacyReadFailure
+  const { added, modified, removed } = backup.changes ?? { added: 0, modified: 0, removed: 0 }
+  const hasChanges = added + modified + removed > 0
+  const qualification = unknown ? typesNotCompared(unknown) : "Comparison coverage uncertain"
+  if (backup.largeInventory) return (
+    <span className="block text-sm leading-5 text-gray-600" title="Compare large inventory on the Drift Detection page.">
+      {backup.changes ? (gap && !hasChanges ? NO_CHANGES_IN_COMPARED_TYPES : `Policies: +${added}, ~${modified}, -${removed}`) : "Policies not compared"}
+      {gap && <span className="block">{qualification}</span>}
+      <br />Inventory: on demand
     </span>
+  )
+  if (!backup.changes) return <span className="text-gray-500" title={first ? undefined : "Made by an older version, or the backup before it did not finish"}>{first ? "First backup" : "Not compared"}</span>
+  if (!hasChanges && !gap) return <span>None</span>
+  return (
+    <>
+      {hasChanges ? (
+        <span className="flex flex-wrap gap-x-2">
+          {added > 0 && <span className="text-green-700">+{added}</span>}
+          {modified > 0 && <span className="text-amber-800">~{modified}</span>}
+          {removed > 0 && <span className="text-red-700">-{removed}</span>}
+        </span>
+      ) : <span>{NO_CHANGES_IN_COMPARED_TYPES}</span>}
+      {gap && <span className="block text-xs font-normal text-gray-600">{qualification}</span>}
+    </>
   )
 }
 

@@ -39,17 +39,26 @@ const backup = (fields: Partial<BackupSummary>): BackupSummary => ({
   scope: { excluded: [], description: "Everything" }, failures: 0, skippedTypes: [], failedTypes: [], size: 2048, duration: 30, changes: null, comparedWith: null, ...fields,
 })
 
-function details(entry: BackupSummary): string {
+function renderBackup(entry: BackupSummary): HTMLDivElement {
   state.backups = [entry]
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
   act(() => root.render(createElement(BackupRestorePage)))
-  return container.textContent ?? ""
+  return container
 }
 
+const details = (entry: BackupSummary) => renderBackup(entry).textContent ?? ""
+
 describe("Backup Details and coverage", () => {
+  it("qualifies an empty comparison on the history card when some types could not be compared", () => {
+    const page = renderBackup(backup({ changes: { added: 0, modified: 0, removed: 0 }, comparedWith: "older", unknownTypes: ["DeviceConfigurations"] }))
+    const text = [...page.querySelectorAll("button")].find(button => button.textContent?.includes("Changes") && button.querySelector("h3"))?.textContent
+    expect(text).toContain("No changes found in the types compared.")
+    expect(text).toContain("1 type not compared")
+  })
+
   it("says that coverage is incomplete and names the types, for a backup that is otherwise complete", () => {
     // A scheduled backup as the Backup Reader: nothing failed and nothing was denied, yet two types are not in it.
     const text = details(backup({ coverage: "incomplete", notRead: ["DeviceCategories", "DeviceCleanupRules"] }))

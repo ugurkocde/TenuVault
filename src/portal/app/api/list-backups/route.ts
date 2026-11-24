@@ -220,6 +220,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     duration: typeof metadata?.DurationSeconds === 'number' ? metadata.DurationSeconds : metadata?.Duration ?? metadata?.duration ?? null,
     changes: null as ChangeSummary | null,
     comparedWith: null as string | null,
+    unknownTypes: undefined as string[] | undefined,
     legacyReadFailure: undefined as boolean | undefined,
     fingerprint: metadata as BackupFingerprint | null | undefined,
     claim,
@@ -597,7 +598,9 @@ export async function POST(request: NextRequest) {
       if (!previous) continue
       current.changes = summarize(compareBackups(previous.fingerprint, current.fingerprint))
       current.comparedWith = previous.id
-      if (comparisonCoverage(previous.fingerprint ?? null, current.fingerprint).legacyReadFailure) current.legacyReadFailure = true
+      const { unknown, legacyReadFailure } = comparisonCoverage(previous.fingerprint ?? null, current.fingerprint)
+      if (unknown.length) current.unknownTypes = unknown
+      if (legacyReadFailure) current.legacyReadFailure = true
     }
     for (const backup of backups) {
       delete backup.ownSize

@@ -183,6 +183,8 @@ TenuVault compares each tenant's two newest complete backups, one tenant after a
 
 ## Where drift appears elsewhere
 
+Backup History uses the same comparison coverage as **View Changes**. When there are no confirmed changes and some types could not be compared, the history card says **No changes found in the types compared** and shows how many types were left out.
+
 * The **Drift** tile on the [Dashboard](/tenants/#the-tenant-dashboard) shows when backups were last compared, and **Check drift** opens this page.
 * Every comparison is recorded in the [audit log](/audit-log/) as "Detect drifts".
 

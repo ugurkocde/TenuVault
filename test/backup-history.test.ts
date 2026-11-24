@@ -122,6 +122,29 @@ describe("backup history", () => {
     })
   })
 
+  it("returns the same unknown types as the detail dialog when the only change is in an unread type", async () => {
+    const scope = { Included: ["DeviceConfigurations", "CompliancePolicies"], Excluded: [] }
+    const unchanged = fingerprint({ "CompliancePolicies/1": ["Compliance.json", "same"] })
+    storage({
+      [`${older}/metadata.json`]: {
+        Status: "Success", Scope: scope, Coverage: "Complete",
+        Items: { ...unchanged, ...fingerprint({ "DeviceConfigurations/1": ["A.json", "before"] }) },
+        Outcomes: [{ Folder: "DeviceConfigurations", Outcome: "saved", Saved: 1 }, { Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 }],
+      },
+      [`${newer}/metadata.json`]: {
+        Status: "CompletedWithWarnings", Scope: scope, Coverage: "Incomplete", Failures: 1, FailedTypes: ["DeviceConfigurations"],
+        Items: unchanged,
+        Outcomes: [{ Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0 }, { Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 }],
+      },
+    })
+    const detail = await (await backupChanges(request({ backupId: newer }))).json()
+    expect(detail).toMatchObject({ changes: [], unknownTypes: ["DeviceConfigurations"] })
+    const { backups } = await (await listBackups(request({}))).json()
+    expect(backups[0]).toMatchObject({
+      id: newer, comparedWith: older, changes: { added: 0, modified: 0, removed: 0 }, unknownTypes: detail.unknownTypes,
+    })
+  })
+
   it("reports real duration, trigger, scope, counts and item changes for the types both backups hold", async () => {
     storage(blobs)
     const { backups } = await (await listBackups(request({}))).json()

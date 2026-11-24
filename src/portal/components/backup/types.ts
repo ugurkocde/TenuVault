@@ -36,6 +36,7 @@ export interface BackupSummary {
   /** Compared with the newest older comparable backup; null when there is none. */
   changes: { added: number; modified: number; removed: number } | null
   comparedWith: string | null
+  unknownTypes?: string[]
   legacyReadFailure?: boolean
   /** Why the metadata could not be read, when it could not. */
   error?: string
