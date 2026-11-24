@@ -1,3 +1,4 @@
+import { normalizeGuid } from "../../shared/security"
 import { rejectProxyAuthResponses } from "../api/network-error"
 import { DirectoryReadDeferredError, DirectoryThrottledError, directoryThrottleError, retryDirectoryWrite } from "./directory-retry"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
@@ -6,7 +7,7 @@ import { directoryWriteAuthorization, directoryWriteResponse } from "./directory
 import { directoryPermissionBlocker } from "./directory-permissions"
 import { directoryReadAbsent, directoryReadShape } from "./directory-read-shape"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
-import { requireRestoreActor } from "./restore-actor"
+import { requireRestoreActor, type RestoreAuthorization } from "./restore-actor"
 import { requireDirectoryApprovals } from "./directory-9a"
 import { appIdentity, applicationAdmission, applicationPermissions, applicationReview, restorableApp, requireApplicationRestoreAccess } from "./directory-9b"
 import { assertNoSecrets, isRestorePersistenceError, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
@@ -20,8 +21,8 @@ const collection = (folder: string) => {
   throw new RestoreSafetyError("Outside application restore scope.")
 }
 /** Application operations plug into the existing directory journal, batching and approval service. */
-export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => [], settings: () => ModuleSetting | undefined = () => undefined, wait?: (ms: number) => Promise<void>, onReadThrottled?: (retryAt: number) => void) {
-  requireRestoreActor(token, actor)
+export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => [], settings: () => ModuleSetting | undefined = () => undefined, wait?: (ms: number) => Promise<void>, onReadThrottled?: (retryAt: number) => void, authorization?: RestoreAuthorization) {
+  requireRestoreActor(token, actor, authorization)
   const fetchRequest = rejectProxyAuthResponses(fetchImpl)
   const request = async (path: string, method = "GET", body?: Item, signal?: AbortSignal): Promise<Item | null> => {
     if (signal?.aborted) throw new RestoreWriteDeferredError("The application request was cancelled before sending.")
@@ -174,7 +175,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     }
     return applicationReview(step, current, resource, principal, actor)
   }
-  const permissionBlocker = (step: GuardedStep) => directoryPermissionBlocker(token, applicationPermissions(step))
+  const permissionBlocker = (step: GuardedStep) => directoryPermissionBlocker(token, applicationPermissions(step), authorization?.scopes)
   const requirePermissions = (step: GuardedStep) => {
     const blocker = permissionBlocker(step)
     if (blocker) throw new RestoreWriteDeferredError(blocker)
@@ -210,7 +211,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     if (current) { step.operation = "update"; step.targetId = String(current.id) }
   }
   const io: GuardedIO = {
-    token, type: folder => typeForFolder(folder)!, read, references,
+    token, authorization, type: folder => typeForFolder(folder)!, read, references,
     // Display names are not unique and cannot reconcile app or gallery creation.
     findCreated: async step => step.directory?.action === "create" && step.folder === "Applications" || step.directory?.action === "gallery" ? [] : (await read(step) ? [await read(step) as Item] : []),
     write: async (step, body, targetId, beforeSend, run, signal, onUnapplied) => {
@@ -218,10 +219,10 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
         let dispatched = false
         try {
           if (signal?.aborted) throw new RestoreWriteDeferredError("The application write was cancelled before sending.")
-          requireRestoreActor(token, actor)
+          requireRestoreActor(token, actor, authorization)
           const blocker = applicationAdmission(step)
           if (blocker) throw new RestoreSafetyError(blocker)
-          if (!run || run.origin !== "restore" || run.tenant !== actor.tenantId || !run.source) throw new RestoreSafetyError("Application access can only be restored from an owned same-tenant backup.")
+          if (!run || run.origin !== "restore" || normalizeGuid(run.tenant) !== normalizeGuid(actor.tenantId) || !run.source) throw new RestoreSafetyError("Application access can only be restored from an owned same-tenant backup.")
           requireDirectoryApprovals(step, run, ["directory-item"])
           requirePermissions(step)
           const path = `applications/${appIdentity(targetId)}`

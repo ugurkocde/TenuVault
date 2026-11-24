@@ -9,6 +9,7 @@ import { DirectoryRestoreStore } from "./storage/directory-restore-store"
 import { DirectoryRestoreService } from "./restore/directory-service"
 import { directoryRestoreUnfinished, setDirectoryRestoreService } from "./restore/directory-dispatch"
 import { IdentityRestoreService } from "./restore/service"
+import { restoreSignIn } from "./restore/restore-actor"
 import { RecoveryAccounts } from "./restore/safety-resolvers"
 import { restoreSafetyRoutes } from "./restore/routes"
 import { setIdentityRestorePreviews, setIdentityRestoreDispatch } from "./restore/dispatch"
@@ -486,9 +487,7 @@ async function bootstrap(): Promise<void> {
     if (!account) throw new Error("Sign in to this tenant before restoring identity policies.")
     await license.requireEntitlement(tenant)
     const token = await tokenFor(tenant, account.clientId, "https://graph.microsoft.com/.default", true)
-    const claims = JSON.parse(Buffer.from(token.accessToken.split(".")[1] ?? "", "base64url").toString("utf8")) as { oid?: string }
-    if (!claims.oid) throw new Error("A signed-in admin is required.")
-    return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken, auditActor: { username: token.account?.username ?? claims.oid, name: token.account?.name } }
+    return restoreSignIn(tenant, account, token)
   }
   // An in-place update needs the plan feature at execution as well, whatever the request said.
   const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch, async (tenant) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { GuardedRunJournal, assertNoSecrets, executeGuardedRun, restoreFingerprint, type GuardedIO, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
-import { requireRestoreActor } from "../src/main/restore/restore-actor"
+import { requireRestoreActor, restoreSignIn } from "../src/main/restore/restore-actor"
 import { addsOnly, addsOnlyPayload, RestoreWriteRefusedError, guardRestoreItem, mergeConsentScopes, restoreOriginBlocker, type RestoreActor } from "../src/shared/intune/restore-guards"
 import { dependencyOrder, mappedReference, rememberMapping, replacedReferenceReport, type RestoreMapping } from "../src/shared/intune/restore-references"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"
@@ -51,6 +51,22 @@ describe("identity restore admission", () => {
     requireRestoreActor(delegated, actor)
     for (const claims of [{ roles: ["Directory.ReadWrite.All"] }, { scp: "", oid: "admin" }, { scp: "write", oid: "other", tid: "tenant", appid: "client" }, { scp: "write", oid: "admin", tid: "other", appid: "client" }, { scp: "write", oid: "admin", tid: "tenant", appid: "other" }, { scp: "write", oid: "admin", tid: "tenant", appid: "client", idtyp: "app" }]) expect(() => requireRestoreActor(token(claims), actor)).toThrow("signed-in admin")
     expect(() => requireRestoreActor("unknown", actor)).toThrow("signed-in admin")
+  })
+  it("uses the signed-in MSAL account for opaque tokens and fails closed without Graph scopes or the matching account", () => {
+    const stored = { clientId: actor.clientId, homeAccountId: "admin.home" }
+    const account = { ...stored, tenantId: actor.tenantId, localAccountId: actor.userId, username: "admin@example.test", environment: "login.microsoftonline.com" }
+    const result = { account, accessToken: "opaque", scopes: ["Policy.ReadWrite.Authorization"], tenantId: actor.tenantId }
+    const connection = restoreSignIn(actor.tenantId, stored, result)
+    expect(connection).toMatchObject({ token: "opaque", userId: actor.userId })
+    requireRestoreActor(connection.token, actor, connection.authorization)
+    expect(() => requireRestoreActor(connection.token, { ...actor, userId: "another-user" }, connection.authorization)).toThrow("signed-in admin")
+    for (const patches of [
+      { account: null }, { account: { ...account, homeAccountId: "other.home" } },
+      { account: { ...account, tenantId: "wrong-tenant" } }, { tenantId: "wrong-tenant" },
+      { scopes: [] }, { scopes: ["openid", "https://storage.azure.com/user_impersonation"] },
+    ]) expect(() => restoreSignIn(actor.tenantId, stored, { ...result, ...patches })).toThrow("signed-in admin")
+    expect(restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: delegated }).userId).toBe(actor.userId)
+    expect(() => restoreSignIn(actor.tenantId, stored, { ...result, account: null, accessToken: token({ scp: "Policy.ReadWrite.Authorization", oid: "admin", tid: "tenant", appid: "other" }) })).toThrow("signed-in admin")
   })
   it("refuses protected users, roles, methods, applications and unresolved safety evidence", () => {
     for (const principal of ["ADMIN", "recovery", "sp"]) expect(() => guardRestoreItem(actor, "EntraRoleAssignments", undefined, { ...references, principals: [principal] }, false)).toThrow("protected")

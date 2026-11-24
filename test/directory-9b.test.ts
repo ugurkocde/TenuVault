@@ -20,8 +20,9 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12,"0")}
 const actor = { tenantId: id(1), userId: id(2), clientId: id(3), applicationObjectId: id(4), servicePrincipalId: id(5), recoveryAccountIds: [id(6)] }
 const app = { tags: null, description: null, notes: null, id: id(10), appId: id(11), displayName: "API", appOwnerOrganizationId: id(1), servicePrincipalType: "Application", appRoles: [{ id: id(90), displayName: "Test role", isEnabled: true, allowedMemberTypes: ["Application"] }], oauth2PermissionScopes: [{ value: "Test.Read", isEnabled: true }] }
 const client = { ...app, id: id(12), appId: id(13), displayName: "Client" }
-const token = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: "Application.Read.All Directory.Read.All Application.ReadWrite.All DelegatedPermissionGrant.ReadWrite.All AppRoleAssignment.ReadWrite.All" })).toString("base64url")}.s`
-function world() {
+const scopes = "Application.Read.All Directory.Read.All Application.ReadWrite.All DelegatedPermissionGrant.ReadWrite.All AppRoleAssignment.ReadWrite.All"
+const token = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: scopes })).toString("base64url")}.s`
+function world(opaque = false) {
   const writes: string[] = [], objects = new Map<string, Item>(), grants: Item[] = [], roles: Item[] = []
   objects.set(`applications/${id(4)}`, { id: id(4), appId: id(3) })
   objects.set(`applications/${id(10)}`, { ...app })
@@ -52,7 +53,7 @@ function world() {
   const data = new Map<string, string>()
   const settings = new ModuleSettings({ get: key => data.get(key) ?? null, set: (key, value) => { data.set(key, value) }, delete: key => { data.delete(key) } })
   settings.setChoice(actor.tenantId, { entra: { access: "restore", areas: ["applications"] } })
-  const io = directory9bIO(token, actor, fetcher, () => [], () => settings.get(actor.tenantId).entra)
+  const io = directory9bIO(opaque ? "opaque-graph-token" : token, actor, fetcher, () => [], () => settings.get(actor.tenantId).entra, undefined, undefined, opaque ? { ...actor, scopes: scopes.split(" ") } : undefined)
   return { io, writes, objects, grants, roles, fetcher, settings }
 }
 const step = (action: NonNullable<GuardedStep["directory"]>["action"], folder = "Applications"): GuardedStep => ({ folder, key: "test", sourceId: id(10), targetId: id(10), operation: "update", directory: { action, expectedAppId: String(app.appId) }, desired: { displayName: "Saved" }, properties: ["displayName"], preview: restoreFingerprint(null), requires: [] })
@@ -927,8 +928,8 @@ it("defers a repeated application nextLink before fetching it again", async () =
   expect(reads).toBe(2); expect(env.writes).toEqual([])
 })
 
-it("previews and restores a home-tenant application name without a service principal", async () => {
-  const env = world(), original = env.fetcher.getMockImplementation()!, data = new Map<string, string>()
+it.each([false, true])("previews and restores a home-tenant application name without a service principal (opaque: %s)", async opaque => {
+  const env = world(opaque), original = env.fetcher.getMockImplementation()!, data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const application = { id: app.id, appId: app.appId, displayName: "API", description: null, notes: null }
   env.objects.set(`applications/${app.id}`, application)

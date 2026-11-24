@@ -4,9 +4,9 @@ import { DirectoryRetryPersistenceError, DirectoryWriteUncertainError, persistDi
 import { DirectoryReplicationDeferredError } from "./directory-retry"
 import { DirectoryObjectNotFoundError, DirectoryRequiredObjectAbsentError, directoryCreateMatches } from "./directory-write-response"
 import { requireConfigurationApproval } from "./entra-configuration"
-import { isGraphId, isGuid } from "../../shared/security"
+import { isGraphId, isGuid, normalizeGuid } from "../../shared/security"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
-import { requireRestoreActor } from "./restore-actor"
+import { requireRestoreActor, type RestoreAuthorization } from "./restore-actor"
 import { createHash } from "node:crypto"
 import type { KeyValueStore } from "../storage/secure-store"
 import { restoreCapability, type IntuneType, type Item } from "../../shared/intune/registry"
@@ -61,6 +61,7 @@ export interface GuardedRun {
 }
 export interface GuardedIO {
   token: string
+  authorization?: RestoreAuthorization
   now?: () => number
   /** True while this tenant's journal holds an acknowledged create of the object inside the replication window. */
   recentlyCreated?: (objectId?: string) => boolean
@@ -205,9 +206,10 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
   if (active.has(key)) throw new RestoreSafetyError("This restore is already running.")
   active.add(key)
   try {
-    requireRestoreActor(io.token, input.actor)
+    requireRestoreActor(io.token, input.actor, io.authorization)
     const previous = journal.load(input.tenant, input.id)
-    const identity = ({ recoveryAccountIds: _recovery, ...connection }: RestoreActor) => connection
+    const identity = ({ recoveryAccountIds: _recovery, ...connection }: RestoreActor) =>
+      Object.fromEntries(Object.entries(connection).map(([field, id]) => [field, id === undefined ? id : normalizeGuid(id)]))
     if (previous && canonical([identity(previous.actor), previous.origin, previous.source, previous.entries.map(entry => entry.step)]) !== canonical([identity(input.actor), input.origin, input.source, input.entries.map(entry => entry.step)])) throw new RestoreSafetyError("The restore identity or plan changed. Preview again with a new run ID.")
     const run = previous ?? structuredClone(input)
     run.actor = structuredClone(input.actor)

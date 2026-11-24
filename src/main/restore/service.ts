@@ -3,10 +3,9 @@ import { randomUUID } from "node:crypto"
 import { INTUNE_TYPES, typeForFolder, restoreCapability } from "../../shared/intune/registry"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { canBackUp, restorePermissionBlocker } from "../../shared/services/modules"
-import { grantedPermissions } from "../../shared/services/token"
 import { mappedReference } from "../../shared/intune/restore-references"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
-import { requireRestoreActor } from "./restore-actor"
+import { requireRestoreActor, restorePermissions, type RestoreAuthorization } from "./restore-actor"
 import { guardedGraphIO } from "./graph-io"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedStep } from "./guarded-run"
 import { RecoveryAccounts, resolveRestoreActor, resolveSafetyReferences } from "./safety-resolvers"
@@ -15,7 +14,7 @@ import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "./reference-scanner"
 import type { IdentityRestoreRequest } from "./dispatch"
 import type { RestoreOutcome } from "../../portal/lib/policies/graph-restore"
 
-export interface RestoreConnection { auditActor?: { username: string; name?: string }; token: string; tenantId: string; clientId: string; userId: string }
+export interface RestoreConnection { auditActor?: { username: string; name?: string }; token: string; authorization?: RestoreAuthorization; tenantId: string; clientId: string; userId: string }
 export class IdentityRestoreService {
   /** `requireUpdate` checks the current plan for an in-place update. The saved run decides the operation, never the request. */
   constructor(private readonly journal: GuardedRunJournal, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly requireUpdate?: (tenant: string) => Promise<void>) {}
@@ -24,17 +23,17 @@ export class IdentityRestoreService {
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) throw new RestoreSafetyError("This connection belongs to another tenant.")
     const reader = safetyReader(connection.token, this.fetchImpl)
     // Refuse app-only tokens before even the safety reads.
-    requireRestoreActor(connection.token, { ...connection, applicationObjectId: "pending", servicePrincipalId: "pending", recoveryAccountIds: [] })
-    const permissionBlocker = !readOnly && folder ? restorePermissionBlocker(folder, grantedPermissions(connection.token)) : undefined
+    requireRestoreActor(connection.token, connection, connection.authorization)
+    const permissionBlocker = !readOnly && folder ? restorePermissionBlocker(folder, restorePermissions(connection.token, connection.authorization?.scopes)) : undefined
     if (permissionBlocker) throw new RestoreSafetyError(permissionBlocker)
     const protections = folder ? operationProtections(folder, operation) : undefined
     const actor = await resolveRestoreActor(reader, connection, readOnly || protections?.length === 0 ? [] : this.recovery.get(tenant), protections)
     const io = guardedGraphIO(connection.token, actor, (step, current, desired) => resolveSafetyReferences(reader, step, current, desired), this.fetchImpl, (mappings, signal) => {
-      const granted = grantedPermissions(connection.token)
+      const granted = restorePermissions(connection.token, connection.authorization?.scopes)
       // Reference reporting is advisory. Do not probe unrelated services outside the token's scopes.
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
       return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
-    })
+    }, connection.authorization)
     return { actor, io }
   }
   /** Called by trusted preview builders only. A renderer never supplies fingerprints or an actor. */

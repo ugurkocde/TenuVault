@@ -1,24 +1,23 @@
 import { checkConfigurationLockout, configurationPayload, isEntraConfiguration, requireConfigurationApproval } from "./entra-configuration"
 import { safetyReader } from "./safety-reader"
 import { restorePermissionBlocker } from "../../shared/services/modules"
-import { isGraphId } from "../../shared/security"
+import { isGraphId, normalizeGuid } from "../../shared/security"
 import { restoreCapability, typeForFolder, type Item } from "../../shared/intune/registry"
 import { findCreatedByDescriptor } from "./create-detection"
 import { restoreMatrixRow, verifiedWriteContract } from "../../shared/intune/restore-matrix"
 import { addsOnlyPayload, RestoreSafetyError, RestoreWriteRefusedError, type RestoreActor, type SafetyReferences } from "../../shared/intune/restore-guards"
-import { grantedPermissions } from "../../shared/services/token"
-import { requireRestoreActor } from "./restore-actor"
+import { requireRestoreActor, restorePermissions, type RestoreAuthorization } from "./restore-actor"
 import { restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 
 /** GET and write transport for the guarded writer. It never acquires or refreshes a sign-in. */
-export function guardedGraphIO(token: string, actor: RestoreActor, references: GuardedIO["references"], fetchImpl: typeof fetch = fetch, referenceScan?: GuardedIO["replacedReferences"]): GuardedIO {
-  requireRestoreActor(token, actor)
+export function guardedGraphIO(token: string, actor: RestoreActor, references: GuardedIO["references"], fetchImpl: typeof fetch = fetch, referenceScan?: GuardedIO["replacedReferences"], authorization?: RestoreAuthorization): GuardedIO {
+  requireRestoreActor(token, actor, authorization)
   const contract = (step: GuardedStep) => {
     const row = restoreMatrixRow(step.folder)
     const write = row?.[step.operation]
     if (!row || !write || !verifiedWriteContract(write) || !write.properties.length || !write.permissions.length) throw new RestoreSafetyError("This write contract has not been verified against the Graph index and Microsoft documentation.")
     if (write.blockedReason) throw new RestoreSafetyError(write.blockedReason)
-    const granted = grantedPermissions(token)
+    const granted = restorePermissions(token, authorization?.scopes)
     const manifestBlocker = restorePermissionBlocker(step.folder, granted)
     if (manifestBlocker) throw new RestoreSafetyError(manifestBlocker)
     if (granted?.kind !== "delegated" || !write.permissions.some(permission => granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks the write permission. Add restore access from Services in Settings, then sign in again.")
@@ -26,7 +25,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     return { row, write }
   }
   const request = async (url: string, method = "GET", body?: Item, etag?: string, beforeSend?: () => void): Promise<Item | null> => {
-    requireRestoreActor(token, actor)
+    requireRestoreActor(token, actor, authorization)
     const options: RequestInit = { method, headers: { Authorization: `Bearer ${token}`, ...(new URL(url).pathname.endsWith("/branding") ? { "Accept-Language": "0" } : {}), ...(body ? { "Content-Type": "application/json" } : {}), ...(etag ? { "If-Match": etag } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) }
     beforeSend?.()
     const response = await fetchImpl(url, options)
@@ -48,16 +47,17 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
   }
   const resolvedPathOf = async (step: GuardedStep, targetId?: string) => {
     const result = pathOf(step, targetId)
-    if (step.folder === "Organization" && targetId && targetId !== actor.tenantId) throw new RestoreSafetyError("Organization restore must target the connected tenant ID.")
+    if (step.folder === "Organization" && targetId && normalizeGuid(targetId) !== normalizeGuid(actor.tenantId)) throw new RestoreSafetyError("Organization restore must target the connected tenant ID.")
     if (step.folder === "Organization" || result.row.readPath.includes("{organizationId}")) {
       const organizations = await request(result.root + "organization?$select=id")
-      if (!Array.isArray(organizations?.value) || organizations.value.length !== 1 || (organizations.value[0] as Item)?.id !== actor.tenantId) throw new RestoreSafetyError("The connected tenant organization could not be uniquely resolved.")
+      const id = Array.isArray(organizations?.value) && organizations.value.length === 1 ? (organizations.value[0] as Item)?.id : undefined
+      if (typeof id !== "string" || normalizeGuid(id) !== normalizeGuid(actor.tenantId)) throw new RestoreSafetyError("The connected tenant organization could not be uniquely resolved.")
       result.path = step.folder === "Organization" ? `organization/${encodeURIComponent(actor.tenantId)}` : result.row.readPath.replace("{organizationId}", encodeURIComponent(actor.tenantId))
     }
     return result
   }
   return {
-    token,
+    token, authorization,
     ...(referenceScan ? { replacedReferences: referenceScan } : {}),
     type: folder => {
       const type = typeForFolder(folder)

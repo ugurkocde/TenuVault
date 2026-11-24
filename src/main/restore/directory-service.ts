@@ -20,7 +20,6 @@ import type { GuardedIO, GuardedStep } from "./guarded-run"
 import { randomUUID, createHash } from "node:crypto"
 import { INTUNE_TYPES, type Item } from "../../shared/intune/registry"
 import { canBackUp } from "../../shared/services/modules"
-import { grantedPermissions } from "../../shared/services/token"
 import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "./reference-scanner"
 import { isGuid } from "../../shared/security"
 import { directoryObjectId } from "../../shared/intune/entra-directory"
@@ -35,7 +34,7 @@ import { directoryMappedId, executeDirectoryBatches, recoverDirectoryRejections 
 import { assertNoSecrets, isRestorePersistenceError, GuardedRunJournal, restoreFingerprint, restorePersistence, type GuardedRun } from "./guarded-run"
 import { resolveRestoreActor, type RecoveryAccounts } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
-import { requireRestoreActor } from "./restore-actor"
+import { requireRestoreActor, restorePermissions } from "./restore-actor"
 import type { RestoreConnection } from "./service"
 import type { IdentityRestoreRequest } from "./dispatch"
 
@@ -66,7 +65,7 @@ export class DirectoryRestoreService {
   private async actorContext(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, version = "v1.0") {
     const connection = validatedConnection ?? await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== restoreTenantKey(tenant)) fail("The connection belongs to another tenant.")
-    requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
+    requireRestoreActor(connection.token, connection, connection.authorization)
     const actorFetch: typeof fetch = async (input, init) => {
       const response = await this.fetchImpl(input, init)
       if (response.status === 429) {
@@ -91,7 +90,7 @@ export class DirectoryRestoreService {
       if (step.directory?.principalId) principals.push(step.directory.principalId)
       return { complete: true, principals, applications: [] }
     }, this.fetchImpl, (mappings, signal) => {
-      const granted = grantedPermissions(connection.token)
+      const granted = restorePermissions(connection.token, connection.authorization?.scopes)
       // Unrelated policy reads are advisory and never add a permission to directory restore.
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
       return referenceMatches(connection.token, mappings, async (input, init) => {
@@ -99,8 +98,8 @@ export class DirectoryRestoreService {
         if (response.status === 429) onThrottled?.(new DirectoryThrottledError(response).retryAt!)
         return response
       }, { signal })
-    }, undefined, undefined, true, onThrottled)
-    const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra, undefined, onThrottled)
+    }, undefined, undefined, true, onThrottled, connection.authorization)
+    const applicationIO = directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra, undefined, onThrottled, connection.authorization)
     for (const adapter of [io, applicationIO]) {
       adapter.recentlyCreated = objectId => this.recentlyCreated(tenant, objectId)
       adapter.now = this.now
@@ -161,7 +160,7 @@ export class DirectoryRestoreService {
   async verifySavedOwner(tenant: string, id: string) { await this.verifyLocalOwner(this.load(tenant, id)) }
   private async ownerConnection(page: DirectoryPage) {
     const connection = await this.connection(page.run.tenant)
-    requireRestoreActor(connection.token, { ...connection, recoveryAccountIds: [] })
+    requireRestoreActor(connection.token, connection, connection.authorization)
     this.verifyOwner(page, connection)
     return connection
   }

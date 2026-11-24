@@ -108,7 +108,8 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
       if (/\/(members|owners)\//.test(path) || path.endsWith("/manager")) return related ? Response.json(principal) : graphNotFound()
       return live ? Response.json({ ...live, ...(action === "license" ? { assignedLicenses: licensed ? step.desired.assignedLicenses : [] } : {}) }) : graphNotFound()
     })
-    const io = directory9aIO(token(), actor, refs, fetcher, async () => [], async () => {})
+    const opaque = outcome === "success" && action === "update"
+    const io = directory9aIO(opaque ? "opaque-graph-token" : token(), actor, refs, fetcher, async () => [], async () => {}, undefined, true, undefined, opaque ? { ...actor, scopes: perms } : undefined)
     step.preview = restoreFingerprint(await io.read(step, step.targetId))
     const run = runFor(step)
     for (const kind of (await io.review(step)).approvals) approveDirectory(step, run, kind)

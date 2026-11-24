@@ -129,7 +129,7 @@ describe("verified configuration subsets and blocked candidates", () => {
 
 // Enabled operations use the real production matrix and generated access. Blocked candidates
 // are admitted only inside the test process, then their original contracts are restored.
-for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (const operation of operations) it(`${folder} ${operation}: uses only generated area scopes through the production service`, async () => {
+for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (const operation of operations) it.each(["JWT", "opaque"] as const)(`${folder} ${operation}: uses only generated area scopes through the production service (%s)`, async (format) => {
   const { areaPermissions } = await import("../src/shared/services/manifest")
   const { IdentityRestoreService } = await import("../src/main/restore/service")
   const { RecoveryAccounts } = await import("../src/main/restore/safety-resolvers")
@@ -145,10 +145,20 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
   try {
     const scopes = new Set(areaPermissions(module.area, "restore", "delegated"))
     const identity = { tenantId: "00000000-0000-4000-8000-000000000004", userId: source, clientId: id }
-    const token = `h.${Buffer.from(JSON.stringify({ tid: identity.tenantId, oid: identity.userId, appid: identity.clientId, scp: [...scopes].join(" ") })).toString("base64url")}.s`
+    const token = format === "opaque" ? "opaque-graph-token" : `h.${Buffer.from(JSON.stringify({ tid: identity.tenantId, oid: identity.userId, appid: identity.clientId, scp: [...scopes].join(" ") })).toString("base64url")}.s`
+    const connect = async () => {
+      if (format === "JWT") return { ...identity, token }
+      const { restoreSignIn } = await import("../src/main/restore/restore-actor")
+      const homeAccountId = "admin.home"
+      return restoreSignIn(identity.tenantId, { ...identity, homeAccountId }, {
+        accessToken: token, tenantId: identity.tenantId, scopes: [...scopes].map(scope => "https://graph.microsoft.com/" + scope),
+        account: { homeAccountId, tenantId: identity.tenantId, localAccountId: identity.userId, username: "admin@example.test", environment: "login.microsoftonline.com" },
+      })
+    }
     let live: Item | null = operation === "create" ? null : { ...fixture, id: source, ...(folder === "AccessPackageCatalogs" ? { catalogType: "userManaged" } : {}), ...(folder === "UserFlowAttributes" ? { userFlowAttributeType: "custom" } : {}) }, writes = 0
     const forbidden: string[] = []
     const fetcher = (async (input, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`)
       const url = new URL(String(input)), resource = url.pathname.replace(/^\/(v1\.0|beta)\//, "")
       if (!scopes.has(row[operation]!.permissions[0]!) || ![row.readPath, `${row.readPath}/${source}`, `${row.readPath}/${liveId}`].includes(resource)) { forbidden.push(resource); throw new Error("Request outside generated access") }
       if (init?.method !== "GET") { writes++; live = { ...live, ...JSON.parse(String(init?.body)), id: operation === "create" ? liveId : source }; return Response.json(live) }
@@ -156,7 +166,7 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
       return live ? Response.json(live) : new Response(null, { status: 404 })
     }) as typeof fetch
     const saved = store(), journal = new GuardedRunJournal(saved)
-    const service = new IdentityRestoreService(journal, new RecoveryAccounts(saved), async () => ({ ...identity, token }), fetcher)
+    const service = new IdentityRestoreService(journal, new RecoveryAccounts(saved), connect, fetcher)
     const request = { path: `backup/${folder}/Policy.json`, snapshot: { ...fixture, id: source, ...(folder === "CrossTenantAccessPolicy" ? { allowedCloudEndpoints: ["microsoftonline.com"] } : folder === "AccessPackageCatalogs" ? { catalogType: "userManaged", resources: [], createdDateTime: "2026-11-18T00:00:00Z" } : {}) }, origin: "restore" as const }
     const run = await service.prepare(identity.tenantId, request, operation)
     const review = await service.review(identity.tenantId, run.id)
@@ -164,13 +174,13 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
     await service.confirm(identity.tenantId, run.id, review.fingerprint)
     // The saved operation decides the plan check at execution, whatever the request carried.
     const lapsed = vi.fn(async () => { throw new Error("Plan feature replaceRestore required") })
-    const unlicensed = new IdentityRestoreService(journal, new RecoveryAccounts(saved), async () => ({ ...identity, token }), fetcher, lapsed)
+    const unlicensed = new IdentityRestoreService(journal, new RecoveryAccounts(saved), connect, fetcher, lapsed)
     if (operation === "update") {
       await expect(unlicensed.restore(identity.tenantId, { ...request, runId: run.id })).rejects.toThrow("replaceRestore")
       expect(writes).toBe(0)
     }
     const allowed = vi.fn(async () => {})
-    await new IdentityRestoreService(journal, new RecoveryAccounts(saved), async () => ({ ...identity, token }), fetcher, allowed).restore(identity.tenantId, { ...request, runId: run.id })
+    await new IdentityRestoreService(journal, new RecoveryAccounts(saved), connect, fetcher, allowed).restore(identity.tenantId, { ...request, runId: run.id })
     expect(allowed).toHaveBeenCalledTimes(operation === "update" ? 1 : 0)
     expect(journal.load(identity.tenantId, run.id)!.entries[0]!.state).toBe("applied")
     expect(forbidden).toEqual([])
