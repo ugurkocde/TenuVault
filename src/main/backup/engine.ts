@@ -25,7 +25,7 @@ import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
 import { GraphResponseValidationError } from "../../shared/graph-response-validation"
 import { readEntries, ExpansionRecoveryError, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, detailPath, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
-import { comparableSnapshot } from "../../shared/intune/compare"
+import { comparableSnapshot, roleAssignmentSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
 import { backupNeed, canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, signedInOnly, type Requirement, type ServiceSelection, type SignInMode } from "../../shared/services/modules"
@@ -999,6 +999,7 @@ export class BackupEngine {
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
         const maskedView = withMaskedSecrets(type, detail)
+        const legacyRole = type.folder === "RoleDefinitions" ? roleAssignmentSnapshot(detail, "legacy") : detail
         items[`${type.folder}/${item.id}`] = {
           file: `${fileName}.json`,
           hash: snapshotHash(detail),
@@ -1006,6 +1007,7 @@ export class BackupEngine {
           ...(type.assignmentsFormerlyExpanded ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
           ...(maskedView ? { hashWithMaskedSecrets: snapshotHash(maskedView) } : {}),
           ...(masked ? { secretsMasked: true as const } : {}),
+          ...(legacyRole !== detail ? { hashWithLegacyRoleAssignments: snapshotHash(legacyRole) } : {}),
         }
         if (masked) maskedItems.push({ Folder: type.folder, Id: item.id, Name: displayName })
         counts[type.folder]!++

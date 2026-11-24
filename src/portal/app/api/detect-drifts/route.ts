@@ -6,6 +6,7 @@ import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { complianceSettingLabel, complianceSettingValue } from "../../../../shared/intune/compliance-settings"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
+import { roleAssignmentSnapshot } from "../../../../shared/intune/compare"
 import { comparisonCoverage } from "../../../../shared/intune/backup-read-coverage"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
@@ -731,6 +732,10 @@ export function compareObjects(
   path: string = '',
   context: any = { parent: null, arrayIndex: null }
 ): { field: string; oldValue: any; newValue: any; displayName?: string }[] {
+  if (path === '') {
+    oldObj = roleAssignmentSnapshot(oldObj, "arrays")
+    newObj = roleAssignmentSnapshot(newObj, "arrays")
+  }
   const changes: { field: string; oldValue: any; newValue: any; displayName?: string }[] = []
 
   if (oldObj === null || newObj === null || typeof oldObj !== 'object' || typeof newObj !== 'object') {

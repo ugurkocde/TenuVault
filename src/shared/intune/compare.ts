@@ -1,4 +1,4 @@
-import type { Json } from "./registry"
+import type { Item, Json } from "./registry"
 
 /**
  * Properties Intune changes on every write or read without the configuration changing: timestamps,
@@ -27,4 +27,34 @@ export function comparableSnapshot(value: Json | undefined): Json {
 /** True when two snapshots hold the same configuration. */
 export function sameSnapshot(a: Json | undefined, b: Json | undefined): boolean {
   return JSON.stringify(comparableSnapshot(a)) === JSON.stringify(comparableSnapshot(b))
+}
+
+// The 0.5 cloud runbook wrote empty assignment arrays as null and singletons as strings.
+// Keep the recorded file hash for integrity checks and use this view only for comparisons.
+export function roleAssignmentSnapshot(snapshot: Item, format: "arrays" | "legacy"): Item {
+  if (!Array.isArray(snapshot?.roleAssignments)) return snapshot
+  let changed = false
+  const roleAssignments = snapshot.roleAssignments.map(assignment => {
+    if (!assignment || typeof assignment !== "object" || Array.isArray(assignment)) return assignment
+    let result = assignment
+    for (const key of ["members", "resourceScopes", "scopeMembers", "roleScopeTagIds"]) {
+      if (!Object.hasOwn(assignment, key)) continue
+      const value = assignment[key]
+      if (value === undefined) continue
+      let next = value
+      if (format === "legacy" && Array.isArray(value)) {
+        if (value.length === 0) next = null
+        else if (value.length === 1 && typeof value[0] === "string") next = value[0]
+      } else if (format === "arrays") {
+        if (value === null) next = []
+        else if (typeof value === "string") next = [value]
+      }
+      if (next === value) continue
+      if (result === assignment) result = { ...assignment }
+      result[key] = next
+      changed = true
+    }
+    return result
+  })
+  return changed ? { ...snapshot, roleAssignments } : snapshot
 }

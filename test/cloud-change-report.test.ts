@@ -9,6 +9,7 @@ import { POST as detectDrifts } from "../src/portal/app/api/detect-drifts/route"
 import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
 import { mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
 import { compareBackups } from "../src/shared/intune/backup-changes"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { buildChangeReport, changeReportMarkdown, reportFileName, summaryLine } from "../src/shared/reports/change-report"
 import { buildChangeReportDocument } from "../src/shared/reports/change-report-html"
 import { reportEmail } from "../src/main/features/reports"
@@ -129,6 +130,55 @@ describe.runIf(Boolean(pwsh))("Desktop and Azure comparison coverage", () => {
       expect(cloud.markdown).toBe(desktop.markdown)
       expect(cloud.html).toBe(desktop.html)
       expect(cloud.email.summary).toBe(summaryLine(desktop.report, { reason: true }))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("Intune role comparisons across a cloud runbook upgrade", () => {
+  const file = "Help desk.json"
+  const path = `RoleDefinitions/${file}`
+  const legacy = {
+    id: "role-1",
+    displayName: "Help desk",
+    roleAssignments: [
+      { id: "a-1", members: "member-1", resourceScopes: null, scopeMembers: "scope-member-1", roleScopeTagIds: null },
+      { id: "a-2", members: null, resourceScopes: "scope-1", scopeMembers: null, roleScopeTagIds: "tag-1" },
+    ],
+  }
+
+  function roleBackups(changed: boolean): [Backup, Backup] {
+    const current = {
+      ...legacy,
+      roleAssignments: [
+        { id: "a-1", members: [changed ? "member-2" : "member-1"], resourceScopes: [], scopeMembers: ["scope-member-1"], roleScopeTagIds: [] },
+        { id: "a-2", members: [], resourceScopes: ["scope-1"], scopeMembers: [], roleScopeTagIds: ["tag-1"] },
+      ],
+    }
+    const backupWithRole = (backup: Backup, snapshot: typeof legacy | typeof current): Backup => ({
+      ...backup,
+      files: { [path]: snapshot },
+      metadata: { ...backup.metadata, Scope: { Included: ["RoleDefinitions"], Excluded: [] }, Items: { "RoleDefinitions/role-1": { file, hash: snapshotHash(snapshot) } } },
+    })
+    return [backupWithRole(backups[0]!, legacy), backupWithRole(backups[1]!, current)]
+  }
+
+  it.each(["desktop", ...(pwsh ? ["PowerShell"] : [])])("compares released scalar and null role assignment fields in %s", async engine => {
+    const dir = mkdtempSync(join(tmpdir(), "tv-report-role-arrays-"))
+    try {
+      for (const changed of [false, true]) {
+        const [older, newer] = roleBackups(changed)
+        const options = { values: true, actors: false }
+        const fixtureFile = join(dir, "backups.json")
+        writeFileSync(fixtureFile, JSON.stringify({ ...fixture, older, newer }))
+        const report = engine === "desktop"
+          ? (await desktopReport(options, [older, newer])).report
+          : cloudReport(options, fixtureFile).report as Awaited<ReturnType<typeof desktopReport>>["report"]
+        expect.soft(report.items.map(item => ({ id: item.id, change: item.change }))).toEqual(changed ? [{ id: "role-1", change: "modified" }] : [])
+        expect.soft(report.items.flatMap(item => item.settings.map(setting => setting.path)))
+          .toEqual(changed ? [expect.stringMatching(/\.members\[/), expect.stringMatching(/\.members\[/)] : [])
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -234,6 +234,32 @@ function Copy-TvDeep {
     return ConvertFrom-TvJson ($Value | ConvertTo-Json -Depth 100)
 }
 
+# Match the 0.5 cloud runbook's null and singleton strings to today's assignment arrays.
+function Get-TvRoleAssignmentSnapshot {
+    param([AllowNull()][object]$Snapshot, [switch]$Legacy)
+    if ($Snapshot -isnot [System.Collections.IDictionary] -or -not (Test-TvJsArray $Snapshot["roleAssignments"])) { return , $Snapshot }
+    $copy = $Snapshot
+    for ($i = 0; $i -lt $Snapshot["roleAssignments"].Count; $i++) {
+        $assignment = $Snapshot["roleAssignments"][$i]
+        if ($assignment -isnot [System.Collections.IDictionary]) { continue }
+        foreach ($key in @("members", "resourceScopes", "scopeMembers", "roleScopeTagIds")) {
+            if (-not $assignment.Contains($key)) { continue }
+            $value = $assignment[$key]
+            if ($Legacy) {
+                if (-not (Test-TvJsArray $value)) { continue }
+                if ($value.Count -eq 0) { $next = $null }
+                elseif ($value.Count -eq 1 -and $value[0] -is [string]) { $next = $value[0] }
+                else { continue }
+            } elseif ($null -eq $value) { $next = @() }
+            elseif ($value -is [string]) { $next = @($value) }
+            else { continue }
+            if ([object]::ReferenceEquals($copy, $Snapshot)) { $copy = Copy-TvDeep $Snapshot }
+            $copy["roleAssignments"][$i][$key] = $next
+        }
+    }
+    return , $copy
+}
+
 # ---------------------------------------------------------------------------
 # JSON parsing without PowerShell's date conversion. ConvertFrom-Json in the
 # Automation 7.2 runtime turns ISO strings into [DateTime] values, which both
@@ -1871,6 +1897,8 @@ function Get-TvDocumentedRows {
 # The changes of a modified item with secrets redacted, plus one Secret values row when a secret changed.
 function Get-TvRedactedChangeRows {
     param([AllowNull()][object]$Older, [AllowNull()][object]$Newer)
+    $Older = Get-TvRoleAssignmentSnapshot $Older
+    $Newer = Get-TvRoleAssignmentSnapshot $Newer
     $rows = [System.Collections.Generic.List[object]]::new()
     Compare-TvObjects (Get-TvReportSafe $Older) (Get-TvReportSafe $Newer) "" $null $rows
     $shown = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -2314,6 +2342,10 @@ function Get-TvBackupReadCoverage {
 function Test-TvSameItem {
     param([Parameter(Mandatory)][object]$Previous, [Parameter(Mandatory)][object]$Item)
     if ((Get-TvProp $Previous "hash") -ceq (Get-TvProp $Item "hash")) { return $true }
+    $previousLegacyRole = Get-TvProp $Previous "hashWithLegacyRoleAssignments"
+    $legacyRole = Get-TvProp $Item "hashWithLegacyRoleAssignments"
+    if ($null -eq $previousLegacyRole -and $null -ne $legacyRole -and $legacyRole -ceq (Get-TvProp $Previous "hash")) { return $true }
+    if ($null -eq $legacyRole -and $null -ne $previousLegacyRole -and $previousLegacyRole -ceq (Get-TvProp $Item "hash")) { return $true }
     $previousMasked = Get-TvProp $Previous "hashWithMaskedSecrets"
     if (((Get-TvProp $Previous "secretsMasked") -eq $true -or (Get-TvProp $Item "secretsMasked") -eq $true) -and $null -ne $previousMasked) { return $previousMasked -ceq (Get-TvProp $Item "hashWithMaskedSecrets") }
     return $null -eq (Get-TvProp $Previous "hashWithEmptyAssignments") -and $null -ne (Get-TvProp $Item "hashWithEmptyAssignments") -and (Get-TvProp $Previous "hash") -ceq (Get-TvProp $Item "hashWithEmptyAssignments")
@@ -3537,6 +3569,12 @@ function Invoke-TvBackup {
                     $body = $detail | ConvertTo-Json -Depth 100
                     Set-TvBlob $storageAccount "$backupFolder/$($type.Folder)/$fileName.json" $body $storageToken
                     $record = [ordered]@{ file = "$fileName.json"; hash = Get-TvSnapshotHash $detail }
+                    if ($type.Folder -ceq "RoleDefinitions") {
+                        $legacyRole = Get-TvRoleAssignmentSnapshot $detail -Legacy
+                        if (-not [object]::ReferenceEquals($legacyRole, $detail)) {
+                            $record.hashWithLegacyRoleAssignments = Get-TvSnapshotHash $legacyRole
+                        }
+                    }
                     if ($type.AssignmentsFormerlyExpanded) {
                         $without = Copy-TvDeep $detail
                         Set-TvProp $without "assignments" @()

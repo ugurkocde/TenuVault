@@ -17,6 +17,7 @@ import { listSnapshot } from "../src/shared/intune/read"
 import { compareBackups } from "../src/shared/intune/backup-changes"
 import { comparisonCoverage } from "../src/shared/intune/backup-read-coverage"
 import { comparableSnapshot } from "../src/shared/intune/compare"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
 import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudStatus } from "../src/shared/cloud-backup"
 import { resolveBackupOwnership } from "../src/shared/backup-ownership"
@@ -911,6 +912,26 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     })
     expect.soft(await roleSnapshot("Object value")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-2"], roleAssignments: [] })
     expect(await roleSnapshot("Array value")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-3"], roleAssignments: [] })
+
+    const file = "Help desk.json"
+    const key = "RoleDefinitions/role-1"
+    const detail = roleDetails["/beta/deviceManagement/roleAssignments/assignment-1"].value
+    const snapshot = { ...roleDetails["/beta/deviceManagement/roleDefinitions/role-1"], roleAssignments: [detail] }
+    const historical = (member: string) => ({
+      Scope: { Included: ["RoleDefinitions"], Excluded: [] },
+      Items: { [key]: { file, hash: snapshotHash({ ...snapshot, roleAssignments: [
+        { ...detail, members: member, resourceScopes: null, scopeMembers: "scope-member-1", roleScopeTagIds: null },
+      ] }) } },
+    })
+    const manifest = engine === "runbook"
+      ? JSON.parse(runPlainFixture().at(-1)!.calls.find(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+      : await desktop!.file(job!, "metadata.json")
+    expect(manifest.Items[key].hash).toBe(snapshotHash(snapshot))
+    expect(historical("member-1").Items[key].hash).toBe("nqJCtL/UMTIVAlR3MX8WAX")
+    const current = { ...manifest, Items: { [key]: manifest.Items[key] } }
+    expect.soft(compareBackups(historical("member-1"), current)).toEqual([])
+    expect.soft(compareBackups(current, historical("member-1"))).toEqual([])
+    expect(compareBackups(historical("different-member"), current)).toMatchObject([{ id: "role-1", change: "modified" }])
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("keeps personal identifiers out of cloud detail failure output and outcomes", () => {

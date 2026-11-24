@@ -10,6 +10,8 @@ export type BackupItems = Record<string, {
    * with `assignments: []`, as those versions recorded it.
    */
   hashWithEmptyAssignments?: string
+  /** The hash of an Intune role with assignment arrays written as in the 0.5 cloud runbook. */
+  hashWithLegacyRoleAssignments?: string
   /** For objects with encrypted values: the hash with every encrypted value masked (****). */
   hashWithMaskedSecrets?: string
   /** The encrypted values could not be read in plain text, so the file holds ****. */
@@ -80,6 +82,10 @@ export function compareBackups(older: BackupFingerprint, newer: BackupFingerprin
  */
 export function sameItem(previous: BackupItems[string], item: BackupItems[string]): boolean {
   if (previous.hash === item.hash) return true
+  const previousLegacyRole = previous.hashWithLegacyRoleAssignments
+  const legacyRole = item.hashWithLegacyRoleAssignments
+  if (previousLegacyRole === undefined && legacyRole !== undefined && legacyRole === previous.hash) return true
+  if (legacyRole === undefined && previousLegacyRole !== undefined && previousLegacyRole === item.hash) return true
   // A backup that could not decrypt a value is compared with the value masked on both sides.
   if ((previous.secretsMasked || item.secretsMasked) && previous.hashWithMaskedSecrets !== undefined) return previous.hashWithMaskedSecrets === item.hashWithMaskedSecrets
   return previous.hashWithEmptyAssignments === undefined && item.hashWithEmptyAssignments !== undefined && previous.hash === item.hashWithEmptyAssignments

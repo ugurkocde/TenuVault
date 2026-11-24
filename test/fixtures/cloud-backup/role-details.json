@@ -18,7 +18,9 @@
       "id": "assignment-1",
       "displayName": "Regional support",
       "members": ["member-1"],
-      "resourceScopes": ["scope-1"]
+      "resourceScopes": [],
+      "scopeMembers": ["scope-member-1"],
+      "roleScopeTagIds": []
     }
   },
   "/beta/deviceManagement/roleDefinitions/role-2": {

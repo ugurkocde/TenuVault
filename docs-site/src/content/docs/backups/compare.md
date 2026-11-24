@@ -70,6 +70,8 @@ To compare the tenant as it is right now with your last backup, run a new backup
 
 For backups that record per-type outcomes, only complete reads are compared. TenuVault needs every page of a policy list to confirm what was present. A complete list with zero policies can confirm a deletion. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without naming the type, the comparison shows a coverage warning. Some reported additions or deletions may be policies that backup failed to read.
 
+When comparing Intune roles from older Azure backups, TenuVault treats empty and single-value assignment lists the same as their current backup format. Changes to the members, scopes or scope tags still appear in drift and change reports.
+
 | Service | Example of coverage shown as unknown |
 | --- | --- |
 | Defender | One backup could not read attack simulations. |
