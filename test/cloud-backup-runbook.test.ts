@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest"
 import { AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportJSON } from "../src/portal/lib/audit/export"
 import { createHash } from "node:crypto"
-import { fixture, scriptedGraph } from "./helpers/backup-fixture"
+import { fixture, scriptedGraph, type GraphRoute } from "./helpers/backup-fixture"
 import listPages from "./fixtures/cloud-backup/list-pages.json"
 import expandedAssignments from "./fixtures/cloud-backup/expanded-assignments.json"
 import { compareObjects } from "../src/portal/app/api/detect-drifts/route"
@@ -39,7 +39,7 @@ let plainRuns: Run[] | undefined
 /** The scenarios of the plain-run fixture, in the order printed by the PowerShell harness. */
 function runPlainFixture(): Run[] {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
-  plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
+  plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
   return plainRuns
 }
 const TENANT = "11111111-2222-3333-4444-555555555555"
@@ -831,26 +831,42 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it.each(["desktop", ...(pwsh ? ["runbook"] : [])])("keeps assignments out of drift when the %s backup cannot validate the policy", async engine => {
     const configs = "/beta/deviceManagement/deviceConfigurations"
     const detail = `${configs}/cfg-1?$expand=assignments`
+    const relationship = `${configs}/cfg-1/assignments`
     const snapshot = { id: "cfg-1", displayName: "Baseline Wi-Fi", assignments: expandedAssignments.assignments }
     const file = "DeviceConfigurations/Baseline Wi-Fi.json"
     const folders = ["DeviceConfigurations", "CompliancePolicySettings"]
     const scope = { excluded: INTUNE_TYPES.filter(type => !folders.includes(type.folder)).map(type => type.folder) }
-    const capture = async (list: unknown, assignments: unknown) => {
-      const desktop = fixture(scriptedGraph({ [configs]: { value: list }, [detail]: { ...snapshot, assignments } }))
+    const capture = async (scenario?: typeof expandedAssignments.cases[number]) => {
+      const { list, assignments, relationshipPages, relationshipStatus } = scenario ?? {}
+      const omitted = relationshipPages || relationshipStatus
+      const routes: Record<string, GraphRoute> = {
+        [configs]: { value: list ?? [snapshot] },
+        [detail]: omitted ? { id: snapshot.id, displayName: snapshot.displayName } : { ...snapshot, assignments: assignments ?? snapshot.assignments },
+      }
+      for (const [index, entries] of (relationshipPages ?? []).entries()) {
+        const path = index === 0 ? relationship : `${relationship}?page=${index + 1}`
+        routes[path] = {
+          value: entries.map(entry => entry === null ? null : snapshot.assignments[entry]),
+          ...(index + 1 < relationshipPages!.length && { "@odata.nextLink": `https://graph.microsoft.com${relationship}?page=${index + 2}` }),
+        }
+      }
+      if (relationshipStatus) routes[relationship] = () => new Response(null, { status: relationshipStatus })
+      const desktop = fixture(scriptedGraph(routes))
       const job = await desktop.run({ scope })
-      return { manifest: await desktop.manifest(job), policy: await desktop.file(job, file) }
+      return { manifest: await desktop.manifest(job), policy: await desktop.file(job, file), paths: desktop.requests.map(call => call.path) }
     }
     const cloud = (index: number) => {
       const run = runPlainFixture()[index]!
       const blobs = writtenBlobs(run)
       const folder = folderOf(blobs)
       const policy = blobs.get(`${folder}/${file}`)
-      return { manifest: JSON.parse(blobs.get(`${folder}/metadata.json`)!), policy: policy ? JSON.parse(policy) : undefined, compared: run.compared }
+      return { manifest: JSON.parse(blobs.get(`${folder}/metadata.json`)!), policy: policy ? JSON.parse(policy) : undefined, compared: run.compared,
+        paths: run.calls.filter(call => call.method === "Get" && call.uri.startsWith("https://graph.microsoft.com")).map(call => new URL(call.uri).pathname + new URL(call.uri).search) }
     }
-    const before = engine === "desktop" ? await capture([snapshot], snapshot.assignments) : cloud(0)
+    const before = engine === "desktop" ? await capture() : cloud(0)
     for (const [index, scenario] of expandedAssignments.cases.entries()) {
       const after = engine === "desktop"
-        ? await capture(scenario.list ?? [snapshot], scenario.assignments ?? snapshot.assignments)
+        ? await capture(scenario)
         : cloud(16 + listPages.length + index)
       const removed = scenario.removed ?? []
       const unknown = scenario.unread ? ["DeviceConfigurations"] : []
@@ -858,7 +874,9 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
       expect.soft(after.manifest.Coverage, scenario.name).toBe(scenario.unread ? "Incomplete" : "Complete")
       expect.soft(comparisonCoverage(before.manifest, after.manifest).unknown, scenario.name).toEqual(unknown)
       expect.soft(changes.map(change => change.change), scenario.name).toEqual(removed.length ? ["modified"] : [])
-      expect.soft(after.policy?.assignments, scenario.name).toEqual(scenario.unread ? undefined : scenario.assignments ?? snapshot.assignments)
+      expect.soft(after.policy?.assignments, scenario.name).toEqual(scenario.unread ? undefined : scenario.assignments ?? snapshot.assignments.filter(assignment => !removed.includes(assignment.id)))
+      const pages = scenario.relationshipPages?.length ?? (scenario.relationshipStatus ? 1 : 0)
+      expect.soft(after.paths.filter(path => path.startsWith(relationship)), scenario.name).toEqual(Array.from({ length: pages }, (_, index) => index === 0 ? relationship : `${relationship}?page=${index + 1}`))
       let rows: DriftRow[]
       if ("compared" in after) {
         expect.soft(after.compared, scenario.name).toMatchObject({ UnknownTypes: unknown })

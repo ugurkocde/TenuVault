@@ -47,6 +47,7 @@ export interface Extra {
   path: (id: string) => string
   /** Expanded collection paths relative to each returned entry. */
   expandedCollections?: readonly string[]
+  expansionFallbacks?: IntuneType["expansionFallbacks"]
   /** The path returns one object; its `property` is stored instead of a collection. */
   single?: boolean
   /** Stores the complete singleton response of a sub-resource. */
@@ -141,6 +142,8 @@ export interface IntuneType {
   expand?: string
   /** Collection paths for a detail $expand with nested expansions or options. Simple lists of names are inferred. */
   expandedCollections?: readonly string[]
+  /** For omitted collections, override the beta relationship path relative to its parent, or use false when no equivalent GET exists. */
+  expansionFallbacks?: Readonly<Record<string, string | false>>
   /** $select for the detail GET, for types that leave properties out by default. */
   select?: string
   /**
@@ -542,6 +545,7 @@ export const INTUNE_TYPES: IntuneType[] = [
     nameKey: "displayName",
     expand: "scheduledActionsForRule($expand=scheduledActionConfigurations),assignments",
     expandedCollections: ["scheduledActionsForRule", "scheduledActionsForRule.scheduledActionConfigurations", "assignments"],
+    expansionFallbacks: { scheduledActionsForRule: false, "scheduledActionsForRule.scheduledActionConfigurations": false },
     restore: "create",
     assign: { key: "assignments" },
     prepare: (payload) => {
@@ -579,6 +583,7 @@ export const INTUNE_TYPES: IntuneType[] = [
         property: "scheduledActionsForRule",
         path: (id) => `deviceManagement/compliancePolicies/${id}/scheduledActionsForRule?$expand=scheduledActionConfigurations`,
         expandedCollections: ["scheduledActionConfigurations"],
+        expansionFallbacks: { scheduledActionConfigurations: false },
       },
       { property: "assignments", path: (id) => `deviceManagement/compliancePolicies/${id}/assignments` },
     ],
@@ -673,6 +678,7 @@ export const INTUNE_TYPES: IntuneType[] = [
     path: "deviceManagement/deviceShellScripts",
     nameKey: "displayName",
     expand: "assignments",
+    expansionFallbacks: { assignments: false },
     restore: "create",
     assign: { key: "deviceManagementScriptAssignments" },
   },
@@ -683,6 +689,7 @@ export const INTUNE_TYPES: IntuneType[] = [
     path: "deviceManagement/deviceCustomAttributeShellScripts",
     nameKey: "displayName",
     expand: "assignments",
+    expansionFallbacks: { assignments: false },
     restore: "create",
     assign: { key: "deviceManagementScriptAssignments" },
     // PATCH rejects the attribute's identity, even unchanged; a renamed attribute can only be restored as a copy.

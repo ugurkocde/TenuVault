@@ -25,6 +25,7 @@ $script:timeoutDetail = $false
 $script:secondListPage = $null
 $script:listResponses = @{}
 $script:privateDetail = $false
+$script:relationshipStatus = $null
 $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
@@ -50,6 +51,9 @@ function Invoke-TvHttp {
     $graphPrefix = "https://graph.microsoft.com"
     if ($Uri.StartsWith($graphPrefix)) {
         $endpoint = $Uri.Substring($graphPrefix.Length)
+        if ($script:relationshipStatus -and $endpoint -eq "/beta/deviceManagement/deviceConfigurations/cfg-1/assignments") {
+            throw [TvHttpError]::new($script:relationshipStatus, "Relationship read refused")
+        }
         if ($script:listResponses.Contains($endpoint)) {
             $text = ConvertTo-Json -InputObject $script:listResponses[$endpoint] -Compress -Depth 16
             return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
@@ -184,12 +188,21 @@ $scenarios += @(foreach ($case in $expansions.cases) {
     if ($case.Contains("list")) {
         $responses["/beta/deviceManagement/deviceConfigurations"] = @{ value = $case.list }
     }
-    if ($case.Contains("assignments")) {
-        $responses['/beta/deviceManagement/deviceConfigurations/cfg-1?$expand=assignments'] = @{
-            id = "cfg-1"; displayName = "Baseline Wi-Fi"; assignments = $case.assignments
-        }
+    if ($case.Contains("assignments") -or $case.relationshipPages -or $case.relationshipStatus) {
+        $detail = @{ id = "cfg-1"; displayName = "Baseline Wi-Fi" }
+        if ($case.Contains("assignments")) { $detail.assignments = $case.assignments }
+        $responses['/beta/deviceManagement/deviceConfigurations/cfg-1?$expand=assignments'] = $detail
     }
-    @{ Responses = $responses }
+    $relationship = "/beta/deviceManagement/deviceConfigurations/cfg-1/assignments"
+    for ($index = 0; $index -lt $case.relationshipPages.Count; $index++) {
+        $page = @{ value = @(foreach ($assignment in $case.relationshipPages[$index]) {
+            if ($null -eq $assignment) { $null } else { $expansions.assignments[$assignment] }
+        }) }
+        if ($index + 1 -lt $case.relationshipPages.Count) { $page["@odata.nextLink"] = "https://graph.microsoft.com${relationship}?page=$($index + 2)" }
+        $key = if ($index -eq 0) { $relationship } else { "${relationship}?page=$($index + 1)" }
+        $responses[$key] = $page
+    }
+    @{ Responses = $responses; RelationshipStatus = $case.relationshipStatus }
 })
 foreach ($scenario in $scenarios) {
     $script:calls.Clear()
@@ -198,6 +211,7 @@ foreach ($scenario in $scenarios) {
     $script:secondListPage = $scenario.Page
     $script:listResponses = $scenario.Responses
     $script:privateDetail = $scenario.PrivateDetail
+    $script:relationshipStatus = $scenario.RelationshipStatus
     $output = [System.Collections.Generic.List[string]]::new()
     $errorText = $null
     try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }

@@ -25,7 +25,7 @@ function setup(options: { count?: number; retention?: number; retentionDays?: ()
       if (url.hostname === "graph.microsoft.com") {
         return url.pathname.endsWith("/deviceConfigurations")
           ? Response.json({ value: Array.from({ length: options.count ?? 0 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
-          : Response.json({ id: url.pathname.split("/").at(-1) })
+          : Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (url.searchParams.get("comp") === "list") {
         const names = [...saved.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))

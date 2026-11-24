@@ -705,7 +705,10 @@ export class BackupEngine {
           return session.get<Item>(url, type.headers, control)
         }),
         list: (path: string, idKey?: string) => read(control => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, idKey, ...(path === listPath(type) ? { filter: type.filter } : {}) })),
-        completeList: (path, expandedPage) => read(control => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, expandedPage })),
+        completeList: (path, expandedPage) => read(control => session.list(
+          expandedPage === undefined ? graphUrl("beta", path) : graphUrl(version, path, type.additionalReadVersions),
+          { ...control, headers: type.headers, ...(expandedPage !== undefined && { expandedPage }) },
+        )),
       })
     }
 

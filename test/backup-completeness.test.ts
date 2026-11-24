@@ -94,7 +94,7 @@ describe("scheduled outcome of a partial backup", () => {
       }
       if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
       if (url.pathname.endsWith("/dc2")) return Response.json({ error: { message: "Forbidden" } }, { status: 403 })
-      return Response.json({ id: url.pathname.split("/").pop() })
+      return Response.json({ id: url.pathname.split("/").pop(), assignments: [] })
     }
     const { engine, store, account } = engineSetup(partialGraph)
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, trigger: "scheduled" }).id)

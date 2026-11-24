@@ -52,7 +52,10 @@ function fakeGraph(overrides: Record<string, Response | (() => Response)> = {}) 
     if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
     if (url.pathname.endsWith("/assignments")) return Response.json({ value: [] })
     const id = url.pathname.split("/").pop()
-    return Response.json({ "@odata.context": "ctx", id, detail: true })
+    const expansion = url.searchParams.get("$expand")
+    const collections = expansion === "settings" ? { settings: [] } : expansion?.startsWith("scheduledActionsForRule")
+      ? { assignments: [], scheduledActionsForRule: [] } : expansion === "assignments" ? { assignments: [] } : {}
+    return Response.json({ "@odata.context": "ctx", ...collections, id, detail: true })
   }
 }
 
@@ -302,7 +305,7 @@ describe("BackupEngine", () => {
     })
     expect(metadata.Status).toBe("Success")
     const detail = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/CompliancePolicies/Compliance.json`)).data.toString())
-    expect(detail).toEqual({ id: "cp1", detail: true })
+    expect(detail).toEqual({ id: "cp1", detail: true, assignments: [], scheduledActionsForRule: [] })
     // Only the compliance settings are kept from the tenant-wide settings, under a fixed ID.
     const settings = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/CompliancePolicySettings/Compliance policy settings.json`)).data.toString())
     expect(settings).toEqual({ id: "CompliancePolicySettings", secureByDefault: false, deviceComplianceCheckinThresholdDays: 0, isScheduledActionEnabled: true, enhancedJailBreak: false })
@@ -314,7 +317,7 @@ describe("BackupEngine", () => {
     let throttled = 0
     const graph = fakeGraph({
       "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": () =>
-        throttled++ === 0 ? new Response("", { status: 429, headers: { "retry-after": "0.001" } }) : Response.json({ id: "cp1" }),
+        throttled++ === 0 ? new Response("", { status: 429, headers: { "retry-after": "0.001" } }) : Response.json({ id: "cp1", assignments: [], scheduledActionsForRule: [] }),
       "/beta/deviceManagement/configurationPolicies/sc1?$expand=settings": () =>
         Response.json({ error: { message: "SyntheticGraphErrorCanary" } }, { status: 403 }),
     })

@@ -15,6 +15,7 @@ import { INTUNE_TYPES } from "../src/shared/intune/registry"
  * and Defender, recorded from the release this work started from (commit d906ad4b). Every run
  * here must still write the same files and the same manifest, and report the same job, scheduler
  * result and retention. Only the fields named in ADDED may appear on top.
+ * The policy fingerprints include the explicit expanded arrays returned by the fixture tenant.
  *
  * To record again after an intended change: UPDATE_GOLDEN=1 npx vitest run test/intune-backup-unchanged.test.ts
  */
@@ -67,7 +68,10 @@ function fixtureGraph(overrides: Record<string, () => Response> = {}) {
     if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
     if (url.pathname.endsWith("/assignments")) return Response.json({ value: [] })
     const id = url.pathname.split("/").pop()
-    return Response.json({ "@odata.context": "ctx", id, displayName: `Object ${id}`, detail: true })
+    const expansion = url.searchParams.get("$expand")
+    const collections = expansion === "settings" ? { settings: [] } : expansion?.startsWith("scheduledActionsForRule")
+      ? { assignments: [], scheduledActionsForRule: [] } : expansion === "assignments" ? { assignments: [] } : {}
+    return Response.json({ "@odata.context": "ctx", ...collections, id, displayName: `Object ${id}`, detail: true })
   }
 }
 

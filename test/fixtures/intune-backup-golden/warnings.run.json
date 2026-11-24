@@ -2,11 +2,11 @@
   "files": {
     ".tenuvault-owner.json": "{\"Source\":\"TenuVault Desktop\",\"TenantId\":\"11111111-1111-1111-1111-111111111111\",\"RunId\":\"<run>\"}",
     "AutopilotDevices/SN-0001.json": "ea45d0c6800811d948a20b885bed0cbfb483c9aa01dba6b6562b52ec7ad8fe02",
-    "CompliancePolicies/Compliance.json": "d51a051aa7f2eae1e1088dbf91bfa396503750f5b21783ba13cf1b2f6305b792",
+    "CompliancePolicies/Compliance.json": "4ba3340b6ac7c0ad9bbe1b6308eca6b373ec2be4dab1e505310be1fffef2021d",
     "CompliancePolicySettings/Compliance policy settings.json": "7be2bd790b02bc9559dadd8f5786e2588f077c696187101bb2c9abd9c6875166",
-    "ConfigurationPolicies/Settings catalog.json": "8ccbe336c64f2ff32956d7c119ad04445b02f7878e1caf1bd58bf97837408398",
-    "DeviceConfigurations/Win_ BitLocker_Encryption.json": "192e7b8ca4b0672edc0262f6abc70c8ff9ff8e36a9a41e89e3d326585de1fa79",
-    "PowerShellScripts/Script.json": "a55604a18a66f7c08dfa015a7bc0de75cbac1a43471ed263441b07f71e27eee0",
+    "ConfigurationPolicies/Settings catalog.json": "ed788b529ba77cea0d3ab1cb35f54953bca38a5f57f22d25635daf953e19f0c0",
+    "DeviceConfigurations/Win_ BitLocker_Encryption.json": "e2166abee7a82914c5aa610eac640ef275f9dce3f5ebdb71f350a3ba74f2c001",
+    "PowerShellScripts/Script.json": "7ecdc6fe6630b8759cea9fb474be77def3b4729ce051b0ed38733d9624422c48",
     "ScopeTags/Berlin.json": "53d895ea31c7a8727963acbd366699ac0c9eda939c97193363ee1a6cb01c41a6"
   },
   "job": {

@@ -47,9 +47,9 @@ const unset = refusal(404, "Request_ResourceNotFound", "Resource '' does not exi
 function tenant(routes: Record<string, GraphRoute> = {}) {
   return scriptedGraph({
     "/beta/deviceManagement/deviceCompliancePolicies": { value: [{ id: "cp1", displayName: "Compliance" }] },
-    "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": { id: "cp1", displayName: "Compliance" },
+    "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": { id: "cp1", displayName: "Compliance", scheduledActionsForRule: [], assignments: [] },
     "/beta/deviceManagement/deviceManagementScripts": { value: [{ id: "ps1", displayName: "Script" }] },
-    "/beta/deviceManagement/deviceManagementScripts/ps1?$expand=assignments": { id: "ps1", displayName: "Script" },
+    "/beta/deviceManagement/deviceManagementScripts/ps1?$expand=assignments": { id: "ps1", displayName: "Script", assignments: [] },
     "/beta/policies/tokenLifetimePolicies": { value: [] },
     "/beta/policies/federatedTokenValidationPolicy": unset,
     "/beta/policies/mobileDeviceManagementPolicies": { value: [] },

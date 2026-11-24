@@ -65,7 +65,7 @@ const units = Array.from({ length: UNITS }, (_, index) => ({ id: `au${index + 1}
 function tenant(routes: Record<string, GraphRoute> = {}) {
   return scriptedGraph({
     "/beta/deviceManagement/deviceCompliancePolicies": { value: [{ id: "cp1", displayName: "Compliance" }] },
-    "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": { id: "cp1", displayName: "Compliance" },
+    "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": { id: "cp1", displayName: "Compliance", scheduledActionsForRule: [], assignments: [] },
     "/beta/deviceManagement/deviceCategories": { value: [{ id: "cat1", displayName: "Kiosk" }] },
     "/beta/deviceManagement/deviceCategories/cat1": { id: "cat1", displayName: "Kiosk" },
     "/beta/directory/administrativeUnits": { value: units },

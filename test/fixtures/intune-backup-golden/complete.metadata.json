@@ -114,7 +114,7 @@
     },
     "CompliancePolicies/cp1": {
       "file": "Compliance.json",
-      "hash": "sGt3IguvNsfuWMrh7/+VeZ"
+      "hash": "69LRR0sVEYtVVZgoRR9Grx"
     },
     "CompliancePolicySettings/CompliancePolicySettings": {
       "file": "Compliance policy settings.json",
@@ -122,8 +122,8 @@
     },
     "ConfigurationPolicies/sc1": {
       "file": "Settings catalog.json",
-      "hash": "6GXdT/ctNiZ5rz6Nudm2SX",
-      "hashWithEmptyAssignments": "A38kbNt47552CkHvC3bP86"
+      "hash": "eaGwQn0OxO77VPmX9c0Xsn",
+      "hashWithEmptyAssignments": "bEM/E9JCniclXtIDjewQzA"
     },
     "DeviceCategories/cat1": {
       "file": "Kiosk.json",
@@ -131,15 +131,15 @@
     },
     "DeviceConfigurations/dc1": {
       "file": "Win_ BitLocker_Encryption.json",
-      "hash": "SXGWlT9iZ8vRlom8dsvFPo"
+      "hash": "8EdgxsIv2rMDiYLZ1PFmld"
     },
     "DeviceConfigurations/dc2": {
       "file": "Win_ BitLocker_Encryption (dc2).json",
-      "hash": "F44TQ5Pl0t1n+cGBmJzkbm"
+      "hash": "cY8Pgeq1s5fuDVAOKuKb5/"
     },
     "PowerShellScripts/ps1": {
       "file": "Script.json",
-      "hash": "HiVxwVUcLIVXxqclPuuWWC"
+      "hash": "m5vDYKiHkXZkzRl3+1OaHt"
     },
     "ScopeTags/7": {
       "file": "Berlin.json",

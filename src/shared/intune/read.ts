@@ -12,8 +12,8 @@ export interface GraphReader {
   get: (path: string) => Promise<Item>
   /** Follows @odata.nextLink; accepts a relative path or an absolute nextLink. */
   list: (path: string, idKey?: string) => Promise<Item[]>
-  /** Completes an expanded page against its collection path when the reader validates list pages. */
-  completeList?: (path: string, page: unknown) => Promise<Item[]>
+  /** Validates an expanded page and follows its continuation, or reads the beta relationship when the page is omitted. */
+  completeList?: (path: string, page?: unknown) => Promise<Item[]>
 }
 
 /** The Microsoft Graph version a type's paths are relative to. */
@@ -90,7 +90,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   let detail = type.singleton ? singletonObject(type.singleton, read) : read
   if (type.staticIds) detail = { ...detail, id }
   detail = withIdentity(type, detail)
-  await completeExpanded(detail, graph, path.split("?")[0]!, type.expandedCollections ?? type.expand?.split(","))
+  await completeExpanded(detail, graph, path.split("?")[0]!, type.expandedCollections ?? type.expand?.split(","), type.expansionFallbacks)
   // A type that keeps only some properties keeps them of the object itself; what its extras read is stored next to them.
   if (type.keep) detail = keptSnapshot(type.keep, detail)
   // Extra paths are built from Graph-returned IDs, so each ID is encoded as one path segment.
@@ -122,7 +122,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
           }
         }
       }
-      await completeExpanded(entries, graph, collection.split("?")[0]!, extra.expandedCollections)
+      await completeExpanded(entries, graph, collection.split("?")[0]!, extra.expandedCollections, extra.expansionFallbacks)
       detail[extra.property] = entries
     } catch (error) {
       const answer = error as { continuationPage?: true; status?: number; answer?: { code?: string; message?: string } }
@@ -174,17 +174,21 @@ function storedSnapshot(type: IntuneType, snapshot: Item): Item {
 }
 
 /** Read every expanded page, including terminal and nested pages, before storing it. */
-async function completeExpanded(value: Json, graph: GraphReader, path: string, collections: readonly string[] = []): Promise<void> {
+async function completeExpanded(
+  value: Json, graph: GraphReader, path: string, collections: readonly string[] = [],
+  fallbacks: IntuneType["expansionFallbacks"] = {}, prefix = "",
+): Promise<void> {
   if (!value || typeof value !== "object") return
   if (Array.isArray(value)) {
     for (const entry of value) {
       const id = entry && typeof entry === "object" && !Array.isArray(entry) ? entry.id : undefined
-      await completeExpanded(entry, graph, path && typeof id === "string" && id ? `${path}/${encodeURIComponent(id)}` : "", collections)
+      await completeExpanded(entry, graph, path && typeof id === "string" && id ? `${path}/${encodeURIComponent(id)}` : "", collections, fallbacks, prefix)
     }
     return
   }
   const continuation = "@odata.nextLink"
-  const expanded = new Set(graph.completeList ? collections.filter(property => Object.hasOwn(value, property)) : [])
+  const declared = graph.completeList ? collections.filter(property => !property.includes(".")) : []
+  const expanded = new Set(declared)
   for (const key of Object.keys(value)) {
     if (key.endsWith(continuation)) expanded.add(key.slice(0, -continuation.length))
   }
@@ -194,8 +198,14 @@ async function completeExpanded(value: Json, graph: GraphReader, path: string, c
     const nextLink = value[key]
     if (graph.completeList) {
       if (!path) throw new Error(`Invalid expanded collection ${property}`)
-      const page = { value: value[property], ...(Object.hasOwn(value, key) && { [continuation]: nextLink }) }
-      value[property] = await graph.completeList(`${path}/${property}`, page)
+      if (declared.includes(property) && !Object.hasOwn(value, property)) {
+        const relationship = fallbacks[prefix + property] ?? property
+        if (relationship === false) throw new Error(`Microsoft Graph did not return the expanded collection ${prefix}${property}`)
+        value[property] = await graph.completeList(`${path}/${relationship}`)
+      } else {
+        const page = { value: value[property], ...(Object.hasOwn(value, key) && { [continuation]: nextLink }) }
+        value[property] = await graph.completeList(`${path}/${property}`, page)
+      }
     } else {
       if (typeof nextLink !== "string") continue
       if (!Array.isArray(value[property])) throw new Error(`Invalid expanded collection ${property}`)
@@ -204,9 +214,9 @@ async function completeExpanded(value: Json, graph: GraphReader, path: string, c
     delete value[key]
   }
   for (const [key, child] of Object.entries(value)) {
-    const prefix = `${key}.`
-    const nested = collections.filter(property => property.startsWith(prefix)).map(property => property.slice(prefix.length))
-    await completeExpanded(child, graph, path ? `${path}/${key}` : "", nested)
+    const prefixKey = `${key}.`
+    const nested = collections.filter(property => property.startsWith(prefixKey)).map(property => property.slice(prefixKey.length))
+    await completeExpanded(child, graph, path ? `${path}/${key}` : "", nested, fallbacks, prefix + prefixKey)
   }
 }
 
@@ -396,6 +406,6 @@ export function organizationReader(graph: GraphReader): GraphReader {
   return {
     get: async path => graph.get(await resolve(path)),
     list: async (path, idKey) => graph.list(await resolve(path), idKey),
-    ...(graph.completeList && { completeList: async (path: string, page: unknown) => graph.completeList!(await resolve(path), page) }),
+    ...(graph.completeList && { completeList: async (path: string, page?: unknown) => graph.completeList!(await resolve(path), page) }),
   }
 }

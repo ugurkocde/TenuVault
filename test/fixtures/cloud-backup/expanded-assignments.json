@@ -8,6 +8,10 @@
     { "name": "assignment without an ID", "assignments": [{ "target": { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }], "unread": true },
     { "name": "null policy ID", "list": [{ "id": null, "displayName": "Baseline Wi-Fi" }], "unread": true },
     { "name": "empty assignments", "assignments": [], "unread": false, "removed": ["assignment-1", "assignment-2"] },
-    { "name": "populated assignments", "unread": false }
+    { "name": "populated assignments", "unread": false },
+    { "name": "omitted assignments recovered across two pages", "relationshipPages": [[0], [1]], "unread": false },
+    { "name": "omitted assignments recovered with a real removal", "relationshipPages": [[0]], "unread": false, "removed": ["assignment-2"] },
+    { "name": "omitted assignments with a refused relationship read", "relationshipStatus": 400, "unread": true },
+    { "name": "omitted assignments with a malformed relationship page", "relationshipPages": [[0], [null]], "unread": true }
   ]
 }

@@ -148,7 +148,7 @@ describe("unreachable backup jobs", () => {
       const items = Array.from({ length: 30 }, (_, index) => ({ id: `item-${index}`, displayName: `Item ${index}` }))
       const job = await run({ ...request, scope: { excluded: [] } }, (url) => url.pathname.endsWith("/deviceConfigurations")
         ? Response.json({ value: items })
-        : url.pathname.endsWith("/deviceConfigurations/item-0") ? Response.json({ id: "item-0" })
+        : url.pathname.endsWith("/deviceConfigurations/item-0") ? Response.json({ id: "item-0", assignments: [] })
           : url.pathname.includes("/deviceConfigurations/") ? null : Response.json({ value: [] }))
       expect(job).toMatchObject({ status: "Failed" })
       expect(job.exception).toContain("Microsoft Graph did not respond for 24 consecutive requests")
@@ -273,7 +273,7 @@ describe("unreachable backup jobs", () => {
     it("counts a partial backup that saved some policies", async () => {
       const job = await run(twoTypes, (url) => url.pathname.includes("/deviceCompliancePolicies")
         ? null
-        : url.pathname.endsWith("/deviceConfigurations") ? Response.json({ value: [{ id: "saved", displayName: "Saved" }] }) : Response.json({ id: "saved" }))
+        : url.pathname.endsWith("/deviceConfigurations") ? Response.json({ value: [{ id: "saved", displayName: "Saved" }] }) : Response.json({ id: "saved", assignments: [] }))
       expect(job).toMatchObject({ status: "Completed", failures: 1 })
       expect(job.unreachable).toBeUndefined()
       expect(scheduledResult(job)).toEqual({ status: "Failed", message: job.progressMessage })

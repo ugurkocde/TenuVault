@@ -128,7 +128,7 @@ describe("backup request recovery", () => {
       const url = new URL(sent.url)
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
-        return Response.json(items[0])
+        return Response.json({ ...items[0], assignments: [] })
       }
       if (sent.method === "PUT" && !url.search) uploads.set(decodeURIComponent(url.pathname), { type: sent.headers.get("content-type"), body: await sent.text() })
       return new Response(null, { status: 201 })
@@ -154,7 +154,7 @@ describe("backup request recovery", () => {
     const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
-      return Response.json({ id: url.pathname.split("/").at(-1) })
+      return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
     })
     const handleLocalBlob = vi.fn(async (sent: Request) => {
       if (new URL(sent.url).search) return new Response(null, { status: 201 })
@@ -243,7 +243,7 @@ describe("backup request recovery", () => {
       if (!hanging) return
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
-        return Response.json({ id: url.pathname.split("/").at(-1) })
+        return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       signals.push(init!.signal!)
@@ -285,7 +285,7 @@ describe("backup request recovery", () => {
     const { engine, fetchImpl } = setup((url, init) => {
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
-        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
+        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       } else if (service === "Graph" || url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       signals.push(init!.signal!)
       return new Response(new ReadableStream(), { status: 503 })
@@ -312,7 +312,7 @@ describe("backup request recovery", () => {
     const { engine } = setup((url) => {
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: Array.from({ length: 8 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` })) })
-        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
+        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       } else if (service === "Graph" || url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       failures++
       return new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("Connection reset while reading body")) } }), { status: 503 })
@@ -600,10 +600,10 @@ describe("backup request recovery", () => {
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
         { id: "bad-1", displayName: "Bad 1" }, { id: "reset", displayName: "Reset" }, { id: "bad-2", displayName: "Bad 2" },
       ] })
-      if (url.pathname.endsWith("/reset")) return service === "blob" ? Response.json({ id: "reset" }) : new Promise<Response>(resolve => {
-        setTimeout(() => resolve(Response.json({ id: "reset" })), 4500)
+      if (url.pathname.endsWith("/reset")) return service === "blob" ? Response.json({ id: "reset", assignments: [] }) : new Promise<Response>(resolve => {
+        setTimeout(() => resolve(Response.json({ id: "reset", assignments: [] })), 4500)
       })
-      if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
+      if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       failures.push(Date.now() - started)
       throw new TypeError("Connection reset")
     }, 2)
@@ -641,7 +641,7 @@ describe("backup request recovery", () => {
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
         { id: "bad-1", displayName: "Bad 1" }, { id: "saved", displayName: "Saved" }, { id: "bad-2", displayName: "Bad 2" },
       ] })
-      if (url.pathname.endsWith("/saved")) return Response.json({ id: "saved" })
+      if (url.pathname.endsWith("/saved")) return Response.json({ id: "saved", assignments: [] })
       return uploading.then(() => { throw new TypeError("Connection reset") })
     }, 2)
     const job = engine.start(request)
@@ -664,7 +664,7 @@ describe("backup request recovery", () => {
           { id: "saved", displayName: "Saved" },
           ...Array.from({ length: 8 }, (_, index) => ({ id: `hung-${index}`, displayName: `Hung ${index}` })),
         ] })
-        return Response.json({ id: url.pathname.split("/").at(-1) })
+        return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       if (url.pathname.endsWith("/Saved.json")) {
@@ -698,7 +698,7 @@ describe("backup request recovery", () => {
         ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
         { id: "good", displayName: "Good" },
       ] })
-      if (url.pathname.endsWith("/good")) return Response.json({ id: "good" })
+      if (url.pathname.endsWith("/good")) return Response.json({ id: "good", assignments: [] })
       attempts++
       return new Response(null, { status, headers: { "Retry-After": "1" } })
     }, 1)
@@ -726,7 +726,7 @@ describe("backup request recovery", () => {
           controller.close()
         } }))
       }
-      return Response.json({ id: url.pathname.split("/").at(-1) })
+      return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
     }, 1)
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(10_000)
@@ -745,7 +745,7 @@ describe("backup request recovery", () => {
         ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
         { id: "good", displayName: "Good" },
       ] })
-      if (url.pathname.endsWith("/good")) return Response.json({ id: "good" })
+      if (url.pathname.endsWith("/good")) return Response.json({ id: "good", assignments: [] })
       attempts++
       return new Response("Invalid JSON")
     }, 1)
@@ -766,7 +766,7 @@ describe("backup request recovery", () => {
           ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
           { id: "good", displayName: "Good" },
         ] })
-        return Response.json({ id: url.pathname.split("/").at(-1) })
+        return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (!url.pathname.includes("/Bad")) return
       attempts++
@@ -800,7 +800,7 @@ describe("backup request recovery", () => {
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
         { id: "waiting", displayName: "Waiting" }, { id: "bad-1", displayName: "Bad 1" }, { id: "bad-2", displayName: "Bad 2" },
       ] })
-      if (url.pathname.endsWith("/waiting")) return Response.json({ id: "waiting" })
+      if (url.pathname.endsWith("/waiting")) return Response.json({ id: "waiting", assignments: [] })
       return waitingUpload.then(() => { throw new TypeError("Connection reset") })
     }, 2)
     const job = engine.start(request)
@@ -860,7 +860,7 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") {
         return url.pathname.endsWith("/deviceConfigurations")
           ? Response.json({ value: [{ id: "policy", displayName: "Policy" }] })
-          : Response.json({ id: "policy", displayName: "Policy" })
+          : Response.json({ id: "policy", displayName: "Policy", assignments: [] })
       }
       if (url.search) return new Response(null, { status: 201 })
       const target = url.pathname.endsWith(blob === "metadata" ? "/metadata.json" : "/Policy.json")
@@ -904,7 +904,7 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") {
         return url.pathname.endsWith("/deviceConfigurations")
           ? Response.json({ value: [{ id: "bad", displayName: "Bad" }, { id: "good", displayName: "Good" }] })
-          : Response.json({ id: url.pathname.split("/").at(-1) })
+          : Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (url.search) return new Response(null, { status: 201 })
       if (url.pathname.endsWith("/Bad.json")) {
@@ -1018,7 +1018,7 @@ describe("backup request recovery", () => {
       const times = calls.get(id) ?? []
       times.push(Date.now() - started)
       calls.set(id, times)
-      return times.length <= 2 ? new Response(null, { status: 429, headers: { "Retry-After": "120" } }) : Response.json({ id })
+      return times.length <= 2 ? new Response(null, { status: 429, headers: { "Retry-After": "120" } }) : Response.json({ id, assignments: [] })
     }
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async (_tenant, _client, scope) => {
       if (scope.includes("graph.microsoft.com") && ++tokenCalls === 3) await new Promise(resolve => { setTimeout(resolve, 10_000) })
@@ -1083,7 +1083,7 @@ describe("backup request recovery", () => {
       const times = calls.get(id) ?? []
       times.push(Date.now() - started)
       calls.set(id, times)
-      if (times.length > 1) return Response.json({ id, displayName: id })
+      if (times.length > 1) return Response.json({ id, displayName: id, assignments: [] })
       const throttled = () => new Response(null, { status: 429, headers: { "Retry-After": id === "policy-0" || id === "policy-1" ? "120" : "60" } })
       return id === "policy-1" ? new Promise<Response>(resolve => { setTimeout(() => resolve(throttled()), 20_000) }) : throttled()
     })
@@ -1176,7 +1176,7 @@ describe("backup request recovery", () => {
         failedReads++
         throw new TypeError("Connection reset")
       }
-      return Response.json({ id: "good", displayName: "Good" })
+      return Response.json({ id: "good", displayName: "Good", assignments: [] })
     })
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(3_000)

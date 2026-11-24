@@ -126,7 +126,7 @@ function graphWith(...lists: Array<{ path: string; items: Array<Record<string, u
     if (list && !url.search) return Response.json({ value: list.items })
     if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
     const id = url.pathname.split("/").pop()
-    return Response.json({ id, detail: true, lastModifiedDateTime: String(Math.random()) })
+    return Response.json({ id, detail: true, ...(url.searchParams.get("$expand") === "assignments" && { assignments: [] }), lastModifiedDateTime: String(Math.random()) })
   }
 }
 
