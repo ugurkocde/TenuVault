@@ -16,6 +16,8 @@ export interface TenantConnection {
   origin: "legacy" | "wizard"
   createdAt: string
   updatedAt: string
+  /** Creation timestamp from the disk profile, which 0.5.x assigns when adding a tenant. */
+  profileCreatedAt?: string | null
   /** Keep the tenant's own registration for organization license sharing after a switch. */
   ownClientId?: string
   /** Detect a 0.5.x sign-in changing token-cache.bin without changing the 0.6 cache. */

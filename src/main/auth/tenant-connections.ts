@@ -78,6 +78,7 @@ export class TenantConnections {
   migrate(raw = this.host.store.get(TENANT_LIST_KEY)): void {
     const entries = this.legacyEntries(raw)
     const removed: string[] = []
+    const readded = new Set<string>()
     for (const profile of savedTenants(raw) ?? []) {
       const tenant = profileId(profile)
       if (!tenant) continue
@@ -85,6 +86,18 @@ export class TenantConnections {
       if (record?.origin !== "wizard") continue
       const legacyKey = storedAccountKey(tenant)
       const sharedKey = publicAccountKey(tenant)
+      const profileClient = profile.credentials?.appId
+      const createdAt = validTime(profile.createdAt) ? profile.createdAt : null
+      const creationChanged = record.profileCreatedAt !== undefined
+        ? record.profileCreatedAt !== createdAt
+        : createdAt !== null && Date.parse(createdAt) > Date.parse(record.updatedAt)
+      if (isGuid(profileClient) && (creationChanged ||
+        (profileClient.toLowerCase() !== legacyClientId(record).toLowerCase() && profileClient.toLowerCase() !== record.clientId.toLowerCase()))) {
+        entries[PREFIX + tenant] = this.legacyRecord(profileClient, createdAt)
+        readded.add(tenant)
+        removed.push(sharedKey)
+        continue
+      }
       const legacy = this.host.store.get(legacyKey)
       const usesPublicClient = record.method !== "ownApp"
       const shared = usesPublicClient ? this.host.store.get(sharedKey) : null
@@ -102,12 +115,12 @@ export class TenantConnections {
           if (shared === null) entries[sharedKey] = saved
         } else if (shared !== null) removed.push(sharedKey)
       } else if (saved !== null && (!matches(saved) || legacySignInChanged)) removed.push(legacyKey)
-      if (this.host.legacyCache && record.legacyCacheFingerprint !== fingerprint) {
-        entries[PREFIX + tenant] = JSON.stringify({ ...record, legacyCacheFingerprint: fingerprint })
+      if (record.profileCreatedAt === undefined || (this.host.legacyCache && record.legacyCacheFingerprint !== fingerprint)) {
+        entries[PREFIX + tenant] = JSON.stringify({ ...record, profileCreatedAt: createdAt, ...(this.host.legacyCache ? { legacyCacheFingerprint: fingerprint } : {}) })
       }
     }
     if (raw !== null) {
-      const aligned = this.alignProfiles(raw)
+      const aligned = this.alignProfiles(raw, readded)
       if (aligned !== raw) entries[TENANT_LIST_KEY] = aligned
     }
     this.host.store.setMany(entries, removed)
@@ -126,13 +139,17 @@ export class TenantConnections {
       if (!isGuid(credentials?.tenantId) || !isGuid(credentials.appId)) continue
       const key = PREFIX + credentials.tenantId.toLowerCase()
       if (this.host.store.get(key) !== null || Object.hasOwn(entries, key)) continue
-      const updatedAt = this.now().toISOString()
-      entries[key] = JSON.stringify({
-        version: 1, method: "ownApp", origin: "legacy", clientId: credentials.appId,
-        ownClientId: credentials.appId, createdAt: validTime(tenant.createdAt) ? tenant.createdAt : updatedAt, updatedAt,
-      } satisfies TenantConnection)
+      entries[key] = this.legacyRecord(credentials.appId, validTime(tenant.createdAt) ? tenant.createdAt : null)
     }
     return entries
+  }
+
+  private legacyRecord(clientId: string, createdAt: string | null): string {
+    const updatedAt = this.now().toISOString()
+    return JSON.stringify({
+      version: 1, method: "ownApp", origin: "legacy", clientId, ownClientId: clientId,
+      createdAt: createdAt ?? updatedAt, updatedAt,
+    } satisfies TenantConnection)
   }
 
   get(tenantId: string): TenantConnection | null {
@@ -154,7 +171,7 @@ export class TenantConnections {
     const profile = this.profile(tenant, raw)
     if (!profile) throw new Error("Save the tenant profile with its connection.")
     const at = this.now().toISOString()
-    const record: TenantConnection = { version: 1, ...selected, origin: "wizard", createdAt: at, updatedAt: at, ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}) }
+    const record: TenantConnection = { version: 1, ...selected, origin: "wizard", createdAt: at, updatedAt: at, profileCreatedAt: validTime(profile.createdAt) ? profile.createdAt : null, ...(selected.method === "ownApp" ? { ownClientId: selected.clientId } : {}) }
     this.validateAccount(tenant, record.clientId, staged.account)
     this.validateStorage(profile, record.method)
     this.commit(tenant, JSON.stringify([...saved, profile]), record, staged)
@@ -179,9 +196,9 @@ export class TenantConnections {
   }
 
   /** An older renderer snapshot must not replace a wizard connection's credentials. */
-  private alignProfiles(raw: string): string {
+  private alignProfiles(raw: string, readded?: ReadonlySet<string>): string {
     return this.updateProfiles(raw, tenantId => {
-      const connection = this.get(tenantId)
+      const connection = readded?.has(tenantId) ? null : this.get(tenantId)
       return connection?.origin === "wizard" ? legacyClientId(connection) : undefined
     })
   }

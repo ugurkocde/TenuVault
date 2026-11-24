@@ -92,6 +92,31 @@ describe("tenant connection migration", () => {
     expect(f.signIn).not.toHaveBeenCalled()
   })
 
+  it.each([[OWN, "2026-11-25T12:00:00.000Z"], [NEXT, NOW]])("keeps a fresh 0.5.x profile and account when it re-adds the tenant with %s", async (clientId, createdAt) => {
+    const f = fixture()
+    const profiles = JSON.parse(raw)
+    profiles[0].createdAt = NOW
+    f.connections.enroll(TENANT, { method: "ownApp", clientId: OWN }, JSON.stringify(profiles), staged(OWN))
+    await f.connections.switch(TENANT, { method: "tenuvaultApp" })
+    const legacy = f.reopen()
+    legacy.set(TENANT_LIST_KEY, "[]")
+    const readded = JSON.parse(raw)[0]
+    readded.createdAt = createdAt
+    readded.credentials.appId = clientId
+    const profile = JSON.stringify([readded])
+    legacy.set(TENANT_LIST_KEY, profile)
+    accountStore(legacy).set(staged(clientId).account)
+    f.reopenLegacy().set(`msal.${clientId}`, "new legacy sign-in")
+
+    const upgraded = f.restart()
+    expect(upgraded.connections.get(TENANT)).toMatchObject({ origin: "legacy", method: "ownApp", clientId, createdAt: readded.createdAt })
+    expect(upgraded.accounts.get(TENANT)?.clientId).toBe(clientId)
+    expect(upgraded.store.get(publicAccountKey(TENANT))).toBeNull()
+    expect(upgraded.store.get(TENANT_LIST_KEY)).toBe(profile)
+    await expect(upgraded.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })).rejects.toThrow("new wizard")
+    expect(f.restart().connections.get(TENANT)).toEqual(upgraded.connections.get(TENANT))
+  })
+
   it("removes the record when the profile is removed and classifies an original-setup reconnect as legacy", () => {
     const f = fixture(); f.enroll()
     f.connections.saveProfiles("[]")
