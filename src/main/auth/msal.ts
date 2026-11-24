@@ -35,7 +35,8 @@ export interface AuthHost {
   cachePlugin: (clientId: string) => ICachePlugin
   authorizeInteractive?: (tenantId: string) => void
   sharedScopes?: (tenantId: string, scope: string) => Promise<string[]>
-  authorizeConnection?: (tenantId: string, clientId: string, scope: string) => Promise<void> | void
+  authorizeConnection?: (tenantId: string, clientId: string, scope: string) => void
+  authorizeSilentToken?: (tenantId: string, clientId: string, scope: string) => Promise<void>
   authorizeIssuedToken?: (tenantId: string, clientId: string, scope: string, result: AuthenticationResult) => void
   /** Opens the system browser for the loopback sign-in flow. */
   openBrowser: (url: string) => Promise<void>
@@ -244,7 +245,7 @@ export class AuthManager {
       homeAccountId: account.homeAccountId,
     }
     this.host.authorizeInteractive?.(signedIn.tenantId)
-    await this.host.authorizeConnection?.(signedIn.tenantId, clientId, RESOURCE_SCOPES.graph)
+    this.host.authorizeConnection?.(signedIn.tenantId, clientId, RESOURCE_SCOPES.graph)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }
@@ -374,7 +375,8 @@ export class AuthManager {
    * token. Throws SignInRequiredError when the admin has to sign in again.
    */
   async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<AuthenticationResult> {
-    await this.host.authorizeConnection?.(tenantId, clientId, scope)
+    this.host.authorizeConnection?.(tenantId, clientId, scope)
+    if (this.host.authorizeSilentToken) await this.host.authorizeSilentToken(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
     if (!stored || stored.clientId !== clientId) {
       throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.", scope)
@@ -440,7 +442,7 @@ export class AuthManager {
   async reauthenticate(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph): Promise<SignedInAccount> {
     this.host.authorizeInteractive?.(tenantId)
     if (!isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
-    await this.host.authorizeConnection?.(tenantId, clientId, scope)
+    this.host.authorizeConnection?.(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
     const scopes = clientId.toLowerCase() === TENUVAULT_CLIENT_ID ? await this.connectionScopes(tenantId, clientId, scope) : [scope]
     const result = await this.acquireInteractive(clientId, tenantId, scopes, undefined, stored?.username).catch((error: unknown) => {
@@ -460,7 +462,7 @@ export class AuthManager {
       name: account.name,
       homeAccountId: account.homeAccountId,
     }
-    await this.host.authorizeConnection?.(tenantId, clientId, scope)
+    this.host.authorizeConnection?.(tenantId, clientId, scope)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }
@@ -472,7 +474,7 @@ export class AuthManager {
 
   async signInWithDeviceCode(tenant: string, clientId: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal): Promise<void> {
     this.host.authorizeInteractive?.(tenant)
-    await this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
+    this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
     if (clientId.toLowerCase() === TENUVAULT_CLIENT_ID) throw new Error("Sign in to the TenuVault app in the system browser.")
     // End this tenant's waiting browser attempts.
     for (const entry of this.interactiveControls.values()) if (entry.tenant.toLowerCase() === tenant.toLowerCase()) entry.controller.abort(new SignInCancelledError())
@@ -480,7 +482,7 @@ export class AuthManager {
     signal.throwIfAborted()
     const account = result.account!
     this.host.authorizeInteractive?.(tenant)
-    await this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
+    this.host.authorizeConnection?.(tenant, clientId, RESOURCE_SCOPES.graph)
     this.host.accountStore.set({ tenantId: tenant.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
   }
 

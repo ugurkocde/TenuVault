@@ -348,7 +348,8 @@ async function bootstrap(): Promise<void> {
       if (!scopes.length) throw new Error("Review the permission packs in Sign-in and access.")
       return resourceScopes(resource, scopes)
     },
-    authorizeConnection: (tenant, client, scope) => capabilities.requireConnectionEnabled(tenant, client, scope),
+    authorizeConnection: (tenant, client, scope) => capabilities.requireConnection(tenant, client, scope),
+    authorizeSilentToken: (tenant, client, scope) => capabilities.requireConnectionEnabled(tenant, client, scope),
     authorizeIssuedToken: (tenant, client, scope, result) => capabilities.requireIssuedToken(tenant, client, scope, result.accessToken, result),
     openBrowser: (url) => {
       if (!isMicrosoftLoginUrl(url)) {
@@ -544,7 +545,7 @@ async function bootstrap(): Promise<void> {
   // Reader credentials stay in the backup engine and its audit delivery, outside delegated sign-in.
   const backupReader = new BackupReaderService(tokenStore, {
     fetch: bridgedFetch, services: tenantId => moduleSettings.selection(tenantId),
-    connectionChanged: tenantId => health.connectionsChanged(tenantId),
+    connectionChanged: (tenantId) => health.connectionsChanged(tenantId),
     bindToken: (tenant, client, scope, token) => capabilities.bindReaderToken(tenant, client, scope, token),
   })
   // Connection health: what the token checks and the backup runs of each tenant observed, and what
