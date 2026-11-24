@@ -1,11 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest"
-import { InteractionRequiredAuthError, ServerError } from "@azure/msal-node"
+import { InteractionRequiredAuthError, ServerError, type ICachePlugin, type TokenCacheContext } from "@azure/msal-node"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SecureStore } from "../src/main/storage/secure-store"
 import { TenantConnections, TENANT_LIST_KEY } from "../src/main/auth/tenant-connections"
-import { accountStore } from "../src/main/auth/stores"
+import { accountStore, secureCachePlugin, stageConnectionCache } from "../src/main/auth/stores"
 import { POST as restoreBackup } from "../src/portal/app/api/restore-backup/route"
 import { POST as detectDrifts } from "../src/portal/app/api/detect-drifts/route"
 import { routes as reportRoutes } from "../src/main/features/reports"
@@ -32,15 +32,33 @@ import type { TenantConnection } from "../src/shared/tenant-connection"
 import { memoryStore } from "./helpers"
 
 const msal = vi.hoisted(() => ({ acquire: vi.fn() }))
+vi.mock("../src/main/auth/loopback-sign-in", async importOriginal => ({
+  ...await importOriginal<typeof import("../src/main/auth/loopback-sign-in")>(),
+  loopbackSignIn: ({ app }: { app: { finishFixtureSignIn: () => Promise<unknown> } }) => app.finishFixtureSignIn(),
+}))
 vi.mock("@azure/msal-node", async importOriginal => ({
   ...await importOriginal<typeof import("@azure/msal-node")>(),
   PublicClientApplication: class {
     acquireTokenSilent = msal.acquire
-    constructor(private readonly config: { auth: { clientId: string } }) {}
-    getAllAccounts = async () => [
-      { homeAccountId: "account", username: "fixture@example.test" },
-      { homeAccountId: this.config.auth.clientId, username: "registered@example.test" },
-    ]
+    constructor(private readonly config: { auth: { clientId: string }; cache: { cachePlugin: ICachePlugin } }) {}
+    async finishFixtureSignIn() {
+      const account = { homeAccountId: "wizard-admin", username: "admin@example.test", tenantId: TENANT }
+      await this.config.cache.cachePlugin.afterCacheAccess({
+        cacheHasChanged: true, tokenCache: { serialize: () => JSON.stringify(account) },
+      } as TokenCacheContext)
+      return { account, accessToken: "first-token" }
+    }
+    async getAllAccounts() {
+      let cached: string | undefined
+      await this.config.cache.cachePlugin.beforeCacheAccess({
+        tokenCache: { deserialize: (value: string) => { cached = value } },
+      } as TokenCacheContext)
+      return [
+        { homeAccountId: "account", username: "fixture@example.test" },
+        { homeAccountId: this.config.auth.clientId, username: "registered@example.test" },
+        ...(cached ? [JSON.parse(cached)] : []),
+      ]
+    }
   },
 }))
 
@@ -139,6 +157,30 @@ afterEach(() => {
   vi.unstubAllGlobals()
   if (dir) rmSync(dir, { recursive: true, force: true })
   dir = undefined
+})
+
+it("reads the first backup token after wizard enrollment with an uppercase client ID", async () => {
+  dir = mkdtempSync(join(tmpdir(), "tv-wizard-connection-"))
+  const store = new SecureStore(join(dir, "settings"), { encrypt: value => Buffer.from(value), decrypt: value => value.toString() })
+  const accounts = accountStore(store)
+  const connections = new TenantConnections({ store, coverage: () => [], signIn: {} })
+  const auth = new AuthManager({
+    fetch: vi.fn(), openBrowser: async () => {}, accountStore: accounts,
+    cachePlugin: clientId => secureCachePlugin(store, clientId),
+  })
+  const supplied = CLIENT.toUpperCase()
+  const stage = (clientId: string) => {
+    const draft = stageConnectionCache(store, clientId)
+    return { cache: draft.plugin, beforeSave: () => store.setMany(draft.cacheWrites()) }
+  }
+  const account = await auth.signIn(TENANT, supplied, { stage })
+  connections.enroll(TENANT, { method: "ownApp", clientId: account.clientId }, JSON.stringify([
+    { credentials: { tenantId: TENANT, appId: account.clientId } },
+  ]), { account: accounts.get(TENANT)!, accessToken: "" })
+  msal.acquire.mockResolvedValueOnce({ accessToken: "first-backup-token" })
+  const enrolled = connections.get(TENANT)!
+  expect(enrolled.clientId).toBe(CLIENT)
+  await expect(auth.getAccessToken(TENANT, enrolled.clientId, RESOURCE_SCOPES.graph)).resolves.toMatchObject({ accessToken: "first-backup-token" })
 })
 
 function fixture(mixed = false, dispatchInternal: (request: Request) => Promise<Response> = vi.fn()) {

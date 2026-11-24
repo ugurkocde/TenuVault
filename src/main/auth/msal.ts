@@ -278,12 +278,14 @@ export class AuthManager {
     loginHint?: string
     /** Called when the browser has answered and the code is being redeemed: the browser step is over. */
     onBrowserDone?: () => void
-    staged?: { cache: ICachePlugin; beforeSave: (tenantId: string) => void }
+    stage?: (clientId: string) => { cache: ICachePlugin; beforeSave: (tenantId: string) => void }
   }): Promise<SignedInAccount> {
     if (normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID) throw new Error("Choose Start now in the sign-in method settings.")
     if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw new Error("Choose TenuVault app in the sign-in method settings.")
     this.host.authorizeInteractive?.(tenant)
-    const stagedApp = options?.staged && this.createApp(clientId, options.staged.cache, true)
+    if (options?.stage) clientId = normalizeGuid(clientId)
+    const staged = options?.stage?.(clientId)
+    const stagedApp = staged && this.createApp(clientId, staged.cache, true)
     const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone, stagedApp).catch((error: unknown) => {
       throw firstSignInError(error)
     })
@@ -299,7 +301,7 @@ export class AuthManager {
     }
     this.host.authorizeInteractive?.(signedIn.tenantId)
     this.host.authorizeConnection?.(signedIn.tenantId, clientId, RESOURCE_SCOPES.graph)
-    options?.staged?.beforeSave(signedIn.tenantId)
+    staged?.beforeSave(signedIn.tenantId)
     this.host.accountStore.set(signedIn)
     return { tenantId: signedIn.tenantId, clientId, username: signedIn.username, name: signedIn.name }
   }

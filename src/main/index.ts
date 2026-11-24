@@ -1571,16 +1571,18 @@ async function bootstrap(): Promise<void> {
     // The window hears when the browser step ends, as soon as Microsoft has answered, and again
     // when the license check starts, so it stops offering ways to recover a browser sign-in.
     const phase = (value: "completing" | "license") => { if (!event.sender.isDestroyed()) event.sender.send("auth:signInPhase", value) }
-    const pending = options?.wizard === true ? stageConnectionCache(cache, clientId) : undefined
-    const staged = pending && {
-      cache: pending.plugin,
-      beforeSave: (signedInTenant: string) => {
-        checkWizardTenant(signedInTenant)
-        if (options?.expectedTenant && options.expectedTenant.toLowerCase() !== signedInTenant) throw new Error("You signed in to a different tenant. Sign in with an account from this tenant.")
-        for (const [key, value] of Object.entries(pending.cacheWrites())) cache.set(key, value)
-      },
-    }
-    const account = await auth.signIn(tenant, clientId, { ...(loginHint ? { loginHint } : {}), onBrowserDone: () => phase("completing"), staged }).finally(returnToApp).catch((error: unknown) => {
+    const stage = options?.wizard === true ? (wizardClientId: string) => {
+      const pending = stageConnectionCache(cache, wizardClientId)
+      return {
+        cache: pending.plugin,
+        beforeSave: (signedInTenant: string) => {
+          checkWizardTenant(signedInTenant)
+          if (options?.expectedTenant && options.expectedTenant.toLowerCase() !== signedInTenant) throw new Error("You signed in to a different tenant. Sign in with an account from this tenant.")
+          for (const [key, value] of Object.entries(pending.cacheWrites())) cache.set(key, value)
+        },
+      }
+    } : undefined
+    const account = await auth.signIn(tenant, clientId, { ...(loginHint ? { loginHint } : {}), onBrowserDone: () => phase("completing"), stage }).finally(returnToApp).catch((error: unknown) => {
       const event = signInEvent(error)
       diagnostics.record(event, isSetupError(event) ? "signin" : undefined)
       throw error
