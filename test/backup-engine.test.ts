@@ -1,3 +1,5 @@
+import { AuthError } from "@azure/msal-node"
+import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
 import { mkdtempSync } from "node:fs"
 import { DEFAULT_SELECTION, disabledFolders } from "../src/shared/services/modules"
 import { randomBytes } from "node:crypto"
@@ -74,6 +76,28 @@ async function finished(engine: BackupEngine, id: string) {
 }
 
 describe("BackupEngine", () => {
+  it.each([["Start now", GRAPH_CLI_CLIENT_ID], ["own registration", CLIENT]])(
+    "keeps a silent sign-in failure out of backup logs and history with %s",
+    async (_method, clientId) => {
+      const username = "private-admin@example.test"
+      const history = new FailedAttemptLog(memoryStore())
+      const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-engine-")), [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const engine = new BackupEngine({
+        fetch: (input, init) => handleLocalBlobRequest(store, new Request(input, init)),
+        // An OAuth error can reach the token consumer without a SignInRequiredError wrapper.
+        getToken: async () => { throw new AuthError("interaction_required", "", `Sign in again as ${username} (AADSTS50076).`) },
+        onFinished: (job, request) => history.finished(job, request),
+      })
+      const job = await finished(engine, engine.start({ tenantId: TENANT, clientId, storageAccountName: account }).id)
+      const attempts = history.list(TENANT)
+      expect(job.status).toBe("Failed")
+      expect(JSON.stringify({ job, attempts })).not.toContain(username)
+      expect(job.log.join("\n")).toContain("AADSTS50076")
+      expect(attempts).toMatchObject([{ runId: job.id, message: expect.stringContaining("Sign in again") }])
+    },
+  )
+
   it.each([
     [400, "InvalidHeaderValue", "Check that the backup storage is available and retry."],
     [403, "AuthenticationFailed", "Sign in again to this tenant."],

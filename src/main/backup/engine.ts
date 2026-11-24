@@ -1,3 +1,4 @@
+import { oauthSignInCode, signInLogCode } from "../../shared/sign-in-errors"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP } from "../../shared/tenant-connection"
 import { graphCliScopes } from "../auth/connection-coverage"
 import { isBackupName, parseBackupName } from "../../shared/intune/backup-names"
@@ -295,8 +296,15 @@ async function tokenOrStop<T>(get: () => Promise<T>, outcome: RunOutcome): Promi
     return await get()
   } catch (error) {
     recordFailure(outcome, error)
-    // Keep the cause: it tells a sign-in Microsoft refused from one that could not reach Microsoft.
-    throw new TokenError(error instanceof Error ? error.message : String(error), { cause: error })
+    // Token acquisition errors can reach the job, manifest and history through several paths.
+    // Keep the original cause for classification and use only fixed text for a raw silent refusal.
+    const message = error instanceof Error ? error.message : String(error)
+    const oauth = error instanceof Error && "errorCode" in error &&
+      error.name !== "ServerError" && error.name !== "SignInRequiredError" ? oauthSignInCode(error.errorCode) : undefined
+    const reason = oauth === "interaction_required" || oauth === "login_required" || oauth === "invalid_grant"
+      ? `Microsoft sign-in (${signInLogCode(message) ?? oauth}). Sign in again to this tenant.`
+      : maskBackupAccountIdentifiers(message)
+    throw new TokenError(reason, { cause: error })
   }
 }
 
