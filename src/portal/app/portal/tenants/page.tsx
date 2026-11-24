@@ -46,6 +46,7 @@ import { tenantPlanName, tenantLicense, tenantPlan, useLicense } from "@desktop/
 import { GatedButton } from "@desktop/components/PlanGate"
 import { PlanBadge } from "@desktop/components/UpgradeNote"
 import { allows, type Plan } from "../../../../shared/plans"
+import { comparisonTypeName, LEGACY_COMPARISON_NOTICE, type ComparisonCoverageNotice } from "../../../../shared/intune/backup-read-coverage"
 import { Badge } from "~/components/ui/badge"
 import { Checkbox } from "~/components/ui/checkbox"
 import {
@@ -84,7 +85,7 @@ function TenantsPageContent() {
   const portfolioPlan: Plan | null = !licenseStatus ? null
     : licenseStatus.tenants.some((t) => t.entitled && t.plan === "msp") ? "msp"
     : licenseStatus.tenants.some((t) => t.entitled && t.plan === "pro") ? "pro" : "community"
-  const [driftByTenant, setDriftByTenant] = useState<Record<string, { total: number; critical: number; unknown: number } | { error: string }>>({})
+  const [driftByTenant, setDriftByTenant] = useState<Record<string, ({ total: number; critical: number } & ComparisonCoverageNotice) | { error: string }>>({})
   const [checkingDrift, setCheckingDrift] = useState(false)
   const searchParams = useSearchParams()
   const [searchQuery, setSearchQuery] = useState("")
@@ -376,7 +377,12 @@ function TenantsPageContent() {
           }
           setDriftByTenant((current) => ({
             ...current,
-            [tenantId]: response.ok ? { total: data.summary?.total ?? 0, critical: data.summary?.critical ?? 0, unknown: data.unknownTypes?.length ?? 0 } : { error: data.error ?? "Drift check failed" },
+            [tenantId]: response.ok ? {
+              total: data.summary?.total ?? 0,
+              critical: data.summary?.critical ?? 0,
+              unknownTypes: data.unknownTypes,
+              legacyReadFailure: data.legacyReadFailure,
+            } : { error: data.error ?? "Drift check failed" },
           }))
         } catch (error) {
           setDriftByTenant((current) => ({ ...current, [tenantId]: { error: error instanceof Error ? error.message : "Drift check failed" } }))
@@ -1390,8 +1396,19 @@ function TenantsPageContent() {
                         const drift = driftByTenant[tenant.credentials?.tenantId?.toLowerCase() ?? ""]
                         if (!drift) return <span className="text-gray-400">Not checked</span>
                         if ("error" in drift) return <span className="text-amber-700" title={drift.error}>Not available</span>
-                        if (drift.total === 0) return drift.unknown > 0 ? <span className="text-amber-700">Coverage unknown for some types</span> : <span className="text-green-700">No drift</span>
-                        return <span className={drift.critical > 0 ? "text-red-700" : "text-amber-800"}>{drift.total} change{drift.total === 1 ? "" : "s"}{drift.critical > 0 ? `, ${drift.critical} critical` : ""}</span>
+                        const unknown = drift.unknownTypes?.length ?? 0
+                        if (drift.total === 0 && !unknown && !drift.legacyReadFailure) return <span className="text-green-700">No drift</span>
+                        return <div className="space-y-1">
+                          <p className={drift.critical > 0 ? "text-red-700" : drift.total > 0 ? "text-amber-800" : "text-gray-700"}>
+                            {drift.total} change{drift.total === 1 ? "" : "s"}{drift.critical > 0 ? `, ${drift.critical} critical` : ""}
+                          </p>
+                          {unknown > 0 && <p className="text-xs text-amber-700" title={drift.unknownTypes?.map(comparisonTypeName).join(", ")}>
+                            {unknown} {unknown === 1 ? "type" : "types"} not compared
+                          </p>}
+                          {drift.legacyReadFailure && <p className="max-w-40 whitespace-normal text-xs text-amber-700" title={LEGACY_COMPARISON_NOTICE}>
+                            Older backup has an unassigned read failure
+                          </p>}
+                        </div>
                       })()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
