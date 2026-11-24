@@ -742,7 +742,9 @@ export class LicenseService {
     return this.healthFetch ??= (async () => {
       let data: LicenseHealthResponse | null = null
       try {
-        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
+        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, {
+          signal: AbortSignal.timeout(10_000), redirect: "error", cache: "no-store",
+        })
         if (response.ok) data = await response.json()
       } catch { /* Shared sign-in requires positive health discovery. */ }
       this.connectMethodsHealth = {

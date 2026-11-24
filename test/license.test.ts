@@ -2527,7 +2527,7 @@ describe("TenuVault app availability", () => {
     "keeps the shared sign-in disabled for health response %j", async health => {
       const fetch = vi.fn(async () => Response.json(health))
       expect(await service({ fetch }).tenuvaultAppEnabled()).toBe(false)
-      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/desktop-license\/health$/), expect.objectContaining({ redirect: "error" }))
+      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/desktop-license\/health$/), expect.objectContaining({ redirect: "error", cache: "no-store" }))
     },
   )
 
