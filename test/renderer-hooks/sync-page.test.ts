@@ -254,7 +254,7 @@ describe("Sync page plans", () => {
     plan.current = "community"
     const container = await render()
     expect(container.querySelector('section[aria-label="Copy to Tenants preview"]')).not.toBeNull()
-    expect(container.textContent).toContain("Pro copies to one tenant per run, including tenants on a Pro trial or MSP. Copying to several tenants at once requires MSP on every tenant in the run.")
+    expect(container.textContent).toContain("On Pro, each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run.")
     expect(container.querySelector('ol[aria-label="Steps"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Recent copies"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Choose settings"]')).toBeNull()
@@ -279,7 +279,7 @@ describe("Sync page plans", () => {
     }
     await click(card(container, "Contoso Germany"))
     expect(card(container, "Contoso Germany").getAttribute("aria-pressed")).toBe("true")
-    expect(container.textContent).toContain("Pro copies to one tenant per run, including tenants on a Pro trial or MSP. Copying to several tenants at once requires MSP on every tenant in the run.")
+    expect(container.textContent).toContain("On Pro, each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run.")
     expect(container.textContent).not.toMatch(/upsell|upgrade now|unlock/i)
     await click(button(container, "See plans"))
     expect(opened).toEqual([["buy", { source: "sync-targets" }]])
