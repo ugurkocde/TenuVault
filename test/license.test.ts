@@ -1,3 +1,4 @@
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { prepareScheduledCoverage } from "../src/main/backup/schedule-prepare"
 import { BackupScheduler } from "../src/main/backup/scheduler"
@@ -2529,6 +2530,28 @@ describe("TenuVault app availability", () => {
       expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/desktop-license\/health$/), expect.objectContaining({ redirect: "error" }))
     },
   )
+
+  it.each(["trial health", "unreachable health", "new sign-in"])("stops the next request in an active operation after %s", async check => {
+    const health = vi.fn()
+      .mockResolvedValueOnce(Response.json({ connectMethods: { tenuvaultApp: true } }))
+      .mockImplementationOnce(async () => {
+        if (check === "unreachable health") throw new Error("network unavailable")
+        return Response.json({ tenantTrials: { ok: true, enabled: false }, connectMethods: { tenuvaultApp: false } })
+      })
+    const license = service({ fetch: health })
+    const capabilities = new ConnectionCapabilities(() => ({
+      version: 1, origin: "wizard", method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, createdAt: "", updatedAt: "",
+    }), undefined, method => license.connectMethodEnabled(method))
+    const url = new URL("https://graph.microsoft.com/beta/organization")
+    const bearer = "opaque-shared-token"
+    capabilities.requireIssuedToken(TENANT, TENUVAULT_CLIENT_ID, "https://graph.microsoft.com/.default", bearer)
+    const request = () => capabilities.authorizeRequest(url, url, { headers: { Authorization: `Bearer ${bearer}` } }, TENANT)
+    await expect(request()).resolves.toBeUndefined()
+    if (check === "new sign-in") expect(await license.tenuvaultAppEnabled(true)).toBe(false)
+    else await license.checkTrialHealth()
+    await expect(request()).rejects.toThrow("currently unavailable")
+    expect(health).toHaveBeenCalledTimes(2)
+  })
 
   it("refreshes a positive result and disables sign-in when health turns it off", async () => {
     const now = vi.spyOn(Date, "now")

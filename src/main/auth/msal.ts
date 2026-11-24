@@ -34,7 +34,7 @@ export interface AuthHost {
   /** Encrypted per-client MSAL cache persistence. */
   cachePlugin: (clientId: string) => ICachePlugin
   authorizeInteractive?: (tenantId: string) => void
-  sharedScopes?: (tenantId: string, scope: string) => Promise<string[]>
+  sharedScopes?: (tenantId: string, scope: string, freshHealth: boolean) => Promise<string[]>
   authorizeConnection?: (tenantId: string, clientId: string, scope: string) => void
   authorizeSilentToken?: (tenantId: string, clientId: string, scope: string) => Promise<void>
   authorizeIssuedToken?: (tenantId: string, clientId: string, scope: string, result: AuthenticationResult) => void
@@ -333,10 +333,10 @@ export class AuthManager {
     }
   }
 
-  private async connectionScopes(tenant: string, clientId: string, scope: string): Promise<string[]> {
+  private async connectionScopes(tenant: string, clientId: string, scope: string, freshHealth = false): Promise<string[]> {
     if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) {
       if (!this.host.sharedScopes) throw new Error("TenuVault app sign-in is unavailable.")
-      return this.host.sharedScopes(tenant, scope)
+      return this.host.sharedScopes(tenant, scope, freshHealth)
     }
     return [scope]
   }
@@ -445,7 +445,7 @@ export class AuthManager {
     if (!isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
     this.host.authorizeConnection?.(tenantId, clientId, scope)
     const stored = this.host.accountStore.get(normalizeGuid(tenantId))
-    const scopes = normalizeGuid(clientId) === TENUVAULT_CLIENT_ID ? await this.connectionScopes(tenantId, clientId, scope) : [scope]
+    const scopes = normalizeGuid(clientId) === TENUVAULT_CLIENT_ID ? await this.connectionScopes(tenantId, clientId, scope, true) : [scope]
     const result = await this.acquireInteractive(clientId, tenantId, scopes, undefined, stored?.username).catch((error: unknown) => {
       if (normalizeGuid(clientId) === TENUVAULT_CLIENT_ID) throw sharedSignInFailure(error, false)
       throw missingPermissionError(scope, error) ?? error

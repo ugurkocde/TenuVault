@@ -337,8 +337,8 @@ async function bootstrap(): Promise<void> {
     fetch: bridgedFetchLater,
     cachePlugin: (clientId) => secureCachePlugin(cache, clientId),
     authorizeInteractive: tenant => capabilities.requireInteractive(tenant),
-    sharedScopes: async (tenant, scope) => {
-      if (!await license.tenuvaultAppEnabled()) throw new Error("TenuVault app sign-in is currently unavailable.")
+    sharedScopes: async (tenant, scope, freshHealth) => {
+      if (!await license.tenuvaultAppEnabled(freshHealth)) throw new Error("TenuVault app sign-in is currently unavailable.")
       const connection = connections.get(tenant)
       if (connection?.method !== "tenuvaultApp") throw new Error("Choose TenuVault app for this tenant first.")
       const resource = scope === RESOURCE_SCOPES.graph ? "graph" : scope === RESOURCE_SCOPES.storage ? "storage" : scope === RESOURCE_SCOPES.management ? "management" : null
@@ -873,7 +873,7 @@ async function bootstrap(): Promise<void> {
     })
   }
   const consentPlan = async (tenant: string) => {
-    if (!isGuid(tenant) || !tenantProfile(tenant) || connections.get(tenant)?.origin !== "wizard" || !await license.tenuvaultAppEnabled()) return null
+    if (!isGuid(tenant) || !tenantProfile(tenant) || connections.get(tenant)?.origin !== "wizard" || !await license.tenuvaultAppEnabled(true)) return null
     return currentPacks(tenant)
   }
   const packConsent = new PackConsentFlow({

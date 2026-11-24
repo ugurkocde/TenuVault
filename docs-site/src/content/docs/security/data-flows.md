@@ -77,6 +77,8 @@ Large-inventory preparation uses encrypted temporary merge files for sorted obje
 
 The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used for license activation, refresh, release and tenant trials, the trial key service at `https://www.tenuvault.com/api/desktop-trial`, used when you request a trial key by email, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
 
+Before a new TenuVault app sign-in, the desktop app checks availability at `https://www.tenuvault.com/api/desktop-license/health`. This request carries no tenant details or Microsoft tokens. For work already running, the desktop app can reuse a successful availability result for up to two minutes. If any check of this endpoint finds the TenuVault app disabled or the service unreachable, the next request that uses the TenuVault app is blocked. Requests already sent can finish.
+
 When you open the pricing page or the checkout (`https://www.tenuvault.com/api/desktop-checkout`) from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
 The link to the free setup call page (`https://www.tenuvault.com/setup-call`) works the same way: it names the screen it was opened from (for example `src=app-welcome`) and carries no identifier. Only your browser visits that page, and only when you click the link. The app does not request the page and does not contact a booking service.

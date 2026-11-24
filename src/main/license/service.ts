@@ -334,6 +334,13 @@ function retryAfterMs(value: string | null): number | null {
 
 export const TRIAL_END_NOTICE_DAYS = 60
 
+type ConnectMethod = "graphCli" | "tenuvaultApp"
+interface LicenseHealthResponse {
+  connectMethods?: Partial<Record<ConnectMethod, unknown>>
+  organizationLicenses?: { clientIdSets?: unknown }
+  tenantTrials?: Partial<Record<"ok" | "enabled" | "days" | "extensionDays" | "extensionWindowDays" | "extensionGraceDays", unknown>>
+}
+
 export class LicenseService {
   private state: StoredLicense | null = null
   private trialPolicy: NonNullable<LicenseStatus["tenantTrialPolicy"]> = {}
@@ -344,8 +351,8 @@ export class LicenseService {
   private healthCheck: Promise<void> | null = null
   private healthRetryAt = 0
   private healthFailures = 0
-  private connectMethodsHealth?: { expiresAt: number; enabled: Record<"graphCli" | "tenuvaultApp", boolean> }
-  private connectMethodsCheck?: Promise<Record<"graphCli" | "tenuvaultApp", boolean>>
+  private connectMethodsHealth?: { expiresAt: number; enabled: Record<ConnectMethod, boolean> }
+  private healthFetch?: Promise<LicenseHealthResponse | null>
   private sharingCapability?: { expiresAt: number; supported: boolean }
   private sharingCheck?: Promise<boolean>
   private trialRecords: Record<string, StoredTenantTrial> = {}
@@ -395,13 +402,12 @@ export class LicenseService {
     if (Date.now() < this.healthRetryAt || (this.healthCheckedAt && Date.now() - this.healthCheckedAt < COMMUNITY_RECHECK_MS)) return
     this.healthCheck = (async () => {
       try {
-        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
-        const data = await response.json()
-        if (!response.ok || data?.tenantTrials?.ok !== true || typeof data.tenantTrials.enabled !== "boolean") throw new Error("Trial health is unavailable.")
+        const data = await this.fetchHealth()
+        if (data?.tenantTrials?.ok !== true || typeof data.tenantTrials.enabled !== "boolean") throw new Error("Trial health is unavailable.")
         this.trialPolicy = {}
         for (const field of ["days", "extensionDays", "extensionWindowDays", "extensionGraceDays"] as const) {
           const value = data.tenantTrials[field]
-          if (Number.isInteger(value) && value > 0 && value <= 365) this.trialPolicy[field] = value
+          if (typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 365) this.trialPolicy[field] = value
         }
         this.trialsEnabled = data.tenantTrials.enabled === true
         this.healthCheckedAt = Date.now()
@@ -720,36 +726,38 @@ export class LicenseService {
     return entry.source === "tenant" && Boolean(clientId && entry.organizationClientId && clientId.toLowerCase() !== entry.organizationClientId)
   }
 
-  tenuvaultAppEnabled(): Promise<boolean> {
-    return this.connectMethodEnabled("tenuvaultApp")
+  tenuvaultAppEnabled(fresh = false): Promise<boolean> {
+    return this.connectMethodEnabled("tenuvaultApp", fresh)
   }
 
-  async connectMethodEnabled(method: "graphCli" | "tenuvaultApp"): Promise<boolean> {
-    if (this.connectMethodsHealth && Date.now() < this.connectMethodsHealth.expiresAt) return this.connectMethodsHealth.enabled[method]
-    const enabled = await (this.connectMethodsCheck ??= (async () => {
-      const enabled = { graphCli: false, tenuvaultApp: false }
+  async connectMethodEnabled(method: ConnectMethod, fresh = false): Promise<boolean> {
+    if (!fresh && this.connectMethodsHealth && Date.now() < this.connectMethodsHealth.expiresAt) {
+      return this.connectMethodsHealth.enabled[method]
+    }
+    const data = await this.fetchHealth()
+    return data?.connectMethods?.[method] === true
+  }
+
+  private fetchHealth(): Promise<LicenseHealthResponse | null> {
+    return this.healthFetch ??= (async () => {
+      let data: LicenseHealthResponse | null = null
       try {
         const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
-        if (response.ok) {
-          const methods = (await response.json())?.connectMethods
-          enabled.graphCli = methods?.graphCli === true
-          enabled.tenuvaultApp = methods?.tenuvaultApp === true
-        }
+        if (response.ok) data = await response.json()
       } catch { /* Shared sign-in requires positive health discovery. */ }
-      this.connectMethodsHealth = { expiresAt: Date.now() + 2 * 60_000, enabled }
-      return enabled
-    })().finally(() => { this.connectMethodsCheck = undefined }))
-    return enabled[method]
+      this.connectMethodsHealth = {
+        expiresAt: Date.now() + 2 * 60_000,
+        enabled: { graphCli: data?.connectMethods?.graphCli === true, tenuvaultApp: data?.connectMethods?.tenuvaultApp === true },
+      }
+      return data
+    })().finally(() => { this.healthFetch = undefined })
   }
 
   private async supportsClientIdSets(): Promise<boolean> {
     if (this.sharingCapability && Date.now() < this.sharingCapability.expiresAt) return this.sharingCapability.supported
     return this.sharingCheck ??= (async () => {
-      let supported = false
-      try {
-        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
-        if (response.ok) supported = (await response.json())?.organizationLicenses?.clientIdSets === true
-      } catch { /* Keep using the legacy contract while discovery is unavailable. */ }
+      const data = await this.fetchHealth()
+      const supported = data?.organizationLicenses?.clientIdSets === true
       this.sharingCapability = { supported, expiresAt: Date.now() + 2 * 60_000 }
       return supported
     })().finally(() => { this.sharingCheck = undefined })
