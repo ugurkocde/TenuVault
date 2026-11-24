@@ -1,3 +1,4 @@
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { prepareScheduledCoverage } from "../src/main/backup/schedule-prepare"
 import { BackupScheduler } from "../src/main/backup/scheduler"
 import { generateKeyPairSync, sign } from "node:crypto"
@@ -1231,6 +1232,23 @@ describe("LicenseService organization licenses", () => {
     })
     await license.refreshAll()
     expect(calls.at(-1)!.body.shareWithTenant).toBe(true)
+  })
+
+  it("sends the tenant's client ID set and requires explicit key-holder authorization for Start now", async () => {
+    answer = ({ action, body }) => action === "activate"
+      ? granted("act-key", { shared: false })
+      : granted("act-key", { shared: body.shareWithTenant, allowedClientIds: body.allowedClientIds })
+    const license = service({ clientId: () => TENUVAULT_CLIENT_ID, ownClientId: () => APP_ID.toUpperCase() })
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    expect(calls.at(-1)?.body).toMatchObject({ clientId: TENUVAULT_CLIENT_ID, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
+    await license.setShared(TENANT, true, true)
+    expect(calls.at(-1)?.body).toMatchObject({ allowGraphCli: true, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID] })
+    await license.refreshAll()
+    expect(calls.findLast(call => call.action === "refresh")?.body).not.toHaveProperty("allowGraphCli")
+    await license.setShared(TENANT, true, false)
+    expect(calls.at(-1)?.body).toMatchObject({ allowGraphCli: false, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
+    answer = () => granted("act-key", { shared: true })
+    await expect(license.setShared(TENANT, true, true)).rejects.toThrow("did not confirm")
   })
 
   it("reports a sharing change the service could not store", async () => {

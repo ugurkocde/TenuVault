@@ -1,3 +1,5 @@
+import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
+import { organizationClientIds } from "./client-ids"
 import { readTenantTrials, TENANT_TRIAL_STATE_KEY, type StoredTenantTrial, type TrialTally } from "./tenant-trial-state"
 import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
@@ -109,6 +111,7 @@ export interface LicenseServiceOptions {
   platform?: string
   idToken?: IdTokenProvider
   clientId?: ClientIdProvider
+  ownClientId?: ClientIdProvider
   /** Whether the tenant is still saved or has a new sign-in being added. */
   tenantPresent?: (tenantId: string) => boolean
   connectedTenantIds?: () => string[]
@@ -688,11 +691,17 @@ export class LicenseService {
   // The proof of the tenant the service needs to share the license with it: the app
   // registration and a fresh sign-in to it. Not needed to stop sharing. Without it the
   // service still licenses this machine but leaves the sharing unchanged.
-  private async sharingFields(tenantId: string, share?: boolean): Promise<{ clientId?: string; idToken?: string }> {
+  private async sharingFields(tenantId: string, share?: boolean, allowGraphCli?: boolean) {
     const clientId = this.clientId(tenantId)?.toLowerCase()
     if (share === false || !clientId || !guidPattern.test(clientId)) return {}
     const idToken = await this.idToken(tenantId)
-    return idToken ? { clientId, idToken } : { clientId }
+    if (!idToken) return { clientId }
+    const ownClientId = this.options.ownClientId ? this.options.ownClientId(tenantId) : clientId
+    return {
+      clientId, idToken,
+      allowedClientIds: organizationClientIds(ownClientId, allowGraphCli),
+      ...(allowGraphCli === undefined ? {} : { allowGraphCli }),
+    }
   }
 
   private load(): void {
@@ -1189,7 +1198,7 @@ export class LicenseService {
     }
   }
 
-  private async refreshCurrent(tenantId: string, share?: boolean): Promise<void> {
+  private async refreshCurrent(tenantId: string, share?: boolean, allowGraphCli?: boolean): Promise<void> {
     const entry = this.state?.activations[tenantId]
     if (!this.state || !entry) return
     const current = this.requestGuard(tenantId)
@@ -1220,11 +1229,15 @@ export class LicenseService {
         tenantId,
         // Lets the service send version 2 tokens to apps that read them.
         appVersion: this.options.appVersion,
-        ...(await this.sharingFields(tenantId, shareWithTenant)),
+        ...(await this.sharingFields(tenantId, shareWithTenant, allowGraphCli)),
         ...(shareWithTenant === undefined ? {} : { shareWithTenant }),
       }, current)
       this.assertCurrent(current)
       this.accept(tenantId, data, "key")
+      if (allowGraphCli !== undefined && data.sharedReason !== "sign_in_required" &&
+        (!Array.isArray(data.allowedClientIds) || data.allowedClientIds.includes(GRAPH_CLI_CLIENT_ID) !== allowGraphCli)) {
+        throw new Error("The license service did not confirm the Start now sharing setting.")
+      }
     } catch (error) {
       this.assertCurrent(current)
       if (error instanceof LicenseDenied && error.reason !== "trial_used") {
@@ -1271,7 +1284,7 @@ export class LicenseService {
   }
 
   /** The key holder lets the tenant's other admins use the license, or stops. */
-  async setShared(tenantId: string, share: boolean): Promise<void> {
+  async setShared(tenantId: string, share: boolean, allowGraphCli?: boolean): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()
     return this.mutate([tenant], true, async () => {
@@ -1279,7 +1292,7 @@ export class LicenseService {
       if (!this.state?.key || !entry || entry.source === "tenant") {
         throw new Error("Only the machine that holds the license key can change sharing.")
       }
-      await this.refreshCurrent(tenant, share)
+      await this.refreshCurrent(tenant, share, allowGraphCli)
       if (share && this.state?.activations[tenant]?.shareNeedsSignIn) {
         throw new Error("Sign in to this tenant again to share the license with it.")
       }

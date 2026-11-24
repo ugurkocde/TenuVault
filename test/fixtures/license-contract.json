@@ -281,7 +281,9 @@
       "optional": [
         "clientId",
         "idToken",
-        "shareWithTenant"
+        "shareWithTenant",
+        "allowedClientIds",
+        "allowGraphCli"
       ]
     },
     "refresh": {
@@ -295,7 +297,9 @@
         "appVersion",
         "clientId",
         "idToken",
-        "shareWithTenant"
+        "shareWithTenant",
+        "allowedClientIds",
+        "allowGraphCli"
       ]
     },
     "deactivate": {
