@@ -487,6 +487,10 @@
       "delegated": "d8ce6a2a-46ff-438e-96bc-020f23870a55",
       "application": null
     },
+    "User.DeleteRestore.All": {
+      "delegated": "4bb440cd-2cf2-4f90-8004-aa2acd2537c5",
+      "application": null
+    },
     "User.ReadUpdate.All": {
       "delegated": "f8b099f1-a6ce-4e00-8fff-5f783ff4faeb",
       "application": null
@@ -1869,7 +1873,7 @@
         "GET /groups/{id}/owners"
       ],
       "write": ["POST /groups", "PATCH /groups/{id}", "POST /groups/{id}/members/$ref", "DELETE /groups/{id}/members/{id}/$ref", "POST /groups/{id}/owners/$ref", "DELETE /groups/{id}/owners/{id}/$ref"],
-      "live": "2026-11-18 approved 9a fixture lifecycle. The application token holds a union of roles, so acceptance does not isolate each alternative. Current operation tables and reference identifiers establish delegated least privilege. Privileged variants stay blocked.",
+      "live": "2026-11-18 approved 9a fixture lifecycle. The application token holds a union of roles, so acceptance does not isolate each alternative. Current operation tables and reference identifiers establish delegated least privilege. The published Graph scope covers user recycle restore, which remains blocked by the 9a evidence gate. Privileged variants stay blocked.",
       "backup": {
         "delegated": [
           {"permission": "Group.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
@@ -1939,8 +1943,8 @@
       "area": "usersAndDevices",
       "folders": ["Users"],
       "read": ["GET /users"],
-      "write": ["POST /users", "PATCH /users/{id}", "PUT /users/{id}/manager/$ref"],
-      "live": "2026-11-18 approved 9a fixture lifecycle. The application token holds a union of roles, so acceptance does not isolate each alternative. Current operation tables and reference identifiers establish delegated least privilege. Privileged variants stay blocked.",
+      "write": ["POST /users", "PATCH /users/{id}", "PUT /users/{id}/manager/$ref", "POST /beta/directory/deletedItems/{id}/restore"],
+      "live": "2026-11-18 approved 9a fixture lifecycle. The application token holds a union of roles, so acceptance does not isolate each alternative. Current operation tables and reference identifiers establish delegated least privilege. The published Graph scope covers user recycle restore, which remains blocked by the 9a evidence gate. Privileged variants stay blocked.",
       "backup": {
         "delegated": [
           {"permission": "User.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
@@ -1957,6 +1961,7 @@
           {"permission": "User.Create", "asked": true, "model": "no entry", "index": "no entry", "status": "confirmed"},
           {"permission": "User.ReadUpdate.All", "asked": true, "model": "no entry", "index": "no entry", "status": "confirmed"},
           {"permission": "User.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "User.DeleteRestore.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
           {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
         ],
         "application": "unsupported"
