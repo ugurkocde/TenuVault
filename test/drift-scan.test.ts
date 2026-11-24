@@ -7,7 +7,9 @@ import { apiBody } from '../src/main/features/deps'
 import { call, TENANT_A } from './feature-helpers'
 import { memoryStore } from './helpers'
 import { parseBackupName } from '../src/shared/intune/backup-names'
+import { POST as backupChanges } from '../src/portal/app/api/backup-changes/route'
 import { POST as listBackups } from '../src/portal/app/api/list-backups/route'
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { compareBackups, summarize } from '../src/shared/intune/backup-changes'
 import { createAuditRecorder } from '../src/main/api/audit'
 import { CANCELLED_HEADER, registerDriftScan } from '../src/portal/lib/drift/scan-hooks'
@@ -422,6 +424,53 @@ describe('Drift item matching', () => {
     const result = await (await drift(request())).json()
     expect(result.drifts).toEqual([])
     expect(result.warnings).toEqual([{ file: 'DeviceConfigurations/A v2.json', backup: NEW, message: expect.stringContaining('403') }])
+  })
+
+  it.each([
+    ['own registration', 'own-app', 'DefenderAttackSimulations', 'NamedLocations', 'DeviceConfigurations'],
+    ['TenuVault app', TENUVAULT_CLIENT_ID, 'NamedLocations', 'DeviceConfigurations', 'DefenderAttackSimulations'],
+    ['Start now', GRAPH_CLI_CLIENT_ID, 'DeviceConfigurations', 'DefenderAttackSimulations', 'NamedLocations'],
+  ])('omits unread types in all services from backup changes and drift for %s', async (_method, appId, excluded, refused, unresolved) => {
+    const covered = 'CompliancePolicies'
+    const folders = [excluded, refused, unresolved, covered]
+    const oldItems = Object.fromEntries(folders.map(folder => [`${folder}/a`, { file: 'A.json', hash: 'old' }]))
+    const before = {
+      Status: 'Success', TenantId: TENANT_A, AuthMode: 'delegated', Scope: { Included: folders }, Items: oldItems,
+      Outcomes: folders.map(Folder => ({ Folder, Outcome: 'saved', Saved: 1 })),
+    }
+    const after = {
+      Status: 'Success', TenantId: TENANT_A, AuthMode: 'delegated', Scope: { Included: [refused, unresolved, covered], Excluded: [excluded] },
+      Items: { [`${refused}/b`]: { file: 'B.json', hash: 'partial' } }, Coverage: 'Incomplete',
+      Outcomes: [{ Folder: refused, Outcome: 'skipped', Cause: 'role', Saved: 1 }, { Folder: covered, Outcome: 'notConfigured' }],
+    }
+    const { reads } = fakeStorage({
+      [OLD]: { metadata: before, files: Object.fromEntries(folders.map(folder => [`${folder}/A.json`, policy('a', folder)])) },
+      [NEW]: { metadata: after, files: { [`${refused}/B.json`]: policy('b', 'Partially captured') } },
+    })
+    expect(compareBackups(before, after)).toMatchObject([{ folder: covered, change: 'removed' }])
+    expect(compareBackups(after, before)).toMatchObject([{ folder: covered, change: 'added' }])
+    const changed = await (await backupChanges(request({ appId, backupId: NEW }))).json()
+    expect(changed.changes).toMatchObject([{ folder: covered, change: 'removed' }])
+    expect(new Set(changed.unknownTypes)).toEqual(new Set([excluded, refused, unresolved]))
+    const listed = await (await listBackups(request({ appId, subscriptionId: 'local', resourceGroupName: 'local' }))).json()
+    expect(listed.backups[0].changes).toEqual({ added: 0, modified: 0, removed: 1 })
+    for (const documentItems of [false, true]) {
+      const result = await (await drift(request({ appId, documentItems }))).json()
+      expect(result.drifts).toMatchObject([{ backupFile: `${covered}/A.json`, changeType: 'deleted' }])
+      expect(new Set(result.unknownTypes)).toEqual(new Set([excluded, refused, unresolved]))
+    }
+    expect(reads.filter(file => [excluded, refused, unresolved].some(folder => file.includes(`/${folder}/`)))).toEqual([])
+  })
+
+  it('keeps legacy failures with no identified type out of comparisons', async () => {
+    const backups = twoBackups(true)
+    backups[NEW]!.metadata!.Failures = 1
+    backups[NEW]!.metadata!.Status = 'CompletedWithWarnings'
+    fakeStorage(backups)
+    expect(compareBackups(backups[OLD]!.metadata!, backups[NEW]!.metadata!)).toEqual([])
+    const result = await (await drift(request({ baseline: OLD, comparison: NEW }))).json()
+    expect(result.unknownTypes).toContain('DeviceConfigurations')
+    expect(result.drifts).toEqual([])
   })
 
   it('agrees with the backup list counts for the same pair', async () => {

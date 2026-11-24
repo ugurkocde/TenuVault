@@ -5,7 +5,7 @@ import { compareLargePage } from "../../../../main/backup/large-page"
 import { largeIndexes } from "../../../../shared/large-backup"
 import { isBackupName } from "../../../../shared/intune/backup-names"
 import { readJsonCapped } from "../../../../shared/capped-body"
-import { coveredFolders } from "../../../../shared/intune/scope"
+import { comparisonCoverage } from "../../../../shared/intune/backup-read-coverage"
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const [older, newer] = await Promise.all([readOwnedBackup(readResponse, baseline, tenantId, storageAccountName), readOwnedBackup(readResponse, backupId, tenantId, storageAccountName)])
     if (!older.ok) return NextResponse.json({ error: older.error }, { status: older.status })
     if (!newer.ok) return NextResponse.json({ error: newer.error }, { status: newer.status })
-    if (!largeIndexes(older.metadata)[folder]?.complete || !largeIndexes(newer.metadata)[folder]?.complete || !coveredFolders(older.metadata).has(folder) || !coveredFolders(newer.metadata).has(folder)) throw new Error("Both backups must completely cover this inventory")
+    if (!largeIndexes(older.metadata)[folder]?.complete || !largeIndexes(newer.metadata)[folder]?.complete || !comparisonCoverage(older.metadata, newer.metadata).shared.has(folder)) throw new Error("Both backups must completely cover this inventory")
     const reader = (id: string) => async (name: string) => {
       const response = await readResponse(`${id}/${name}`)
       if (!response.ok) throw new Error("Inventory page could not be read")

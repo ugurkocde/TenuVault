@@ -124,6 +124,7 @@ export interface DriftResult {
   baseline: DriftBackupRef
   comparison: DriftBackupRef
   warnings: DriftWarning[]
+  unknownTypes?: string[]
   /** Items read and compared, and items skipped because their stored fingerprints match. */
   stats: { compared: number; unchanged: number }
   /** Missing in results saved before names were read, or when Graph could not be reached. */

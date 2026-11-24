@@ -13,12 +13,12 @@ const metadata = { TenantId: tenant, BackupFolder: backup, Status: "Success", Fa
 const body = { tenantId: tenant, appId: "client", clientSecret: "placeholder", subscriptionId: "local", resourceGroupName: "local", storageAccountName: "contoso", backupId: backup, largeInventory: true }
 const request = (extra = {}) => new NextRequest("http://tenuvault.internal/api/test", { method: "POST", body: JSON.stringify({ ...body, ...extra }) })
 afterEach(() => vi.unstubAllGlobals())
-function install(foreign = false) {
+function install(foreign = false, newer: Record<string, unknown> = {}) {
   const read: string[] = []
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = new URL(String(input)); read.push(url.pathname + url.search)
     if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
-    if (url.pathname.endsWith("metadata.json")) return Response.json({ ...metadata, BackupFolder: url.pathname.includes(before) ? before : backup, TenantId: foreign ? "22222222-2222-2222-2222-222222222222" : tenant })
+    if (url.pathname.endsWith("metadata.json")) return Response.json({ ...metadata, ...(url.pathname.includes(before) ? {} : newer), BackupFolder: url.pathname.includes(before) ? before : backup, TenantId: foreign ? "22222222-2222-2222-2222-222222222222" : tenant })
     if (url.pathname.endsWith("000000.json")) return Response.json([entry])
     if (url.pathname.endsWith("one.json")) return Response.json(snapshot)
     return new Response(null, { status: 404 })
@@ -43,6 +43,13 @@ it("compares a bounded inventory page after verifying ownership of both backups"
   expect(await response.json()).toMatchObject({ unchanged: 1, changes: [], next: null })
   expect(reads.filter(path => path.endsWith("metadata.json"))).toHaveLength(2)
   expect(reads.some(path => path.endsWith("one.json"))).toBe(false)
+})
+it("refuses an inventory with a skipped outcome even when its index looks complete", async () => {
+  const reads = install(false, { Outcomes: [{ Folder: "DeviceConfigurations", Outcome: "skipped" }] })
+  const response = await compare(request({ baseline: before, folder: "DeviceConfigurations" }))
+  expect(response.status).toBe(400)
+  expect(await response.json()).toEqual({ error: "Both backups must completely cover this inventory" })
+  expect(reads.some(path => path.includes("_index"))).toBe(false)
 })
 it("refuses a foreign inventory without reading its shards", async () => {
   const reads = install(true)

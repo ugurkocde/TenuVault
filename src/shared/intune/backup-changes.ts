@@ -1,4 +1,4 @@
-import { coveredFolders, type ScopeMetadata } from "./scope"
+import { comparisonCoverage, type BackupReadMetadata } from "./backup-read-coverage"
 import { stoppedEarly } from "./backup-status"
 
 /** Per item fingerprints a backup's metadata.json holds, keyed by "<type folder>/<Intune ID>". */
@@ -16,10 +16,8 @@ export type BackupItems = Record<string, {
   secretsMasked?: true
 }>
 
-export interface BackupFingerprint extends ScopeMetadata {
-  Status?: unknown
+export interface BackupFingerprint extends BackupReadMetadata {
   Items?: unknown
-  LargeItems?: unknown
 }
 
 export interface ItemChange {
@@ -57,8 +55,7 @@ export function compareBackups(older: BackupFingerprint, newer: BackupFingerprin
   const before = itemsOf(older)
   const after = itemsOf(newer)
   if (!before || !after) return []
-  const olderFolders = coveredFolders(older)
-  const shared = new Set([...coveredFolders(newer)].filter((folder) => olderFolders.has(folder)))
+  const { shared } = comparisonCoverage(older, newer)
   const inScope = (key: string) => shared.has(key.slice(0, key.indexOf("/")))
   const split = (key: string) => ({ folder: key.slice(0, key.indexOf("/")), id: key.slice(key.indexOf("/") + 1) })
 

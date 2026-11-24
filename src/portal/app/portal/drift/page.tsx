@@ -1,5 +1,7 @@
 "use client"
 
+import { UnknownComparisonTypes } from "~/components/backup/unknown-comparison-types"
+
 import { LargeComparison } from "~/components/backup/large-inventory"
 import { useState, useEffect, useMemo, useRef } from "react"
 import { Link, useSearchParams } from "react-router-dom"
@@ -274,7 +276,7 @@ export default function DriftDetectionPage() {
   // The loaded list decides, so a backup made after a scan found too few lifts the notice.
   const insufficient = !running && !result && (backupsLoaded ? completeBackups.length < 2 : failedJob?.code === "INSUFFICIENT_BACKUPS")
   const showResult = !!result && !!selectedTenant
-  const noDriftText = result?.largeFolders?.length ? "No policy drift. Compare inventory in pages below." : result ? `No drift between ${formatDate(result.baseline.timestamp)} and ${formatDate(result.comparison.timestamp)}` : ""
+  const noDriftText = result?.largeFolders?.length ? "No policy drift. Compare inventory in pages below." : result?.unknownTypes?.length ? "No drift found in the types compared." : result ? `No drift between ${formatDate(result.baseline.timestamp)} and ${formatDate(result.comparison.timestamp)}` : ""
   const counts = {
     added: drifts.filter(d => d.changeType === "added").length,
     modified: drifts.filter(d => d.changeType === "modified").length,
@@ -763,6 +765,7 @@ export default function DriftDetectionPage() {
           )}
 
           {!!result.largeFolders?.length && selectedTenant && <LargeComparison key={`${tenantId}/${storageAccountName}/${result.baseline.id}/${result.comparison.id}`} credentials={{ ...selectedTenant.credentials, storageAccountName }} baseline={result.baseline.id} backupId={result.comparison.id} folders={result.largeFolders} />}
+          <UnknownComparisonTypes folders={result.unknownTypes} />
           {result.warnings.length > 0 && (
             <Alert className="rounded-3xl border-transparent bg-amber-50 p-5 [&>svg]:left-5 [&>svg]:top-5">
               <AlertTriangle className="h-4 w-4 text-amber-700" />

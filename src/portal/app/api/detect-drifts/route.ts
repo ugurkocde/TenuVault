@@ -6,7 +6,7 @@ import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { complianceSettingLabel, complianceSettingValue } from "../../../../shared/intune/compliance-settings"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
-import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
+import { comparisonCoverage } from "../../../../shared/intune/backup-read-coverage"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
 import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
@@ -162,13 +162,14 @@ export async function POST(request: NextRequest) {
     const olderBackup = pair.baseline
 
     // Only types both backups hold are compared: a backup that left apps out has not seen them deleted.
-    const olderFolders = coveredFolders(olderBackup.metadata as ScopeMetadata)
+    const coverage = comparisonCoverage(olderBackup.metadata, newerBackup.metadata)
     const largeFolders = [...new Set([...Object.keys(largeIndexes(olderBackup.metadata)), ...Object.keys(largeIndexes(newerBackup.metadata))])]
-    const shared = [...coveredFolders(newerBackup.metadata as ScopeMetadata)].filter(folder => olderFolders.has(folder) && !largeFolders.includes(folder))
+    const shared = [...coverage.shared].filter(folder => !largeFolders.includes(folder))
     let listed = 0
     const listing = () => report({ phase: "listing", detail: `Listing the backed-up policies: ${listed} of 2 backups`, done: listed, total: 2 })
     listing()
     const list = async (backup: string) => {
+      if (!shared.length) return []
       const files = largeFolders.length ? (await Promise.all(shared.map(folder => fetchPolicyFiles(storageAccountName, backup, accessToken, [folder], signal, folder)))).flat() : await fetchPolicyFiles(storageAccountName, backup, accessToken, shared, signal)
       listed++
       listing()
@@ -300,6 +301,7 @@ export async function POST(request: NextRequest) {
       baseline: backupRef(olderBackup),
       comparison: backupRef(newerBackup),
       warnings,
+      ...(coverage.unknown.length ? { unknownTypes: coverage.unknown } : {}),
       stats,
       ...(settingNames ? { settingNames } : {}),
     }

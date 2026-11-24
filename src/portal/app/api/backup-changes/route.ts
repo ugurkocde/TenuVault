@@ -3,6 +3,7 @@ import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/back
 import { type NextRequest, NextResponse } from "next/server"
 import { listLargeBackupPages, listOrdinaryBackupPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
+import { comparisonCoverage } from "../../../../shared/intune/backup-read-coverage"
 import { comparable, compareBackups, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
 import { compareObjects } from "../detect-drifts/route"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
@@ -96,7 +97,8 @@ export async function POST(request: NextRequest) {
     )
     const order = { removed: 0, modified: 1, added: 2 }
     items.sort((a, b) => order[a.change] - order[b.change] || a.typeLabel.localeCompare(b.typeLabel) || a.name.localeCompare(b.name))
-    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items, warnings })
+    const { unknown } = comparisonCoverage(previous.metadata, current)
+    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items, warnings, ...(unknown.length ? { unknownTypes: unknown } : {}) })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Changes could not be listed." }, { status: 500 })
   }
