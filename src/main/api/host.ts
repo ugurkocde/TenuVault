@@ -4,6 +4,7 @@ import type { ApiRequest, ApiResponse } from "../../shared/ipc"
 import { INTERNAL_API_ORIGIN } from "../../shared/constants"
 import { NextRequest } from "./next-server-shim"
 import { withRouteTenant } from "../storage/blob-emulator"
+import { isGuid } from "../../shared/security"
 
 /** Largest request body accepted over IPC, matching the 8 MB policies limit the routes enforce. */
 export const MAX_IPC_BODY_BYTES = 8 * 1024 * 1024
@@ -37,7 +38,8 @@ export class ApiHost {
 
   async dispatch(request: Request): Promise<Response> {
     const url = new URL(request.url)
-    const route = this.options.routes[url.pathname.replace(/\/$/, "")]
+    const path = url.pathname.replace(/\/$/, "")
+    const route = this.options.routes[path]
     if (!route) {
       return Response.json({ error: `No desktop handler for ${url.pathname}` }, { status: 404 })
     }
@@ -49,9 +51,15 @@ export class ApiHost {
     // Every portal route shares this boundary, including internal API calls.
     let tenantId: unknown
     let storageAccountName: unknown
+    const metadata: ExecutionMetadata = {}
     if (request.method !== "GET" && request.method !== "HEAD") {
       const input: unknown = await request.clone().json().catch(() => null)
       if (input && typeof input === "object" && "tenantId" in input) tenantId = input.tenantId
+      if (path === "/api/restore-backup" && isGuid(tenantId) && input && typeof input === "object" &&
+        "targetTenants" in input && Array.isArray(input.targetTenants)) {
+        const destinations = input.targetTenants.flatMap(target => isGuid(target?.tenantId) ? [target.tenantId.toLowerCase()] : [])
+        if (destinations.length) metadata.copyTenants = { source: tenantId.toLowerCase(), destinations }
+      }
       if (input && typeof input === "object" && "storageAccountName" in input) {
         try { assertStorageAccountName(input.storageAccountName) }
         catch { return Response.json({ error: "Invalid storage account name" }, { status: 400 }) }
@@ -63,7 +71,6 @@ export class ApiHost {
     if (blocked) return blocked
 
     const body = request.method === "GET" || request.method === "HEAD" ? "" : await request.clone().text()
-    const metadata: ExecutionMetadata = {}
     // Bound before the route takes its token, so a sign-in that changes meanwhile never moves the audit.
     try { this.options.beforeRoute?.(request, body, metadata) } catch (error) { console.error(`[api] ${request.method} ${url.pathname} could not capture the audit binding:`, error) }
     // The archive stream keeps reading storage during the native save. Hold the route's tenant

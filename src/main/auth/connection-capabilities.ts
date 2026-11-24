@@ -2,6 +2,7 @@ import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid } from "../../shared/security"
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import type { TenantConnection } from "../../shared/tenant-connection"
+import { executionMetadata } from "../api/execution-metadata"
 
 export const READ_ONLY = "Start now is read-only. Change sign-in method to restore, revert, deploy or copy policies."
 const GRAPH_ONLY = "Start now only connects to Microsoft Graph. Change sign-in method to access other Microsoft services."
@@ -49,13 +50,19 @@ export class ConnectionCapabilities {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase()
     if (method === "GET" || method === "HEAD") return
     const authorization = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("authorization")
-    const tenant = tokenTenant(authorization) ?? routeTenant
-    if (!tenant || !this.isGraphOnly(tenant)) return
+    const tokenId = tokenTenant(authorization)?.toLowerCase()
+    const copy = executionMetadata.getStore()?.copyTenants
+    // Copy writes belong to the source as well as the destination, even after tokens were issued.
+    // If the token's tenant cannot identify a destination, recheck every bound destination.
+    const targets = copy
+      ? [copy.source, ...(tokenId && copy.destinations.includes(tokenId) ? [tokenId] : copy.destinations)]
+      : [tokenId ?? routeTenant].filter((id): id is string => id !== null)
+    if (!targets.some(id => this.isGraphOnly(id))) return
     if (method === "POST" && /^\/(?:beta|v1\.0)\/\$batch$/i.test(url.pathname)) {
       const batch = await new Request(input, init).clone().json().catch(() => null) as { requests?: Array<{ method?: unknown }> } | null
       if (Array.isArray(batch?.requests) && batch.requests.every(request => request?.method === "GET")) return
     }
-    this.requireWrite([tenant])
+    this.requireWrite(targets)
   }
 
   isGraphOnly(tenantId: string): boolean {

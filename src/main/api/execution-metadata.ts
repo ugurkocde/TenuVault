@@ -4,6 +4,8 @@ import type { RestoreConnection } from "../restore/service"
 import type { AuditBinding } from "./audit-sink"
 
 export interface ExecutionMetadata {
+  /** The source and destinations admitted for a cross-tenant backup copy. */
+  copyTenants?: { source: string; destinations: string[] }
   directoryActor?: Pick<SignedInAccount, "username" | "name">
   /** The audit binding of the admin who started an archive download, captured before its route runs. */
   downloadAudit?: AuditBinding

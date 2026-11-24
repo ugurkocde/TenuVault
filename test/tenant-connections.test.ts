@@ -11,6 +11,7 @@ import { RESOURCE_SCOPES } from "../src/shared/constants"
 import { connectionCoverage } from "../src/main/auth/connection-coverage"
 import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { ApiHost } from "../src/main/api/host"
 import { withRouteTenant } from "../src/main/storage/blob-emulator"
 
 const TENANT = "aaaaaaaa-1111-1111-1111-111111111111"
@@ -251,6 +252,38 @@ describe("in-place sign-in change", () => {
 })
 
 describe("Start now capability", () => {
+  it.each(["source", "destination"] as const)("stops copy batches if the %s switches after admission", async side => {
+    const f = fixture()
+    const changedTenant = side === "source" ? TENANT : OTHER
+    const account = staged(OWN, changedTenant)
+    f.signIn.mockImplementation(async (id, client) => staged(client, id))
+    f.connections.enroll(changedTenant, { method: "ownApp", clientId: OWN }, raw.replaceAll(TENANT, changedTenant), account)
+    const cap = new ConnectionCapabilities(id => f.connections.get(id))
+    const network = vi.fn(async () => new Response("{}"))
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+      authorizeGraphRequest: (url, input, init, tenant) => cap.authorizeGraphRequest(url, input, init, tenant),
+    })
+    const batch = (method: string, authorization = `Bearer ${jwt({ tid: OTHER })}`) => fetch("https://graph.microsoft.com/beta/$batch", {
+      method: "POST", headers: { authorization }, body: JSON.stringify({ requests: [{ id: "1", method, url: "/deviceManagement/configurationPolicies" }] }),
+    })
+    const host = new ApiHost({ guard: request => cap.guard(request), routes: {
+      "/api/restore-backup": { POST: async () => {
+        await batch("POST")
+        await f.connections.switch(changedTenant, { method: "graphCli" })
+        await expect(batch("POST")).rejects.toThrow(READ_ONLY)
+        await expect(batch("POST", "Bearer opaque")).rejects.toThrow(READ_ONLY)
+        await expect(batch("GET")).resolves.toBeInstanceOf(Response)
+        return Response.json({ ok: true })
+      } },
+    } })
+    const response = await host.dispatch(new Request("http://test/api/restore-backup", {
+      method: "POST", body: JSON.stringify({ tenantId: TENANT, targetTenants: [{ tenantId: OTHER, appId: OWN }] }),
+    }))
+    expect(response.status).toBe(200)
+    expect(network).toHaveBeenCalledTimes(2)
+  })
+
   it("blocks writes even with a write token, including copy from or to the tenant", async () => {
     const f = fixture()
     const cap = new ConnectionCapabilities(id => f.connections.get(id))
