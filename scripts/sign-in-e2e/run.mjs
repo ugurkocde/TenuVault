@@ -150,14 +150,21 @@ async function launchApp(label) {
   }
 }
 
-/** From the welcome screen to a started first sign-in; returns the Microsoft sign-in address. */
+/** Starts first sign-in from Welcome and returns the address and expected next heading. */
 async function startSignIn(page) {
   await page.getByRole("button", { name: "Connect your tenant" }).click({ timeout: 30_000 })
-  // The harness also runs against 0.5.3 installers, which go straight to Connect.
-  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(button => ["Continue with Intune", "I already have an app registration"].includes(button.textContent.trim())))
+  // Older installers start at Services with Intune selected, or go straight to Connect.
+  const ownApp = page.getByRole("button", { name: "Choose Your own app registration", exact: true })
   const services = page.getByRole("button", { name: "Continue with Intune", exact: true })
-  if (await services.isVisible()) await services.click()
-  await page.getByRole("button", { name: "I already have an app registration" }).click()
+  const existingRegistration = page.getByRole("button", { name: "I already have an app registration", exact: true })
+  await ownApp.or(services).or(existingRegistration).waitFor()
+  const wizard = await ownApp.isVisible()
+  if (wizard) {
+    await ownApp.click()
+    await page.getByRole("checkbox", { name: "Back up Intune", exact: true }).check()
+  }
+  if (wizard || await services.isVisible()) await services.click()
+  await existingRegistration.click()
   await page.getByText("Sign in to your tenant").waitFor()
   await page.locator("#tenant").fill(TENANT_ID)
   await page.locator("#clientId").fill(CLIENT_ID)
@@ -174,7 +181,8 @@ async function startSignIn(page) {
   const url = await page.evaluate(() => navigator.clipboard.readText())
   const parsed = new URL(url)
   assert(parsed.origin === `https://${LOGIN_HOST}` && parsed.pathname === `/${TENANT_ID}/oauth2/v2.0/authorize`, `unexpected sign-in address ${parsed.origin}${parsed.pathname}`)
-  return parsed
+  const resultHeading = wizard ? /^Sign-in results$/ : /^(Choose where backups are stored|Review your chosen permissions)$/
+  return { url: parsed, resultHeading }
 }
 
 /** Whether something still accepts connections on 127.0.0.1:`port`. */
@@ -205,7 +213,7 @@ async function signInWith(engine, standIn) {
   let browser
   try {
     await app.page.getByText("Welcome to TenuVault").waitFor({ timeout: 30_000 })
-    const url = await startSignIn(app.page)
+    const { url, resultHeading } = await startSignIn(app.page)
     const port = redirectPort(url)
     assert(await listening(port), "the app's listener is not open while the sign-in waits")
     standIn.setMode("code")
@@ -218,7 +226,7 @@ async function signInWith(engine, standIn) {
     await opened.page.screenshot({ path: join(outDir, `${engine.name}-browser.png`) })
     // The stand-in proves sign-in, not delegated Graph access. In 0.6 a valid sign-in
     // can correctly stop at the advisory permission result before storage.
-    await app.page.getByRole("heading", { name: /^(Choose where backups are stored|Review your chosen permissions)$/ }).waitFor({ timeout: 30_000 })
+    await app.page.getByRole("heading", { name: resultHeading }).waitFor({ timeout: 30_000 })
     await app.page.getByText(`Signed in as ${ACCOUNT.username}`).waitFor()
     assert(standIn.log.slice(logStart).some((line) => line.includes("licensing: tenant route")), "the license check after this sign-in did not reach the local stand-in")
     await app.page.screenshot({ path: join(outDir, `${engine.name}-app.png`) })
@@ -244,7 +252,7 @@ async function refusals(standIn) {
   let browser
   try {
     await app.page.getByText("Welcome to TenuVault").waitFor({ timeout: 30_000 })
-    const url = await startSignIn(app.page)
+    const { url } = await startSignIn(app.page)
     const port = redirectPort(url)
     const opened = await openBrowser({ type: chromium }, standIn)
     browser = opened.browser
