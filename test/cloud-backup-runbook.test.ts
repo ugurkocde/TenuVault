@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest"
 import { AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportJSON } from "../src/portal/lib/audit/export"
 import { createHash } from "node:crypto"
+import { fixture, scriptedGraph } from "./helpers/backup-fixture"
+import listPages from "./fixtures/cloud-backup/list-pages.json"
 import { moduleForFolder } from "../src/shared/services/modules"
 import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
 import { listSnapshot } from "../src/shared/intune/read"
@@ -125,6 +127,9 @@ describe("Cloud audit contract", () => {
     startDenied: RestartRun
     resultsDenied: RestartRun
     graph401: RestartRun
+    page429: RestartRun
+    page503: RestartRun
+    pageCancelled: RestartRun
     auditWriteDenied: RestartRun
     identity: { token: string; calls: number }
     transport: { budgeted: number; unbudgeted: number }
@@ -380,6 +385,19 @@ describe("Cloud audit contract", () => {
     expect(JSON.parse(auditFiles(run)[0]![1]).entries[0].job).toMatchObject({ status: "failed", reason: "GRAPH_LIST_FAILED" })
     expect(run.calls.some(call => call.uri.includes(".tenuvault-owner.json"))).toBe(false)
   }, 60_000)
+
+  it.runIf(Boolean(pwsh)).each([["page429", 429], ["page503", 503], ["pageCancelled", 0]] as const)(
+    "keeps coverage incomplete when the runbook exhausts retries for %s",
+    (scenario, status) => {
+      const run = restartCases()[scenario]
+      expect(run.calls.filter(call => call.uri.endsWith("/deviceManagement/deviceCategories?page=2"))).toHaveLength(3)
+      const manifest = JSON.parse(Object.entries(run.blobs).find(([url]) => url.endsWith("/metadata.json"))![1])
+      expect(manifest).toMatchObject({
+        Status: "Failed", Coverage: "Incomplete", FailedTypes: ["DeviceCategories"],
+        Outcomes: [expect.objectContaining({ Folder: "DeviceCategories", Outcome: "failed", Saved: 0, Status: status })],
+      })
+    }, 60_000,
+  )
 
   it("offers an ARM upgrade that leaves a PowerShell setup's backup writer, variables and schedule in place", () => {
     const resources = template.resources as Array<{ type: string; name: string; condition?: string; dependsOn?: string[] }>
@@ -750,6 +768,51 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(empty.compared?.Drifts).toHaveLength(1)
     expect(compareBackups(baseline, manifest(malformed))).toEqual([])
     expect(malformed.compared).toMatchObject({ Drifts: [], UnknownTypes: ["DeviceConfigurations"], LegacyReadFailure: false })
+  }, 60_000)
+
+  it.each(listPages.map((scenario, index) => ({ ...scenario, index })))("validates $name before recording complete coverage on desktop and in PowerShell", async ({ responses, failed, changes, index }) => {
+    const configs = "/beta/deviceManagement/deviceConfigurations"
+    const autopilot = "/beta/deviceManagement/windowsAutopilotDeviceIdentities"
+    const baseline = {
+      [configs]: { value: [{ id: "cfg-1", displayName: "Baseline Wi-Fi" }] },
+      [autopilot]: { value: [{ id: "ap-1", serialNumber: "SN-0001" }] },
+      [`${configs}/cfg-1?$expand=assignments`]: { id: "cfg-1", displayName: "Baseline Wi-Fi", assignments: [] },
+      [`${configs}/cfg-2?$expand=assignments`]: { id: "cfg-2", displayName: "Second policy", assignments: [] },
+    }
+    const folders = ["DeviceConfigurations", "AutopilotDevices", "CompliancePolicySettings"]
+    const scope = { excluded: INTUNE_TYPES.filter(type => !folders.includes(type.folder)).map(type => type.folder) }
+    const capture = async (routes: Record<string, unknown>) => {
+      const desktop = fixture(scriptedGraph(routes))
+      const job = await desktop.run({ scope })
+      return desktop.manifest(job)
+    }
+    const before = await capture(baseline)
+    const desktop = await capture({ ...baseline, ...responses })
+    const differences = compareBackups(before, desktop).map(({ change, id }) => ({ change, id }))
+    expect(differences).toEqual(changes)
+    expect(desktop.Coverage).toBe(failed ? "Incomplete" : "Complete")
+    expect(comparisonCoverage(before, desktop).unknown).toEqual(failed ? [failed] : [])
+
+    if (!pwsh) return
+    const runs = runPlainFixture()
+    const cloudRun = runs[15 + index]!
+    const manifest = (run: Run) => JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+    const cloud = manifest(cloudRun)
+    const cloudBefore = manifest(runs[0]!)
+    expect(cloud.Coverage).toBe(desktop.Coverage)
+    const unread = (outcomes: Array<{ Folder: string; Outcome: string }>) =>
+      outcomes.filter(entry => entry.Outcome === "failed").map(entry => entry.Folder)
+    expect(unread(desktop.Outcomes)).toEqual(failed ? [failed] : [])
+    expect(unread(cloud.Outcomes)).toEqual(unread(desktop.Outcomes))
+    expect(compareBackups(cloudBefore, cloud).map(({ change, id }) => ({ change, id }))).toEqual(differences)
+    expect(cloudRun.compared).toMatchObject({ UnknownTypes: failed ? [failed] : [], LegacyReadFailure: false })
+    expect(cloudRun.compared?.Drifts.map(drift => drift.configId)).toEqual(differences.map(({ id }) => id))
+    if (changes.some(({ change }) => change === "added")) {
+      for (const result of [desktop, cloud]) {
+        expect(result.Outcomes).toContainEqual({ Folder: "DeviceConfigurations", Outcome: "saved", Saved: 2 })
+        expect(Object.keys(result.Items)).toEqual(expect.arrayContaining(["DeviceConfigurations/cfg-1", "DeviceConfigurations/cfg-2"]))
+      }
+    }
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {

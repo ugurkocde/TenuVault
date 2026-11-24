@@ -270,7 +270,7 @@ function ConvertFrom-TvJsonElement {
 function ConvertFrom-TvJson {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
     $document = [System.Text.Json.JsonDocument]::Parse($Text)
-    try { return ConvertFrom-TvJsonElement $document.RootElement } finally { $document.Dispose() }
+    try { return ,(ConvertFrom-TvJsonElement $document.RootElement) } finally { $document.Dispose() }
 }
 
 # The property names of a parsed object, in document order.
@@ -1182,7 +1182,7 @@ function Complete-TvAuditRun {
 
 function Get-TvGraphUrl {
     param([Parameter(Mandatory)][string]$Path)
-    if ($Path.StartsWith("https://")) {
+    if ($Path.StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
         if (-not ([uri]$Path).Host.Equals("graph.microsoft.com")) { throw "Invalid Graph continuation link" }
         return $Path
     }
@@ -1192,27 +1192,76 @@ function Get-TvGraphUrl {
 function Invoke-TvGraphGet {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token)
     $result = Invoke-TvHttp -Uri (Get-TvGraphUrl $Path) -Token $Token -Method "Get" -Headers @{ Accept = "application/json" }
-    return ConvertFrom-TvJson $result.Text
+    # Preserve a root array so the collection validator can reject it as an invalid envelope.
+    return ,(ConvertFrom-TvJson $result.Text)
+}
+
+function Test-TvGraphListPage {
+    param([object]$Page, [uri]$Start, [System.Collections.Generic.HashSet[string]]$Seen)
+    if ($Page -isnot [System.Collections.IDictionary] -or $Page.psbase.Keys -cnotcontains "value" -or $Page["value"] -isnot [array]) {
+        throw "Graph returned an invalid policy collection"
+    }
+    foreach ($item in $Page["value"]) {
+        if ($item -isnot [System.Collections.IDictionary] -or $item.psbase.Keys -cnotcontains "id" -or
+            $item["id"] -isnot [string] -or [string]::IsNullOrWhiteSpace($item["id"])) {
+            throw "Microsoft Graph returned a collection entry without id"
+        }
+    }
+    if ($Page.psbase.Keys -cnotcontains "@odata.nextLink") { return }
+    $next = $Page["@odata.nextLink"]
+    $parsed = $null
+    if ($next -isnot [string] -or $next -notmatch '^https://[^/]' -or $next -cne $next.Trim() -or
+        ($next -split '\?', 2)[0] -match '[\s\\#]' -or $next -match '[\t\r\n\\#]' -or
+        -not [uri]::TryCreate($next, [UriKind]::Absolute, [ref]$parsed) -or
+        $parsed.Scheme -ne "https" -or $parsed.Authority -ne $Start.Authority -or $parsed.UserInfo -or
+        -not $parsed.AbsolutePath.Equals($Start.AbsolutePath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Graph returned an invalid continuation link"
+    }
+    if (-not $Seen.Add($parsed.AbsoluteUri)) { throw "Graph returned a repeated continuation link" }
+    return $next
 }
 
 function Invoke-TvGraphList {
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token)
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token, [object]$ExpandedPage)
     $items = [System.Collections.Generic.List[object]]::new()
     $next = Get-TvGraphUrl $Path
+    $start = [uri]$next
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    [void]$seen.Add($start.AbsoluteUri)
     $pages = 0
     while ($next) {
-        if (++$pages -gt 1000) { throw "Graph listing did not finish after 1000 pages: $Path" }
-        $page = Invoke-TvGraphGet $next $Token
-        if ($page -isnot [System.Collections.IDictionary] -or $page["value"] -isnot [array]) {
-            throw "Graph returned an invalid policy collection"
-        }
-        foreach ($item in $page["value"]) { if ($null -ne $item) { $items.Add($item) } }
-        $next = $page["@odata.nextLink"]
-        if ($page.Contains("@odata.nextLink") -and ($next -isnot [string] -or [string]::IsNullOrWhiteSpace($next))) {
-            throw "Graph returned an invalid continuation link"
-        }
+        if (++$pages -gt 1000) { throw "Graph listing did not finish after 1000 pages" }
+        $page = if ($pages -eq 1 -and $PSBoundParameters.ContainsKey("ExpandedPage")) { $ExpandedPage }
+            else { ,(Invoke-TvGraphGet $next $Token) }
+        $next = Test-TvGraphListPage $page $start $seen
+        $items.AddRange($page["value"])
     }
     return $items
+}
+
+function Complete-TvGraphExpansion {
+    param([object]$Value, [string]$Path, [string]$Token)
+    if ($Value -is [array]) {
+        foreach ($entry in $Value) {
+            $id = Get-TvProp $entry "id"
+            $entryPath = if ($Path -and $id -is [string] -and $id) { "$Path/$([uri]::EscapeDataString($id))" } else { "" }
+            Complete-TvGraphExpansion $entry $entryPath $Token
+        }
+        return
+    }
+    if ($Value -isnot [System.Collections.IDictionary]) { return }
+    foreach ($key in @(Get-TvKeys $Value)) {
+        if (-not $key.EndsWith("@odata.nextLink", [StringComparison]::Ordinal)) { continue }
+        if (-not $Path) { throw "Graph returned an invalid expanded collection" }
+        $property = $key.Substring(0, $key.Length - "@odata.nextLink".Length)
+        $page = [ordered]@{ value = $Value[$property]; "@odata.nextLink" = $Value[$key] }
+        $Value[$property] = @(Invoke-TvGraphList "$Path/$property" $Token -ExpandedPage $page)
+        $Value.Remove($key)
+    }
+    foreach ($key in @(Get-TvKeys $Value)) {
+        $childPath = if ($Path) { "$Path/$key" } else { "" }
+        Complete-TvGraphExpansion $Value[$key] $childPath $Token
+    }
 }
 
 function Get-TvDetailPath {
@@ -1264,7 +1313,8 @@ function Read-TvObject {
         [Parameter(Mandatory)][string]$Token,
         [Parameter(Mandatory)][hashtable]$Outcome
     )
-    $detail = Invoke-TvGraphGet (Get-TvDetailPath $Type $Id) $Token
+    $path = Get-TvDetailPath $Type $Id
+    $detail = Invoke-TvGraphGet $path $Token
     if ($Type.Keep) { return Get-TvKeptSnapshot $Type $detail }
     if ($Type.Singleton) {
         $snapshot = [ordered]@{ id = $Type.Singleton.Id }
@@ -1275,17 +1325,7 @@ function Read-TvObject {
         }
         return $snapshot
     }
-    # Large expanded collections page like lists.
-    foreach ($key in @(Get-TvKeys $detail)) {
-        $value = Get-TvProp $detail $key
-        if ($key.EndsWith("@odata.nextLink") -and $value -is [string]) {
-            $property = $key.Substring(0, $key.Length - "@odata.nextLink".Length)
-            $existing = @(Get-TvProp $detail $property)
-            $more = Invoke-TvGraphList $value $Token
-            Set-TvProp $detail $property @($existing + $more)
-            Remove-TvProp $detail $key
-        }
-    }
+    Complete-TvGraphExpansion $detail ($path -split '\?', 2)[0] $Token
     $encodedId = [uri]::EscapeDataString($Id)
     foreach ($extra in $Type.Extras) {
         $extraPath = ([string]$extra.Template).Replace("{id}", $encodedId)
@@ -1294,14 +1334,18 @@ function Read-TvObject {
             Set-TvProp $detail $extra.Property (Get-TvProp $one $extra.Property)
             continue
         }
-        $entries = Invoke-TvGraphList $extraPath $Token
+        $entries = @(Invoke-TvGraphList $extraPath $Token)
+        Complete-TvGraphExpansion $entries ($extraPath -split '\?', 2)[0] $Token
         if ($extra.Each) {
             foreach ($entry in $entries) {
                 $entryPath = ([string]$extra.Each.Template).Replace("{id}", $encodedId).Replace("{entryId}", [uri]::EscapeDataString([string](Get-TvProp $entry "id")))
                 if ($extra.Each.Property) {
-                    Set-TvProp $entry $extra.Each.Property @(Invoke-TvGraphList $entryPath $Token)
+                    $nested = @(Invoke-TvGraphList $entryPath $Token)
+                    Complete-TvGraphExpansion $nested ($entryPath -split '\?', 2)[0] $Token
+                    Set-TvProp $entry $extra.Each.Property $nested
                 } else {
                     $full = Invoke-TvGraphGet $entryPath $Token
+                    Complete-TvGraphExpansion $full ($entryPath -split '\?', 2)[0] $Token
                     foreach ($k in @(Get-TvKeys $full)) { if ($k -ne "@odata.context") { Set-TvProp $entry $k (Get-TvProp $full $k) } }
                 }
             }
@@ -3137,18 +3181,23 @@ function Read-TvReportAudit {
     $select = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"
     $filter = [uri]::EscapeDataString("activityDateTime gt $From and activityDateTime le $To and activityOperationType ne 'Get' and activityOperationType ne 'Search'")
     $next = "$script:GraphBeta/deviceManagement/auditEvents?`$select=$select&`$filter=$filter&`$top=200"
+    $start = [uri]$next
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    [void]$seen.Add($start.AbsoluteUri)
     $changes = [System.Collections.Generic.List[object]]::new()
     $pages = 0
     try {
         while ($next -and $pages -lt 200 -and $changes.Count -le 2000) {
             $pages++
             $page = Invoke-TvGraphGet $next $GraphToken
-            foreach ($raw in @(Get-TvProp $page "value")) { $change = ConvertFrom-TvAuditEvent $raw; if ($change) { $changes.Add($change) } }
-            $next = Get-TvProp $page "@odata.nextLink"
+            $next = Test-TvGraphListPage $page $start $seen
+            foreach ($raw in $page["value"]) { $change = ConvertFrom-TvAuditEvent $raw; if ($change) { $changes.Add($change) } }
         }
-    } catch [TvHttpError] {
-        if ($_.Exception.Status -eq 403) { return @{ Error = "Microsoft Graph returned 403 for the Intune audit log. The cloud backup identity needs DeviceManagementApps.Read.All." } }
-        if ($_.Exception.Status -eq 429) { return @{ Error = $script:CloudThrottledNote } }
+    } catch {
+        if ($_.Exception -is [TvHttpError]) {
+            if ($_.Exception.Status -eq 403) { return @{ Error = "Microsoft Graph returned 403 for the Intune audit log. The cloud backup identity needs DeviceManagementApps.Read.All." } }
+            if ($_.Exception.Status -eq 429) { return @{ Error = $script:CloudThrottledNote } }
+        }
         return @{ Error = "The Intune audit log could not be read: $(Get-TvSafeError $_.Exception.Message)" }
     }
     $note = $null

@@ -23,6 +23,7 @@ $script:failGraphToken = $false
 $script:failDetail = $false
 $script:timeoutDetail = $false
 $script:secondListPage = $null
+$script:listResponses = @{}
 $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
@@ -43,6 +44,14 @@ function Invoke-TvHttp {
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
     if ($script:failAuditReceipt -and $Uri -like "*/tenuvault-backup-results/audit-receipts/*") { throw [TvHttpError]::new(403, "Audit receipt denied") }
     $text = '{"value":[]}'
+    $graphPrefix = "https://graph.microsoft.com"
+    if ($Uri.StartsWith($graphPrefix)) {
+        $endpoint = $Uri.Substring($graphPrefix.Length)
+        if ($script:listResponses.Contains($endpoint)) {
+            $text = ConvertTo-Json -InputObject $script:listResponses[$endpoint] -Compress -Depth 16
+            return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
+        }
+    }
     if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
         $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
     } elseif (($Uri -like "*/tenuvault-backup-results/audit-*/*" -or $Uri -like "*/intune-backups/cloud-backup-status-*") -and $Method -eq "Get") {
@@ -59,6 +68,8 @@ function Invoke-TvHttp {
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
     } elseif ($Uri -like "*getOmaSettingPlainTextValue*") {
         throw [TvHttpError]::new(403, "No access to plaintext")
+    } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-2*") {
+        $text = '{"id":"cfg-2","displayName":"Second policy","assignments":[]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
         if ($script:timeoutDetail) { throw [TimeoutException]::new("Detail call timed out") }
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
@@ -157,12 +168,20 @@ $script:failAuditReceipt = $false
 [Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
 $before = ConvertFrom-TvJson $baselineManifestWrite.body
 $older = @{ Name = "older"; Metadata = $before }
-foreach ($page in @($null, '{}', '{"value":null}', '{"value":{"id":"cfg-2"}}', '{"value":[],"@odata.nextLink":false}', '{"value":[]}')) {
+$scenarios = @(foreach ($page in @($null, '{}', '{"value":null}', '{"value":{"id":"cfg-2"}}', '{"value":[],"@odata.nextLink":false}', '{"value":[]}')) {
+    @{ Page = $page; Timeout = $null -eq $page; Responses = @{} }
+})
+$parity = Get-Content (Join-Path $PSScriptRoot "list-pages.json") -Raw | ConvertFrom-Json -AsHashtable
+$scenarios += @($parity | ForEach-Object { @{ Responses = $_.responses } })
+foreach ($scenario in $scenarios) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
-    $script:timeoutDetail = $null -eq $page
-    $script:secondListPage = $page
-    $output = @(Invoke-TvBackup)
+    $script:timeoutDetail = $scenario.Timeout
+    $script:secondListPage = $scenario.Page
+    $script:listResponses = $scenario.Responses
+    $output = [System.Collections.Generic.List[string]]::new()
+    $errorText = $null
+    try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }
     $newerWrite = $script:calls | Where-Object { $_.method -eq "Put" -and $_.uri -like "*/metadata.json" }
     $newer = @{ Name = "newer"; Metadata = ConvertFrom-TvJson $newerWrite.body }
     $compared = Get-TvBackupDrifts -Older $older -Newer $newer -Types (Get-TvTypes) -ReadItem {
@@ -175,5 +194,5 @@ foreach ($page in @($null, '{}', '{"value":null}', '{"value":{"id":"cfg-2"}}', '
         if ($write) { return ConvertFrom-TvJson $write.body }
         return $null
     }
-    Write-Output (@{ calls = @($script:calls.ToArray()); output = $output; compared = $compared } | ConvertTo-Json -Compress -Depth 10)
+    Write-Output (@{ calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText; compared = $compared } | ConvertTo-Json -Compress -Depth 10)
 }

@@ -1,0 +1,133 @@
+[
+  {
+    "name": "a null entry on a later page",
+    "responses": {
+      "/beta/deviceManagement/deviceConfigurations": {
+        "value": [],
+        "@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?page=2"
+      },
+      "/beta/deviceManagement/deviceConfigurations?page=2": {
+        "value": [
+          null
+        ]
+      }
+    },
+    "failed": "DeviceConfigurations",
+    "changes": []
+  },
+  {
+    "name": "an empty Autopilot device ID",
+    "responses": {
+      "/beta/deviceManagement/windowsAutopilotDeviceIdentities": {
+        "value": [
+          {
+            "id": "",
+            "serialNumber": "SN-0001"
+          }
+        ]
+      }
+    },
+    "failed": "AutopilotDevices",
+    "changes": []
+  },
+  {
+    "name": "a different collection on the same host",
+    "responses": {
+      "/beta/deviceManagement/deviceConfigurations": {
+        "value": [],
+        "@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceCategories?page=2"
+      },
+      "/beta/deviceManagement/deviceCategories?page=2": {
+        "value": []
+      }
+    },
+    "failed": "DeviceConfigurations",
+    "changes": []
+  },
+  {
+    "name": "a different API version",
+    "responses": {
+      "/beta/deviceManagement/deviceConfigurations": {
+        "value": [],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/deviceManagement/deviceConfigurations?page=2"
+      },
+      "/v1.0/deviceManagement/deviceConfigurations?page=2": {
+        "value": []
+      }
+    },
+    "failed": "DeviceConfigurations",
+    "changes": []
+  },
+  {
+    "name": "a valid empty collection",
+    "responses": {
+      "/beta/deviceManagement/deviceConfigurations": {
+        "value": []
+      }
+    },
+    "failed": null,
+    "changes": [
+      {
+        "change": "removed",
+        "id": "cfg-1"
+      }
+    ]
+  },
+  {
+    "name": "a valid multi-page collection",
+    "responses": {
+      "/beta/deviceManagement/deviceConfigurations": {
+        "value": [
+          {
+            "id": "cfg-1",
+            "displayName": "Baseline Wi-Fi"
+          }
+        ],
+        "@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?page=2"
+      },
+      "/beta/deviceManagement/deviceConfigurations?page=2": {
+        "value": [
+          {
+            "id": "cfg-2",
+            "displayName": "Second policy"
+          }
+        ]
+      }
+    },
+    "failed": null,
+    "changes": [
+      {
+        "change": "added",
+        "id": "cfg-2"
+      }
+    ]
+  },
+  {
+    "name": "a root array instead of an object",
+    "responses": {
+      "/beta/deviceManagement/deviceConfigurations": [
+        {
+          "value": []
+        }
+      ]
+    },
+    "failed": "DeviceConfigurations",
+    "changes": []
+  },
+  {
+    "name": "an expanded page pointing to a different collection",
+    "responses": {
+      "/beta/deviceManagement/deviceConfigurations/cfg-1?$expand=assignments": {
+        "id": "cfg-1",
+        "displayName": "Baseline Wi-Fi",
+        "assignments": [],
+        "assignments@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1/other?page=2"
+      },
+      "/beta/deviceManagement/deviceConfigurations/cfg-1/other?page=2": {
+        "value": []
+      }
+    },
+    "failed": "DeviceConfigurations",
+    "changes": []
+  }
+]
