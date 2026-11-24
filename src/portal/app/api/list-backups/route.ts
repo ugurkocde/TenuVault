@@ -40,8 +40,9 @@ interface MetadataRead { metadata: any; metadataError?: string; retryable?: bool
  * unreadable files traced to it (BackupUnavailable). Null for every other failure, including a
  * blob that may only be in a file that could not be traced: that does not make the backup unavailable.
  */
-function unavailableReason(status: number, body: string): string | null {
+function unavailableReason(status: number, body: string, local: boolean): string | null {
   if (status !== 409 || !body.includes('<Code>BackupUnavailable</Code>')) return null
+  if (!local) return 'Backup files could not be read (HTTP 409, BackupUnavailable). Check storage access and retry.'
   return decodeXml(/<Message>([^<]*)<\/Message>/.exec(body)?.[1] ?? 'Files of this backup could not be read.')
 }
 const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError && !result.metadata.CompanionBackup && !result.metadata.LargeBackupOutcomes)
@@ -60,6 +61,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   const parsed = parseBackupName(name)!
   const legacy = parsed.precision === "day"
   const date = parsed.timestamp.slice(0, 10)
+  const local = storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
   const readMetadata = async (): Promise<MetadataRead> => {
     try {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${name}/metadata.json`)}`, { headers: storageHeaders(accessToken) })
@@ -72,7 +74,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
         return { metadata }
       }
       const body = response.status === 409 ? await response.text() : ''
-      const unavailable = unavailableReason(response.status, body)
+      const unavailable = unavailableReason(response.status, body, local)
       if (unavailable) return { metadata: null, metadataError: unavailable, unavailable: true }
       // A manifest that may only be in a file no backup can be traced to: the folder is treated as
       // having none, so it shows as running or incomplete and is never used as a complete backup.
@@ -88,7 +90,6 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   }
   // On this device a backup can become unavailable while its metadata.json stays unchanged (another
   // of its files is damaged), so its metadata is read each time: the store checks it then.
-  const local = storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
   const metadataRead: Promise<MetadataRead> = inventory?.version
     ? (local ? readMetadata() : metadataCache.read(inventory.cacheKey, inventory.version, readMetadata))
     // On this device a listing leaves out a metadata.json it cannot read, so a folder listed without
@@ -96,7 +97,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     : inventory ? (local ? readMetadata().then((read) => read.unavailable || (isLargeBackup(name) && read.retryable) ? read : { metadata: null }) : Promise.resolve({ metadata: null })) : readMetadata()
   // A backup made unavailable by damaged files is still listed, with the reason, so the others stay usable.
   const filesRead: Promise<string | { unavailable: string }> = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch((error) => {
-    const unavailable = error instanceof BlobListError ? unavailableReason(error.status, error.body) : null
+    const unavailable = error instanceof BlobListError ? unavailableReason(error.status, error.body, local) : null
     if (unavailable) return { unavailable }
     throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`)
   })

@@ -50,6 +50,25 @@ const blobs = {
 }
 
 describe("backup history", () => {
+  it("uses fixed guidance when an Azure response claims backup files are unavailable", async () => {
+    storage(blobs)
+    const account = "private-admin@example.test"
+    const served = globalThis.fetch
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith(`${newer}/metadata.json`)) {
+        return new Response(`<Error><Code>BackupUnavailable</Code><Message>Could not read the files for ${account}.</Message></Error>`, { status: 409 })
+      }
+      return served(input, init)
+    }))
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      expect(JSON.stringify(listed)).not.toContain(account)
+      expect(listed.backups.find((backup: { id: string }) => backup.id === newer)).toMatchObject({
+        status: "unavailable", error: expect.stringContaining("HTTP 409, BackupUnavailable"),
+      })
+    }
+  })
+
   it("reports a backup's coverage with the types it did not read in full, and nothing for a backup that does not record it", async () => {
     const recorded = "backup-2026-11-10-020000"
     const included = ["DeviceConfigurations", "PowerShellScripts", "DeviceCategories", "Apps", "CompliancePolicies"]
