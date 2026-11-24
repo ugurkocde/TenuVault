@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
 import { applyChangeSet, approveChangeSet, createChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
@@ -8,6 +8,11 @@ import { FeatureError } from "../src/main/features/route"
 import { PROMOTION_NOT_FOUND, type PromotionRecord } from "../src/main/features/promotion/engine"
 import type { SyncRunRecord, SyncSkip } from "../src/main/features/sync/engine"
 import { recordSyncLinks, syncLinks, type SyncLink, type SyncLinksRecord } from "../src/main/features/sync/links"
+import { ApiHost } from "../src/main/api/host"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { executionMetadata } from "../src/main/api/execution-metadata"
+import { RESOURCE_SCOPES } from "../src/shared/constants"
 import { planGuard, requiredFeatures } from "../src/main/api/plan-gates"
 import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -1414,4 +1419,43 @@ describe("Codex round 1", () => {
     const listed = (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs.find((entry: { id: string }) => entry.id === run.id)
     expect(listed.outcome).toBe("failed")
   })
+})
+
+it("binds the source recovered from a saved Sync when preview rereads it", async () => {
+  const context = setup()
+  const result = await planned(context)
+  const target = result.targets[0]!.promotion!
+  const clientFor = (tenant: string) => tenant === TENANT_A ? TENANT_C : TENANT_D
+  const cap = new ConnectionCapabilities(tenant => ({
+    version: 1, origin: "legacy", method: "ownApp", clientId: clientFor(tenant), createdAt: "", updatedAt: "",
+  }))
+  const originalGraph = context.deps.graph
+  const network = vi.fn<typeof fetch>(async (input, init) => {
+    const { pathname, search } = new URL(String(input))
+    const tenant = new Headers(init?.headers).get("authorization")?.slice("Bearer opaque-".length)
+    if (tenant !== TENANT_A && tenant !== TENANT_B) throw new Error("Unexpected tenant token.")
+    const graph = await originalGraph(tenant)
+    const response = await graph(init?.method ?? "GET", pathname.replace(/^\/beta\//, "") + search)
+    return Response.json(response.body, { status: response.status })
+  })
+  const fetch = createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+    authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
+  })
+  context.deps.graph = async tenant => {
+    expect(executionMetadata.getStore()?.connections?.get(tenant)).toBe(clientFor(tenant))
+    const accessToken = `opaque-${tenant}`
+    cap.requireIssuedToken(tenant, clientFor(tenant), RESOURCE_SCOPES.graph, accessToken)
+    return async (method, path) => {
+      const response = await fetch("https://graph.microsoft.com/beta/" + path, {
+        method, headers: { authorization: `Bearer ${accessToken}` },
+      })
+      return { status: response.status, body: await response.json() }
+    }
+  }
+  const host = new ApiHost({ routes: syncRoutes(context.deps), bindConnections: ids => cap.bindConnections(ids), guard: planGuard(context.deps.plan) })
+  const response = await host.dispatch(guardRequest({ tenantId: TENANT_B, action: "preview", id: target.id }))
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ sourceChanges: [] })
+  expect(network.mock.calls.map(([, init]) => new Headers(init?.headers).get("authorization"))).toContain(`Bearer opaque-${TENANT_A}`)
 })
