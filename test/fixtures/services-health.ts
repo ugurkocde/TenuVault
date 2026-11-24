@@ -102,7 +102,7 @@ export const incompleteBackupFixture: BackupJobDisplay = {
   results: { types: [
     { folder: "ConfigurationPolicies", label: "Settings catalog policies", area: "Configuration", state: "saved", found: 24, saved: 24, failed: 0 },
     { folder: "CompliancePolicies", label: "Compliance policies", area: "Compliance", state: "saved", found: 12, saved: 12, failed: 0 },
-    { folder: "AuthenticationMethods", label: "Authentication methods", area: "Authentication", state: "skipped", saved: 0, failed: 0, reason: "Microsoft refused the read although the permission is present. Check the admin role and license, then run a backup again." },
-    { folder: "SecureScoreControlProfiles", label: "Secure Score control profiles", area: "Posture", state: "skipped", saved: 0, failed: 0, reason: "Microsoft reported that this service is not onboarded in this tenant." },
+    { folder: "AuthenticationMethodsPolicy", label: "Authentication methods policy", area: "Authentication", state: "unreadable", saved: 0, failed: 0, reason: "Microsoft refused the read although the permission is present. Check the admin role and license, then run a backup again." },
+    { folder: "TermsOfUseAgreements", label: "Terms of use", area: "Governance", state: "skipped", saved: 0, failed: 0, reason: "The connection does not have permission to read terms of use." },
   ], notices: [], coverage: "incomplete", totalPolicies: 36 },
 }

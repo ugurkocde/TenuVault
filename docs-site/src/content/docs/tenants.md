@@ -13,13 +13,13 @@ A tenant in TenuVault is one Microsoft tenant you have signed in to, together wi
 | **Dashboard** | Sidebar | Backup overview of the selected tenant |
 | **All tenants** | Sidebar, when two or more tenants are connected | Status of every connected tenant at a glance |
 | **Tenants** | Sidebar | The **Tenant Management** page: rename, tag, refresh, back up and remove tenants |
-| **Services** | Below **Tenants** in the sidebar | **Defender**, **Entra ID** and **Intune** shortcuts to filtered backup contents for the selected tenant |
+| **Services** | Below **Tenants** in the sidebar | **Entra ID** and **Intune** shortcuts to filtered backup contents for the selected tenant |
 | **Settings** | Sidebar | Sign in again and change where a tenant's backups are stored |
 | **License** | Sidebar | License state of each tenant and license sharing |
 
 Below **Dashboard** and **Tenants**, the sidebar lists **Services** followed by **Protect** (backups, App Backup, drift, Copy to Tenants and alerts), **Baselines** (OpenIntuneBaseline, CIS Benchmarks and frameworks) and **Oversight** (reports, audit log, governance, changes and operations). Select a group's heading to fold it away; TenuVault remembers folded groups on this computer, and a dot next to a folded heading shows that the open page is inside it. The arrow next to **Frameworks** folds its list of frameworks the same way, with the same dot. **Help** at the bottom of the sidebar opens **What's new**, **Share feedback** and **Support**.
 
-The **Services** group below **Dashboard** and **Tenants** lists Defender, Entra ID and Intune. **Protect** follows with Backup & Restore, App Backup, Drift Detection, Copy to Tenants and Alerts. A service marked **Off** opens **Settings > Services and permissions**, where you can turn it on. The badges follow the selected tenant and update when a service changes. An enabled service opens **Backup & Restore** with that service selected; its sidebar entry stays highlighted until you choose **All** in the page's **Service** filter.
+The **Services** group below **Dashboard** and **Tenants** lists Entra ID and Intune. **Protect** follows with Backup & Restore, App Backup, Drift Detection, Copy to Tenants and Alerts. A service marked **Off** opens **Settings > Services and permissions**, where you can turn it on. The badges follow the selected tenant and update when a service changes. An enabled service opens **Backup & Restore** with that service selected; its sidebar entry stays highlighted until you choose **All** in the page's **Service** filter.
 
 ![Services above Protect, alongside the backup timeline](/images/sidebar/services-group-light.png)
 
@@ -58,7 +58,6 @@ Each tenant shows **X of Z** backup types for the services it has enabled. Expan
 
 | Service | Coverage on Tenants |
 | --- | --- |
-| Defender | Shows the count for selected Defender configuration types. |
 | Entra ID | Shows the count for selected Entra ID configuration types, including Conditional Access when enabled. |
 | Intune | Shows the count for selected Intune configuration types. |
 
@@ -145,7 +144,7 @@ Click a tenant's name, or its arrow button, to select it and open its dashboard.
 
 Open **Tenants** in the sidebar. Use the search box to filter by name or domain, and the grid and list buttons to switch views.
 
-In either view, select Defender, Entra ID or Intune beside a tenant to open its filtered backup contents. In the grid view, each tenant card also shows the tenant's initials, name, domain, tags, live counts of **Compliance Policies** and **Configuration Profiles** read from Intune, the **Backup storage**, when data was last refreshed (**Last sync**) and the next automatic backup. **Backup Now** opens the backup dialog.
+In either view, select Entra ID or Intune beside a tenant to open its filtered backup contents. In the grid view, each tenant card also shows the tenant's initials, name, domain, tags, live counts of **Compliance Policies** and **Configuration Profiles** read from Intune, the **Backup storage**, when data was last refreshed (**Last sync**) and the next automatic backup. **Backup Now** opens the backup dialog.
 
 The list view shows the same tenants as a table with the columns **Tenant**, **Status**, **Region**, **Policies**, **Tags**, **Last Backup**, **Plan**, **Drift** and **Actions**.
 

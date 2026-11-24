@@ -1,6 +1,6 @@
 ---
 title: "Restore configuration from a backup"
-description: "Restore supported Entra ID and Intune configuration from a TenuVault backup and review Defender recovery limits."
+description: "Restore supported Entra ID and Intune configuration from a TenuVault backup."
 faq:
   - question: "How do I restore an Intune policy?"
     answer: "Open Backup & Restore in TenuVault and start the restore wizard, or pick a backup in Backup History and click Restore from this backup. Choose the policies, choose Create copies or Replace in place, review what will happen to each policy, then confirm."
@@ -18,7 +18,6 @@ Restore supported configuration from a saved tenant backup. The available action
 
 | Service | Restore availability |
 | --- | --- |
-| Defender | Browse and compare backups. See [Defender recovery limits](/restore/defender/). |
 | Entra ID | Restore supported Conditional Access policies and individually review eligible configuration and directory changes. See [Restore Entra ID configuration](/restore/identity/). |
 | Intune | Recreate supported policies, replace them in place or create copies. See [Restore Intune configuration](/restore/intune/). |
 

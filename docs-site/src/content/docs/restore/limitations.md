@@ -16,7 +16,6 @@ Most Intune items restore directly from a backup. A few cannot, because Intune d
 
 [App Backup](/apps/app-backup/) covers installer content separately. Its Windows preview retrieves supported Win32 installers on an enrolled PC and restores captured backups as new, unassigned apps to the same tenant on every plan, or to another connected tenant with Pro or MSP for that tenant. The configuration-backup wizard described below does not use those installer captures; start that restore from **App Backup → Backups → Restore to tenant…**. Earlier administrator-selected archives remain exportable, but do not qualify as captured backups for restore.
 
-Availability depends on the service and policy type. Start with the limits for [Defender](/restore/defender/), [Entra ID](/restore/identity/) or [Intune](/restore/intune/).
 
 ## Items that cannot be restored
 
@@ -169,11 +168,11 @@ These exclusions also apply to staged directory recovery. The preview reports th
 | Devices | A device object is created by device registration. |
 | Domains | Ownership and federation need separate verification and setup. |
 
-Mail-enabled security groups and distribution groups cannot be recreated through the directory Graph flow. Microsoft 365 recovery covers its directory object only. Teams, SharePoint and mailbox content are excluded. Only the admitted closed directory subsets are available. See [Directory recovery](/restore/identity/#users-and-groups).
+Mail-enabled security groups and distribution groups cannot be recreated through the directory Graph flow. Microsoft 365 recovery covers its directory object only. Teams, SharePoint and mailbox content are excluded. Only the admitted closed directory subsets are available. See [Directory recovery](/restore/identity/#groups).
 
 ## Directory restore boundaries
 
-Directory restore supports disabled cloud member creation, existing cloud member display names, static security-group creation/nonempty descriptions, manager assignment and ordinary user member/owner relationships. See [the per-operation boundaries](/restore/identity/#users-and-groups). Each removal needs the group's exact choice and an individual approval. Exact member removal is not performed for Conditional Access targeted groups because membership changes can affect policy enforcement and safe remaining membership cannot be established across concurrent edits or replication delay. Remove those members in Microsoft Entra. Unreadable targeting blocks removal; ordinary security-group removals remain admitted. Account state, recycle recovery, guests, licenses, Microsoft 365 groups, dynamic rules, role-assignable or Conditional Access excluded groups, nested principals and other unverified fields remain blocked with reasons.
+Directory restore supports individually reviewed subsets for eligible cloud security groups. Devices are backup-only. See [Entra ID restore](/restore/identity/#groups).
 
 Passwords and authentication methods, application secrets/private keys, federated identity credentials, dynamic members, Microsoft first-party service principals, activated PIM instances, synced objects, devices and domains are never restored. Recreation gets a new ID; review policy targets and external integrations before activation. Application recreation would also get a new app ID, but is not enabled here.
 
@@ -185,7 +184,7 @@ Group link restore also refuses a resource with any current directory membership
 
 User display-name and manager changes are blocked when Conditional Access group targeting or exclusions exist or cannot be completely read. Their dynamic-membership effects need a separate verified review. Every access addition and manager change also has separate privilege and security-response approvals.
 
-Application restore uses individual review. Only operations with matching documentation, live fixture read-back and production integration tests are admitted. Application registration updates are limited to nonempty displayName and description. Owner restore remains blocked because the lab verifies only fixture service-principal owners, while the production owner resolver handles users. Delegated consent remains blocked after inconsistent live lifecycle results, including a later HTTP 400 deletion after an earlier complete matched cycle. Enterprise app metadata and app role assignment restore remain blocked after HTTP 400 in live round trips. Creation, other metadata fields and app policy bindings remain blocked. Recycle recovery can revive credentials and access and cannot be admitted by checking IDs alone. Recreated registrations get a new app ID and break every client using the old one. Gallery apps need verified template provenance, which current backups lack. SSO, SAML signing keys, provisioning secrets and all credentials require setup again. See [application restore](/restore/identity/#app-registrations-enterprise-apps-and-consent).
+App registrations, enterprise apps, privileged roles and user restore are outside stable coverage.
 
 
 ## Saved directory restores

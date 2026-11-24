@@ -18,7 +18,6 @@ Plan how to recover from deleted or changed configuration, a lost admin device o
 
 Check what the service can recover before starting an exercise:
 
-* [Defender](/restore/defender/) provides backed-up settings for comparison and manual recovery.
 * [Entra ID](/restore/identity/) supports Conditional Access and selected, individually reviewed changes.
 * [Intune](/restore/intune/) supports standard policy restore and eligible tenant-to-tenant copies.
 

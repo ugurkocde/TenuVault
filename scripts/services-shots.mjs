@@ -227,7 +227,9 @@ try {
         await click("Run Backup")
         await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes("Start backup")`)
         await click("Start backup")
-        await waitFor(`document.body.innerText.includes("Coverage incomplete")`)
+        await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes("Backup completed with incomplete coverage")`)
+        await evaluate(`document.querySelector('[role="dialog"] button[aria-label^="Details:"]').click()`)
+        await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes("Terms of use")`)
       }
       if (state === "tenants-list-intune-off") {
         await evaluate(`document.querySelector('button[aria-label="List view"]').click()`)

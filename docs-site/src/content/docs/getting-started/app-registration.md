@@ -45,10 +45,10 @@ TenuVault does not create a second app registration when the tenant already has 
 * It is still the plain desktop registration TenuVault makes: no client secret, no certificate, and no web or single-page application redirect URI.
 * It has an enterprise application, and that already has tenant-wide admin consent for TenuVault's work on Microsoft Graph. One of these counts:
   * Intune: consent for at least one of the Intune permissions in the [default set](#delegated-permissions) below. Every setup that includes Intune asks for one of them.
-  * Defender or Entra ID: consent for more than half of the permissions that backing up the service asks for. The areas you turn on separately are not counted.
+  * Entra ID: consent for more than half of the permissions that backing up the service asks for. The areas you turn on separately are not counted.
   * Conditional Access: consent for everything a setup for Conditional Access alone asks for, which is `User.Read`, `Organization.Read.All` and `Policy.Read.All` together.
 
-  Consent for a single permission of Defender or Entra ID, for `Policy.Read.All` without the other two, or for the two permissions every sign-in has (`User.Read` and `Organization.Read.All`) does not count, because administrators grant such permissions to many apps.
+  Consent for a single permission of Entra ID, for `Policy.Read.All` without the other two, or for the two permissions every sign-in has (`User.Read` and `Organization.Read.All`) does not count, because administrators grant such permissions to many apps.
 
 The last point is what TenuVault relies on. A name and a note can be set by anyone who may create app registrations, which in many tenants is every member. Tenant-wide admin consent can only come from an administrator, so it shows that an administrator trusted this app registration before. An app registration that does not meet every point is left exactly as it is, and TenuVault creates its own next to it.
 
@@ -130,7 +130,7 @@ The table above is the default permission set. For an older registration, follow
 
 The `-IncludeConditionalAccessRestore` switch adds `Policy.ReadWrite.ConditionalAccess` for [Conditional Access restores](/backups/conditional-access/). Conditional Access backups use the default `Policy.Read.All`.
 
-With `-Services` the script requests the permissions of the services you name in place of the default set, for example Defender or Entra ID. [App registration and delegated permissions](/security/permissions/#defender-and-entra-id-permission-packs) lists them per service and area. With `-RestoreAccess Entra`, Roles and PIM review uses delegated `Application.Read.All` and `User.Read.All` to identify protected apps and resolve principals. Roles and PIM writes are unavailable.
+With `-Services` the script requests the permissions of the services you name in place of the default set, for example Entra ID. [App registration and delegated permissions](/security/permissions/#entra-id-permission-packs) lists them per service and area. With `-RestoreAccess Entra`, Roles and PIM review uses delegated `Application.Read.All` and `User.Read.All` to identify protected apps and resolve principals. Roles and PIM writes are unavailable.
 
 ## Use the setup script instead
 
@@ -225,9 +225,9 @@ If an app registration with the same name already exists, the script prints a no
 | `-TenantId` | No | Tenant ID or domain to create the app registration in. Defaults to the tenant of the account you sign in with. |
 | `-DisplayName` | No | Name of the app registration. Default: `TenuVault Desktop`. |
 | `-AllowedGroupId` | No | Object ID of a security group. When set, user assignment is required on the enterprise application and only members of this group can sign in to TenuVault. |
-| `-Services` | No | The services the app registration can back up: `Defender`, `Entra`, `Intune`. Use `ConditionalAccess` to select the independent Conditional Access area of Entra ID. Default: `Intune` and `ConditionalAccess`, which is the permission set in the table above. Each service brings its own read permissions, and a service you leave out brings none. The script refuses an empty list, such as `-Services @()`; leave the parameter out to get the default. |
+| `-Services` | No | The services the app registration can back up: `Entra` and `Intune`. Use `ConditionalAccess` to select the independent Conditional Access area of Entra ID. Default: `Intune` and `ConditionalAccess`, which is the permission set in the table above. Each service brings its own read permissions, and a service you leave out brings none. The script refuses an empty list, such as `-Services @()`; leave the parameter out to get the default. |
 | `-RestoreAccess` | No | The services TenuVault may also restore, which adds their write permissions. Default: `Intune`, when Intune is one of the services. When you pass it, name every service that gets write permissions, or `None` to request read permissions only. |
-| `-Areas` | No | Areas of Entra ID that are backed up only on request: `Groups`, `UsersAndDevices`, `Applications`. Groups and users and devices hold personal data. Needs `Entra` in `-Services`. The script refuses an empty list; leave the parameter out to back up none of these areas. |
+| `-Areas` | No | Areas of Entra ID that are backed up only on request: `Groups` and `UsersAndDevices`. Groups and device inventory hold personal data. Needs `Entra` in `-Services`. The script refuses an empty list; leave the parameter out to back up none of these areas. |
 | `-IncludeGroupRead` | No | Deprecated switch accepted for compatibility. New registrations already include delegated `GroupMember.Read.All`. |
 | `-UseDeviceCode` | No | Switch. Signs in with a device code instead of opening a browser on this computer, for remote shells without a browser. Conditional Access often blocks device code flow, so only use it when the browser sign-in is not possible. |
 
@@ -296,10 +296,10 @@ The browser opens for the tenant of your Microsoft account. To set up another te
 
 ## Permissions for a service choice
 
-During setup, choose services before the connection method. The permission list in the app and the command under **Use the setup script instead** both request backup access. For example, choosing Entra ID includes Conditional Access:
+Intune is included during setup. On **Check**, turn on **Also back up Entra ID device and access settings** to see any missing Entra and Conditional Access permissions. If you are preparing a registration in advance, this script requests access to all three backup packs:
 
 ```powershell
-./New-TenuVaultDesktopApp.ps1 -Services ConditionalAccess,Entra -RestoreAccess None
+./New-TenuVaultDesktopApp.ps1 -Services Intune,ConditionalAccess,Entra -RestoreAccess None
 ```
 
 Use the permission list shown in TenuVault when following the manual guide. The handoff message also contains this list and the generated command. Do not use the Intune default list for an Entra-only registration. Existing registrations are left unchanged by quick setup; missing chosen permissions are reported after sign-in.

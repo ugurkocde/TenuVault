@@ -1,11 +1,11 @@
 ---
 title: "Run a configuration backup"
-description: "Back up Defender, Entra ID and Intune configuration on your device or in your own Azure storage account."
+description: "Back up Entra ID and Intune configuration on your device or in your own Azure storage account."
 faq:
   - question: "How do I back up Microsoft tenant configuration?"
     answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault saves supported configuration for the services and areas in your backup choice."
   - question: "What does a configuration backup include?"
-    answer: "TenuVault covers 17 Defender types, 77 Entra ID types including Conditional Access, and 41 Intune types. The backup includes the services and areas you enable and the types you select. App installer content is captured separately with App Backup."
+    answer: "Supported Intune configuration, including Defender settings you manage in Intune, and selected Entra ID device, access and directory settings."
   - question: "Does Microsoft Intune have a built-in backup?"
     answer: "No. Intune has no native backup, point-in-time restore or recycle bin for policies, so a deleted or changed policy cannot be recovered from the Intune portal. A backup tool such as TenuVault saves the configuration through Microsoft Graph before something goes wrong."
   - question: "Where are configuration backups stored?"
@@ -14,7 +14,7 @@ faq:
     answer: "On a schedule, so a recent backup always exists before you need it. Community includes manual and weekly scheduled backups. Pro and MSP add daily schedules. Also run a manual backup before any large policy change."
 ---
 
-A configuration backup captures the selected Defender, Entra ID and Intune policies and settings that TenuVault can read at run time. Use **Backup & Restore** to choose what to back up, follow the run and check its coverage before relying on it for recovery.
+A configuration backup captures the selected Entra ID and Intune policies and settings that TenuVault can read at run time. Use **Backup & Restore** to choose what to back up, follow the run and check its coverage before relying on it for recovery.
 
 ## How a backup works
 
@@ -28,9 +28,9 @@ To retrieve supported Win32 installer content from Intune, use [free App Backup]
 
 ## Browse backups by service
 
-Below **Backup & Restore**, the sidebar's **Services** group lists **Defender**, **Entra ID** and **Intune**. Select an enabled service to open this page filtered to its policies. A service marked **Off** opens **Settings > Services and permissions** instead. While service status is loading or unavailable, each link opens filtered backup contents without an **Off** badge. Only a confirmed off service opens Settings.
+Below **Backup & Restore**, the sidebar's **Services** group lists **Entra ID** and **Intune**. Select an enabled service to open this page filtered to its policies. A service marked **Off** opens **Settings > Services and permissions** instead. While service status is loading or unavailable, each link opens filtered backup contents without an **Off** badge. Only a confirmed off service opens Settings.
 
-The **Service** filter offers **All**, **Defender**, **Entra ID** and **Intune**. It narrows **Contents**, **Trends by policy type**, large inventory and the **Restore** type lists. Backup contents group the areas under their services. Conditional Access appears under Entra ID and keeps its own backup switch. If only Conditional Access is on, the Entra ID sidebar link still opens backup contents. The filter stays in the page address across reloads, tab changes and back/forward navigation. Choose **All** to clear the highlighted sidebar service. An unknown service in an address shows All.
+The **Service** filter offers **All**, **Entra ID** and **Intune**. It narrows **Contents**, **Trends by policy type**, large inventory and the **Restore** type lists. Backup contents group the areas under their services. Conditional Access appears under Entra ID and keeps its own backup switch. If only Conditional Access is on, the Entra ID sidebar link still opens backup contents. The filter stays in the page address across reloads, tab changes and back/forward navigation. Choose **All** to clear the highlighted sidebar service. An unknown service in an address shows All.
 
 The timeline, totals, downloads and **Run Backup** still cover the whole backup. This view does not change the tenant's saved backup scope or which services new backups include. Turn services on or off in Settings.
 
@@ -75,7 +75,7 @@ The **Back up** dialog offers three choices:
 | **Everything** | "Also app details and assignments. Installer files are never included." Every supported type of the services and opt-in areas that are on. |
 | **Custom** | "Choose areas and individual types." |
 
-With **Custom**, TenuVault lists the areas under Defender, Entra ID and Intune, in that order. Tick an area to include all of its types, or expand it to tick individual types. When the tenant has an earlier backup, each area and type shows how many items it held last time, and the dialog estimates the total number of items.
+With **Custom**, TenuVault lists the areas under Entra ID and Intune, in that order. Tick an area to include all of its types, or expand it to tick individual types. When the tenant has an earlier backup, each area and type shows how many items it held last time, and the dialog estimates the total number of items.
 
 The line under the choices shows how many of the available types the backup covers, grouped by service and area. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
 
@@ -143,7 +143,7 @@ If Microsoft asks you to sign in again during a backup, the job log and Backup H
 
 When a policy name appears in a backup error, **Copy log** and **Backup History** mask email addresses and user principal names in it. Downloading an older failed backup as a ZIP also masks these identifiers in the error recorded in the archive's metadata.
 
-Some Defender and Entra ID endpoints refuse a read with the same answer Microsoft gives for a sign-in that ended. TenuVault asks such a request once more with a new sign-in token. Only when the new token gets the same answer is the type left out; when no new token can be had, the backup stops and you are asked to sign in again.
+Some Entra ID endpoints refuse a read with the same answer Microsoft gives for a sign-in that ended. TenuVault asks such a request once more with a new sign-in token. Only when the new token gets the same answer is the type left out; when no new token can be had, the backup stops and you are asked to sign in again.
 
 ## Read the result
 
@@ -187,7 +187,7 @@ The Dashboard and Backup History show **Coverage incomplete** separately from th
 
 One case is different: when every selected type was left out, the backup read nothing and holds nothing. It ends as **Failed** with "Backup failed: nothing could be read" and the cause most of the types share, for example a missing permission or a product the tenant has no license for. Scheduled backups retry it, a failure is notified, and older backups are kept. A backup whose types are all empty or not set up in the tenant did read the tenant and stays **Complete**.
 
-A Defender or Entra ID endpoint that fails ends its own type, and the backup goes on with the other types and services. When Microsoft Graph stops answering the requests of one of these services, the rest of that service is not read and the other services are.
+An Entra ID endpoint that fails ends its own type, and the backup goes on with the other types and services. When Microsoft Graph stops answering the requests of one of these services, the rest of that service is not read and the other services are.
 
 Types the backup choice leaves out, and the types of a service that is turned off for the tenant, are not selected. They never make coverage incomplete.
 
@@ -204,7 +204,7 @@ If TenuVault closes before a backup finishes, its next launch shows the interrup
 Each entry shows:
 
 * the date and time
-* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 135 types"
+* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 54 types"
 * how it started: **Manual**, **Scheduled** or **From tray**
 * the result, when it is not **Complete**
 * **Items**, **Size**, **Duration** and **Changes** since the previous backup (see [Compare backups](/backups/compare/))

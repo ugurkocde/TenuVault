@@ -292,7 +292,7 @@ try {
       const route = welcome ? "#/" : restoreScope ? "#/portal/backup" : restore ? "#/portal/backup?tab=restore" : sidebar ? "#/portal/dashboard" : "#/portal/onboarding"
       await evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); location.hash = ${JSON.stringify(route)}; location.reload()`)
       const disclose = async text => {
-        const summary = `[...document.querySelectorAll("summary")].find(item => item.textContent.includes(${JSON.stringify(text)}))`
+        const summary = `[...document.querySelectorAll("summary, button[aria-expanded]")].find(item => item.textContent.trim().startsWith(${JSON.stringify(text)}))`
         await waitFor(`Boolean(${summary})`)
         await evaluate(`${summary}.click()`)
       }

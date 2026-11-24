@@ -1,13 +1,13 @@
 ---
 title: "Change reports"
-description: Review changes across Defender, Entra ID and Intune backups. Export a report or send it by email.
+description: Review changes across Entra ID and Intune backups. Export a report or send it by email.
 ---
 
 A change report documents added, changed and deleted policies between two backups. It includes the old and new values of changed settings, up to 300 settings per new or deleted policy, and the actors identified by matching audit events. It also summarizes changes to covered directory records. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
 
 Open **Reports** in the sidebar. The page works on the tenant selected in the tenant switcher.
 
-Change reports cover saved Defender, Entra ID and Intune configuration. Conditional Access changes fall under Entra ID. Reports can name actors for supported Conditional Access and Intune audit events. Other areas can show configuration changes with no actor attribution.
+Change reports cover saved Entra ID and Intune configuration. Conditional Access changes fall under Entra ID. Reports can name actors for supported Conditional Access and Intune audit events. Other areas can show configuration changes with no actor attribution.
 
 ## What your plan includes
 

@@ -3,11 +3,12 @@ title: "Restore to another tenant"
 description: Copy items from one tenant's backup into other connected tenants (MSP).
 ---
 
+This workflow applies to supported [Intune policies](/restore/intune/) and [Conditional Access policies](/backups/conditional-access/). Other [Entra ID types](/restore/identity/) are unavailable for cross-tenant copy.
+
 With TenuVault MSP you can copy items from a backup of one tenant into one or more other tenants you have connected. Use it to roll a known good configuration out to customer tenants, or to rebuild configuration in a replacement tenant.
 
 For the planning steps around the copy itself, see the [Intune tenant to tenant migration](https://www.tenuvault.com/guides/intune-tenant-to-tenant-migration) guide.
 
-This workflow applies to eligible [Intune policies](/restore/intune/) and [Conditional Access policies](/backups/conditional-access/). Other [Entra ID types](/restore/identity/) and [Defender types](/restore/defender/) are unavailable for cross-tenant copy.
 
 ## Requirements
 

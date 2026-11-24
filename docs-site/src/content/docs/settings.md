@@ -51,13 +51,11 @@ To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
 Choose a tenant to see three independent connections: **Microsoft Graph sign-in**, **Backup Reader** and **Backup storage**. Opening Settings checks the connection with a fresh token request (or reuses a check from the last minute). It never opens a sign-in window and never blocks a backup. **Check again** asks Microsoft again, including for the Backup Reader.
 
-The sidebar also lists **Defender**, **Entra ID** and **Intune** in a **Services** group below **Backup & Restore**. An enabled service with access opens backup contents filtered to that service. **Needs access** opens this Settings section for a service you chose that the current sign-in cannot read. It stays enabled. Open **Details** on the service notice to see the areas that need access and guidance for your sign-in method. **Off** also opens this Settings section. Badges follow the selected tenant. While service status is loading or unavailable, links open filtered backup contents without a badge. The backup page's **Service** filter only changes the view; use the switches here to change future backup coverage.
+The sidebar also lists **Entra ID** and **Intune** in a **Services** group below **Backup & Restore**. An enabled service with access opens backup contents filtered to that service. **Needs access** opens this Settings section for a service you chose that the current sign-in cannot read. It stays enabled. Open **Details** on the service notice to see the areas that need access and guidance for your sign-in method. **Off** also opens this Settings section. Badges follow the selected tenant. While service status is loading or unavailable, links open filtered backup contents without a badge. The backup page's **Service** filter only changes the view; use the switches here to change future backup coverage.
 
-![Services and permissions with independent connection states and all three services](/images/services/healthy-light.png)
+![Services and permissions with independent connection states and both services](/images/services/healthy-light.png)
 
-![Defender marked Off in the Services sidebar group](/images/sidebar/defender-off-light.png)
 
-The cards show **Defender**, **Entra ID** and **Intune**. Expand **Areas and access** for the permissions, backup verification and switches of each area. **Conditional Access** stays independently switchable inside Entra ID, even while the rest of Entra ID is off. Entra ID now has [67 configuration backup types](/backups/entra/) in Tenant settings, Authentication, External identities, Roles and PIM, Governance, and the opt-in Groups area. Areas with no implemented types have no switch. Defender has [17 configuration backup types](/backups/defender/) with no restore yet.
 
 | Control | What it does |
 | --- | --- |
@@ -264,7 +262,7 @@ Branded reports are fully white label: they carry no TenuVault name or logo. Wha
 | Part | Settings |
 | --- | --- |
 | **This computer** | **Keep backups for**, **Keep running in the menu bar/tray when I close the window**, **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Download and install updates automatically**, **Get nightly builds**, the appearance and the PDF branding with its logo. Only the preferences you changed are written, so defaults stay defaults. |
-| Each tenant you choose | Which services are on in **Services and permissions** (Defender, Entra ID including its independent Conditional Access switch, and Intune), what is backed up, the backup schedule (on or off, daily or weekly, time and weekday) and the [cloud backup](/backups/cloud/) setup record. |
+| Each tenant you choose | Which services are on in **Services and permissions** (Entra ID including its independent Conditional Access switch, and Intune), what is backed up, the backup schedule (on or off, daily or weekly, time and weekday) and the [cloud backup](/backups/cloud/) setup record. |
 | **Include connection details** | Optional. For each tenant, the client ID of its app registration and where its backups are stored (this device, or the Azure storage account with its subscription, resource group and region). Another admin can then connect the tenant from the file. Both are identifiers, not secrets. |
 
 A file never holds sign-ins or tokens, license keys, the recovery key or encryption keys, Backup Reader certificates, proxy passwords, client secrets, logs, journals or history. Permissions are not part of the file either: they belong to the app registration in Entra, and every admin signs in with their own account. The access level of each service (**Backup only** or **Backup and restore**) and its opt-in areas, such as Groups, are not in the file either; choose them in **Services and permissions** on the other computer.
@@ -362,9 +360,7 @@ Stable installs follow stable by default. Enable **Get nightly builds** to recei
 
 Hygiene scan findings and health review finding reconciliation are saved together before returning, reducing repeated encryption and disk writes. A failed batch leaves the previous records intact.
 
-![Defender coverage and service areas at 1024px](/images/services/defender-backup-types-light.png)
 
-The Defender card names the major policy exclusions before a backup is run. Review [Defender coverage](/backups/defender/) before relying on these backups.
 
 ### Backup audit access
 

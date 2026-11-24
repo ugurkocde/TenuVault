@@ -99,4 +99,4 @@ Once you have a successful backup, [practice an Intune restore](https://www.tenu
 
 ## Your chosen services
 
-The first backup step names the services selected during setup. The first backup covers the selected areas for [Defender](/backups/defender/), [Entra ID](/backups/entra/) or [Intune](/backups/intune/). Conditional Access is included when its switch is on under Entra ID. The default scope leaves out Intune app details.
+Your first backup covers Intune and the Entra ID areas you enabled on **Check** that your sign-in can read.

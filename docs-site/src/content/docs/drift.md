@@ -1,9 +1,9 @@
 ---
 title: "Drift detection"
-description: Compare Defender, Entra ID and Intune backups, then revert supported changes or restore a copy.
+description: Compare Entra ID and Intune backups, then revert supported changes or restore a copy.
 ---
 
-Drift detection shows what changed in your Defender, Entra ID and Intune configuration between two backups: added and deleted policies, changes to policy settings, and changes to covered directory records. By default it compares your two newest complete backups, and you can pick any other pair. Where the policy type supports restore, you can revert the change or restore a separate copy. Conditional Access is part of Entra ID coverage.
+Drift detection shows what changed in your Entra ID and Intune configuration between two backups: added and deleted policies, changes to policy settings, and changes to covered directory records. By default it compares your two newest complete backups, and you can pick any other pair. Where the policy type supports restore, you can revert the change or restore a separate copy. Conditional Access is part of Entra ID coverage.
 
 TenuVault compares backups, not the live tenant. To include the latest changes, run a backup first. See [Run a backup](/backups/).
 
@@ -112,7 +112,6 @@ For backups that record per-type outcomes, only complete reads are compared. For
 
 | Service | Example of coverage shown as unknown |
 | --- | --- |
-| Defender | One backup could not read attack simulations. |
 | Entra ID | One backup could not read named locations. |
 | Intune | One backup left apps out of its scope. |
 
