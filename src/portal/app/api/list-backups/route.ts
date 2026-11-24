@@ -336,7 +336,15 @@ export async function POST(request: NextRequest) {
     // in their own container, so no history path can enumerate snapshots, even after a crash.
     const discoveryUrl = `https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-`
     const warnings: string[] = []
-    const largeText = await listLargeBackupPages(discoveryUrl, accessToken, warnings)
+    const local = storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+    const localLargeStorageWarning = "Some large backups on this device could not be read. Check access to the local backup folder and retry."
+    const largeText = local
+      ? await listBlobPages(discoveryUrl, accessToken).catch(error => {
+        // The local store creates the optional container when a large backup is saved or imported.
+        if (!(error instanceof BlobListError && error.status === 404 && error.completedPages === 0)) warnings.push(localLargeStorageWarning)
+        return ""
+      })
+      : await listLargeBackupPages(discoveryUrl, accessToken, warnings)
     const largeDiscoveryComplete = warnings.length === 0
 
     // Parse XML response to extract backup folders
@@ -364,7 +372,7 @@ export async function POST(request: NextRequest) {
     let damagedFileNames: string[] = []
     // Why they cannot be used, by kind, so the list can say what to do about them.
     let damagedKinds: DamagedFileKinds | null = null
-    if (storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)) {
+    if (local) {
       const containers = ['intune-backups', LARGE_BACKUP_CONTAINER]
       const kinds: DamagedFileKinds[] = []
       let knownKinds = true
@@ -400,7 +408,10 @@ export async function POST(request: NextRequest) {
     // counted as unresolved; its run, if it failed, counts once through its attempt record.
     const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, String(tenantId), inventories.get(name)))
     const omittedLarge = described.filter(backup => isLargeBackup(backup.id) && (backup.unresolved || backup.error) && !backup.foreign && backup.status !== "unavailable")
-    if (omittedLarge.length) warnings.push(LARGE_STORAGE_UNAVAILABLE)
+    if (omittedLarge.length) {
+      const warning = local ? localLargeStorageWarning : LARGE_STORAGE_UNAVAILABLE
+      if (!warnings.includes(warning)) warnings.push(warning)
+    }
     const unresolved = described.filter((backup) => backup.unresolved).length
     // Folders sealed by an earlier version that this device cannot open, for the backups page's offer
     // to import a recovery key. Without the key nobody can tell whose such a folder is, so it counts

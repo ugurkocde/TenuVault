@@ -8,6 +8,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { IncompleteInventoryError, LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
+import { LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -277,6 +278,17 @@ describe("damaged local backup files", () => {
 })
 
 describe("backup history with damaged local files", () => {
+  it("lists an ordinary local backup without warning when the optional large container does not exist", async () => {
+    const { store } = await setup()
+    await backup(store, NEW)
+    expect(await store.containerExists(account, LARGE_BACKUP_CONTAINER)).toBe(false)
+    for (const summary of [false, true]) {
+      const data = await historyResponse(store, summary)
+      expect(data.backups).toMatchObject([{ id: NEW, status: "Success" }])
+      expect(data.warnings ?? []).toEqual([])
+    }
+  })
+
   it.each([["policy file", "CompliancePolicies/a.json"], ["manifest", "metadata.json"]])("lists a backup whose %s is damaged as unavailable next to the usable ones, in both list modes", async (_what, damagedName) => {
     const { store, dir } = await setup()
     await backup(store, OLD)
@@ -312,7 +324,7 @@ describe("backup history with damaged local files", () => {
     }
   })
 
-  async function history(store: LocalBlobStore, summary: boolean) {
+  async function historyResponse(store: LocalBlobStore, summary: boolean) {
     const { NextRequest } = await import("../src/main/api/next-server-shim")
     const { POST: listBackups } = await import("../src/portal/app/api/list-backups/route")
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -324,11 +336,15 @@ describe("backup history with damaged local files", () => {
     }))
     try {
       const body = { tenantId: TENANT, appId: CLIENT, clientSecret: "x", storageAccountName: account, subscriptionId: "local", resourceGroupName: "local", summary }
-      const data = await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json()
-      return Object.fromEntries(data.backups.map((entry: { id: string; status: string }) => [entry.id, entry.status])) as Record<string, string>
+      return await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json()
     } finally {
       vi.unstubAllGlobals()
     }
+  }
+
+  async function history(store: LocalBlobStore, summary: boolean) {
+    const data = await historyResponse(store, summary)
+    return Object.fromEntries(data.backups.map((entry: { id: string; status: string }) => [entry.id, entry.status])) as Record<string, string>
   }
 
   it("notices in a summary list that a backup became unavailable after its manifest was read", async () => {

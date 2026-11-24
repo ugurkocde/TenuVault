@@ -158,7 +158,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     expect((await contents(f.request({ backupId: job.backupFolder }))).status).toBe(200)
     expect((await validate(f.request({ backupId: job.backupFolder }))).status).toBe(200)
   })
-  it.each([403, 404])("returns all 500 ordinary folders and a provisioning warning when large history returns %s", async status => {
+  it.each([403, 404])("returns all 500 ordinary folders with storage-specific history guidance when large history returns %s", async status => {
     const f = await setup()
     for (let at = 0; at < 500; at++) await f.seed(`backup-${new Date(Date.UTC(2020, 0, 1 + at)).toISOString().slice(0, 10)}-000000`)
     f.refuse(status)
@@ -167,7 +167,9 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
       expect(response.status).toBe(200)
       const result = await response.json()
       expect(result.backups).toHaveLength(500)
-      expect(result.warnings).toEqual([expect.stringContaining("New-TenuVaultStorage.ps1 -BackupReaderAppId")])
+      if (azure) expect(result.warnings).toEqual([expect.stringContaining("New-TenuVaultStorage.ps1 -BackupReaderAppId")])
+      else if (status === 404) expect(result.warnings ?? []).toEqual([])
+      else expect(result.warnings).toEqual([expect.stringContaining("Check access to the local backup folder")])
     }
     const response = await changes(f.request({ backupId: "backup-2020-01-02-000000" }))
     expect(response.status).toBe(200)
@@ -186,7 +188,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     expect(listed.status).toBe(200)
     const result = await listed.json()
     expect(result.backups).toHaveLength(2)
-    expect(result.warnings).toContainEqual(expect.stringContaining("New-TenuVaultStorage.ps1"))
+    expect(result.warnings).toContainEqual(expect.stringContaining(azure ? "New-TenuVaultStorage.ps1" : "Check access to the local backup folder"))
     const compared = await drift(f.request())
     expect(compared.status).toBe(200)
     expect((await compared.json()).warnings).toContainEqual(expect.objectContaining({ message: expect.stringContaining("New-TenuVaultStorage.ps1") }))
