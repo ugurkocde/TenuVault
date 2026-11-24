@@ -113,6 +113,22 @@ describe("BackupEngine", () => {
     expect(metadata.Outcomes).toContainEqual(expect.objectContaining({ Folder: "CompliancePolicies", Outcome: "failed", Error: guidance, Status: status }))
   })
 
+  it("keeps policy names recognizable while masking account identifiers in item failures", async () => {
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: "BitLocker (admin+lab@example.test, guest_example.test#EXT#@tenant.onmicrosoft.com)" }] }),
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({ error: { code: "BadRequest" } }, { status: 400 }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const masked = "BitLocker ([redacted], [redacted])"
+    expect(job.log.join("\n")).toContain(`Could not back up "${masked}"`)
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    expect(errors).toEqual([expect.stringContaining(`${masked}:`)])
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const { notReadReasons } = manifestCoverage(metadata)
+    expect(notReadReasons?.DeviceConfigurations).toContain(`${masked}:`)
+    expect(JSON.stringify({ log: job.log, errors, notReadReasons })).not.toMatch(/admin\+lab@|guest_example\.test#EXT#@/i)
+  })
+
   it("keeps every policy when names and id prefixes repeat", async () => {
     // Intune's default enrollment configurations share a display name and the tenant GUID id prefix.
     const prefix = "7192bb9f-ffa6-4f50-9176-7603cd9450d6"

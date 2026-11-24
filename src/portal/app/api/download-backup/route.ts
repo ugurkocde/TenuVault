@@ -1,5 +1,7 @@
 import { completeHalf, largeRunProblems, matchingCompanions, ordinaryOnlyManifest, withRunRecord } from "../../../../shared/backup-companion"
 import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
+import { maskBackupAccountIdentifiers } from "../../../../shared/backup-log"
+import { manifestStatus } from "../../../../shared/intune/backup-status"
 import { exportLargeArchive, exportMixedArchive } from "../../../../main/backup/large-archive"
 import { Readable } from "node:stream"
 import { readJsonCapped } from "../../../../shared/capped-body"
@@ -15,6 +17,19 @@ interface ListedFile {
   path: string
   /** Content length from the listing, or null when storage did not report one. */
   size: number | null
+}
+
+function metadataForZip(content: Uint8Array, ordinaryExport: Record<string, unknown> | null): string | Uint8Array {
+  let metadata: Record<string, unknown> | null = ordinaryExport
+  if (!metadata) {
+    try { metadata = JSON.parse(new TextDecoder().decode(content)) }
+    catch { return content }
+  }
+  if (metadata && typeof metadata.Error === "string" && String(manifestStatus(metadata)).trim().toLowerCase() === "failed") {
+    const error = maskBackupAccountIdentifiers(metadata.Error)
+    if (error !== metadata.Error) return JSON.stringify({ ...metadata, Error: error })
+  }
+  return ordinaryExport ? JSON.stringify(ordinaryExport) : content
 }
 
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string) {
@@ -331,7 +346,7 @@ export async function POST(request: NextRequest) {
             const zipPath = filePath.replace(`${backupId}/`, '')
 
             // Add file to zip with folder structure
-            zip.file(zipPath, zipPath === "metadata.json" && ordinaryExport ? JSON.stringify(ordinaryExport) : content)
+            zip.file(zipPath, zipPath === "metadata.json" ? metadataForZip(content, ordinaryExport) : content)
 
             processedFiles++
             if (processedFiles % 10 === 0 || processedFiles === filePaths.length) {

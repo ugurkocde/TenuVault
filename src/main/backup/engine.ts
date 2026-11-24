@@ -4,6 +4,7 @@ import { isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../shared/backup-stora
 import { captureLarge } from "./large"
 import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, type LargeIndexes } from "../../shared/large-backup"
 import { backupTypeUse } from "../../shared/services/backup-use"
+import { maskBackupAccountIdentifiers } from "../../shared/backup-log"
 import { auditUserFromToken } from "../api/audit-sink"
 import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
@@ -1012,11 +1013,13 @@ export class BackupEngine {
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (signInEnded(error) || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
         failures++
-        const warning = `Could not back up "${displayName}": ${error instanceof Error ? error.message : String(error)}`
+        const logName = maskBackupAccountIdentifiers(displayName)
+        const reason = error instanceof Error ? error.message : String(error)
+        const warning = `Could not back up "${logName}": ${reason}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
         const entry = result(type.folder)
         entry.failed++
-        if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(`${displayName}: ${error instanceof Error ? error.message : String(error)}`)
+        if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(`${logName}: ${reason}`)
         this.write(job, warning)
       }
       done++
