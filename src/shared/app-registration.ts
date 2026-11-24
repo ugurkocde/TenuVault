@@ -103,8 +103,7 @@ export function setupIdsFromClipboard(text: unknown): { tenantId: string; client
 }
 
 
-// Graph beta requires these legacy dates on create and ignores them. Entra admin consent
-// uses the minimum start date. Use a future expiry placeholder for consent that lasts until revoked.
+// These dates match what Entra stores for consent grants. The live lab run verifies both values.
 export const DELEGATED_GRANT_DATES = {
   startTime: "0001-01-01T00:00:00Z",
   expiryTime: "9999-12-31T23:59:59Z",
