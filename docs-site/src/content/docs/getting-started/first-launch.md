@@ -3,7 +3,7 @@ title: "Start TenuVault for the first time"
 description: What the welcome screen shows, how the 14 day Pro trial starts when you connect your tenant, and how to enter a license key.
 ---
 
-The first time you start TenuVault, it shows **Welcome to TenuVault**. There is no plan to choose here: you connect your tenant first, and TenuVault shows the tenant's plan once you have signed in.
+The first time you start TenuVault, it shows **Welcome to TenuVault**. There is no plan to choose here: you connect your tenant first, and TenuVault checks the tenant's plan as you finish setup.
 
 The welcome screen appears while this computer has no license key, no tenant licensed through its organization and no connected tenant. TenuVault skips it in these cases:
 
@@ -22,14 +22,6 @@ While no tenant is connected, TenuVault always opens the guided setup, **Set up 
 
 To buy a license or ask for an invoice, use the **License** page after setup. See [Activate and manage your license](/licensing/manage/). For what each plan includes, see [Plans and features](/licensing/).
 
-## Connect your tenant
-
-1. Select **Connect your tenant**.
-2. Choose services on **What do you want to back up?** Intune is preselected. The cards appear in the order Defender, Entra ID and Intune. Review coverage, choose your services and continue.
-3. On **Connect**, review the setup-only access before signing in. Continue with [Choose a sign-in method](/getting-started/connect-tenant/).
-
-The first tenant you sign in to without a key starts its 14 day Pro trial, unless that tenant already had one. If your organization shares a TenuVault license with that tenant, TenuVault picks it up when you sign in, and the tenant uses that plan instead. You can also start the trial or enter a key later, on the **Storage** step of the setup or on the **License** page.
-
 <figure class="docs-screenshot">
   <a href="/images/screenshots/welcome.webp" aria-label="Open full-size screenshot: welcome">
     <img src="/images/screenshots/welcome.webp" alt="The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry" width="1280" height="893" loading="lazy" decoding="async" />
@@ -37,9 +29,17 @@ The first tenant you sign in to without a key starts its 14 day Pro trial, unles
   <figcaption>The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry. Captured from the desktop app. Select the image to view it full size.</figcaption>
 </figure>
 
+## Connect your tenant
+
+Select **Connect your tenant** to open **Let's sign in**. Choose **Start now**, **TenuVault app**, or **Your own app registration**. Start now and the TenuVault app show an explanation when the license service has disabled them.
+
+Choose at least one of Defender, Entra ID and Intune. All three start off for a new tenant. Select **Also restore** where supported, or use **Back up** only. Conditional Access is under Entra ID. Review the permission coverage in **Results**, then confirm where the backups are stored. Start now uses this device. Find the tenant ID on the **Overview** page in the Microsoft Entra admin center. The Storage step can prefill the signed-in address for optional trial emails. Select the email button only if you want to send it.
+
+TenuVault starts the first backup automatically. The next time you add a tenant, you choose its sign-in method and services independently. Tenants already connected before this wizard keep their configuration.
+
 ## Start a trial
 
-There is nothing to start: connecting a new tenant starts its 14 day Pro trial automatically, with no card and no email. The **Storage** step of the setup shows the trial with its end date. The trial ends without a charge, can be extended once, and afterwards one tenant continues on Community. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
+There is nothing to start: connecting a new tenant starts its 14 day Pro trial automatically, with no card and no email. When the trial starts during sign-in, the **Storage** step shows its end date. If your organization shares a TenuVault license with your tenant, TenuVault checks it when you finish setting up the tenant. The trial ends without a charge, can be extended once, and afterwards one tenant continues on Community. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
 
 ## Enter a license key
 
@@ -47,7 +47,7 @@ There is nothing to start: connecting a new tenant starts its 14 day Pro trial a
 2. Paste the key from your email into **License key**.
 3. Select **Save key**.
 
-The key is saved on this device and activated for your tenant when you sign in. TenuVault then opens **Set up TenuVault**; see [Choose a sign-in method](/getting-started/connect-tenant/).
+The key is saved on this device and activated for your tenant when you finish setup. TenuVault then opens **Set up TenuVault**; see [Choose a sign-in method](/getting-started/connect-tenant/).
 
 If the key is rejected, TenuVault shows the reason under the field. For activation details and error messages, see [Activate and manage your license](/licensing/manage/).
 
@@ -69,11 +69,3 @@ Backups on this device become unreadable unless you exported their [recovery key
 ## Next step
 
 [Choose a sign-in method](/getting-started/connect-tenant/).
-
-## Connect your tenant
-
-Select **Connect your tenant** to open **Let's sign in**. Choose **Start now**, **TenuVault app**, or **Your own app registration**. Start now and the TenuVault app show an explanation when the license service has disabled them.
-
-Choose at least one of Defender, Entra ID and Intune. All three start off for a new tenant. Select **Also restore** where supported, or use **Back up** only. Conditional Access is under Entra ID. Review the permission coverage in **Results**, then confirm where the backups are stored. Start now uses this device. The Storage step can prefill the signed-in address for optional trial emails. Select the email button only if you want to send it.
-
-TenuVault starts the first backup automatically. The next time you add a tenant, you choose its sign-in method and services independently. Tenants already connected before this wizard keep their configuration.

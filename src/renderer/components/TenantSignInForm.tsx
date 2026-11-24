@@ -436,10 +436,11 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         autoComplete="off"
         disabled={busy}
         aria-invalid={Boolean(error)}
-        aria-describedby={error ? `${id}-error` : undefined}
+        aria-describedby={[wizard && id === "tenant" ? "tenant-id-help" : "", error ? `${id}-error` : ""].filter(Boolean).join(" ") || undefined}
         className={error ? "border-red-400 focus-visible:ring-red-400" : undefined}
         onKeyDown={(e) => e.key === "Enter" && void submit()}
       />
+      {wizard && id === "tenant" && <p id="tenant-id-help" className="text-xs text-gray-600">Find Tenant ID on the Overview page in the Microsoft Entra admin center.</p>}
       {error && <p id={`${id}-error`} role="alert" className="text-xs text-red-700">{error}</p>}
     </div>
   )

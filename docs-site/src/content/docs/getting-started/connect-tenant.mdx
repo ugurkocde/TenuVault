@@ -108,11 +108,11 @@ You use this step yourself when the app registration was created with the setup 
 
    | Field | Enter | Example |
    | --- | --- | --- |
-   | **Tenant id or domain** | Your tenant ID (GUID) or a verified domain of the tenant | `contoso.onmicrosoft.com` |
+   | **Tenant id or domain** | Your tenant ID from **Overview** in the Microsoft Entra admin center, or a verified domain of the tenant | `contoso.onmicrosoft.com` |
    | **Application (client) id** | The client ID printed by the setup script | `00000000-0000-0000-0000-000000000000` |
    | **Display name (optional)** | The name TenuVault shows for this tenant. If you leave it empty, TenuVault uses your organization's name from Microsoft Entra ID. | `Contoso Production` |
 
-2. Select **Sign in with Microsoft**. The button changes to **Waiting for sign-in...** and TenuVault shows **Complete the sign-in in your browser. TenuVault then checks the license for this tenant.**
+2. Select **Sign in with Microsoft**. The button changes to **Waiting for sign-in...** and TenuVault shows **Complete the sign-in in your browser.**
 3. Complete the Microsoft sign-in with your admin account, including MFA if your policies require it.
 
 The sign-in opens in your default browser, on Windows and on macOS. When it finishes, the browser shows **Go back to TenuVault** and TenuVault comes to the front. On Windows, where a window may not put itself in front, its taskbar button flashes instead. You can close the browser tab.
@@ -137,13 +137,13 @@ When a sign-in has waited 3 minutes for the browser to come back, on this step o
 | **Copy instructions for your admin** | Copies the same ready-to-send setup message as **Someone else is the admin? Copy instructions**, for an Entra administrator who can create the app registration. |
 | **Book a free setup call** | Opens the [free setup call](/getting-started/#free-setup-call) page in your browser, where you pick a time for a free 30 minute call. The waiting sign-in is left as it is. |
 
-When a sign-in ends, whether it finished, failed, was cancelled, timed out or was started again, TenuVault stops listening for its answer, so a browser tab finished later signs nothing in. The panel belongs to the browser step only: once Microsoft has answered and TenuVault checks the license, it goes away, and **Try again** no longer stops anything. TenuVault stops waiting after 15 minutes. The first sign-in then shows **The sign-in in the browser was not completed within 15 minutes.** with **Try again** and **Copy instructions for your admin** next to it.
+When a sign-in ends, whether it finished, failed, was cancelled, timed out or was started again, TenuVault stops listening for its answer, so a browser tab finished later signs nothing in. The panel belongs to the browser step only: once Microsoft has answered and TenuVault is completing sign-in, it goes away, and **Try again** no longer stops anything. TenuVault stops waiting after 15 minutes. The first sign-in then shows **The sign-in in the browser was not completed within 15 minutes.** with **Try again** and **Copy instructions for your admin** next to it.
 
 You can use a separate admin account. It does not have to be the account you are signed in to Windows or macOS with. Pick it in the Microsoft account list, choose **Use another account**, or start the sign-in while a browser profile signed in as that admin account is your default.
 
 Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. While TenuVault waits for the sign-in, it notes that Conditional Access needs a browser that passes the device identity, such as Microsoft Edge signed in to your work profile: make it your default browser, cancel and sign in again. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
 
-4. After a successful sign-in, TenuVault checks the license for this tenant and moves to **Storage**, showing **Signed in as &lt;your account&gt;**.
+4. After a successful sign-in, TenuVault shows **Results** with permission coverage for the services you chose. Review the results and continue to **Storage**. TenuVault checks the license when you finish setting up the tenant.
 
 ### Signed in, but not saved yet
 

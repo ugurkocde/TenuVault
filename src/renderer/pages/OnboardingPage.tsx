@@ -791,7 +791,8 @@ export default function OnboardingPage() {
             {method === "graphCli" && <p className="rounded-xl bg-blue-50 p-3 text-sm text-gray-700">{GRAPH_CLI_CONSENT_WARNING}</p>}
             {method === "tenuvaultApp" && <p className="text-sm text-gray-600">Review the permission packs for your chosen services, then sign in.</p>}
             <label className="block space-y-1 text-sm font-medium">Tenant ID
-              <Input value={publicTenant} disabled={publicBusy || Boolean(upgradeTenant)} onChange={event => setPublicTenant(event.target.value)} placeholder="Directory (tenant) ID" />
+              <Input value={publicTenant} disabled={publicBusy || Boolean(upgradeTenant)} onChange={event => setPublicTenant(event.target.value)} placeholder="Directory (tenant) ID" aria-describedby="public-tenant-help" />
+              <span id="public-tenant-help" className="block text-xs font-normal text-gray-600">Find Tenant ID on the Overview page in the Microsoft Entra admin center.</span>
             </label>
             {publicError && <p role="alert" className="text-sm text-red-700">{publicError}</p>}
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
