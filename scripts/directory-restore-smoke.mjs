@@ -61,7 +61,18 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
       await go("#/portal/backup?tab=schedule", "Automatic backups")
     }
   })
-  for (const blocked of [false, true]) await check(`application ${blocked ? "recycle refusal" : "metadata restore"} shows individual review in both themes at 1024 pixels`, async () => {
+  for (const scenario of ["metadata", "recycle", "verified", "pending"]) await check(`application restore review and result for ${scenario}`, async () => {
+    const blocked = scenario === "recycle", temporary = scenario === "verified" || scenario === "pending"
+    const pack = { label: "Entra app metadata restore", scopes: ["Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"] }
+    const runId = "reviewed-application-page"
+    const removal = temporary ? { runId, status: scenario, scopes: [{ consentType: "AllPrincipals", principalId: null, scope: pack.scopes[1] }] } : undefined
+    const wide = async (name, anchor) => {
+      await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+      for (const dark of [false, true]) {
+        await evaluate(`document.documentElement.classList.toggle('dark', ${dark}); [...document.querySelectorAll('p, button')].find(node => node.textContent.trim().startsWith(${JSON.stringify(anchor)}))?.scrollIntoView({ block: 'center' })`)
+        await screenshot(`jit-${name}-${dark ? "dark" : "light"}-1440`)
+      }
+    }
     const resourceId = "00000000-0000-4000-8000-000000000010"
     const row = { key: blocked ? "application-recycle" : "application-metadata", review: {
       principal: null, resource: { id: resourceId, name: "Recovery app registration", type: "application" },
@@ -84,7 +95,7 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
         if (route === '/api/restore-preview') return Promise.resolve(Response.json({ items: [{ path, name: 'Recovery app registration', blocker: 'Use the separate directory review.', replaceBlocker: 'Use the separate directory review.' }] }));
         if (route === '/api/restore-directory') {
           const body = JSON.parse(init.body); window.__directoryRequests.push(body);
-          return Promise.resolve(Response.json(body.action === 'preview' ? { runId: 'reviewed-application-page', fingerprint: 'bound-application-page', more: false, rows: [${JSON.stringify(row)}] } : { status: 'complete', failed: 0 }));
+          return Promise.resolve(Response.json(body.action === 'preview' ? { runId: 'reviewed-application-page', fingerprint: 'bound-application-page', more: false, rows: [${JSON.stringify(row)}], temporaryAccess: ${temporary ? JSON.stringify({ pack, cleanup: { checked: true } }) : "undefined"} } : { status: 'complete', failed: 0, removal: ${JSON.stringify(removal)} }));
         }
         return window.__directoryFetch(input, init);
       };
@@ -115,13 +126,23 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
         assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), "application review overflows at 1024 pixels")
         await screenshot(`application-${blocked ? "recycle-blocked" : "metadata"}-${dark ? 'dark' : 'light'}-1024`)
       }
+      if (scenario === "metadata" || scenario === "verified") await wide(scenario === "metadata" ? "before-review" : "after-review", "Execute approved changes")
       if (blocked) {
         await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.startsWith('Execute approved')).click()`)
         assert(await evaluate(`window.__directoryRequests.length === 1 && window.__directoryRequests[0].action === 'preview'`), "blocked application review sent an execution request")
       } else {
         await evaluate(`[...document.querySelectorAll('label')].find(l => l.innerText.startsWith('Approve this individual change')).querySelector('input').click()`)
+        if (temporary) {
+          assert(await evaluate(`[...document.querySelectorAll('label')].some(label => label.innerText.includes('Remove permissions added by this restore') && label.querySelector('input').checked)`), "the mandatory removal checkbox is missing")
+          if (scenario === "verified") await wide("after-offer", "Temporary permission for app metadata restore")
+        }
         await click("Execute approved changes")
         assert(await waitForCondition(`document.body.innerText.includes('Directory page completed')`), "application result did not appear")
+        if (temporary) {
+          const heading = scenario === "pending" ? "Temporary permission removal pending" : "Temporary permission removal verified"
+          assert(await waitForCondition(`document.body.innerText.includes(${JSON.stringify(heading)})`), "permission removal result did not appear")
+          await wide(`after-${scenario}`, heading)
+        }
         assert(await evaluate(`window.__directoryRequests.length === 2 && window.__directoryRequests[1].action === 'restore' && window.__directoryRequests[1].runId === 'reviewed-application-page' && window.__directoryRequests[1].fingerprint === 'bound-application-page' && JSON.stringify(window.__directoryRequests[1].approvals) === JSON.stringify({ 'application-metadata': ['directory-item'] })`), "application execution was not bound to the reviewed run, fingerprint and individual approval")
       }
     } finally {

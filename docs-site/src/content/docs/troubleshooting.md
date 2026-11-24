@@ -375,3 +375,11 @@ For a Backup Reader created by 0.5.x, ask an Azure administrator to rerun `New-T
 Check **Settings** > **About** for your TenuVault version and sign-in method, then contact support through **Website and support** on the same page, or tell us what got in your way with [Share feedback](#share-feedback).
 
 If setup is what you are stuck on, select **Support** at the top of the guided setup (or **Help** > **Support** in the sidebar once a tenant is connected) and then **Book a free setup call**. It opens the [free setup call](/getting-started/#free-setup-call) page in your browser: 30 minutes, free on every plan, in which you share your screen and we sort it out together.
+
+## Temporary permission removal pending
+
+Close any open Microsoft consent page for this restore. Open the affected tenant in **Tenant Management** or open the app registration's restore result and choose **Retry removal**. TenuVault checks the grant again and uses the existing permissions for cleanup. Retry does not ask for new consent.
+
+If automatic removal still needs an administrator, select **Copy instructions for my admin**. The instructions identify the scopes and whether they belong to tenant-wide or user consent. An Application Administrator or Cloud Application Administrator can open **Microsoft Entra admin center → Entra ID → Enterprise apps → All applications → TenuVault → Permissions**. Under **Admin consent**, use the menu next to each listed Microsoft Graph scope and select **Revoke permission**. For a specific user's grant, locate it in **User consent** and use Microsoft Graph or PowerShell to remove just the listed scopes from that grant. Confirm any uncertain consent before removing a scope. Preserve every unrelated permission. [Microsoft Entra grant management](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/manage-application-permissions)
+
+Return to TenuVault signed in through the TenuVault app in the affected tenant and select **Retry removal** to verify the current grant. A partial cleanup can leave only `DelegatedPermissionGrant.ReadWrite.All` to remove. TenuVault removes that scope last.
