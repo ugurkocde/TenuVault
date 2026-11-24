@@ -24,6 +24,7 @@ $script:failDetail = $false
 $script:timeoutDetail = $false
 $script:secondListPage = $null
 $script:listResponses = @{}
+$script:privateDetail = $false
 $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
@@ -58,6 +59,7 @@ function Invoke-TvHttp {
         throw [TvHttpError]::new(404, "HTTP 404")
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
+        if ($script:privateDetail) { $text = '{"value":[{"id":"cfg-1","displayName":"Private Ada admin+lab@example.test"}]}' }
         if ($null -ne $script:secondListPage) {
             $text = '{"value":[],"@odata.nextLink":"https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?page=2"}'
         }
@@ -71,7 +73,8 @@ function Invoke-TvHttp {
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-2*") {
         $text = '{"id":"cfg-2","displayName":"Second policy","assignments":[]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
-        if ($script:timeoutDetail) { throw [TimeoutException]::new("Detail call timed out") }
+        if ($script:privateDetail) { throw [TvHttpError]::new(400, "HTTP 400 for Private Ada guest_example.test#EXT#@tenant.onmicrosoft.com") }
+        if ($script:timeoutDetail) { throw [TimeoutException]::new("Detail call timed out for admin+lab@example.test") }
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
         if ($script:maskOma -and $Uri -match "/cfg-1(?:\?|$)") {
@@ -173,12 +176,14 @@ $scenarios = @(foreach ($page in @($null, '{}', '{"value":null}', '{"value":{"id
 })
 $parity = Get-Content (Join-Path $PSScriptRoot "list-pages.json") -Raw | ConvertFrom-Json -AsHashtable
 $scenarios += @($parity | ForEach-Object { @{ Responses = $_.responses } })
+$scenarios += @{ PrivateDetail = $true; Responses = @{} }
 foreach ($scenario in $scenarios) {
     $script:calls.Clear()
     $script:OutcomeSent = $false
     $script:timeoutDetail = $scenario.Timeout
     $script:secondListPage = $scenario.Page
     $script:listResponses = $scenario.Responses
+    $script:privateDetail = $scenario.PrivateDetail
     $output = [System.Collections.Generic.List[string]]::new()
     $errorText = $null
     try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }

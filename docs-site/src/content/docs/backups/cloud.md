@@ -97,7 +97,7 @@ If Azure Policy denies the `audit-logs` container, its custom role, or its role 
 
 ### Test it now
 
-Do not wait for the first night. In the portal, open the Automation account, **Runbooks > Invoke-TenuVaultBackup > Start**, set `TENANTKEY` to the value from the setup output and `TRIGGER` to `Manual`, and watch the job. A successful run prints one "Found" and one "Backed up" line per type and ends with "Backup completed". The backup then appears in **Backup History** in TenuVault, marked **Manual**, with `Source: TenuVault Cloud Backup` in its details. Without `TRIGGER` it is marked **Scheduled**, like the runs the schedule starts.
+Do not wait for the first night. In the portal, open the Automation account, **Runbooks > Invoke-TenuVaultBackup > Start**, set `TENANTKEY` to the value from the setup output and `TRIGGER` to `Manual`, and watch the job. A successful run prints one "Found" and one "Backed up" line per type and ends with "Backup completed". A failed policy read names the policy type in the job output and records its coverage as incomplete. The backup then appears in **Backup History** in TenuVault, marked **Manual**, with `Source: TenuVault Cloud Backup` in its details. Without `TRIGGER` it is marked **Scheduled**, like the runs the schedule starts.
 
 ### Manual and scheduled runs
 

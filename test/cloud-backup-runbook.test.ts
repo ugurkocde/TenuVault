@@ -728,7 +728,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(comparisonCoverage(older, newer)).toMatchObject({ unknown: ["DeviceConfigurations"], legacyReadFailure: false })
     expect(newer).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["DeviceConfigurations"], Coverage: "Incomplete" })
     expect(newer.Outcomes).toEqual(expect.arrayContaining([
-      { Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Error: "Detail call timed out" },
+      { Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Error: "Detail call timed out for [redacted]" },
       { Folder: "AutopilotDevices", Outcome: "saved", Saved: 1 },
       { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
     ]))
@@ -813,6 +813,17 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
         expect(Object.keys(result.Items)).toEqual(expect.arrayContaining(["DeviceConfigurations/cfg-1", "DeviceConfigurations/cfg-2"]))
       }
     }
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("keeps personal identifiers out of cloud detail failure output and outcomes", () => {
+    const runs = runPlainFixture()
+    const run = runs[15 + listPages.length]!
+    const metadata = JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+    const outcome = metadata.Outcomes.find((entry: { Folder: string }) => entry.Folder === "DeviceConfigurations")
+    expect(outcome).toMatchObject({ Outcome: "failed", Status: 400, Error: "HTTP 400" })
+    expect(run.output).toContain("Could not back up device configuration profiles: HTTP 400")
+    expect(runs[9]!.output).toContain("Could not back up device configuration profiles: Detail call timed out for [redacted]")
+    expect(JSON.stringify({ output: run.output, outcome })).not.toMatch(/Private Ada|admin\+lab@|guest_example\.test#EXT#@/i)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {

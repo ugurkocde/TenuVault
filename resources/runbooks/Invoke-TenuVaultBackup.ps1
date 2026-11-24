@@ -106,6 +106,8 @@ function Remove-TvProp {
 function Get-TvSafeError {
     param([object]$Value)
     $text = [string]$Value -replace "https?://\S+", "[url]"
+    # Use the desktop account identifier mask for email addresses and UPNs.
+    $text = $text -creplace '(?<![\p{L}\p{N}._%+!#$&*=^`{|}~-])(?<![\p{L}\p{N}]'')[\p{L}\p{N}_%+!#$&*=^`{|}~-]+(?:[.''][\p{L}\p{N}_%+!#$&*=^`{|}~-]+)*@[\p{L}\p{N}]+(?:[.-][\p{L}\p{N}]+)*', "[redacted]"
     $text = $text -replace "[\x00-\x1F\x7F]+", " "
     $text = ($text -replace "\s+", " ").Trim()
     if ($text.Length -gt 500) { $text = $text.Substring(0, 500) }
@@ -3500,19 +3502,21 @@ function Invoke-TvBackup {
                     $counts[$type.Folder]++
                 } catch {
                     $failures++
-                    $reason = Get-TvSafeError $_.Exception.Message
+                    $reason = if ($_.Exception -is [TvHttpError] -and $_.Exception.Status) {
+                        "HTTP $($_.Exception.Status)"
+                    } else { Get-TvSafeError $_.Exception.Message }
                     if (-not $failedTypes.Contains([string]$type.Folder)) {
                         $failedTypes.Add([string]$type.Folder)
                         $outcomes[$type.Folder].Error = $reason
                         if ($_.Exception -is [TvHttpError]) { $outcomes[$type.Folder].Status = $_.Exception.Status }
                     }
                     if ($_.Exception -is [TvHttpError]) {
-                        if ($_.Exception.Status -eq 401) { throw }
+                        if ($_.Exception.Status -eq 401) { throw [TvHttpError]::new(401, $reason) }
                         if ($_.Exception.Status -eq 403) {
                             if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row. Earlier policies in this run were saved; the backup is incomplete." }
                         } else { $consecutiveAuth = 0 }
                     }
-                    Write-Output "Could not back up `"$displayName`": $reason"
+                    Write-Output "Could not back up $($type.Label): $reason"
                 }
                 $outcomes[$type.Folder].Saved = $counts[$type.Folder]
             }
