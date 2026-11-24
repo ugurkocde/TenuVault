@@ -19,7 +19,7 @@ Paths are relative to Microsoft Graph. `{organizationId}` is resolved through th
 
 | Folder or configuration | What is saved | Path | Version | Sign-in | Limits or exclusion reason |
 |---|---|---|---|---|---|
-| AuthorizationPolicy | Authorization settings and default user role overrides | `/policies/authorizationPolicy` | v1.0, overrides beta | Both | Role and permission references stay as IDs |
+| AuthorizationPolicy | Authorization settings and default user role overrides | `/policies/authorizationPolicy` (v1.0), `/policies/authorizationPolicy/authorizationPolicy` (beta) | v1.0, beta for Start now and overrides | Both | Role and permission references stay as IDs |
 | SecurityDefaults | Security defaults settings | `/policies/identitySecurityDefaultsEnforcementPolicy` | v1.0 | Both | No restore; successful Retry-After headers do not pause backups |
 | AdminConsentRequestPolicy | Consent request settings and reviewers | `/policies/adminConsentRequestPolicy` | v1.0 | Both | Reviewer queries and IDs are retained without personal labels |
 | PermissionGrantPolicies | Permission grant conditions, including includes and excludes | `/policies/permissionGrantPolicies` | v1.0 | Both | Condition sets are configuration, not expanded directory objects |
@@ -34,7 +34,7 @@ Paths are relative to Microsoft Graph. `{organizationId}` is resolved through th
 | DeviceRegistrationPolicy | Device join, registration and local admin settings | `/policies/deviceRegistrationPolicy` | v1.0 | Both | Device objects and LAPS passwords excluded |
 | MdmEnrollmentPolicies | MDM enrollment settings and included group IDs | `/policies/mobileDeviceManagementPolicies` | beta | Admin | The Backup Reader leaves it out |
 | MamEnrollmentPolicies | MAM enrollment settings and included group IDs | `/policies/mobileAppManagementPolicies` | beta | Admin | The Backup Reader leaves it out |
-| DirectorySettings | Customized directory settings and values | `/groupSettings` | v1.0 | Both | **Custom banned password words are stored**; they are configuration, not passwords |
+| DirectorySettings | Customized directory settings and values | `/groupSettings` (v1.0), `/settings` (beta) | v1.0, beta for Start now | Both | **Custom banned password words are stored** as configuration |
 | Organization | Organization properties | `/organization` | v1.0 | Both | Configured notification addresses and organization contact details are stored; synchronization run times and status are excluded |
 | EntraCompanyBranding | Default branding text, layout and localization JSON | `/organization/{organizationId}/branding` | v1.0 | Both | Images and custom CSS streams excluded; total stored JSON limited to 1 MiB |
 | Domains | Domain properties, federation settings and DNS record metadata | `/domains` | v1.0 | Both | Federation certificate refresh status and last-run time are excluded; a refused federation sub-read keeps domain properties with incomplete coverage |

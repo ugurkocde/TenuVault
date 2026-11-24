@@ -588,6 +588,7 @@ export class BackupEngine {
     const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
     const unpermitted = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || ((startNow || permissionChecked(type.folder)) && granted && !canBackUp(type.folder, granted))))
     const types = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && !unpermitted.includes(type))
+      .map(type => type.betaReadPath && readVersion(type) === "beta" ? { ...type, path: type.betaReadPath } : type)
     const largeTypes = types.filter(type => type.volume === "large")
     const mixed = largeTypes.length > 0 && types.some(type => type.volume !== "large")
     const ordinaryFolder = backupFolder

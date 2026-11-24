@@ -104,6 +104,8 @@ export interface IntuneType {
   path: string
   /** The Microsoft Graph version every path of the type is relative to. Beta when left out. */
   apiVersion?: GraphVersion
+  /** Alternate backup path when this type is read on beta. */
+  betaReadPath?: string
   /** Versions used only by sub-resources that have no endpoint in the primary version. */
   additionalReadVersions?: readonly GraphVersion[]
   /** Headers every read of the type sends, such as ConsistencyLevel for a query that needs it. */

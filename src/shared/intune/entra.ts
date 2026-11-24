@@ -25,8 +25,9 @@ const brandingStreams = ["backgroundImage", "bannerLogo", "customCSS", "favicon"
 export const ENTRA_5A_TYPES: IntuneType[] = [
   {
     ...singleton("AuthorizationPolicy", "Authorization policy", "policies/authorizationPolicy"),
+    // The beta alias returns a collection. The explicit policy ID returns the entity.
+    betaReadPath: "policies/authorizationPolicy/authorizationPolicy",
     additionalReadVersions: ["beta"],
-    // v1.0 is an entity. Only the overrides need beta and its explicit policy ID.
     extras: [{ property: "defaultUserRoleOverrides", path: () => "https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy/defaultUserRoleOverrides" }],
   },
   singleton("SecurityDefaults", "Security defaults", "policies/identitySecurityDefaultsEnforcementPolicy"),
@@ -49,7 +50,7 @@ export const ENTRA_5A_TYPES: IntuneType[] = [
     ...base(folder!, label!, `policies/${path}`), apiVersion: "beta" as const,
     extras: [{ property: "includedGroups", path: (id: string) => `policies/${path}/${id}/includedGroups?$select=id`, ids: true as const }],
   })),
-  base("DirectorySettings", "Directory settings", "groupSettings"),
+  { ...base("DirectorySettings", "Directory settings", "groupSettings"), betaReadPath: "settings" },
   { ...singleton("Organization", "Organization", "organization"), singleton: { id: "Organization", name: "Organization", collection: true }, neverStored: ["onPremisesLastSyncDateTime", "onPremisesLastPasswordSyncDateTime", "onPremisesSyncStatus"] },
   {
     ...singleton("EntraCompanyBranding", "Company branding", `${organization}/branding`),
