@@ -1,17 +1,30 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const licenseOpen = vi.hoisted(() => vi.fn(async () => undefined))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: licenseOpen } } }))
+const fixture = vi.hoisted(() => ({
+  licenseOpen: vi.fn(async () => undefined), check: vi.fn(), connection: vi.fn(), consent: vi.fn(), plan: vi.fn(),
+}))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: {
+  license: { open: fixture.licenseOpen }, services: { cancelAddition: vi.fn(async () => undefined) }, health: { check: fixture.check },
+  auth: { connection: fixture.connection, restorePackConsent: fixture.consent, packConsentPlan: fixture.plan },
+} }))
 vi.mock("@desktop/lib/plan-dialog", () => ({ showFeaturePlanError: vi.fn() }))
 
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
+import { servicePack } from "../../src/shared/services/permission-packs"
 import { COMPANION_DEADLINE_MS, RestoreWizard } from "../../src/portal/components/backup/restore-wizard"
 
 const roots: Root[] = []
+beforeEach(() => {
+  fixture.check.mockReset().mockResolvedValue({ tenantId: "tenant", clientId: "app", granted: null, services: [] })
+  fixture.connection.mockReset()
+  fixture.consent.mockReset()
+  fixture.plan.mockReset().mockResolvedValue({ packs: [] })
+})
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.replaceChildren()
@@ -23,13 +36,13 @@ afterEach(() => {
 const contents = { content: { groups: [{ folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", policies: [{ path: "DeviceConfigurations/a.json", displayName: "Profile A" }, { path: "DeviceConfigurations/b.json", displayName: "Profile B" }] }] } }
 const preview = { items: [{ path: "DeviceConfigurations/a.json", name: "Profile A" }, { path: "DeviceConfigurations/b.json", name: "Profile B" }] }
 
-async function renderItems(community: boolean): Promise<HTMLDivElement> {
+async function renderItems(community: boolean, appId = "app"): Promise<HTMLDivElement> {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => Response.json(String(input).endsWith("/api/list-backup-contents") ? contents : String(input).endsWith("/api/restore-preview") ? preview : {})))
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
   roots.push(root)
   await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
-    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId, clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
     backups: [{ id: "backup-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 2, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
     initialBackupId: "backup-1", community, canCopyToTenants: false, copyCandidates: [],
   }))))
@@ -43,6 +56,54 @@ async function renderItems(community: boolean): Promise<HTMLDivElement> {
 const buttonNamed = (container: HTMLElement, text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.startsWith(text))
 const itemBoxes = (container: HTMLElement) => [...container.querySelectorAll<HTMLButtonElement>('ul [role="checkbox"]')]
 const selectedCount = (container: HTMLElement) => container.textContent?.match(/(\d+) of 2 selected/)?.[1]
+
+it("offers the TenuVault app pack before confirmation and enables restore only after verification", async () => {
+  const health = (access: "backup" | "restore") => ({ tenantId: "tenant", clientId: TENUVAULT_CLIENT_ID,
+    granted: ["DeviceManagementConfiguration.Read.All"], services: [{ id: "intune", enabled: true, areas: [], access }] })
+  fixture.check.mockResolvedValue(health("backup"))
+  fixture.connection.mockResolvedValue({ clientId: TENUVAULT_CLIENT_ID, graphScopes: [] })
+  fixture.consent.mockResolvedValueOnce({ status: "handoff", url: "https://example.test/approval", message: "Approve Intune restore" })
+  fixture.consent.mockImplementationOnce(async () => {
+    fixture.check.mockResolvedValue(health("restore"))
+    fixture.connection.mockResolvedValue({ clientId: TENUVAULT_CLIENT_ID, graphScopes: servicePack("intune", "restore").scopes })
+    return { status: "verified" }
+  })
+  const container = await renderItems(false, TENUVAULT_CLIENT_ID)
+  expect(itemBoxes(container).every(box => box.disabled)).toBe(true)
+  expect(buttonNamed(container, "Next")?.disabled).toBe(true)
+  await act(async () => buttonNamed(container, "Allow restore for Intune")!.click())
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
+  expect([...dialog.querySelectorAll("option")].map(option => option.value)).toEqual(["intune-restore"])
+  await act(async () => buttonNamed(dialog, "Send to my admin")!.click())
+  expect(buttonNamed(dialog, "Copy link")).toBeDefined()
+  expect(fixture.consent).toHaveBeenNthCalledWith(1, "tenant", "intune", "handoff")
+  await act(async () => buttonNamed(dialog, "Check again")!.click())
+  expect(fixture.consent).toHaveBeenNthCalledWith(2, "tenant", "intune", "check")
+  expect(buttonNamed(container, "Allow restore for Intune")).toBeUndefined()
+  await act(async () => buttonNamed(container, "Select all")!.click())
+  expect(buttonNamed(container, "Next")?.disabled).toBe(false)
+})
+
+it("shows missing permissions and repairs the existing registration before checking again", async () => {
+  fixture.check.mockResolvedValueOnce({ tenantId: "tenant", clientId: "app", granted: ["DeviceManagementConfiguration.Read.All"], services: [] })
+    .mockResolvedValueOnce({ tenantId: "tenant", clientId: "app", granted: ["DeviceManagementConfiguration.ReadWrite.All"], services: [] })
+  const container = await renderItems(false)
+  expect(container.textContent).toContain("DeviceManagementConfiguration.ReadWrite.All")
+  expect(container.querySelector("[data-permission-routes]")?.textContent).toContain("Registration in Entra")
+  expect(itemBoxes(container).every(box => box.disabled)).toBe(true)
+  await act(async () => buttonNamed(container, "Check again")!.click())
+  expect(fixture.check).toHaveBeenLastCalledWith("tenant", true)
+  expect(container.querySelector("[data-permission-routes]")).toBeNull()
+})
+
+it("offers Start now upgrades and keeps the restore items disabled", async () => {
+  const container = await renderItems(false, GRAPH_CLI_CLIENT_ID)
+  const notice = container.querySelector('aside[aria-label="Start now sign-in"]')
+  expect(notice?.textContent).toContain("Start now is read-only")
+  expect(notice?.querySelector("a")?.getAttribute("href")).toContain("section=signin")
+  expect(itemBoxes(container).every(box => box.disabled)).toBe(true)
+  expect(buttonNamed(container, "Next")?.disabled).toBe(true)
+})
 
 it("reads access policies only at the review step", async () => {
   const container = await renderItems(false)

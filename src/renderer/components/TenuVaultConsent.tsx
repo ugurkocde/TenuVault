@@ -3,15 +3,18 @@ import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import type { PackConsentAction, PackConsentPlan, PackConsentResult } from "../../shared/pack-consent"
 import { GRAPH_CLI_UPGRADE, type ConnectionSwitchResult, type WizardSignInResult } from "../../shared/tenant-connection"
+import type { ModuleId } from "../../shared/services/modules"
 import type { PermissionChoice } from "../../shared/services/manifest"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
 
-export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack, onChanged, wizard }: {
+export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack, onChanged, wizard, restore, onRestoreVerified }: {
   tenantId: string
   plan: PackConsentPlan
   active: boolean
   upgrade?: boolean
+  restore?: { id: ModuleId; label: string }
+  onRestoreVerified?: () => void
   initialPack?: string
   onChanged?: (result: ConnectionSwitchResult) => void
   wizard?: { choice: PermissionChoice; pack?: string; onSignedIn: (result: WizardSignInResult) => void }
@@ -42,8 +45,8 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
   const openPlan = async () => {
     setBusy(true)
     try {
-      const fresh = wizard ? plan : await bridge.auth.packConsentPlan(tenantId)
-      if (!fresh) {
+      const fresh = wizard || restore ? plan : await bridge.auth.packConsentPlan(tenantId)
+      if (!fresh?.packs.length) {
         toast("TenuVault app sign-in is currently unavailable.", "error")
         return
       }
@@ -66,8 +69,12 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
     try {
       const response = wizard
         ? await bridge.auth.wizardPackConsent(tenantId, wizard.choice, pack.id, action)
-        : await bridge.auth.packConsent(tenantId, pack.id, action)
+        : restore ? await bridge.auth.restorePackConsent(tenantId, restore.id, action) : await bridge.auth.packConsent(tenantId, pack.id, action)
       setResults(previous => ({ ...previous, [pack.id]: response }))
+      if (restore && action === "check" && response.status === "verified") {
+        setOpen(false)
+        onRestoreVerified?.()
+      }
     } catch {
       setResults(previous => ({ ...previous, [pack.id]: { status: "error", issue: { code: "unavailable", message: "Could not open this permission request. Try again." } } }))
     } finally {
@@ -104,18 +111,18 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
 
   return <>
     <Button variant="outline" size="sm" disabled={busy} onClick={() => void openPlan()}>
-      {wizard ? "Review permission packs and sign in" : active ? "Review permission packs" : upgrade ? GRAPH_CLI_UPGRADE : "Use TenuVault app"}
+      {restore ? `Allow restore for ${restore.label}` : wizard ? "Review permission packs and sign in" : active ? "Review permission packs" : upgrade ? GRAPH_CLI_UPGRADE : "Use TenuVault app"}
     </Button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{wizard || active ? "TenuVault app permissions" : "Switch to the TenuVault app"}</DialogTitle>
-          <DialogDescription>{wizard ? "Review the packs for your chosen services. An administrator can approve each pack in Microsoft Entra." : "Review the permission packs for the services and storage this tenant uses. An administrator can approve each pack in Microsoft Entra."}</DialogDescription>
+          <DialogTitle>{restore ? `Allow restore for ${restore.label}` : wizard || active ? "TenuVault app permissions" : "Switch to the TenuVault app"}</DialogTitle>
+          <DialogDescription>{restore ? "Approve this service’s restore permissions. If another administrator approves them, send them the consent link." : wizard ? "Review the packs for your chosen services. An administrator can approve each pack in Microsoft Entra." : "Review the permission packs for the services and storage this tenant uses. An administrator can approve each pack in Microsoft Entra."}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <label className="block text-sm font-medium">
             Permission pack
-            <select disabled={busy} value={pack.id} onChange={event => { setSelected(event.target.value); setError(undefined) }} className="mt-1 w-full rounded-md border bg-background px-3 py-2">
+            <select disabled={busy || Boolean(restore)} value={pack.id} onChange={event => { setSelected(event.target.value); setError(undefined) }} className="mt-1 w-full rounded-md border bg-background px-3 py-2">
               {currentPlan.packs.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
             </select>
           </label>
@@ -146,8 +153,8 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
             if (busy) void bridge.auth.cancelSignIn()
             else setOpen(false)
           }}>{busy ? "Cancel request" : "Close"}</Button>
-          {pending && <Button variant="outline" disabled={busy} onClick={() => void consent("check")}>Check again</Button>}
-          <Button disabled={busy} onClick={() => void signIn()}>{busy ? "Waiting for Microsoft" : "Sign in"}</Button>
+          {(pending || restore) && <Button variant={restore ? "default" : "outline"} disabled={busy} onClick={() => void consent("check")}>{busy && restore ? "Checking" : "Check again"}</Button>}
+          {!restore && <Button disabled={busy} onClick={() => void signIn()}>{busy ? "Waiting for Microsoft" : "Sign in"}</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

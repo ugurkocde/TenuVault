@@ -57,6 +57,7 @@ const bridge: TenuVaultPreloadBridge = {
     wizardPackConsent: (tenantId, choice, packId, action) => invoke("auth:wizardPackConsent", tenantId, choice, packId, action),
     packConsentPlan: tenantId => invoke("auth:packConsentPlan", tenantId),
     packConsent: (tenantId, packId, action) => invoke("auth:packConsent", tenantId, packId, action),
+    restorePackConsent: (tenantId, service, action) => invoke("auth:restorePackConsent", tenantId, service, action),
     switchConnection: (tenantId, target) => invoke("auth:switchConnection", tenantId, target),
     onAppMetadataRemovalChanged: (listener) => subscribe<string>("auth:appMetadataRemovalChanged", listener),
     appMetadataRemoval: (tenantId, retry) => invoke("auth:appMetadataRemoval", tenantId, retry),

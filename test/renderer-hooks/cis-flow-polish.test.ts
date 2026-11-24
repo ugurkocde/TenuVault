@@ -15,7 +15,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
 vi.mock("../../src/renderer/lib/framework-jobs", () => ({ useFrameworkJobs: () => [] }))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({
   useSelectedTenant: () => ({ selectedTenant: { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId } }, selectedTenantId: "local", setSelectedTenantId: () => undefined }),
-  useTenants: () => [],
+  useTenantById: () => undefined, useTenants: () => [],
 }))
 vi.mock("../../src/renderer/lib/license", () => ({
   useTenantPlan: () => "pro",

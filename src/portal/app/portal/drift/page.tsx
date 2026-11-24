@@ -1,5 +1,7 @@
 "use client"
 
+import { RestoreAccess, useRestoreAccess } from "@desktop/components/RestoreAccess"
+
 import { UnknownComparisonTypes } from "~/components/backup/unknown-comparison-types"
 
 import { LargeComparison } from "~/components/backup/large-inventory"
@@ -332,6 +334,10 @@ export default function DriftDetectionPage() {
     })
   }
 
+  const restoreAccess = useRestoreAccess(selectedTenant?.credentials, Boolean(confirmDialog))
+  const restoreFolder = confirmDialog && drifts.find(drift => drift.id === confirmDialog.driftId)?.backupFile?.split("/")[0]
+  const restoreIssues = restoreFolder ? restoreAccess.issuesFor([restoreFolder]) : []
+
   const executeRevert = async () => {
     if (!confirmDialog || !selectedTenant?.credentials || !selectedTenant?.resources?.storageAccountName) return
 
@@ -573,6 +579,8 @@ export default function DriftDetectionPage() {
               </div>
             </div>
             
+            {selectedTenant?.credentials && <RestoreAccess credentials={selectedTenant.credentials} issues={restoreIssues}
+              checking={restoreAccess.checking} error={restoreAccess.error} onCheck={() => restoreAccess.refresh(true)} />}
             {/* Actions */}
             <div className="flex items-center gap-3">
               <Button
@@ -582,7 +590,7 @@ export default function DriftDetectionPage() {
               >
                 Cancel
               </Button>
-              {confirmDialog.action === "revert" ? (
+              {restoreIssues.length === 0 && (confirmDialog.action === "revert" ? (
                 <Button variant="destructive" className="flex-1 font-medium" onClick={executeRevert}>
                   <RefreshCw className="h-4 w-4 mr-2" />
                   {confirmDialog.recreate ? "Recreate policy" : "Revert policy"}
@@ -592,7 +600,7 @@ export default function DriftDetectionPage() {
                   <Plus className="h-4 w-4 mr-2" />
                   Create copy
                 </Button>
-              )}
+              ))}
             </div>
           </DialogContent>
         )}

@@ -2,7 +2,7 @@ import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_DISABLED, GRA
 import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
 import { ConnectionSwitchError } from "./auth/switch-failure"
-import { APPLICATION_METADATA_RESTORE_PACK, tenantPermissionPacks, resourcePackScopes, resourceScopes } from "../shared/services/permission-packs"
+import { APPLICATION_METADATA_RESTORE_PACK, tenantPermissionPacks, resourcePackScopes, resourceScopes, servicePack, isPackWriteScope } from "../shared/services/permission-packs"
 import type { AuditWatchRecord } from "./features/notifications/model"
 import { DOMAINS } from "./features/domains"
 import { backupStoragePath } from "../shared/backup-storage"
@@ -151,7 +151,8 @@ import { backupAuthorization, featureAccess, withRecoveryBackups } from "./featu
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
 import { afterScheduledBackup } from "./features/reports"
-import { MODULES } from "../shared/services/modules"
+import { MODULES, MODULE_BY_ID, type ModuleId } from "../shared/services/modules"
+import type { PackConsentResult } from "../shared/pack-consent"
 import { ModuleSettings } from "./services/settings"
 import { servicesStatus } from "./services/status"
 import { requireServiceAccess } from "./services/access"
@@ -1790,6 +1791,35 @@ async function bootstrap(): Promise<void> {
   })
   handleTrusted("auth:packConsent", async (_event, tenant: unknown, pack: unknown, action: unknown) => {
     return packConsent.act(typeof tenant === "string" ? tenant.toLowerCase() : "", pack, action).finally(returnToApp)
+  })
+  handleTrusted("auth:restorePackConsent", async (_event, tenantId: unknown, service: unknown, action: unknown): Promise<PackConsentResult> => {
+    const unavailable: PackConsentResult = { status: "error", issue: { code: "unavailable", message: "Restore access is unavailable for this connection and service." } }
+    if (!isGuid(tenantId) || typeof service !== "string" || !MODULE_BY_ID.has(service as ModuleId)) return unavailable
+    const tenant = tenantId.toLowerCase()
+    const id = service as ModuleId
+    if (!tenantProfile(tenant) || !await license.tenuvaultAppEnabled(true)) return unavailable
+    const record = connections.get(tenant)
+    if (record?.method !== "tenuvaultApp") return unavailable
+    const packForService = () => {
+      const setting = moduleSettings.get(tenant)[id]
+      return setting.enabled ? servicePack(id, "restore", Object.keys(setting.areas).filter(area => setting.areas[area])) : null
+    }
+    const pack = packForService()
+    if (!pack?.scopes.some(isPackWriteScope)) return unavailable
+    if (action !== "check") return packConsent.act(tenant, pack.id, action, async () => [pack]).finally(returnToApp)
+    const account = accounts.get(tenant)
+    if (!account) return { status: "waiting", issue: { code: "sign_in_required", message: "Sign in to the TenuVault app again, then check restore access." } }
+    try {
+      const staged = stageConnectionCache(cache, TENUVAULT_CLIENT_ID)
+      await auth.temporaryGraphToken(tenant, staged.plugin, pack.scopes)
+    } catch {
+      return { status: "waiting", issue: { code: "approval_pending", message: "Restore permissions could not be verified for your account. Confirm approval and check again." } }
+    }
+    if (JSON.stringify(packForService()) !== JSON.stringify(pack) || accounts.get(tenant)?.homeAccountId !== account.homeAccountId ||
+      !license.connectMethodEnabledNow("tenuvaultApp") ||
+      !connections.addVerifiedGraphScopes(tenant, record, pack.scopes, moduleSettings.restoreAccessEntries(tenant, id))) return unavailable
+    void health.check(tenant, "again").catch(() => undefined)
+    return { status: "verified" }
   })
   handleTrusted("auth:switchConnection", async (_event, tenantId: unknown, target: unknown) => {
     const outcome = await connections.switchForIpc(tenantId, target, returnToApp)

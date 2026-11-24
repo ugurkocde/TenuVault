@@ -555,6 +555,25 @@ describe("dispatch after asynchronous authorization", () => {
 })
 
 describe("TenuVault app capabilities", () => {
+  it("publishes a verified restore pack and its service setting together", () => {
+    const f = fixture()
+    const choice = { intune: { access: "backup" } } as const
+    const read = resourcePackScopes(tenantPermissionPacks(choice, { azure: false, audit: false }), "graph")
+    f.connections.enroll(TENANT, { method: "tenuvaultApp" }, raw, {
+      ...staged(TENUVAULT_CLIENT_ID), graphScopes: read,
+    }, f.modules.choiceEntries(TENANT, choice))
+    const record = f.connections.get(TENANT)!
+    const restore = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false }).find(pack => pack.id === "intune-restore")!
+    const settings = f.modules.restoreAccessEntries(TENANT, "intune")
+    expect(f.modules.get(TENANT).intune.access).toBe("backup")
+    expect(f.connections.addVerifiedGraphScopes(TENANT, { ...record, updatedAt: "stale" }, restore.scopes, settings)).toBe(false)
+    expect(f.modules.get(TENANT).intune.access).toBe("backup")
+    expect(f.connections.addVerifiedGraphScopes(TENANT, record, restore.scopes, settings)).toBe(true)
+    expect(f.connections.get(TENANT)?.graphScopes).toEqual([...new Set([...read, ...restore.scopes])])
+    expect(f.modules.get(TENANT).intune.access).toBe("restore")
+    expect(f.modules.get(TENANT).entra.enabled).toBe(false)
+  })
+
   it("requires the chosen, verified service restore pack and its scopes in the delegated token", async () => {
     let packs = tenantPermissionPacks({ intune: { access: "backup" } }, { azure: false, audit: false })
     let graphScopes = resourcePackScopes(packs, "graph")

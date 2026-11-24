@@ -22,6 +22,7 @@ const plan = vi.hoisted(() => ({ current: "msp" as "community" | "pro" | "msp" }
 const opened = vi.hoisted(() => [] as unknown[])
 vi.mock("~/contexts/TenantContext", () => ({
   useTenants: () => TENANTS,
+  useTenantById: () => undefined,
   useSelectedTenant: () => ({ selectedTenant: TENANTS[0], selectedTenantId: 1, setSelectedTenantId: () => undefined }),
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({

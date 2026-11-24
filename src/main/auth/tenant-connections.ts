@@ -183,6 +183,19 @@ export class TenantConnections {
     return record
   }
 
+  /** Publish a restore pack verified for the existing shared connection, together with its setting. */
+  addVerifiedGraphScopes(tenant: string, original: TenantConnection, scopes: readonly string[], settings: Record<string, string>): boolean {
+    const record = this.get(tenant)
+    if (this.switching.has(tenant) || record?.method !== "tenuvaultApp" || JSON.stringify(record) !== JSON.stringify(original)) return false
+    this.host.store.setMany({
+      ...settings,
+      [PREFIX + normalizeGuid(tenant)]: JSON.stringify({
+        ...record, graphScopes: [...new Set([...(record.graphScopes ?? []), ...scopes])], updatedAt: this.now().toISOString(),
+      }),
+    })
+    return true
+  }
+
   saveProfiles(raw: string | null): void {
     const previous = savedTenants(this.host.store.get(TENANT_LIST_KEY)) ?? []
     const next = savedTenants(raw)

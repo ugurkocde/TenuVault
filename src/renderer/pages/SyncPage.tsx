@@ -1,3 +1,4 @@
+import { RestoreTargetAccess } from "../components/RestoreAccess"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Loader2, Undo2, XCircle } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -417,6 +418,12 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           planning={planning}
         />
       )}
+
+      {step === 3 && targets.flatMap(id => {
+        const target = tenantOf(id)
+        return target?.credentials ? [<RestoreTargetAccess key={id} credentials={target.credentials} name={target.name}
+          folders={Object.values(chosen).map(policy => policy.folder)} />] : []
+      })}
 
       {step === 3 && (
         <ReviewStep

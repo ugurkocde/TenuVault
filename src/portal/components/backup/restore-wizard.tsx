@@ -44,6 +44,7 @@ import { mergeOutcomes, retryBatches } from "~/lib/policies/restore-retry"
 import { FeatureApiError } from "@desktop/lib/feature-api"
 import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
+import { RestoreAccess, RestoreTargetAccess, useRestoreAccess } from "@desktop/components/RestoreAccess"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
 import { LinkedMessage } from "~/components/linked-message"
@@ -260,6 +261,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [backupId, setBackupId] = useState<string | null>(initialBackupId)
   const backup = backups.find((entry) => entry.id === backupId) ?? null
   const companionId = backup?.companionId
+  const access = useRestoreAccess(tenant.credentials, active && (step === "items" || step === "review"))
+  const [accessRevision, setAccessRevision] = useState(0)
+  const checkAccess = async () => {
+    await access.refresh(true)
+    if (step === "items") setAccessRevision(revision => revision + 1)
+  }
 
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [itemsError, setItemsError] = useState("")
@@ -461,9 +468,15 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       }
     })
     return () => { controller.abort(); setPageLoading(false) }
-  }, [backupId, companionId, tenant, largePage, contentsService])
+  }, [backupId, companionId, tenant, largePage, contentsService, accessRevision])
 
-  const selectionBlocker = (item: BackupItem) => mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
+  const accessIssues = access.issuesFor((items ?? []).map(item => item.folder))
+  const selectionBlocker = (item: BackupItem) => {
+    const issue = access.issueFor(item.folder)
+    // Backup access in the source is enough when the selected policies will be copied elsewhere.
+    if (issue && (issue.method === "graphCli" || !canCopyToTenants || !copyCandidates.length)) return "Restore access is required."
+    return mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
+  }
 
   const itemByPath = useMemo(() => new Map((items ?? []).map((item) => [item.path, item])), [items])
 
@@ -540,6 +553,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const item = itemByPath.get(path)
     const state = review?.[path]
     const blocker = state?.blocker ?? item?.blocker
+    if (item && !copying && access.issueFor(item.folder)) return "cannot"
     if (copying) return blocker ? "cannot" : "copy"
     if (mode === "copy") return blocker ? "cannot" : "create"
     if (state?.replaceBlocker ?? item?.replaceBlocker) return "cannot"
@@ -818,6 +832,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </label>
           </div>
 
+          {accessIssues.length > 0 && <div className="mt-4"><RestoreAccess credentials={tenant.credentials} issues={accessIssues} checking={access.checking} error={access.error} onCheck={checkAccess} /></div>}
+
           {!community && (
             <label className="mt-4 block text-sm text-gray-700">
               Restore method
@@ -966,8 +982,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                       )}
                                     </span>
                                   </label>
-                                  {!copying && DIRECTORY_REVIEW_FOLDERS.includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} />}
-                                  {!copying && (!DIRECTORY_REVIEW_FOLDERS.includes(item.folder) || item.folder === "AdministrativeUnits") && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
+                                  {!copying && !access.issueFor(item.folder) && DIRECTORY_REVIEW_FOLDERS.includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} />}
+                                  {!copying && !access.issueFor(item.folder) && (!DIRECTORY_REVIEW_FOLDERS.includes(item.folder) || item.folder === "AdministrativeUnits") && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}
                               <li className="pl-11">
@@ -988,7 +1004,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             <Button variant="outline" onClick={() => setStep("backup")}>
               <ArrowLeft className="h-4 w-4" /> Other backup
             </Button>
-            <Button className="bg-coral-600 text-white hover:bg-coral-700" disabled={selected.size === 0} onClick={() => setStep("options")}>
+            <Button className="bg-coral-600 text-white hover:bg-coral-700" disabled={selected.size === 0 || ![...selected].some(path => { const item = itemByPath.get(path); return item && !selectionBlocker(item) })} onClick={() => setStep("options")}>
               Next <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
@@ -1236,6 +1252,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             )}
           </div>
 
+          {copying ? copyCandidates.filter(target => copyTargets.includes(target.tenantId)).map(target =>
+            <RestoreTargetAccess key={target.tenantId} credentials={target} name={target.name}
+              folders={selectedPaths.flatMap(path => itemByPath.get(path)?.folder ?? [])} />)
+            : <RestoreAccess credentials={tenant.credentials} issues={access.issuesFor(selectedPaths.flatMap(path => itemByPath.get(path)?.folder ?? []))}
+                checking={access.checking} error={access.error} onCheck={checkAccess} />}
           <div className="mt-6 flex justify-between gap-3">
             <Button variant="outline" onClick={() => setStep("options")}>
               <ArrowLeft className="h-4 w-4" /> Options
