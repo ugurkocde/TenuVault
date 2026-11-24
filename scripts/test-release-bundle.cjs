@@ -16,7 +16,7 @@ try {
     writeFileSync(path, "")
   }
   checkReleaseBundle(fixture)
-  for (const marker of ["__TV_LAB_BUILD__", "TENUVAULT_LAB_LICENSE_ORIGIN", "TENUVAULT_LAB_LICENSE_PUBLIC_KEY", "TV06-TEST-run-12f51c29-1e42-4e15-8079-68fb1f05535e", "Lab build"]) {
+  for (const marker of ["__TV_LAB_BUILD__", "TENUVAULT_LAB_LICENSE_ORIGIN", "TENUVAULT_LAB_LICENSE_PUBLIC_KEY", "TV06-TEST-run-12f51c29-1e42-4e15-8079-68fb1f05535e", "tv06-test-RUN-12F51C29-1E42-4E15-8079-68FB1F05535E", "Lab build"]) {
     writeFileSync(join(fixture, "renderer/index.html"), marker)
     assert.throws(() => checkReleaseBundle(fixture), /Lab build content found/)
   }

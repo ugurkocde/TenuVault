@@ -2,7 +2,8 @@ const { readdirSync, readFileSync } = require("node:fs")
 const { join } = require("node:path")
 const { runInNewContext } = require("node:vm")
 
-const labMarkers = /__TV_LAB_|TENUVAULT_LAB_|TV06-TEST-[a-z0-9-]+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|com\.tenuvault\.desktop\.lab|TenuVault Lab|Lab build/
+const labMarkers = /__TV_LAB_|TENUVAULT_LAB_|com\.tenuvault\.desktop\.lab|TenuVault Lab|Lab build/
+const labFixture = /TV06-TEST-[a-z0-9-]+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
 const sourceFile = /\.(?:[cm]?js|json|html|map|css)$/
 
 function checkReleaseBundle(root) {
@@ -11,7 +12,8 @@ function checkReleaseBundle(root) {
   for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile() || !sourceFile.test(entry.name)) continue
     const path = join(entry.parentPath, entry.name)
-    if (labMarkers.test(readFileSync(path, "utf8"))) throw new Error(`Lab build content found in release bundle: ${path}`)
+    const contents = readFileSync(path, "utf8")
+    if (labMarkers.test(contents) || labFixture.test(contents)) throw new Error(`Lab build content found in release bundle: ${path}`)
   }
   if (process.env.TENUVAULT_RELEASE_BUILD === "1") {
     const { checkLicensePublicKey, ROTATION_LICENSE_PUBLIC_KEYS } = require("./license-public-key.ts")
