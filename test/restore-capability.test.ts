@@ -25,6 +25,7 @@ import { fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
 import { registerTestTypes, testType } from "./helpers/backup-fixture"
 import { withoutRestoreCapability } from "./helpers/restore-capability"
 import { RELEASE_FOLDERS } from "./fixtures/release-0.5-import"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_READ_ONLY, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 
 /**
  * Every type has a restore capability, and a type that declares none can never be written. The
@@ -175,6 +176,29 @@ describe("Intune policy set restore permission", () => {
   const permission = "DeviceManagementConfiguration.ReadWrite.All"
   const tokenWith = (scp: string) => `e30.${Buffer.from(JSON.stringify({ scp })).toString("base64url")}.sig`
   const readOnly = tokenWith("DeviceManagementConfiguration.Read.All DeviceManagementApps.ReadWrite.All")
+
+  it.each([
+    [GRAPH_CLI_CLIENT_ID, GRAPH_CLI_READ_ONLY],
+    [TENUVAULT_CLIENT_ID, "Review the restore permission pack for this service in Sign-in and access."],
+    [credentials.appId, "Add it to your app registration. Services and permissions shows how to add it."],
+  ])("gives connection-specific reasons in the item list and live preview for %s", async (appId, message) => {
+    const seen = world(policySets, {}, readOnly)
+    for (const live of [false, true]) {
+      const response = await restorePreview(post("restore-preview", { ...credentials, appId, backupId: BACKUP, paths: [fileOf(policySets)], live }))
+      expect(response.status).toBe(200)
+      const blocker = expect.stringContaining(message)
+      expect(await response.json()).toMatchObject({ items: [{ blocker, replaceBlocker: blocker }] })
+    }
+    expect(writes(seen)).toEqual([])
+  })
+
+  it("blocks Start now in the item list even for an Intune type without a permission precheck", async () => {
+    const type = typeForFolder("DeviceConfigurations")!
+    const seen = world(type, {}, tokenWith(permission))
+    const response = await restorePreview(post("restore-preview", { ...credentials, appId: GRAPH_CLI_CLIENT_ID, backupId: BACKUP, paths: [fileOf(type)] }))
+    expect(await response.json()).toMatchObject({ items: [{ blocker: GRAPH_CLI_READ_ONLY, replaceBlocker: GRAPH_CLI_READ_ONLY }] })
+    expect(seen.graph).toEqual([])
+  })
 
   it.each([false, true])("shows the missing write scope in the preview with live=%s", async (live) => {
     const seen = world(policySets, {}, readOnly)

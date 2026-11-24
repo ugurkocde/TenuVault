@@ -13,6 +13,7 @@
 import { area, part, type FolderPermissions, type Need, type PermissionArea, type Requirement, type SignInMode } from "./areas"
 import { DEFENDER_AREAS } from "./defender"
 import { ENTRA_AREAS } from "./entra"
+import { GRAPH_CLI_READ_ONLY, sharedSignInMethod } from "../tenant-connection"
 
 export type { AnyOf, FolderPermissions, Need, PermissionArea, Requirement, SignInMode } from "./areas"
 
@@ -294,15 +295,23 @@ export function checksRestorePermission(folder: string): boolean {
   return restorePermissionEntry(folder) !== undefined
 }
 
+export function restoreAccessGuidance(clientId?: string): string {
+  return sharedSignInMethod(clientId ?? null) === "tenuvaultApp"
+    ? "Review the restore permission pack for this service in Sign-in and access."
+    : `Add it to your app registration. ${SERVICES_PAGE} shows how to add it.`
+}
+
 /** Why the current permissions cannot restore a folder that checks its token before writing. */
-export function restorePermissionBlocker(folder: string, granted: GrantedPermissions | undefined): string | undefined {
+export function restorePermissionBlocker(folder: string, granted: GrantedPermissions | undefined, clientId?: string): string | undefined {
+  const method = sharedSignInMethod(clientId ?? null)
+  if (method === "graphCli") return GRAPH_CLI_READ_ONLY
   const entry = restorePermissionEntry(folder)
   if (!entry || !granted) return undefined
   const needed = entry.part.restore[granted.kind]
   const what = folder === "PolicySets" ? "Intune policy sets" : `${entry.module.label} ${entry.area.label.toLowerCase()}`
   if (needed === "unsupported") return `${what} ${granted.kind === "application" ? "can only be restored by a signed-in admin" : "cannot be restored through Microsoft Graph"}.`
   if (satisfied(needed, granted.permissions)) return undefined
-  return `Restoring ${what} needs the ${describeRequirement(needed, granted.permissions)} permission, which the TenuVault app registration does not have. ${SERVICES_PAGE} shows how to add it.`
+  return `Restoring ${what} needs the ${describeRequirement(needed, granted.permissions)} permission. ${restoreAccessGuidance(clientId)}`
 }
 
 /**

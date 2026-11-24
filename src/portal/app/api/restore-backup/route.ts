@@ -200,10 +200,10 @@ export async function POST(request: NextRequest) {
           return {
             targetTenantId: target.tenantId.toLowerCase(), graphToken: targetToken,
             restorer: new Restorer(graphCaller(targetToken, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
-              { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }),
+              { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken), clientId: target.appId, operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }),
           }
         }))
-      : [{ graphToken, restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, guardedRunId: typeof body.guardedRunId === "string" ? body.guardedRunId : undefined, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken), operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }) }]
+      : [{ graphToken, restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, guardedRunId: typeof body.guardedRunId === "string" ? body.guardedRunId : undefined, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken), clientId: appId, operationId: correlated, auditProgress: onProgress, auditSubmitted: onSubmitted }) }]
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {
@@ -369,7 +369,7 @@ async function approvalAction(body: any): Promise<Response> {
   let completionDispatched = false
   let completionProgress: RestoreOutcome | undefined
   const restorer = new Restorer(graph, {
-    mode: "copy", assignments: false, approvalContext: context, granted: grantedPermissions(token), operationId: record.operationId ?? record.id,
+    mode: "copy", assignments: false, approvalContext: context, granted: grantedPermissions(token), clientId: appId, operationId: record.operationId ?? record.id,
     auditApprovalDispatched: () => {
       completionDispatched = true
       audit?.started(0)

@@ -9,6 +9,7 @@ export const GRAPH_CLI_DISABLED = "Start now sign-in is currently unavailable."
 export const GRAPH_CLI_UPGRADE = "Upgrade to the TenuVault app"
 export const OWN_APP_UPGRADE = "Use your own app registration"
 export const GRAPH_CLI_NEXT_STEP = "Choose the TenuVault app or use your own app registration in Sign-in and access."
+export const GRAPH_CLI_READ_ONLY = `Start now is read-only. ${GRAPH_CLI_NEXT_STEP}`
 
 export const ORGANIZATION_RENEWAL_NOTICE = "Ask the license key holder to share the license using the new app registration. Your current license coverage lasts until its existing expiry unless it is renewed sooner."
 

@@ -11,6 +11,7 @@ import { assignmentsUnread } from "../../../../shared/intune/read"
 import { checksRestorePermission, restorePermissionBlocker } from "../../../../shared/services/modules"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { isLegacySealedError } from "../../../../shared/legacy-sealed"
+import { sharedSignInMethod } from "../../../../shared/tenant-connection"
 
 const MAX_ITEMS = 2000
 const CONCURRENCY = 6
@@ -62,12 +63,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const startNow = sharedSignInMethod(appId) === "graphCli"
     const [storageToken, graphToken] = await Promise.all([
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       // Check the app registration's permissions for these folders even without a live comparison.
       live === true
         ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
-        : paths.some((path) => checksRestorePermission(String(path).split("/")[1] ?? ""))
+        : !startNow && paths.some((path) => checksRestorePermission(String(path).split("/")[1] ?? ""))
           // Without the token the restore still checks the permission before its first write.
           ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => "")
           : Promise.resolve(""),
@@ -122,7 +124,7 @@ export async function POST(request: NextRequest) {
       while (next < paths.length) {
         const index = next++
         const path = paths[index] as string
-        try { items[index] = withPermission(await preview(path), granted) }
+        try { items[index] = withPermission(await preview(path), granted, appId) }
         catch (error) {
           // A backup sealed by an earlier version says which key it needs.
           const sealed = isLegacySealedError(error) ? (error as Error).message : null
@@ -136,8 +138,8 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** Marks an item not restorable when the app registration lacks the required write permission. */
-function withPermission(item: PreviewItem, granted: ReturnType<typeof grantedPermissions>): PreviewItem {
-  const blocker = restorePermissionBlocker(item.folder, granted)
+/** Adds connection guidance to actions the snapshot can support. */
+function withPermission(item: PreviewItem, granted: ReturnType<typeof grantedPermissions>, appId: string): PreviewItem {
+  const blocker = restorePermissionBlocker(item.folder, granted, appId)
   return blocker ? { ...item, blocker: item.blocker ?? blocker, replaceBlocker: item.replaceBlocker ?? blocker } : item
 }

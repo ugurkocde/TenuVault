@@ -25,7 +25,7 @@ export class IdentityRestoreService {
     const reader = safetyReader(connection.token, this.fetchImpl)
     // Refuse app-only tokens before even the safety reads.
     requireRestoreActor(connection.token, connection, connection.authorization)
-    const permissionBlocker = !readOnly && folder ? restorePermissionBlocker(folder, restorePermissions(connection.token, connection.authorization?.scopes)) : undefined
+    const permissionBlocker = !readOnly && folder ? restorePermissionBlocker(folder, restorePermissions(connection.token, connection.authorization?.scopes), connection.clientId) : undefined
     if (permissionBlocker) throw new RestoreSafetyError(permissionBlocker)
     const protections = folder ? operationProtections(folder, operation) : undefined
     const actorReader = sharedSignInMethod(connection.clientId) ? safetyReader(connection.token, this.fetchImpl, "beta") : reader

@@ -112,7 +112,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       }
     }
   }
-  const permissionBlocker = (step: GuardedStep, roleAssignable = false) => directoryPermissionBlocker(token, [...directoryPermissions(step), ...(roleAssignable && ["create", "member"].includes(step.directory!.action) ? ["RoleManagement.ReadWrite.Directory"] : [])], authorization?.scopes)
+  const permissionBlocker = (step: GuardedStep, roleAssignable = false) => directoryPermissionBlocker(token, [...directoryPermissions(step), ...(roleAssignable && ["create", "member"].includes(step.directory!.action) ? ["RoleManagement.ReadWrite.Directory"] : [])], actor.clientId, authorization?.scopes)
   const requirePermissions = (step: GuardedStep, roleAssignable = false) => {
     const blocker = permissionBlocker(step, roleAssignable)
     if (blocker) throw new RestoreWriteDeferredError(blocker)

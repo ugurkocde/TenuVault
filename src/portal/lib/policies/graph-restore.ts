@@ -62,6 +62,7 @@ export interface RestoreOptions {
    * restore permission is missing is reported before any write. Unknown permissions block nothing.
    */
   granted?: GrantedPermissions
+  clientId?: string
 }
 
 export interface RestoreOutcome {
@@ -326,7 +327,7 @@ export class Restorer {
     // A type without a restore capability is refused before anything of it is read or written.
     if (restoreCapability(type) === "none") return { success: false, path, action: "skipped", retryable: false, error: writeBlocker(type, "create") }
     if (type.restoreSafety === "identity") return dispatchIdentityRestore(this.graph, { path, snapshot, origin: this.options.crossTenant ? "cross-tenant" : this.options.identityOrigin ?? "restore", runId: this.options.guardedRunId })
-    const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
+    const unpermitted = restorePermissionBlocker(type.folder, this.options.granted, this.options.clientId)
     if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
     const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
     // A backup that could not read the assignments must not replace the live ones with an empty list.
@@ -821,7 +822,7 @@ export class Restorer {
    * fresh plan, a repair, or an approval that was waiting.
    */
   private write(type: IntuneType, operation: WriteOperation, method: "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions): ReturnType<GraphCall> {
-    const blocked = writeBlocker(type, operation) ?? (type.folder === "PolicySets" ? restorePermissionBlocker(type.folder, this.options.granted) : undefined)
+    const blocked = writeBlocker(type, operation) ?? (type.folder === "PolicySets" ? restorePermissionBlocker(type.folder, this.options.granted, this.options.clientId) : undefined)
     if (blocked) throw new NotRestorableError(blocked)
     return this.graph(method, path, body, options)
   }

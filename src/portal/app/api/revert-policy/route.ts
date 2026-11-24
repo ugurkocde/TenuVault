@@ -172,7 +172,7 @@ export async function POST(request: NextRequest) {
     audit?.started(0)
     let outcome: RestoreOutcome
     try {
-      outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { identityOrigin: "drift", guardedRunId: body.guardedRunId, mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken), operationId,
+      outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { identityOrigin: "drift", guardedRunId: body.guardedRunId, mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken), clientId: appId, operationId,
         auditProgress: result => audit?.item(0, restoreAuditItem(backupPath, result, policyContent.id)) })
         .restore(backupPath, policyContent)
       audit?.item(0, restoreAuditItem(backupPath, outcome, policyContent.id))

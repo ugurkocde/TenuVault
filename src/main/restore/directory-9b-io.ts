@@ -175,7 +175,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     }
     return applicationReview(step, current, resource, principal, actor)
   }
-  const permissionBlocker = (step: GuardedStep) => directoryPermissionBlocker(token, applicationPermissions(step), authorization?.scopes)
+  const permissionBlocker = (step: GuardedStep) => directoryPermissionBlocker(token, applicationPermissions(step), actor.clientId, authorization?.scopes)
   const requirePermissions = (step: GuardedStep) => {
     const blocker = permissionBlocker(step)
     if (blocker) throw new RestoreWriteDeferredError(blocker)

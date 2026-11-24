@@ -6,12 +6,12 @@ import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { accessTokenDigest, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { APPLICATION_METADATA_RESTORE_PACK, GRANT_REMOVAL_SCOPE, isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, GRAPH_CLI_READ_ONLY, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
 import type { RequestAuthorization } from "../api/fetch-bridge"
 
-export const READ_ONLY = `Start now is read-only. ${GRAPH_CLI_NEXT_STEP}`
+export const READ_ONLY = GRAPH_CLI_READ_ONLY
 const PACK_REQUIRED = "Approve the restore permission pack for this service in Sign-in and access."
 const CONNECTION_CHANGED = "This tenant's sign-in method changed. Reload the tenant and try again."
 const TOKEN_UNVERIFIED = "TenuVault could not verify the tenant and app in this access token. Sign in again."

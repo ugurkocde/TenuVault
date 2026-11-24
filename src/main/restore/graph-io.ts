@@ -1,7 +1,7 @@
 import { accessPackageCatalogReply, accessPackageCatalogWrite } from "../../shared/intune/entra-snapshot"
 import { checkConfigurationLockout, configurationPayload, isEntraConfiguration, requireConfigurationApproval } from "./entra-configuration"
 import { safetyReader } from "./safety-reader"
-import { restorePermissionBlocker } from "../../shared/services/modules"
+import { restoreAccessGuidance, restorePermissionBlocker } from "../../shared/services/modules"
 import { isGraphId, normalizeGuid } from "../../shared/security"
 import { restoreCapability, typeForFolder, type Item } from "../../shared/intune/registry"
 import { findCreatedByDescriptor } from "./create-detection"
@@ -19,9 +19,9 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     if (!row || !write || !verifiedWriteContract(write) || !write.properties.length || !write.permissions.length) throw new RestoreSafetyError("This write contract has not been verified against the Graph index and Microsoft documentation.")
     if (write.blockedReason) throw new RestoreSafetyError(write.blockedReason)
     const granted = restorePermissions(token, authorization?.scopes)
-    const manifestBlocker = restorePermissionBlocker(step.folder, granted)
+    const manifestBlocker = restorePermissionBlocker(step.folder, granted, actor.clientId)
     if (manifestBlocker) throw new RestoreSafetyError(manifestBlocker)
-    if (granted?.kind !== "delegated" || !write.permissions.some(permission => granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks the write permission. Add restore access from Services in Settings, then sign in again.")
+    if (granted?.kind !== "delegated" || !write.permissions.some(permission => granted.permissions.has(permission))) throw new RestoreSafetyError(`This restore needs the ${write.permissions.join(" or ")} permission. ${restoreAccessGuidance(actor.clientId)}`)
     if (step.properties.some(key => !write.properties.includes(key)) || Object.keys(step.desired).some(key => !write.properties.includes(key))) throw new RestoreSafetyError("The write contains properties outside the verified Graph contract.")
     return { row, write }
   }

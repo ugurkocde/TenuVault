@@ -279,7 +279,7 @@ it.each(["update"] as const)("requires the exact delegated %s permission at fina
   const candidate = action === "update" ? await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, io, async () => app) : await applicationObjectStep("OAuth2PermissionGrants", { id: "A".repeat(43), clientId: client.id, resourceId: app.id, consentType: "AllPrincipals", principalId: null, scope: "Test.Read" }, io, async (_folder, sourceId) => sourceId === client.id ? client : app)
   const run = { version: 1 as const, id: id(99), tenant: actor.tenantId, actor, origin: "restore" as const, source: { path: "owned/path", fingerprint: "source" }, entries: [], mappings: [] }
   for (const kind of (await io.review(candidate)).approvals) approveDirectory(candidate, run, kind)
-  await expect(io.write(candidate, candidate.desired, candidate.targetId, () => {}, run)).rejects.toThrow("least-privileged permission")
+  await expect(io.write(candidate, candidate.desired, candidate.targetId, () => {}, run)).rejects.toThrow("This restore needs Application.ReadWrite.All.")
   expect(env.writes).toEqual([])
 })
 
