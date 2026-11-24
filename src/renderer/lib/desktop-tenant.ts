@@ -3,7 +3,7 @@ import type { TenantCredentials } from "../overrides/add-tenant-modal"
 
 /** A count is null when Microsoft Graph could not read it; it is never shown as zero. */
 interface TenantDetails {
-  organization?: { displayName?: string; primaryDomain?: string }
+  organization?: { id?: string; displayName?: string; primaryDomain?: string }
   statistics?: {
     userCount?: number | null
     deviceCount?: number | null
@@ -19,19 +19,24 @@ interface TenantDetails {
 
 const known = (value: number | null | undefined): number | null => (typeof value === "number" ? value : null)
 
-/** Builds a tenant profile from Microsoft Graph details, without placeholder values. */
-export async function buildTenantProfile(credentials: TenantCredentials, readDetails = true): Promise<Tenant> {
-  let details: TenantDetails = {}
-  if (readDetails) try {
+export async function fetchTenantDetails(credentials: TenantCredentials): Promise<TenantDetails> {
+  try {
     const response = await fetch("/api/fetch-tenant-details", {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(credentials),
     })
-    if (response.ok) details = (await response.json()) as TenantDetails
+    if (response.ok) return await response.json() as TenantDetails
   } catch {
     // The profile still works; details refresh from the Tenants page.
   }
+  return {}
+}
+
+/** Builds a tenant profile from Microsoft Graph details, without placeholder values. */
+export async function buildTenantProfile(credentials: TenantCredentials, readDetails = true, prefetched?: Promise<TenantDetails>): Promise<Tenant> {
+  const details = prefetched ? await prefetched : readDetails ? await fetchTenantDetails(credentials) : {}
   const policies = details.statistics?.policies ?? {}
   const deviceConfigurations = known(policies.deviceConfigurations)
   const configurationPolicies = known(policies.configurationPolicies)

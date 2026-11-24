@@ -818,6 +818,49 @@ it("resumes with the current live account instead of the saved admin", async () 
   expect(loadOnboardingDraft()?.account).toEqual(live)
 })
 
+it("shows the verified tenant on Check and Storage and keeps Check completed during the first backup", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "guest@fabrikam.test" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "My label", account, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValueOnce([account])
+  state.storageChoice = { kind: "local" }
+  state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ plan: "community" }] })
+  const request = vi.fn(async (url: string) => Response.json(url === "/api/backup/start"
+    ? { jobId: "first" } : { organization: { id: TENANT, displayName: "Contoso Ltd" } }))
+  vi.stubGlobal("fetch", request)
+  const container = await render(createElement(OnboardingPage))
+  for (const action of ["Continue to storage", "Start first backup"]) {
+    expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
+    expect(button(container, "Different tenant?")).toBeDefined()
+    await act(async () => button(container, action)!.click())
+  }
+  expect(container.textContent).toContain("Your first backup")
+  expect(container.querySelector('[aria-label="Setup steps"]')?.textContent).toContain("Check (done)")
+  expect(request.mock.calls.filter(([url]) => url === "/api/fetch-tenant-details")).toHaveLength(1)
+})
+
+it("releases an unfinished own-app sign-in when the admin chooses a different tenant on Check", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "guest@fabrikam.test" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValueOnce([account])
+  const container = await render(createElement(OnboardingPage), false)
+  await act(async () => button(container, "Different tenant?")!.click())
+  expect(state.releaseTenant).toHaveBeenCalledWith(TENANT)
+  expect(container.textContent).toContain("Connect your tenant")
+  expect(loadOnboardingDraft()).toMatchObject({ step: 0, tenant: "", clientId: "", account: null })
+})
+
+it("counts each missing permission once, including scopes outside the service breakdown", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now(),
+    services: { entra: { access: "backup" }, conditionalAccess: { access: "backup" }, intune: { access: "backup" } } }))
+  state.accounts.mockResolvedValueOnce([account])
+  state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All", "AuthenticationContext.Read.All", "Policy.Read.All"] })
+  const container = await render(createElement(OnboardingPage), false)
+  const result = container.querySelector('[aria-label="Permission result"]')!
+  expect(result.textContent).toContain("2 permissions are missing.")
+  expect([...result.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Policy.Read.All", "AuthenticationContext.Read.All"])
+})
+
 it.each([false, true])("reveals only an unfinished first backup when leaving, complete: %s", async complete => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
   state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))

@@ -12,7 +12,7 @@ import { chosenBackupCoverage } from "../../shared/services/graph-cli-coverage"
 import { moduleForFolder } from "../../shared/services/modules"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import { AlertTriangle, ArrowLeft, ArrowRight, Ban, Cable, CheckCircle2, Database, FileUp, HardDriveDownload, Loader2, Play, RotateCcw, ScanSearch, ShieldCheck, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants } from "~/contexts/TenantContext"
@@ -33,7 +33,7 @@ import { SetupCallHintShown, SetupCallLink } from "../components/SetupCallLink"
 import { recordSetup, SetupDiagnosticsCard } from "../components/SetupDiagnostics"
 import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
-import { buildTenantProfile } from "../lib/desktop-tenant"
+import { buildTenantProfile, fetchTenantDetails } from "../lib/desktop-tenant"
 import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft } from "../lib/onboarding-draft"
 import type { StorageChoice } from "../lib/storage"
 import { desktopTenantCredentials, type TenantCredentials } from "../overrides/add-tenant-modal"
@@ -130,6 +130,9 @@ export default function OnboardingPage() {
   const permissionResult = permissionCheck?.account === account && permissionCheck?.services === services ? permissionCheck.result : null
   const reviewPermissions = step === 4 || step === 2
   const checkingPermissions = Boolean(account && method === "ownApp" && reviewPermissions && !permissionResult)
+  const tenantDetails = useRef<{ account: SignedInAccount; result: ReturnType<typeof fetchTenantDetails> } | null>(null)
+  const [organization, setOrganization] = useState<{ account: SignedInAccount; name: string } | null>(null)
+  const [completedCheck, setCompletedCheck] = useState<{ account: SignedInAccount; services: PermissionChoice } | null>(null)
   const [resumed, setResumed] = useState(Boolean(initial && (initial.step > 0 || initial.account)))
   const [checkingResume, setCheckingResume] = useState(Boolean(initial?.account))
   const [choice, setChoice] = useState<StorageChoice | null>(null)
@@ -255,6 +258,21 @@ export default function OnboardingPage() {
     return () => { permissionGeneration.current++; clearTimeout(timer) }
   }, [account, services, method, reviewPermissions])
 
+  // Fetch the profile details once per sign-in so the name can be confirmed before enrollment.
+  useEffect(() => {
+    if (!account || method !== "ownApp" || !reviewPermissions || checkingResume) return
+    let active = true
+    if (tenantDetails.current?.account !== account) {
+      tenantDetails.current = { account, result: fetchTenantDetails(desktopTenantCredentials(account, "", { kind: "local" })) }
+    }
+    void tenantDetails.current.result.then(({ organization }) => {
+      if (active && organization?.id?.toLowerCase() === account.tenantId.toLowerCase() && organization.displayName) {
+        setOrganization({ account, name: organization.displayName })
+      }
+    })
+    return () => { active = false }
+  }, [account, method, reviewPermissions, checkingResume])
+
   // Each step starts at its heading, for keyboard and screen reader users too.
   useEffect(() => {
     if (firstStep.current) { firstStep.current = false; if (step !== -1 && step !== -2) return }
@@ -289,7 +307,7 @@ export default function OnboardingPage() {
    * Signs out of a tenant that was signed in here but never saved, which also frees the free
    * Community plan for another tenant, then shows the sign-in form again.
    */
-  const switchTenant = async () => {
+  const switchTenant = async (differentTenant = false) => {
     if (!account) return
     resumeCheck.current = false
     setReleasing(true)
@@ -299,9 +317,18 @@ export default function OnboardingPage() {
       try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } finally { releasingAccount.current = false }
       setAccount(null)
       setChoice(null)
-      // With a setup file for another tenant open, the form starts with the file's IDs.
-      if (setup && !sameRegistration(account, setup.connection)) setFields({ tenant: setup.connection.tenantId, clientId: setup.connection.clientId, displayName: setup.connection.name })
-      setStep(1)
+      if (differentTenant) {
+        setFields({ tenant: "", clientId: "", displayName: "" })
+        setRetryTenant(undefined)
+        setSetup(null)
+        setSetupNotice("")
+        setAutoSignIn(null)
+        setStep(0)
+      } else {
+        // With a setup file for another tenant open, the form starts with the file's IDs.
+        if (setup && !sameRegistration(account, setup.connection)) setFields({ tenant: setup.connection.tenantId, clientId: setup.connection.clientId, displayName: setup.connection.name })
+        setStep(1)
+      }
     } catch (error) {
       setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
     } finally {
@@ -468,6 +495,23 @@ export default function OnboardingPage() {
     setSharedSignIn(null)
   }
 
+  const chooseDifferentTenant = () => {
+    if (method === "ownApp") {
+      void switchTenant(true)
+      return
+    }
+    discardShared()
+    setAccount(null)
+    setChoice(null)
+    setAddError(null)
+    setPublicError("")
+    setPublicCode("")
+    setConsentStatus("")
+    setRetryTenant(undefined)
+    setPublicTenant("")
+    setStep(1)
+  }
+
   const chooseMethod = async (next: SignInMethod) => {
     if (releasing || (next !== "ownApp" && available[next] !== true)) return
     setPublicError("")
@@ -600,7 +644,7 @@ export default function OnboardingPage() {
     }
     try {
       const creds = desktopTenantCredentials(account, fields.displayName, choice)
-      const tenant = { ...(await buildTenantProfile(creds, method === "ownApp")), createdAt: new Date().toISOString() }
+      const tenant = { ...(await buildTenantProfile(creds, method === "ownApp", tenantDetails.current?.account === account ? tenantDetails.current.result : undefined)), createdAt: new Date().toISOString() }
       if (!mounted.current) return
       const profile = serializeTenants([tenant])
       const outcome = sharedSignIn
@@ -624,6 +668,7 @@ export default function OnboardingPage() {
       setTenantProfileId(tenant.id)
       setTenantName(tenant.name)
       setResumed(false)
+      if (checkPassed) setCompletedCheck({ account, services })
       setStep(3)
       // The Storage step showed the trial, so it does not follow the admin into the app as a
       // welcome card to dismiss. Showing it again costs nothing, so a failure is ignored.
@@ -748,20 +793,25 @@ export default function OnboardingPage() {
   const checkPassed = Boolean(account && !publicError && !checkingResume && !checkingPermissions && !unknownCoverage && !gaps.length && !otherMissing.length &&
     (sharedSignIn ? coverage.length : permissionResult))
   const skippedCheck = Boolean(unknownCoverage || gaps.length || otherMissing.length || publicError)
-  const stageComplete = [stageIndex > 0, stageIndex > 1, stageIndex > 2 && checkPassed, stageIndex > 3, succeeded]
+  const checked = completedCheck?.account === account && completedCheck?.services === services
+  const stageComplete = [stageIndex > 0, stageIndex > 1, stageIndex > 2 && (checked || checkPassed), stageIndex > 3, succeeded]
+  const continueToStorage = useCallback(() => {
+    setCompletedCheck(checkPassed && account ? { account, services } : null)
+    setStep(2)
+  }, [account, checkPassed, services])
   const stageWarning = [
     false,
     stageIndex === 1 && Boolean(addError || publicError),
-    stageIndex >= 2 && skippedCheck,
+    stageIndex >= 2 && !stageComplete[2] && skippedCheck,
     stageIndex === 3 && Boolean(addError),
     stageIndex === 4 && (backupFailed || Boolean(displayJob && completedWithWarnings(displayJob))),
   ]
 
   useEffect(() => {
     if (step !== 4 || !checkPassed || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return
-    const timer = setTimeout(() => setStep(2), 1800)
+    const timer = setTimeout(continueToStorage, 1800)
     return () => clearTimeout(timer)
-  }, [step, checkPassed])
+  }, [step, checkPassed, continueToStorage])
 
   const dropService = (id: typeof BACKUP_SERVICES[number]["id"]) => {
     const next = { ...services }
@@ -800,6 +850,14 @@ export default function OnboardingPage() {
       setConsentStatus("Could not copy the instructions.")
     }
   }
+
+  const connectedTenant = account && <div className="space-y-1 text-sm text-gray-600">
+    <p>Signed in as {account.username}</p>
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <p className="min-w-0 break-words">Tenant{organization?.account === account ? ` ${organization.name}` : ""} <span className="font-mono">{account.tenantId}</span></p>
+      <button type="button" className="underline underline-offset-2" disabled={creating || releasing || publicBusy || Boolean(consentBusy)} onClick={chooseDifferentTenant}>Different tenant?</button>
+    </div>
+  </div>
 
   const openSetupAction = <div className="space-y-2 rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-gray-700">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -994,7 +1052,8 @@ export default function OnboardingPage() {
         {step === 4 && (
           <section className="space-y-4" aria-labelledby="setup-step-4">
             <StepHeading id="setup-step-4">Check backup access</StepHeading>
-            {account && <p className="text-sm text-gray-600">Signed in as {account.username}</p>}
+            {connectedTenant}
+            {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
             {checkingPermissions || checkingResume || publicBusy ? (
               publicBusy ? <BrowserSignInWait kind="signin" cancel={() => void bridge.auth.cancelSignIn()} /> : <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p>
             ) : <>
@@ -1007,13 +1066,13 @@ export default function OnboardingPage() {
                   {service.scopes.length > 0 && `, ${service.scopes.length} missing permission${service.scopes.length === 1 ? "" : "s"}`}
                 </li>)}
               </ul>}
-              {gaps.length > 0 && <div className="space-y-3 rounded-xl border border-border p-4 text-sm" aria-label="Permission result">
-                {gaps.map(service => <div key={service.id} className="space-y-1">
-                  <p className="font-medium">{service.label} can&apos;t be backed up yet. {service.scopes.length === 1 ? "One permission is missing." : service.scopes.length ? `${service.scopes.length} permissions are missing.` : "Some areas need permission."}</p>
-                  {service.scopes.length > 0 && <ul className="list-disc break-words pl-5">{service.scopes.map(scope => <li key={scope}>{scope}</li>)}</ul>}
-                </div>)}
+              {(gaps.length > 0 || missing.length > 0) && <div className="space-y-3 rounded-xl border border-border p-4 text-sm" aria-label="Permission result">
+                {gaps.map(service => <p key={service.id} className="font-medium">{service.label} can&apos;t be backed up yet.{service.scopes.length === 0 && " Some areas need permission."}</p>)}
+                {missing.length > 0 && <div className="space-y-1">
+                  <p className="font-medium">{missing.length === 1 ? "One permission is missing." : `${missing.length} permissions are missing.`}</p>
+                  <ul className="list-disc break-words pl-5">{missing.map(scope => <li key={scope}>{scope}</li>)}</ul>
+                </div>}
               </div>}
-              {otherMissing.length > 0 && <p className="break-words text-sm">Missing permissions: {otherMissing.join(", ")}</p>}
               {unknownCoverage && <p className="text-sm text-gray-700">Permissions could not be checked. Check again or continue to storage.</p>}
               {(gaps.length > 0 || otherMissing.length > 0) && <>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1028,7 +1087,7 @@ export default function OnboardingPage() {
               {consentStatus && <p role="status" className="text-sm text-gray-700">{consentStatus}</p>}
               {account && (checkPassed || (unknownCoverage && !gaps.length && !otherMissing.length)) && <div className="flex flex-wrap gap-2">
                 {unknownCoverage && <Button variant="outline" disabled={Boolean(consentBusy)} onClick={checkAgain}>Check again</Button>}
-                <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setStep(2)}>Continue to storage</Button>
+                <Button className="bg-blue-600 hover:bg-blue-700" onClick={continueToStorage}>Continue to storage</Button>
               </div>}
             </>}
           </section>
@@ -1037,9 +1096,7 @@ export default function OnboardingPage() {
         {step === 2 && account && (
           <div className="space-y-4">
             <StepHeading id="setup-step-2">Choose where backups are stored</StepHeading>
-            <p className="flex items-center gap-2 text-sm text-gray-600">
-              <CheckCircle2 className="h-4 w-4 text-green-700" aria-hidden="true" /> Signed in as {account.username}
-            </p>
+            {connectedTenant}
             {checkingPermissions && <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p>}
             {method === "graphCli" && <p className="text-sm text-gray-600">Start now signs in to Microsoft Graph only, so backups stay on this device.</p>}
             {method === "tenuvaultApp" && <p className="text-sm text-gray-600">TenuVault app setup signs in to Microsoft Graph only. Add Azure storage access in Settings after the first backup.</p>}
