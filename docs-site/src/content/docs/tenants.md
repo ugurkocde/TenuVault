@@ -52,7 +52,21 @@ TenuVault checks the license when you sign in and again before it saves the tena
 
 After the tenant is added, TenuVault reads its organization name, primary domain and policy counts from Microsoft Graph. If you connected the same tenant before with the same storage location, the custom name and tags you gave it are restored from that storage.
 
-Use **Settings > Services and permissions** to change what the tenant backs up and check coverage for Defender, Entra ID and Intune. Conditional Access has its own switch under Entra ID.
+## Backup coverage on the Tenants page
+
+Each tenant shows **X of Z** backup types for the services it has enabled. Expand **Coverage details** to see whether a permission was not granted, your role could not read a type, or coverage is unknown. The count reflects the current sign-in and selected service areas. Open **Backup Details** to see what a particular backup read.
+
+| Service | Coverage on Tenants |
+| --- | --- |
+| Defender | Shows the count for selected Defender configuration types. |
+| Entra ID | Shows the count for selected Entra ID configuration types, including Conditional Access when enabled. |
+| Intune | Shows the count for selected Intune configuration types. |
+
+* **Start now** opens sign-in settings with upgrade options.
+* **TenuVault app** opens sign-in settings so you can add the relevant permission pack or send it to your administrator.
+* **Your own app registration** opens **Services and permissions** for that tenant to review and repair missing permissions.
+
+For a role refusal, ask your administrator to check your access to the affected service. For unknown coverage, use **Check again** in **Settings > Services and permissions** and run a backup to verify the read.
 
 ## The tenant dashboard
 

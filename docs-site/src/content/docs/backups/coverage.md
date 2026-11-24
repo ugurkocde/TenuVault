@@ -22,6 +22,12 @@ With every service and opt-in area selected, TenuVault backs up 135 types. Open 
 | Entra ID | 77 | [Entra ID configuration](/backups/entra/) covers 67 configuration types and seven opt-in directory inventories. [Conditional Access](/backups/conditional-access/) adds three types through its own switch. |
 | Intune | 41 | [Intune configuration](/backups/intune/) covers policies, updates, scripts, apps, enrollment and tenant administration. |
 
+## Read the coverage count
+
+**Sign-in results** and **Tenants** show how many of the selected types your sign-in can back up, for each service. The sign-in count uses verified permissions and, on **Tenants**, recent backup outcomes for your current sign-in. A backup may still find a role refusal or a service that needs a license. Types that require a Backup Reader are tracked separately in **Settings > Services and permissions**.
+
+**Backup Details** counts the selected types that were read in full in that backup. An empty list or an unset configuration counts as read. A partial read can still show how many policies were saved. **Not included** means the backup scope left the type out. **Unknown** means the read or coverage could not be confirmed. Expand **Coverage details** to see the affected types and any known reason.
+
 ## How to read the tables
 
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).

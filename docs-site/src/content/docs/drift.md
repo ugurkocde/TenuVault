@@ -98,12 +98,20 @@ A change marked **Reverted** was already reverted with TenuVault. A change marke
 
 ## What drift detection compares
 
-* All types both backups include. If one backup left out apps, apps are not compared. See [What gets backed up](/backups/coverage/).
+* Types read in full by both backups. When either backup excluded a type or did not confirm a complete read, the results list it under **Unknown coverage** and leave it out of added, modified and deleted totals. See [What gets backed up](/backups/coverage/).
 * Changes to IDs, version numbers, creation and modification times, the description and the reference IDs of encrypted values are ignored.
 * Items whose fingerprint (recorded in each backup) is the same in both backups are unchanged and are not read again, so comparisons of large tenants finish faster. Backups made by earlier versions without fingerprints are compared file by file.
 * Lists of settings are matched by the setting itself, so an added, removed or reordered setting is reported as that setting, not as a change to every setting after it.
 * Earlier TenuVault versions saved Settings Catalog policies (including endpoint security and Settings Catalog compliance policies) without their assignments. When the older backup comes from such a version, the assignments of these policies are not compared, so the first backup that includes them does not show every assigned policy as changed. Their settings are still compared.
 * New policies whose name starts with **[Restored]** are reported as added and marked **Likely restored copy**. TenuVault creates copies with this prefix when you restore, and a policy created in Intune can carry the same prefix, so the result stays visible.
+
+### Examples by service
+
+| Service | Example of coverage shown as unknown |
+| --- | --- |
+| Defender | One backup could not read attack simulations. |
+| Entra ID | One backup could not read named locations. |
+| Intune | One backup left apps out of its scope. |
 
 ### Severity
 
