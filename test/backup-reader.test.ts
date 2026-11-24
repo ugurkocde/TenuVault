@@ -93,22 +93,30 @@ describe("checkReaderToken", () => {
   })
 
   it("refuses an unreadable token", () => {
-    expect(() => checkReaderToken("not-a-jwt", app, "graph")).toThrow(/cannot read/)
+    expect(() => checkReaderToken("not-a-jwt", app, "graph")).toThrow(/cannot verify.*Graph roles/)
   })
 })
 
-it("dispatches roleless Storage tokens from the verified reader after a switch, including audit delivery", async () => {
+it.each([storageToken(), "opaque-storage-token"])("dispatches verified reader Storage tokens after a switch, including audit delivery (%#)", async (storage) => {
   const cap = new ConnectionCapabilities(() => ({
     version: 1, origin: "wizard", method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, createdAt: "", updatedAt: "",
   }))
   const reader = new BackupReaderService(store(), {
-    acquire: async (_app, scope) => ({ accessToken: scope === RESOURCE_SCOPES.storage ? storageToken() : graphToken() }),
+    acquire: async (_app, scope) => ({ accessToken: scope === RESOURCE_SCOPES.storage ? storage : graphToken() }),
     now: () => new Date("2026-10-26T12:00:00Z"),
     bindToken: (tenant, client, scope, token) => cap.bindReaderToken(tenant, client, scope, token),
   })
   reader.prepare(TENANT, "fixture")
   await reader.verify(TENANT, READER)
-  const network = vi.fn<typeof fetch>(async () => new Response(null, { status: 201 }))
+  const network = vi.fn<typeof fetch>(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.origin === "https://graph.microsoft.com") {
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${graphToken()}`)
+      return Response.json({ value: [] })
+    }
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${storage}`)
+    return new Response(null, { status: 201 })
+  })
   const fetchBlob = createBridgedFetch({
     dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
     authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
@@ -116,15 +124,38 @@ it("dispatches roleless Storage tokens from the verified reader after a switch, 
   const put = async (container: string) => fetchBlob(`https://contoso.blob.core.windows.net/${container}/example.json`, {
     method: "PUT", headers: { authorization: `Bearer ${await reader.tokens(scheduled)!.storage()}` },
   })
-  await expect(executionMetadata.run({ connections: cap.bindConnections([TENANT]) }, () => put("intune-backups"))).resolves.toMatchObject({ status: 201 })
+  const job = await executionMetadata.run({ connections: cap.bindConnections([TENANT]) }, async () => {
+    const engine = new BackupEngine({ fetch: fetchBlob, getToken: vi.fn(), unattendedTokens: request => reader.tokens(request) })
+    return engine.waitForJob(engine.start({
+      ...scheduled, scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) },
+    }))
+  })
+  expect(job).toMatchObject({ status: "Completed", authMode: "app-only" })
+  expect(network.mock.calls.some(([url, init]) => String(url).includes("/intune-backups/") && init?.method === "PUT")).toBe(true)
   await expect(put("intune-audit-logs")).resolves.toMatchObject({ status: 201 })
+  const calls = network.mock.calls.length
   const other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
   await expect(executionMetadata.run({ connections: cap.bindConnections([other]) }, () => put("intune-backups"))).rejects.toThrow("method changed")
+  await expect(fetchBlob("https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations", {
+    headers: { authorization: `Bearer ${storage}` },
+  })).rejects.toThrow("could not verify")
   const foreign = storageToken({ appid: scheduled.clientId, roles: ["Some.Role"] })
   await expect(fetchBlob("https://contoso.blob.core.windows.net/intune-backups/example.json", {
     headers: { authorization: `Bearer ${foreign}` },
   })).rejects.toThrow("method changed")
-  expect(network).toHaveBeenCalledTimes(2)
+  expect(network).toHaveBeenCalledTimes(calls)
+})
+
+it("refuses an opaque Graph token at setup and after verification with a readable Graph token", async () => {
+  const { reader, setGraph } = service({ graph: () => "opaque-graph" })
+  reader.prepare(TENANT, "fixture")
+  await expect(reader.verify(TENANT, READER)).rejects.toThrow(/cannot verify.*Graph roles/)
+  expect(reader.tokens(scheduled)).toBeNull()
+
+  setGraph(() => graphToken())
+  await reader.verify(TENANT, READER)
+  setGraph(() => "opaque-graph")
+  await expect(reader.tokens(scheduled)!.graph()).rejects.toThrow(/cannot verify.*Graph roles/)
 })
 
 describe("BackupReaderService", () => {

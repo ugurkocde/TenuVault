@@ -545,7 +545,7 @@ async function bootstrap(): Promise<void> {
   const backupReader = new BackupReaderService(tokenStore, {
     fetch: bridgedFetch, services: tenantId => moduleSettings.selection(tenantId),
     connectionChanged: (tenantId) => health.connectionsChanged(tenantId),
-    bindToken: (tenant, client, scope, token) => capabilities.bindReaderToken(tenant, client, scope, token),
+    bindToken: (tenant, client, scope, token, expiresOn) => capabilities.bindReaderToken(tenant, client, scope, token, expiresOn),
   })
   // Connection health: what the token checks and the backup runs of each tenant observed, and what
   // that adds up to. A check asks Microsoft for a new token without any window, so it goes straight

@@ -272,6 +272,8 @@ When a computer is retired or lost, remove its certificate from the app registra
 
 ## Troubleshooting
 
+If TenuVault cannot verify the Backup Reader's Microsoft Graph roles, it stops the scheduled backup. Use **Test now** in **Settings > Backup Reader** to check the connection again. The reader must be able to prove that its current Graph permissions are read-only.
+
 | Message | Cause | Fix | Who |
 | --- | --- | --- | --- |
 | Microsoft refused the Backup Reader (AADSTS700027) | Microsoft does not know the certificate: it was not uploaded, or not yet applied. | Run the setup script with the saved certificate, wait a few minutes and verify again. | Entra administrator runs the script; you verify |

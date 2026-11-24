@@ -3,7 +3,8 @@ import type { BackupRequest, RunTokens } from "../backup/engine"
 import type { BackupReaderStatus, BackupReaderTestResult } from "../../shared/ipc"
 import type { SecureStore } from "../storage/secure-store"
 import { RESOURCE_SCOPES } from "../../shared/constants"
-import { isGuid } from "../../shared/security"
+import { accessTokenClaims } from "./token-identity"
+import { isGuid, normalizeGuid } from "../../shared/security"
 import { DEFAULT_SELECTION, MODULES, type ServiceSelection } from "../../shared/services/modules"
 import { READER_ALLOWED_ROLES, readerExcludedFolders, readerRequiredRoles, SCRIPT_SERVICE } from "../../shared/services/manifest"
 import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
@@ -68,6 +69,7 @@ export interface BackupReaderCredential {
 
 export interface AcquiredToken {
   accessToken: string
+  expiresOn?: Date | null
 }
 
 /**
@@ -79,7 +81,7 @@ export type AcquireToken = (credential: { tenantId: string; clientId: string; ce
 const KEY = "backupReader."
 
 export class BackupReaderService {
-  private readonly bindToken?: (tenantId: string, clientId: string, scope: string, token: string) => void
+  private readonly bindToken?: (tenantId: string, clientId: string, scope: string, token: string, expiresOn?: Date | null) => void
   private readonly connectionChanged?: (tenantId: string) => void
   private readonly now: () => Date
   private readonly acquire: AcquireToken
@@ -139,7 +141,7 @@ export class BackupReaderService {
    * the script with the exported file and then verifying always matches.
    */
   prepare(tenantId: string, deviceName: string): BackupReaderStatus {
-    const tenant = tenantId.toLowerCase()
+    const tenant = normalizeGuid(tenantId)
     const credential = this.read(tenant) ?? { tenantId: tenant, clientId: "", active: null, pending: null, verifiedRoles: null }
     if (!credential.pending) {
       const subject = `TenuVault Backup Reader (${deviceName.replace(/[^\w .-]/g, "").slice(0, 48) || "device"})`
@@ -160,12 +162,12 @@ export class BackupReaderService {
     const credential = this.read(tenantId)
     if (!credential) throw new BackupReaderError("Create the Backup Reader certificate first.")
     if (!isGuid(clientId)) throw new BackupReaderError("Enter the Backup Reader's application (client) ID that the setup script printed.")
-    if (credential.active && credential.clientId && credential.clientId.toLowerCase() !== clientId.toLowerCase()) {
+    if (credential.active && credential.clientId && normalizeGuid(credential.clientId) !== normalizeGuid(clientId)) {
       throw new BackupReaderError("This tenant already has a Backup Reader with a different application ID. Remove it first to switch.")
     }
     if (options.renewal && !credential.pending) throw new BackupReaderError("No renewal certificate is waiting. Create one with Renew certificate.")
     const certificate = options.renewal || !credential.active ? credential.pending! : credential.active
-    const app = { tenantId: credential.tenantId, clientId: clientId.toLowerCase(), certificate }
+    const app = { tenantId: credential.tenantId, clientId: normalizeGuid(clientId), certificate }
     const token = await this.acquire(app, RESOURCE_SCOPES.graph, { fresh: true }).catch((error: unknown) => {
       throw refused(error) ?? error
     })
@@ -226,7 +228,7 @@ export class BackupReaderService {
   }
 
   remove(tenantId: string): void {
-    this.store.delete(KEY + tenantId.toLowerCase())
+    this.store.delete(KEY + normalizeGuid(tenantId))
     this.connectionChanged?.(tenantId)
   }
 
@@ -258,7 +260,11 @@ export class BackupReaderService {
         // A network failure or a transient refusal stays as it is, so the backup is retried.
         throw refused(error, { permanentOnly: true }) ?? error
       })
-      const roles = checkReaderToken(acquired.accessToken, app, resource, selection)
+      if (!acquired.accessToken) throw new BackupReaderError("Microsoft returned no token for the Backup Reader.")
+      // The certificate acquisition binds an opaque Storage bearer to this tenant, app and resource.
+      // For Graph, verify the current roles on every acquisition, including after an app changes.
+      const claims = accessTokenClaims(acquired.accessToken)
+      const roles = resource === "storage" && !claims ? [] : checkReaderClaims(claims, app, resource, selection)
       if (resource === "graph" && roles.join(" ") !== seen) {
         this.noteRoleChange(credential.tenantId, roles, { registrationId: credential.clientId, certificate: credential.active?.thumbprintSha256 })
         usable = verified.filter((role) => roles.includes(role))
@@ -266,7 +272,7 @@ export class BackupReaderService {
         // Remembered only once the checks passed, so a refused reader is refused on every request of the run.
         seen = roles.join(" ")
       }
-      this.bindToken?.(app.tenantId, app.clientId, RESOURCE_SCOPES[resource], acquired.accessToken)
+      this.bindToken?.(app.tenantId, app.clientId, RESOURCE_SCOPES[resource], acquired.accessToken, acquired.expiresOn)
       return acquired.accessToken
     }
     return {
@@ -290,7 +296,7 @@ export class BackupReaderService {
    */
   /** The stored reader is still the registration and certificate a run captured. */
   private sameReader(credential: BackupReaderCredential, reader: { registrationId?: string; certificate?: string }): boolean {
-    return credential.clientId === reader.registrationId && credential.active?.thumbprintSha256 === reader.certificate
+    return !!reader.registrationId && normalizeGuid(credential.clientId) === normalizeGuid(reader.registrationId) && credential.active?.thumbprintSha256 === reader.certificate
   }
 
   private noteRoleChange(tenantId: string, roles: string[], reader: { registrationId?: string; certificate?: string }): void {
@@ -311,7 +317,7 @@ export class BackupReaderService {
   }
 
   private read(tenantId: string): BackupReaderCredential | null {
-    const tenant = tenantId.toLowerCase()
+    const tenant = normalizeGuid(tenantId)
     const raw = this.store.get(KEY + tenant)
     if (!raw) return null
     let parsed: unknown
@@ -328,7 +334,7 @@ export class BackupReaderService {
   }
 
   private write(credential: BackupReaderCredential): void {
-    this.store.set(KEY + credential.tenantId.toLowerCase(), JSON.stringify(credential))
+    this.store.set(KEY + normalizeGuid(credential.tenantId), JSON.stringify(credential))
     this.connectionChanged?.(credential.tenantId)
   }
 }
@@ -343,7 +349,7 @@ function isCertificate(value: unknown): value is Certificate {
 function isCredential(value: unknown, tenant: string): value is BackupReaderCredential {
   if (!value || typeof value !== "object") return false
   const credential = value as Partial<BackupReaderCredential>
-  if (typeof credential.tenantId !== "string" || credential.tenantId.toLowerCase() !== tenant) return false
+  if (typeof credential.tenantId !== "string" || normalizeGuid(credential.tenantId) !== tenant) return false
   if (typeof credential.clientId !== "string") return false
   if (credential.active !== null && !isCertificate(credential.active)) return false
   if (credential.pending !== null && !isCertificate(credential.pending)) return false
@@ -384,15 +390,18 @@ export function readerConfidenceRead(selection: ServiceSelection, roles: readonl
  * the services that are on by default.
  */
 export function checkReaderToken(token: string, app: { tenantId: string; clientId: string }, resource: "graph" | "storage", selection: ServiceSelection = DEFAULT_SELECTION): string[] {
-  let claims: Record<string, unknown>
-  try {
-    claims = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as Record<string, unknown>
-  } catch {
-    throw new BackupReaderError("Microsoft returned a Backup Reader token the app cannot read.")
+  return checkReaderClaims(accessTokenClaims(token), app, resource, selection)
+}
+
+function checkReaderClaims(claims: Record<string, unknown> | undefined, app: { tenantId: string; clientId: string }, resource: "graph" | "storage", selection: ServiceSelection): string[] {
+  if (!claims) {
+    throw new BackupReaderError(resource === "graph"
+      ? "TenuVault cannot verify the Backup Reader's Microsoft Graph roles in this token. Scheduled backups require a token with verifiable read-only roles. Check the Backup Reader in Settings."
+      : "Microsoft returned a Backup Reader token the app cannot read.")
   }
   const appId = typeof claims.appid === "string" ? claims.appid : claims.azp
-  if (typeof claims.tid !== "string" || claims.tid.toLowerCase() !== app.tenantId.toLowerCase()) throw new BackupReaderError("The Backup Reader token was issued for a different tenant.")
-  if (typeof appId !== "string" || appId.toLowerCase() !== app.clientId.toLowerCase()) throw new BackupReaderError("The Backup Reader token was issued to a different app registration.")
+  if (typeof claims.tid !== "string" || normalizeGuid(claims.tid) !== normalizeGuid(app.tenantId)) throw new BackupReaderError("The Backup Reader token was issued for a different tenant.")
+  if (typeof appId !== "string" || normalizeGuid(appId) !== normalizeGuid(app.clientId)) throw new BackupReaderError("The Backup Reader token was issued to a different app registration.")
   if (typeof claims.aud !== "string" || !AUDIENCES[resource].has(claims.aud)) throw new BackupReaderError("The Backup Reader token is for a different resource.")
   // Delegated tokens carry scp; the Backup Reader is only ever an application.
   if (claims.scp !== undefined || (claims.idtyp !== undefined && claims.idtyp !== "app")) throw new BackupReaderError("The Backup Reader token is not an app-only token.")
@@ -450,6 +459,6 @@ function msalAcquire(fetchImpl?: typeof fetch): AcquireToken {
     }
     const result = await app.acquireTokenByClientCredential({ scopes: [scope], skipCache: options?.fresh === true })
     if (!result?.accessToken) throw new Error("Microsoft returned no token for the Backup Reader.")
-    return { accessToken: result.accessToken }
+    return { accessToken: result.accessToken, expiresOn: result.expiresOn }
   }
 }
