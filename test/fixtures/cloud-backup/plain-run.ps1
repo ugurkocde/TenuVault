@@ -22,6 +22,7 @@ $script:calls = [System.Collections.Generic.List[object]]::new()
 $script:failGraphToken = $false
 $script:failDetail = $false
 $script:timeoutDetail = $false
+$script:secondListPage = $null
 $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
@@ -48,6 +49,11 @@ function Invoke-TvHttp {
         throw [TvHttpError]::new(404, "HTTP 404")
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
+        if ($null -ne $script:secondListPage) {
+            $text = '{"value":[],"@odata.nextLink":"https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?page=2"}'
+        }
+    } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?page=2") {
+        $text = $script:secondListPage
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeviceIdentities") {
         # A list-only type: the entry is the snapshot, with status fields and secrets left out.
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
@@ -145,26 +151,29 @@ $output = [System.Collections.Generic.List[string]]::new()
 try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
 
-# 10. List succeeded and one detail read timed out. Compare the actual manifests from both captures.
-$script:calls.Clear()
-$script:OutcomeSent = $false
+# 10. A detail read times out. 11 through 15. Lists with malformed or empty final pages.
+# Compare the actual manifests from each capture.
 $script:failAuditReceipt = $false
-$script:timeoutDetail = $true
 [Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
-$output = @(Invoke-TvBackup)
-$newerWrite = $script:calls | Where-Object { $_.method -eq "Put" -and $_.uri -like "*/metadata.json" }
 $before = ConvertFrom-TvJson $baselineManifestWrite.body
-$after = ConvertFrom-TvJson $newerWrite.body
 $older = @{ Name = "older"; Metadata = $before }
-$newer = @{ Name = "newer"; Metadata = $after }
-$compared = Get-TvBackupDrifts -Older $older -Newer $newer -Types (Get-TvTypes) -ReadItem {
-    param($backup, $file)
-    $root = if ($backup -eq "older") { $baselineManifestWrite.uri } else { $newerWrite.uri }
-    $escapedFile = ($file.Split('/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
-    $uri = $root -replace 'metadata.json$', $escapedFile
-    $reads = if ($backup -eq "older") { $baselineCalls } else { $script:calls }
-    $write = $reads | Where-Object { $_.method -eq "Put" -and $_.uri -eq $uri }
-    if ($write) { return ConvertFrom-TvJson $write.body }
-    return $null
+foreach ($page in @($null, '{}', '{"value":null}', '{"value":{"id":"cfg-2"}}', '{"value":[],"@odata.nextLink":false}', '{"value":[]}')) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:timeoutDetail = $null -eq $page
+    $script:secondListPage = $page
+    $output = @(Invoke-TvBackup)
+    $newerWrite = $script:calls | Where-Object { $_.method -eq "Put" -and $_.uri -like "*/metadata.json" }
+    $newer = @{ Name = "newer"; Metadata = ConvertFrom-TvJson $newerWrite.body }
+    $compared = Get-TvBackupDrifts -Older $older -Newer $newer -Types (Get-TvTypes) -ReadItem {
+        param($backup, $file)
+        $root = if ($backup -eq "older") { $baselineManifestWrite.uri } else { $newerWrite.uri }
+        $escapedFile = ($file.Split('/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+        $uri = $root -replace 'metadata.json$', $escapedFile
+        $reads = if ($backup -eq "older") { $baselineCalls } else { $script:calls }
+        $write = $reads | Where-Object { $_.method -eq "Put" -and $_.uri -eq $uri }
+        if ($write) { return ConvertFrom-TvJson $write.body }
+        return $null
+    }
+    Write-Output (@{ calls = @($script:calls.ToArray()); output = $output; compared = $compared } | ConvertTo-Json -Compress -Depth 10)
 }
-Write-Output (@{ calls = @($script:calls.ToArray()); output = $output; compared = $compared } | ConvertTo-Json -Compress -Depth 10)

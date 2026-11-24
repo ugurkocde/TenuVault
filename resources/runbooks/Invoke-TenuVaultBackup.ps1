@@ -1203,8 +1203,14 @@ function Invoke-TvGraphList {
     while ($next) {
         if (++$pages -gt 1000) { throw "Graph listing did not finish after 1000 pages: $Path" }
         $page = Invoke-TvGraphGet $next $Token
-        foreach ($item in @(Get-TvProp $page "value")) { if ($null -ne $item) { $items.Add($item) } }
-        $next = Get-TvProp $page "@odata.nextLink"
+        if ($page -isnot [System.Collections.IDictionary] -or $page["value"] -isnot [array]) {
+            throw "Graph returned an invalid policy collection"
+        }
+        foreach ($item in $page["value"]) { if ($null -ne $item) { $items.Add($item) } }
+        $next = $page["@odata.nextLink"]
+        if ($page.Contains("@odata.nextLink") -and ($next -isnot [string] -or [string]::IsNullOrWhiteSpace($next))) {
+            throw "Graph returned an invalid continuation link"
+        }
     }
     return $items
 }
@@ -3383,6 +3389,13 @@ function Invoke-TvBackup {
                 $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "failed"; Saved = 0; Error = $reason; Status = $status }
                 Write-Output "Could not read $($type.Label): $reason"
             }
+        } catch {
+            $consecutiveAuth = 0
+            $failures++
+            $failedTypes.Add([string]$type.Folder)
+            $reason = Get-TvSafeError $_.Exception.Message
+            $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "failed"; Saved = 0; Error = $reason }
+            Write-Output "Could not read $($type.Label): $reason"
         }
     }
 

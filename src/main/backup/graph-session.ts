@@ -58,16 +58,7 @@ export class GraphSession {
 
   async list(url: string, options: ListOptions = {}): Promise<GraphItem[]> {
     const items: GraphItem[] = []
-    let next: string | undefined = url
-    const seen = new Set<string>()
-    while (next) {
-      if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
-      const request = graphContinuation(url, next, seen, options.filter)
-      const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(request, options.headers, options)
-      if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
-      items.push(...page.value)
-      next = page["@odata.nextLink"]
-    }
+    for await (const page of this.pages(url, options)) items.push(...page)
     return items
   }
 
@@ -78,10 +69,11 @@ export class GraphSession {
     while (next) {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
       const request = graphContinuation(url, next, seen, options.filter)
-      const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(request, options.headers, options)
-      if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
-      yield page.value
+      const page = await this.get<{ value?: GraphItem[]; "@odata.nextLink"?: string } | null>(request, options.headers, options)
+      if (!Array.isArray(page?.value)) throw new Error("Graph returned an invalid policy collection")
       next = page["@odata.nextLink"]
+      if (next !== undefined && (typeof next !== "string" || !next.trim())) throw new Error("Graph returned an invalid continuation link")
+      yield page.value
     }
   }
 

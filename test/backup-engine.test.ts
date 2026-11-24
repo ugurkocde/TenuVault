@@ -137,6 +137,18 @@ describe("BackupEngine", () => {
     expect(metadata.Outcomes).toContainEqual(expect.objectContaining({ Folder: "CompliancePolicies", Outcome: "failed", Error: guidance, Status: status }))
   })
 
+  it.each(["", null, false])("marks the type unread when a later list page has a continuation of %j", async (nextLink) => {
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations?page=2": Response.json({ value: [], "@odata.nextLink": nextLink }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Coverage: "Incomplete" })
+    expect(metadata.Outcomes).toContainEqual({
+      Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Error: "Graph returned an invalid continuation link",
+    })
+  })
+
   it("keeps policy names recognizable while masking account identifiers in item failures", async () => {
     const { engine, store, account } = setup(fakeGraph({
       "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: "BitLocker (admin+lab@example.test, guest_example.test#EXT#@tenant.onmicrosoft.com)" }] }),

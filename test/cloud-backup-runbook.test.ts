@@ -31,7 +31,7 @@ function runAuditSetup(shell: (file: string, args: string[], options: { encoding
 type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
 type Run = { calls: RunCall[]; error?: string | null; output?: string[]; compared?: { Drifts: Array<{ configId: string }>; UnknownTypes: string[] } }
 let plainRuns: Run[] | undefined
-/** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
+/** The scenarios of the plain-run fixture, in the order printed by the PowerShell harness. */
 function runPlainFixture(): Run[] {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
   plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
@@ -714,6 +714,42 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
       { Folder: "AutopilotDevices", Outcome: "saved", Saved: 1 },
       { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
     ]))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh)).each([
+    [10, "missing value", "Graph returned an invalid policy collection"],
+    [11, "null value", "Graph returned an invalid policy collection"],
+    [12, "object value", "Graph returned an invalid policy collection"],
+    [13, "invalid continuation", "Graph returned an invalid continuation link"],
+  ])("marks the type unread when a later page in scenario %i has %s", (index, _case, error) => {
+    const run = runPlainFixture()[index]!
+    const blobs = writtenBlobs(run)
+    const manifest = JSON.parse(blobs.get(`${folderOf(blobs)}/metadata.json`)!)
+    expect(run.calls.filter(call => call.uri.includes("/deviceManagement/deviceConfigurations")).map(call => call.uri))
+      .toEqual([expect.stringMatching(/deviceConfigurations$/), expect.stringMatching(/deviceConfigurations\?page=2$/)])
+    expect(manifest).toMatchObject({ Status: "CompletedWithWarnings", Coverage: "Incomplete", FailedTypes: ["DeviceConfigurations"] })
+    expect(manifest.Outcomes).toEqual(expect.arrayContaining([
+      { Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Error: error },
+      { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
+    ]))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("omits deletions for an unread list but keeps deletions for a valid empty list", () => {
+    const runs = runPlainFixture()
+    const manifest = (run: Run) => {
+      const blobs = writtenBlobs(run)
+      return JSON.parse(blobs.get(`${folderOf(blobs)}/metadata.json`)!)
+    }
+    const baseline = manifest(runs[0]!)
+    const malformed = runs[10]!
+    const empty = runs[14]!
+    const emptyManifest = manifest(empty)
+    expect(emptyManifest).toMatchObject({ Status: "Success", Coverage: "Complete" })
+    expect(emptyManifest.Outcomes).toContainEqual({ Folder: "DeviceConfigurations", Outcome: "saved", Saved: 0 })
+    expect(compareBackups(baseline, emptyManifest)).toHaveLength(1)
+    expect(empty.compared?.Drifts).toHaveLength(1)
+    expect(compareBackups(baseline, manifest(malformed))).toEqual([])
+    expect(malformed.compared).toMatchObject({ Drifts: [], UnknownTypes: ["DeviceConfigurations"], LegacyReadFailure: false })
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {
