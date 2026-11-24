@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { describe, expect, it, vi } from "vitest"
 import { ENTRA_5B_TYPES as TYPES, PIM_GROUP_READ_BUDGET_MS, PIM_GROUP_SCHEDULE_REQUEST_LIMIT } from "../src/shared/intune/entra"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"

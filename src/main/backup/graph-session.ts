@@ -104,7 +104,6 @@ export class GraphSession {
       if (this.throttleError) throw this.throttleError
       let response: Response | undefined
       let attempted = false
-      let endpointRefusal = false
       try {
         return await withRequestTimeout(async (signal) => {
           const token = confirming ? (fresh ??= await this.token({ fresh: true })) : await this.token()
@@ -125,12 +124,6 @@ export class GraphSession {
             this.answered()
             return result
           }
-          // This endpoint returns a recorded IIS permission page, not a token expiry. Refreshing
-          // the token here could open sign-in and end an otherwise valid admin session.
-          endpointRefusal = this.options.service === "defender" && response.status === 401 &&
-            /^\/beta\/security\/threatSubmission\/emailThreatSubmissionPolicies(?:\/[^/]+)?$/.test(new URL(url).pathname) &&
-            /text\/html/i.test(response.headers.get("content-type") ?? "") &&
-            /Access is denied due to invalid credentials/i.test(await response.clone().text())
           throw await graphFailure(response, grant, this.options.requireGrantEvidence === true && !grant)
         }, signal)
       } catch (error) {
@@ -149,7 +142,7 @@ export class GraphSession {
         // or to a Backup Reader. A sign-in that just ended is answered the same way. The request is asked once more
         // with a token Microsoft issues now: a sign-in that ended gets none, which ends the backup, and only an
         // answer to the new token is taken as the endpoint's own.
-        if (this.options.isolated && !endpointRefusal && !confirming && error instanceof GraphError && error.status === 401 && !signInRefused({ status: 401, ...error.answer })) {
+        if (this.options.isolated && !confirming && error instanceof GraphError && error.status === 401 && !signInRefused({ status: 401, ...error.answer })) {
           confirming = true
           attempt = -1
           continue

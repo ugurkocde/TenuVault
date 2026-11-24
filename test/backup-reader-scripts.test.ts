@@ -85,10 +85,9 @@ describe("New-TenuVaultBackupReader.ps1", () => {
 
     it.each<[string, PermissionChoice]>([
       ["Entra ID alone", { entra: { access: "backup" } }],
-      ["Defender alone", { defender: { access: "backup" } }],
       ["Conditional Access alone", { conditionalAccess: { access: "backup" } }],
-      ["Intune and Entra ID with two opt-in areas", { intune: { access: "backup" }, entra: { access: "backup", areas: ["groups", "applications"] } }],
-      ["every service with every area", { intune: { access: "backup", areas: ["devices"] }, conditionalAccess: { access: "backup" }, entra: { access: "backup", areas: ["groups", "usersAndDevices", "applications"] }, defender: { access: "backup" } }],
+      ["Intune and Entra ID with two opt-in areas", { intune: { access: "backup" }, entra: { access: "backup", areas: ["groups"] } }],
+      ["every service with every area", { intune: { access: "backup", areas: ["devices"] }, conditionalAccess: { access: "backup" }, entra: { access: "backup", areas: ["groups", "usersAndDevices"] } }],
     ])("grants what the permission manifest names for %s, from the command the app shows", (_name, choice) => {
       const expected = [...readerRoles(choice)]
       // The command the Backup Reader card builds for a reader with these roles asks for the same roles again.

@@ -8,7 +8,6 @@ import { deferredPrivilegedRestore, DEFERRED_RESTORE_MESSAGE } from "./directory
  * Paths are relative to https://graph.microsoft.com/beta/, or to the version a type names.
  */
 
-import { DEFENDER_TYPES } from "./defender"
 import { ENTRA_TYPES } from "./entra"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID, complianceSettingChanges, complianceSettingsUpdate } from "./compliance-settings"
 import { createState, isMicrosoftManaged, MICROSOFT_MANAGED, policyBody, policyChanges, policyWarnings, replaceState, strengthBody, strengthUpdate } from "./conditional-access"
@@ -1302,7 +1301,6 @@ export const INTUNE_TYPES: IntuneType[] = [
     warnings: policyWarnings,
   },
   ...ENTRA_TYPES,
-  ...DEFENDER_TYPES,
 ]
 
 for (const type of INTUNE_TYPES) {

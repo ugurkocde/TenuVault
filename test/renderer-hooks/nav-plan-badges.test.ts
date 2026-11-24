@@ -119,7 +119,7 @@ describe("sidebar plan badges for paid screens", () => {
     const nav = container.querySelector('nav[aria-label="Main navigation"]')!
     const group = nav.querySelector('section[aria-label="Services"]')!
     expect(group.querySelector("h2")?.textContent).toBe("Services")
-    expect([...group.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
+    expect([...group.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Entra ID", "Intune"])
     expect(group.previousElementSibling?.textContent).toBe("DashboardTenants")
     expect(group.closest("#nav-items-Protect")).toBeNull()
     for (const link of group.querySelectorAll("a")) expect(link.hasAttribute("data-nav-row")).toBe(true)

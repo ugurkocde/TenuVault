@@ -8,7 +8,7 @@ export const STAGED_8C_OPERATIONS: Readonly<Record<string, readonly ("create" | 
   CrossTenantAccessPolicy: ["update"], ExternalIdentitiesPolicy: ["update"],
   UserFlowAttributes: ["create", "update"], AccessPackageCatalogs: ["create", "update"],
   AccessReviewPolicy: ["update"], LifecycleWorkflowSettings: ["update"],
-  LifecycleWorkflows: ["update"], DefenderCustomDetectionRules: ["create", "update"],
+  LifecycleWorkflows: ["update"],
 }
 const fields: Record<string, Record<string, string>> = {
   CrossTenantAccessPolicy: { displayName: "string" }, ExternalIdentitiesPolicy: { allowExternalIdentitiesToLeave: "boolean" },
@@ -17,7 +17,6 @@ const fields: Record<string, Record<string, string>> = {
   AccessReviewPolicy: { isGroupOwnerManagementEnabled: "boolean" },
   LifecycleWorkflowSettings: { workflowScheduleIntervalInHours: "number" },
   LifecycleWorkflows: { displayName: "string", description: "string", isEnabled: "boolean", isSchedulingEnabled: "boolean" },
-  DefenderCustomDetectionRules: { id: "string", displayName: "string", description: "string", status: "string", queryCondition: "object", schedule: "object", detectionAction: "object" },
 }
 function closed(value: unknown, schema: Record<string, string>): value is Item {
   return !!value && typeof value === "object" && !Array.isArray(value) && Object.entries(value).every(([key, child]) => Object.hasOwn(schema, key) && child !== null && typeof child === schema[key] && (typeof child !== "number" || Number.isFinite(child)))
@@ -54,15 +53,5 @@ export function configuration8cPayload(folder: string, operation: "create" | "up
   if (folder === "AccessPackageCatalogs" && (body.state !== "unpublished" || body.isExternallyVisible !== false)) throw new RestoreSafetyError("The catalog must remain unpublished and hidden externally.")
   if (folder === "LifecycleWorkflowSettings" && (!Number.isInteger(body.workflowScheduleIntervalInHours) || Number(body.workflowScheduleIntervalInHours) < 1 || Number(body.workflowScheduleIntervalInHours) > 24)) throw new RestoreSafetyError("The workflow schedule interval must be an integer from 1 to 24.")
   if (folder === "LifecycleWorkflows") { body.isEnabled = false; body.isSchedulingEnabled = false }
-  if (folder === "DefenderCustomDetectionRules") {
-    body.status = "disabled"
-    if (body.queryCondition && (!closed(body.queryCondition, { queryText: "string" }) || typeof (body.queryCondition as Item).queryText !== "string")) throw new RestoreSafetyError("Unsupported detection query condition.")
-    if (body.schedule && (!closed(body.schedule, { frequency: "string" }) || !["PT1H", "PT3H", "PT12H", "P1D"].includes(String((body.schedule as Item).frequency)))) throw new RestoreSafetyError("Unsupported detection schedule.")
-    if (body.detectionAction) {
-      const action = body.detectionAction as Item
-      if (!closed(action, { alertTemplate: "object" }) || !closed(action.alertTemplate, { title: "string", description: "string", severity: "string", recommendedActions: "string" }) || !["informational", "low", "medium", "high"].includes(String((action.alertTemplate as Item)?.severity))) throw new RestoreSafetyError("Automated response actions and unsupported alert fields require separate verification and activation approval.")
-    }
-    if (operation === "create" && ["id", "displayName", "queryCondition", "schedule", "detectionAction"].some(key => !body[key])) throw new RestoreSafetyError("Detection creation needs an explicit key, name, query, schedule and alert template.")
-  }
   return body
 }

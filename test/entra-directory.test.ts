@@ -1,8 +1,10 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import JSZip from "jszip"
 import { reviewArchive } from "../src/main/backup/archive"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { ENTRA_DIRECTORY_TYPES as TYPES, DIRECTORY_SCHEMAS, DIRECTORY_EXTRA_SCHEMAS, directoryExtraSnapshot, assertDirectoryDefinition } from "../src/shared/intune/entra-directory"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"
 import { listPath, listSnapshot } from "../src/shared/intune/read"

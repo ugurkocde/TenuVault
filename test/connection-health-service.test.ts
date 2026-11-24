@@ -20,7 +20,7 @@ const SCOPES = [...graphPermissions(DEFAULT_SETUP_CHOICE, "delegated")]
 const WITHOUT_APPS = SCOPES.filter((permission) => !permission.startsWith("DeviceManagementApps"))
 
 const choice = (enabled: boolean, access: "backup" | "restore" = "backup"): ServiceChoice => ({ enabled, access, areas: {} })
-const SETTINGS: Record<ModuleId, ServiceChoice> = { intune: choice(true, "restore"), conditionalAccess: choice(false), entra: choice(false), defender: choice(false) }
+const SETTINGS: Record<ModuleId, ServiceChoice> = { intune: choice(true, "restore"), conditionalAccess: choice(false), entra: choice(false) }
 
 /** A token with these scopes, issued two hours before the test's clock starts. Not signed. */
 const token = (scopes: string[]) => `e30.${Buffer.from(JSON.stringify({ scp: scopes.join(" "), iat: Math.floor((START.getTime() - 2 * 60 * MINUTE) / 1000) })).toString("base64url")}.sig`

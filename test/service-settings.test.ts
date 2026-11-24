@@ -1,10 +1,7 @@
-import { DEFENDER_TYPES } from "../src/shared/intune/defender"
-import { recorded as defenderRecorded } from "./helpers/defender"
-import { ENTRA_5A_TYPES, ENTRA_5B_TYPES, ENTRA_5C_TYPES } from "../src/shared/intune/entra"
+import { ENTRA_TYPES, ENTRA_5B_TYPES, ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { entraFixtureResponses } from "./helpers/entra-5a"
 import { detailPath, listPath, graphVersion } from "../src/shared/intune/read"
 
-const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES]
 
 /** Small documented responses keep this selection test independent of the lab's PIM policy volume. */
 function responsesFor(folder: string): ReturnType<typeof entraFixtureResponses> {
@@ -79,7 +76,7 @@ async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = T
 }) {
   const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-services-")), [randomBytes(32)])
   const graphPaths: string[] = []
-  const entraResponses = Object.assign({}, ...ENTRA_TYPES.map(type => responsesFor(type.folder))) as ReturnType<typeof entraFixtureResponses>
+  const entraResponses = Object.assign({}, ...ENTRA_TYPES.filter(type => !moduleForFolder(type.folder)?.area.optIn).map(type => responsesFor(type.folder))) as ReturnType<typeof entraFixtureResponses>
   const capabilities = new ConnectionCapabilities(() => null)
   const opaqueToken = "opaque-graph-token"
   if (options?.clientId === TENUVAULT_CLIENT_ID) {
@@ -93,9 +90,7 @@ async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = T
       const path = decodeURIComponent(url.pathname)
       graphPaths.push(path)
       if (options?.denied?.includes(path)) return Response.json({ error: { code: "Forbidden", message: "Access denied" } }, { status: 403 })
-      const defenderType = DEFENDER_TYPES.find(type => url.pathname.startsWith(`/${type.apiVersion}/${type.path}`))
-      const defenderResponses = defenderType ? defenderRecorded(defenderType.folder, true).responses : {}
-      const answer = entraResponses[url.pathname + url.search] ?? Object.entries(defenderResponses).find(([path]) => decodeURIComponent(path) === decodeURIComponent(url.pathname + url.search))?.[1]
+      const answer = entraResponses[url.pathname + url.search]
       return answer ? Response.json(answer.body, { status: answer.status, headers: answer.headers }) : emptyIntuneRead(url.pathname)
     }) as typeof fetch,
     graphGrant: token => capabilities.graphGrant(token),
@@ -157,14 +152,13 @@ describe("Settings stored by the 0.5 release", () => {
     describe(fixture.name, () => {
       const tenantId = fixture.readAs ?? TENANT
 
-      it("keeps Intune on, Conditional Access as it was, and Entra ID and Defender off", () => {
+      it("keeps Intune on, Conditional Access as it was, and Entra ID off", () => {
         const settings = new ModuleSettings(storeWith(fixture.stored))
         expect(settings.selection(tenantId).services).toEqual(["intune", ...(fixture.conditionalAccess ? ["conditionalAccess"] : [])])
         expect(settings.get(tenantId)).toEqual({
           intune: { enabled: true, connection: "default", access: "restore", areas: {} },
           conditionalAccess: { enabled: fixture.conditionalAccess, connection: "default", access: "backup", areas: {} },
-          entra: { enabled: false, connection: "default", access: "backup", areas: { groups: false, usersAndDevices: false, applications: false } },
-          defender: { enabled: false, connection: "default", access: "backup", areas: {} },
+          entra: { enabled: false, connection: "default", access: "backup", areas: { groups: false, usersAndDevices: false } },
         })
       })
 
@@ -181,18 +175,19 @@ describe("Settings stored by the 0.5 release", () => {
   }
 })
 
-it("keeps the selected services enabled and skips wholly unreadable services in a scheduled backup", async () => {
+it("keeps selected services enabled and skips types that lack access in a scheduled backup", async () => {
   const settings = new ModuleSettings(memoryStore())
-  settings.setChoice(TENANT, { intune: { access: "backup" }, conditionalAccess: { access: "backup" }, defender: { access: "backup" } })
+  settings.setChoice(TENANT, { intune: { access: "backup" }, conditionalAccess: { access: "backup" }, entra: { access: "backup" } })
   const token = "Policy.Read.All"
   const modules = await servicesStatus(TENANT, settings, async () => ({ accessToken: jwt(token) }))
-  expect(modules.needsAccess).toEqual(["defender", "intune"])
-  expect(modules.modules.filter(module => module.enabled).map(module => module.id)).toEqual(["intune", "conditionalAccess", "defender"])
+  expect(modules.needsAccess).toEqual(["intune"])
+  expect(modules.modules.filter(module => module.enabled).map(module => module.id)).toEqual(["intune", "conditionalAccess", "entra"])
   const result = await backup(settings, DEFAULT_SCOPE, TENANT, { scopes: token, trigger: "scheduled" })
   expect(result.status).toBe("Success")
   expect(result.graphPaths.length).toBeGreaterThan(0)
-  expect(result.graphPaths.every(path => path.includes("conditionalAccess"))).toBe(true)
-  expect(result.job.results?.types.find(type => type.folder === "DefenderSecureScoreControlStates")?.state).toBe("skipped")
+  expect(result.graphPaths.some(path => path.includes("conditionalAccess"))).toBe(true)
+  expect(result.graphPaths.some(path => path.includes("authenticationMethodsPolicy"))).toBe(true)
+  expect(result.job.results?.types.find(type => type.folder === "AuthenticationContexts")?.state).toBe("skipped")
   expect(result.job.results?.types.find(type => type.folder === "DeviceConfigurations")?.state).toBe("skipped")
 })
 
@@ -253,12 +248,12 @@ it("records a denied Intune read as a failure when the grant covers that type", 
 
 it("shows Needs access only for services neither connection can read", async () => {
   const settings = new ModuleSettings(memoryStore())
-  settings.setChoice(TENANT, { conditionalAccess: { access: "backup" }, intune: { access: "backup" }, defender: { access: "backup" } })
+  settings.setChoice(TENANT, { conditionalAccess: { access: "backup" }, intune: { access: "backup" }, entra: { access: "backup" } })
   const status = await servicesStatus(TENANT, settings, async () => ({
     accessToken: jwt("DeviceManagementConfiguration.Read.All"),
-  }), false, undefined, () => ["defender", "intune"])
-  expect(status.needsAccess).toEqual(["entra"])
-  expect(status.modules.filter(module => module.enabled).map(module => module.id)).toEqual(["intune", "conditionalAccess", "defender"])
+  }), false, undefined, () => ["entra", "intune"])
+  expect(status.needsAccess).toEqual([])
+  expect(status.modules.filter(module => module.enabled).map(module => module.id)).toEqual(["intune", "conditionalAccess", "entra"])
 })
 
 describe("Saving a setting on top of stored settings", () => {
@@ -317,8 +312,8 @@ describe("Saving a setting on top of stored settings", () => {
     expect(read(corrupt)).toEqual({ [TENANT]: { conditionalAccess: { connection: "default", enabled: true } } })
 
     const broken = storeWith(JSON.stringify({ [TENANT]: "conditionalAccess" }))
-    new ModuleSettings(broken).set(TENANT, "defender", true)
-    expect(read(broken)).toEqual({ [TENANT]: { defender: { connection: "default", enabled: true } } })
+    new ModuleSettings(broken).set(TENANT, "entra", true)
+    expect(read(broken)).toEqual({ [TENANT]: { entra: { connection: "default", enabled: true } } })
   })
 
   it("tells its listener about every saved change", () => {
@@ -326,7 +321,7 @@ describe("Saving a setting on top of stored settings", () => {
     const settings = new ModuleSettings(memoryStore(), () => { changes++ })
     settings.set(TENANT, "intune", false)
     settings.setAccess(TENANT, "intune", "backup")
-    settings.setArea(TENANT, "entra", "applications", true)
+    settings.setArea(TENANT, "entra", "usersAndDevices", true)
     expect(changes).toBe(3)
   })
 })
@@ -335,7 +330,7 @@ describe("Access level and opt-in areas per tenant", () => {
   it("stores the access level per service and refuses anything else", () => {
     const settings = new ModuleSettings(memoryStore())
     expect(settings.setAccess(TENANT, "intune", "backup").intune.access).toBe("backup")
-    expect(settings.setAccess(TENANT, "defender", "restore").defender.access).toBe("restore")
+    expect(settings.setAccess(TENANT, "entra", "restore").entra.access).toBe("restore")
     expect(settings.get(TENANT).conditionalAccess.access).toBe("backup")
     for (const [id, access] of [["intune", "write"], ["intune", undefined], ["exchange", "backup"], [7, "backup"]] as const) {
       expect(() => settings.setAccess(TENANT, id, access)).toThrow("Choose a service, and backup or restore as its access.")
@@ -348,7 +343,7 @@ describe("Access level and opt-in areas per tenant", () => {
   it("turns opt-in areas on and off, and refuses an area that is not opt-in", () => {
     const settings = new ModuleSettings(memoryStore())
     settings.set(TENANT, "entra", true)
-    expect(settings.setArea(TENANT, "entra", "usersAndDevices", true).entra.areas).toEqual({ groups: false, usersAndDevices: true, applications: false })
+    expect(settings.setArea(TENANT, "entra", "usersAndDevices", true).entra.areas).toEqual({ groups: false, usersAndDevices: true })
     expect(settings.setArea(TENANT, "entra", "usersAndDevices", false).entra.areas.usersAndDevices).toBe(false)
     for (const [id, area, enabled] of [["entra", "authentication", true], ["entra", "unknown", true], ["intune", "apps", true], ["entra", "groups", "yes"], ["exchange", "groups", true]] as const) {
       expect(() => settings.setArea(TENANT, id, area, enabled)).toThrow("Choose an area that can be turned on or off.")
@@ -397,10 +392,9 @@ describe("Access level and opt-in areas per tenant", () => {
 const COMBINATIONS: ModuleId[][] = Array.from({ length: 2 ** MODULES.length }, (_, bits) => MODULES.filter((_module, index) => bits & (1 << index)).map((module) => module.id))
 
 describe("Any combination of services for a tenant", () => {
-  it("covers all sixteen, with Entra ID only and Defender only among them", () => {
-    expect(COMBINATIONS).toHaveLength(16)
+  it("covers all eight, including Entra ID alone", () => {
+    expect(COMBINATIONS).toHaveLength(8)
     expect(COMBINATIONS).toContainEqual(["entra"])
-    expect(COMBINATIONS).toContainEqual(["defender"])
   })
 
   for (const combination of COMBINATIONS) {
@@ -419,20 +413,18 @@ describe("Any combination of services for a tenant", () => {
       expect(job.status).toBe("Completed")
       expect(job.exception).toBeUndefined()
       expect(status).toBe("Success")
-      expect(included).toEqual([...(combination.includes("intune") ? INTUNE_FOLDERS : []), ...(combination.includes("conditionalAccess") ? CONDITIONAL_ACCESS_FOLDERS : []), ...(combination.includes("entra") ? ENTRA_TYPES.filter(type => type.area !== "Groups" && type.backupMode !== "application").map(type => type.folder) : []), ...(combination.includes("defender") ? DEFENDER_TYPES.map(type => type.folder) : [])])
+      expect(included).toEqual([...(combination.includes("intune") ? INTUNE_FOLDERS : []), ...(combination.includes("conditionalAccess") ? CONDITIONAL_ACCESS_FOLDERS : []), ...(combination.includes("entra") ? ENTRA_TYPES.filter(type => !moduleForFolder(type.folder)?.area.optIn && type.backupMode !== "application").map(type => type.folder) : [])])
       if (!combination.includes("intune")) expect(intuneRead(graphPaths)).toEqual([])
       if (!combination.includes("conditionalAccess")) expect(graphPaths.filter((path) => path.includes("conditionalAccess") && !path.endsWith("authenticationContextClassReferences"))).toEqual([])
       // Every read is from a selected type or one of its recorded sub-resources.
       const expectedPaths = included.flatMap(folder => {
         const type = INTUNE_TYPES.find(type => type.folder === folder)!
         if (moduleForFolder(folder)?.module.id === "entra") return Object.keys(responsesFor(folder)).map(key => new URL(key, "https://graph.microsoft.com").pathname)
-        if (moduleForFolder(folder)?.module.id === "defender") return Object.keys(defenderRecorded(folder, true).responses).map(key => new URL(key, "https://graph.microsoft.com").pathname)
         return [`/beta/${type.path}`]
       })
       expect(new Set(graphPaths)).toEqual(new Set(expectedPaths))
       // The results list holds the selected types only, and a turned-off Intune is named.
       expect(job.results?.types.filter(type => type.folder !== "ApiConnectors").map((type) => type.folder)).toEqual(included)
-      if (combination.includes("entra")) expect(job.results?.types.find(type => type.folder === "ApiConnectors")?.state).toBe("skipped")
       // A warning, so a backup without Intune stands out in the result instead of reading like any other success.
       const warnings = job.results?.notices.filter((notice) => notice.level === "warning").map((notice) => notice.message) ?? []
       expect(warnings.includes("Intune is turned off for this tenant, so its types are not backed up. Services and permissions in Settings turns it on again.")).toBe(!combination.includes("intune"))
@@ -444,11 +436,11 @@ describe("Any combination of services for a tenant", () => {
       for (const module of MODULES) settings.set(TENANT, module.id, combination.includes(module.id))
       const status = await servicesStatus(TENANT, settings, async () => ({ accessToken: jwt("Policy.Read.All") }))
       expect(status.error).toBeUndefined()
-      expect(status.modules.map((module) => [module.id, module.enabled])).toEqual([["intune", combination.includes("intune")], ["conditionalAccess", combination.includes("conditionalAccess")], ["entra", combination.includes("entra")], ["defender", combination.includes("defender")]])
+      expect(status.modules.map((module) => [module.id, module.enabled])).toEqual([["intune", combination.includes("intune")], ["conditionalAccess", combination.includes("conditionalAccess")], ["entra", combination.includes("entra")]])
       const off = disabledFolders(settings.selection(TENANT))
       // Every folder of a service that is off, and of an opt-in area nobody turned on.
       expect(off).toEqual(MODULES.flatMap((module) => module.areas.filter((area) => !combination.includes(module.id) || area.optIn).flatMap((area) => area.folders)))
-      // Of the types this version backs up, that leaves out what it left out before Entra ID and Defender had folders.
+      // Of the types this version backs up, that leaves out what it left out before Entra ID had folders.
       const backedUp = new Set(INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id)).map((type) => type.folder))
       expect(off.filter((folder) => backedUp.has(folder))).toEqual([...(combination.includes("intune") ? [] : MODULES[0]!.areas.flatMap((area) => area.folders)), ...(combination.includes("conditionalAccess") ? [] : CONDITIONAL_ACCESS_FOLDERS)])
     })
@@ -501,14 +493,14 @@ describe("The access check behind restore history", () => {
 
   it("reads Conditional Access, and nothing of Intune, for a tenant without Intune", async () => {
     reads.length = 0
-    await check(["conditionalAccess", "defender"], answer({ value: [{ id: "p1" }] }))
+    await check(["conditionalAccess", "entra"], answer({ value: [{ id: "p1" }] }))
     expect(reads).toEqual(["identity/conditionalAccess/policies?$top=1&$select=id"])
     await expect(check(["conditionalAccess"], answer({}, 403))).rejects.toThrow("Entra Conditional Access management access is required for this tenant's restore history.")
   })
 
   it("refuses a tenant whose services have no such read yet, without asking Microsoft or naming Intune", async () => {
     reads.length = 0
-    for (const services of [[], ["entra"], ["defender"], ["entra", "defender"]] as ModuleId[][]) {
+    for (const services of [[], ["entra"]] as ModuleId[][]) {
       await expect(check(services, answer({ value: [] }))).rejects.toThrow("Turn on Intune or Entra Conditional Access for this tenant in Settings before opening this tenant's restore history.")
     }
     expect(reads).toEqual([])

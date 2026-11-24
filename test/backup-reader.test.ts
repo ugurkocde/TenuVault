@@ -554,7 +554,7 @@ describe("Backup Reader per service", () => {
   it("asks for the Intune roles only when the tenant backs up Intune", () => {
     expect(() => checkReaderToken(graphToken({ roles: entraRoles }), app, "graph", CLASSIC)).toThrow(/missing permissions or their admin consent: DeviceManagementApps.Read.All/)
     expect(checkReaderToken(graphToken({ roles: entraRoles }), app, "graph", ENTRA)).toEqual([...entraRoles].sort())
-    expect(checkReaderToken(graphToken({ roles: [] }), app, "graph", { services: ["conditionalAccess", "entra", "defender"] })).toEqual([])
+    expect(checkReaderToken(graphToken({ roles: [] }), app, "graph", { services: ["conditionalAccess", "entra"] })).toEqual([])
   })
 
   it("gives a scheduled backup of an Entra-only tenant the reader's token without any Intune role", async () => {
@@ -565,7 +565,7 @@ describe("Backup Reader per service", () => {
     expect(verified.state).toBe("verified")
     expect(verified.verifiedRoles).toEqual([...entraRoles].sort())
     // Left out is only what Microsoft Graph lets no app-only identity read.
-    expect(verified.excludedTypes).toEqual(["MdmEnrollmentPolicies", "MamEnrollmentPolicies", "OnPremisesSynchronization"])
+    expect(verified.excludedTypes).toEqual(["MdmEnrollmentPolicies", "MamEnrollmentPolicies"])
     const tokens = reader.tokens(scheduled)!
     expect(tokens.mode).toBe("app-only")
     expect(await tokens.graph()).toBe(graphToken({ roles: entraRoles }))
@@ -597,13 +597,12 @@ describe("Backup Reader per service", () => {
   })
 
   it("tests an Entra-only reader with an Entra read, never an Intune one", () => {
-    expect(readerConfidenceRead(ENTRA, entraRoles)).toEqual({ label: "Entra ID", path: "policies/authorizationPolicy?$select=id" })
-    expect(readerConfidenceRead({ services: ["defender"] }, [...readerRoles({ defender: { access: "backup" } })])?.path).toBe("security/secureScoreControlProfiles?$top=1&$select=id")
+    expect(readerConfidenceRead(ENTRA, entraRoles)).toEqual({ label: "Entra ID", path: "policies/authenticationMethodsPolicy" })
     expect(readerConfidenceRead(CLASSIC, READER_REQUIRED_ROLES)).toEqual({ label: "Intune", path: "deviceManagement/deviceCompliancePolicies?$top=1&$select=id" })
     // With Intune on but only the Conditional Access role held, the read is the Conditional Access one.
     expect(readerConfidenceRead(CLASSIC, [CONDITIONAL_ACCESS_ROLE])?.path).toBe("identity/conditionalAccess/policies?$top=1&$select=id")
     expect(readerConfidenceRead(ENTRA, READER_REQUIRED_ROLES)).toBeUndefined()
-    for (const selection of [ENTRA, { services: ["defender" as const] }, { services: ["conditionalAccess" as const] }]) expect(readerConfidenceRead(selection, [...entraRoles, "SecurityEvents.Read.All"])?.path).not.toContain("deviceManagement")
+    for (const selection of [ENTRA, { services: ["conditionalAccess" as const] }]) expect(readerConfidenceRead(selection, [...entraRoles, "SecurityEvents.Read.All"])?.path).not.toContain("deviceManagement")
   })
 
   it.each([
@@ -627,7 +626,7 @@ describe("Backup Reader per service", () => {
   })
 
   it("never refuses a reader for the roles of a service the tenant has turned off", async () => {
-    const roles = [...READER_REQUIRED_ROLES, ...entraRoles, ...readerRoles({ defender: { access: "backup" } })]
+    const roles = [...READER_REQUIRED_ROLES, ...entraRoles, ...readerRoles({ entra: { access: "backup" } })]
     const { reader } = service({ selection: { services: ["intune"] }, graph: () => graphToken({ roles }) })
     reader.prepare(TENANT, "LAPTOP-1")
     const verified = await reader.verify(TENANT, READER)
@@ -641,10 +640,10 @@ describe("Backup Reader per service", () => {
     const { reader } = service({ selection: { services: ["intune", "entra"] }, graph: () => graphToken({ roles: [...READER_REQUIRED_ROLES, "Policy.Read.All"] }) })
     reader.prepare(TENANT, "LAPTOP-1")
     const excluded = (await reader.verify(TENANT, READER)).excludedTypes
-    expect(excluded).toContain("Domains")
-    expect(excluded).toContain("EntraRoleDefinitions")
+    expect(excluded).toContain("AuthenticationContexts")
+    expect(excluded).toContain("TermsOfUseAgreements")
     // What Policy.Read.All reads stays in, and so does all of Intune apart from the device inventory types.
-    expect(excluded).not.toContain("AuthorizationPolicy")
+    expect(excluded).not.toContain("AuthenticationMethodsPolicy")
     expect(excluded.filter((folder) => folders("intune").includes(folder))).toEqual(DEVICE_INVENTORY_TYPES)
     expect(excluded.every((folder) => folders("intune").includes(folder) || folders("entra").includes(folder))).toBe(true)
   })
@@ -668,7 +667,7 @@ describe("Backup Reader per service", () => {
     const after = await reader.verify(TENANT, READER)
     expect(after.thumbprintSha256).toBe(before.thumbprintSha256)
     expect(after.roleChange).toBeNull()
-    expect(after.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, "MdmEnrollmentPolicies", "MamEnrollmentPolicies", "OnPremisesSynchronization"])
+    expect(after.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, "MdmEnrollmentPolicies", "MamEnrollmentPolicies"])
   })
 
   it("refuses a reader that can read nothing the tenant backs up, and names the services to set it up for", async () => {
@@ -682,17 +681,17 @@ describe("Backup Reader per service", () => {
     const { reader, setSelection } = service()
     reader.prepare(TENANT, "LAPTOP-1")
     await reader.verify(TENANT, READER)
-    setSelection({ services: ["entra", "defender"] })
+    setSelection({ services: ["entra"] })
     // The reader is still offered, so the engine does not take the admin's sign-in instead.
     const tokens = reader.tokens(scheduled)
     expect(tokens).not.toBeNull()
     const error = await tokens!.graph().catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(BackupReaderError)
-    expect((error as Error).message).toContain("no permission to read Entra ID or Defender")
-    expect((error as Error).message).toContain("-Services Entra,Defender")
+    expect((error as Error).message).toContain("no permission to read Entra ID")
+    expect((error as Error).message).toContain("-Services Entra")
     // Every later request of the same run is refused too, also one that was already on its way.
-    await expect(tokens!.graph()).rejects.toThrow("no permission to read Entra ID or Defender")
-    await expect(tokens!.excludedTypes!()).rejects.toThrow("no permission to read Entra ID or Defender")
+    await expect(tokens!.graph()).rejects.toThrow("no permission to read Entra ID")
+    await expect(tokens!.excludedTypes!()).rejects.toThrow("no permission to read Entra ID")
   })
 
   it("still refuses a role outside the manifest at verification and at every scheduled backup", async () => {

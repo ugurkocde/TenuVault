@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { expect, it, vi } from "vitest"
 import { buildConsentUrl, HANDOFF_REDIRECT } from "../src/main/auth/pack-consent"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"

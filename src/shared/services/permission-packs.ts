@@ -22,7 +22,7 @@ export interface PermissionPack {
 }
 
 const IDENTITY_SCOPES = ["openid", "profile", "offline_access"]
-const SERVICES = ["defender", "entra", "intune", "conditionalAccess"] as const
+const SERVICES = ["entra", "intune", "conditionalAccess"] as const
 const SERVICE_EXTRAS: Partial<Record<ModuleId, string[]>> = { intune: [GROUP_READ_PERMISSION] }
 
 const EXCLUDED = new Set(["Organization.ReadWrite.All", "Directory.ReadWrite.All", ...PRIVILEGED_WRITES])
@@ -133,7 +133,7 @@ export function permissionPackTable(published: Readonly<Record<PackResource, Rea
     table.push(`| ${pack.label} | ${PACK_RESOURCES[pack.resource].label} | ${scopes.join("<br />") || "None"} |`)
   }
   for (const pack of [
-    ...tenantPermissionPacks({ defender: { access: "backup" }, entra: { access: "backup" }, intune: { access: "backup" }, conditionalAccess: { access: "backup" } }, { azure: true, audit: true }),
+    ...tenantPermissionPacks({ entra: { access: "backup" }, intune: { access: "backup" }, conditionalAccess: { access: "backup" } }, { azure: true, audit: true }),
     ...SERVICES.map(id => servicePack(id, "restore")),
     ...(privilegedRestoreEnabled ? [APPLICATION_METADATA_RESTORE_PACK, PRIVILEGED_ENTRA_PACK] : []),
   ]) row(pack)

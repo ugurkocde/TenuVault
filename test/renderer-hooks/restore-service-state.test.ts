@@ -88,7 +88,7 @@ it("keeps a deferred restore, progress and retry context through filter attempts
   expect(writes()).toHaveLength(1)
   await act(async () => finish(Response.json({ success: false, details: { results: outcomes } })))
   expect(filter().disabled).toBe(false)
-  await changeFilter("defender")
+  await changeFilter("intune")
   expect(container.textContent).toContain("1 item completed; 1 failed.")
   expect(container.textContent).toContain("Profile 1")
   expect(container.textContent).toContain("Try this policy again")

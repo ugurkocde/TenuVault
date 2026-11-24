@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 const fixture = vi.hoisted(() => ({
   licenseOpen: vi.fn(async () => undefined), check: vi.fn(), connection: vi.fn(), consent: vi.fn(), plan: vi.fn(),
 }))

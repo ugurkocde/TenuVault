@@ -144,7 +144,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   }
   // An existing registration is used only when an administrator has already given it tenant-wide
   // consent for TenuVault's work: for one of the Intune permissions a setup asks for by default,
-  // for most of what backing up Entra ID or Defender asks for, or for everything a setup for
+  // for most of what backing up Entra ID asks for, or for everything a setup for
   // Conditional Access alone asks for (see showsApproval). One permission that many apps are
   // given, or the ones every sign-in has, say nothing alone. Any member of a tenant may create app
   // registrations, with any name and note, and remains their owner. Granting consent to such a

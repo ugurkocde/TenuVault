@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { graphUserCreateResponse } from "./fixtures/directory-graph-v1"
 vi.mock("node:fs", { spy: true })
 import * as fs from "node:fs"

@@ -440,9 +440,9 @@ describe('Drift item matching', () => {
   })
 
   it.each([
-    ['own registration', 'own-app', 'DefenderAttackSimulations', 'NamedLocations', 'DeviceConfigurations'],
-    ['TenuVault app', TENUVAULT_CLIENT_ID, 'NamedLocations', 'DeviceConfigurations', 'DefenderAttackSimulations'],
-    ['Start now', GRAPH_CLI_CLIENT_ID, 'DeviceConfigurations', 'DefenderAttackSimulations', 'NamedLocations'],
+    ['own registration', 'own-app', 'TermsOfUseAgreements', 'NamedLocations', 'DeviceConfigurations'],
+    ['TenuVault app', TENUVAULT_CLIENT_ID, 'NamedLocations', 'DeviceConfigurations', 'TermsOfUseAgreements'],
+    ['Start now', GRAPH_CLI_CLIENT_ID, 'DeviceConfigurations', 'TermsOfUseAgreements', 'NamedLocations'],
   ])('omits unread types in all services from backup changes and drift for %s', async (_method, appId, excluded, refused, unresolved) => {
     const covered = 'CompliancePolicies'
     const folders = [excluded, refused, unresolved, covered]

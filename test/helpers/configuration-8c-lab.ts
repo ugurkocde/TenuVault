@@ -7,7 +7,7 @@ import { graphContinuation } from "../../src/shared/graph-continuation"
 export const LAB_8C_TENANT = "ffc10f05-e837-4803-81b1-7c4dee678c2a"
 export const LAB_8C_APP = "5c61d8c7-4fbf-4779-bbf8-68e37573bdcb"
 const prefix = "TV06-TEST-"
-const collections = ["UserFlowAttributes", "AccessPackageCatalogs", "DefenderCustomDetectionRules"]
+const collections = ["UserFlowAttributes", "AccessPackageCatalogs"]
 const singletons = ["CrossTenantAccessPolicy", "ExternalIdentitiesPolicy", "AccessReviewPolicy", "LifecycleWorkflowSettings"]
 // Guest access and scheduling probes are identical-value-only. Metadata never changes relationships.
 const identicalOnly = new Set(["ExternalIdentitiesPolicy", "LifecycleWorkflowSettings"])
@@ -126,7 +126,6 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
         if (!(error instanceof Error) || !error.message.includes("HTTP 404")) throw error
         await pause(); continue
       }
-      if (folder === "DefenderCustomDetectionRules" && current.status !== "disabled") throw new Error("Detection must stay disabled")
       different = Object.keys(expected).filter(key => !equal(current[key], expected[key]))
       if (!different.length) {
         stable++

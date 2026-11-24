@@ -1,4 +1,6 @@
-import { expect, it } from "vitest"
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
+import { expect, it, vi } from "vitest"
 import { graphPermissions, DEFAULT_SETUP_CHOICE } from "../src/shared/services/manifest"
 import { servicePack } from "../src/shared/services/permission-packs"
 import { directoryAdmission } from "../src/main/restore/directory-9a-io"

@@ -1,3 +1,4 @@
+import { expandedEntraScope } from "../intune/entra-scope"
 import { INTUNE_TYPES, restoreCapability } from "../intune/registry"
 import { checkedChoice, type PermissionChoice } from "./manifest"
 import { MODULES, moduleForFolder, type ModuleId } from "./modules"
@@ -5,6 +6,10 @@ import { MODULES, moduleForFolder, type ModuleId } from "./modules"
 import { BACKUP_SERVICES } from "./presentation"
 
 export const DEFAULT_ONBOARDING_CHOICE: PermissionChoice = { intune: { access: "backup" } }
+export const ONBOARDING_ENTRA_CHOICE: PermissionChoice = {
+  ...DEFAULT_ONBOARDING_CHOICE, conditionalAccess: { access: "backup" }, entra: { access: "backup" },
+}
+
 
 /** Keep the read permission included by every earlier Intune setup, without enabling its backups. */
 export function onboardingPermissions(choice: PermissionChoice): PermissionChoice {
@@ -39,5 +44,5 @@ export function choiceLabel(choice: PermissionChoice): string {
 export const PERSONAL_DATA: Record<string, string> = {
   applications: "Stores app registration and enterprise app definitions, credential metadata, owner IDs, consent grants and role assignment IDs. Federated credential subjects and notification addresses can identify people. No passwords or private keys are stored.",
   groups: "Stores group properties and the object IDs of members and owners. These identify people and their group memberships.",
-  usersAndDevices: "Stores allowlisted user identity, job, organization, account state, licenses and manager ID, device inventory and organizational contacts. These can include names, email addresses and device identifiers. Passwords and credentials are never stored.",
+  usersAndDevices: expandedEntraScope ? "Stores allowlisted user identity, job, organization, account state, licenses and manager ID, device inventory and organizational contacts. These can include names, email addresses and device identifiers. Passwords and credentials are never stored." : "Stores device inventory, which can include device names and identifiers.",
 }

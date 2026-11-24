@@ -71,14 +71,7 @@ describe("Backup Details", () => {
     expect(selected?.textContent).toContain("Requested run")
   })
 
-  it("shows an Intune-only backup as excluded when opened through the Defender filter", () => {
-    downloadState.search = "service=defender"
-    const { container } = renderBackup({ scope: { included: ["ConfigurationPolicies"], excluded: [], description: "Everything" } })
-    const defender = container.querySelector('section[aria-label="Defender"]')!
-    expect(defender.textContent).toContain("Not included in this backup")
-    expect(defender.textContent).not.toContain("None in the tenant")
-    expect(defender.querySelector("details")).toBeNull()
-  })
+
 
   it("shows an unread type with its reason even if the backup holds some of its policies", () => {
     const { container } = renderBackup({

@@ -224,9 +224,8 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
   it.each<[string, PermissionChoice]>([
     ["Entra ID to back up", { entra: { access: "backup" } }],
     ["Intune to back up only", { intune: { access: "backup" } }],
-    ["Defender and Conditional Access to back up", { defender: { access: "backup" }, conditionalAccess: { access: "backup" } }],
     ["Intune to restore and Entra ID with groups to back up", { intune: { access: "restore" }, entra: { access: "backup", areas: ["groups"] } }],
-    ["every service and area to restore", { intune: { access: "restore" }, conditionalAccess: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices", "applications"] }, defender: { access: "restore" } }],
+    ["every service and area to restore", { intune: { access: "restore" }, conditionalAccess: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices"] } }],
   ])("requests exactly the permissions of the manifest for %s, from the parameters the app generates", async (_name, choice) => {
     const result = await run("default", parameters(setupScriptArguments(choice)))
     expect(result.code, result.text).toBe(0)

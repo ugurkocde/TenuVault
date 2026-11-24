@@ -8,6 +8,7 @@ import { ModuleSettings } from "../src/main/services/settings"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { Item } from "../src/shared/intune/registry"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`

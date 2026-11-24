@@ -8,21 +8,15 @@ it("defaults to Intune backup access and keeps the legacy Conditional Access rea
   expect(DEFAULT_ONBOARDING_CHOICE).toEqual({ intune: { access: "backup" } })
   expect(onboardingPermissions(DEFAULT_ONBOARDING_CHOICE)).toEqual({ intune: { access: "backup" }, conditionalAccess: { access: "backup" } })
   expect(choiceLabel({ intune: { access: "restore" }, entra: { access: "backup" } })).toBe("Entra ID and Intune")
-  expect(choiceLabel({ intune: { access: "restore" }, conditionalAccess: { access: "backup" }, defender: { access: "backup" } })).toBe("Defender, Entra ID (Conditional Access) and Intune")
   expect(choiceLabel({})).toBe("a service")
   expect(hasOnboardingBackups(DEFAULT_ONBOARDING_CHOICE)).toBe(true)
   expect(hasOnboardingBackups({ entra: { access: "backup" } })).toBe(true)
-  expect(hasOnboardingBackups({ defender: { access: "backup" } })).toBe(true)
 })
 it("offers restore only where a writable backup type exists", () => {
   expect(canRequestRestore("intune")).toBe(true)
   expect(canRequestRestore("conditionalAccess")).toBe(true)
   expect(canRequestRestore("entra")).toBe(true)
   expect(checkedOnboardingChoice({ entra: { access: "restore" } })).toEqual({ entra: { access: "restore" } })
-  for (const id of ["defender"] as const) {
-    expect(canRequestRestore(id)).toBe(false)
-    expect(() => checkedOnboardingChoice({ [id]: { access: "restore" } })).toThrow("not available")
-  }
   expect(() => checkedOnboardingChoice({})).toThrow()
 })
 it("saves all service and area settings in one write before a non-Intune tenant can run", () => {

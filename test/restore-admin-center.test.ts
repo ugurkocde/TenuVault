@@ -8,8 +8,6 @@ it.each([
   ["/beta/groups/id", "the Microsoft Entra admin center"],
   ["ConfigurationPolicies", "the Microsoft Intune admin center"],
   ["deviceManagement/templates/id/createInstance", "the Microsoft Intune admin center"],
-  ["DefenderSecureScoreControlStates", "the Microsoft Defender portal"],
-  ["security/secureScoreControlProfiles/id", "the Microsoft Defender portal"],
   ["unknown/endpoint/id", "the target service’s admin center"],
 ])("directs recovery for %s to %s", (path, center) => {
   expect(restoreAdminCenter(path)).toBe(center)

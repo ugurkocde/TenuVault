@@ -110,7 +110,7 @@ describe("Tenant backup coverage", () => {
   it("shows license and setup guidance for Start now without a sign-in upgrade link", async () => {
     state.report.mockResolvedValue({
       ...answer(), clientId: GRAPH_CLI_CLIENT_ID,
-      coverage: [{ service: "defender", folders: ["DefenderAttackSimulations"], readable: [], issues: { DefenderAttackSimulations: "license" } }],
+      coverage: [{ service: "entra", folders: ["TermsOfUseAgreements"], readable: [], issues: { TermsOfUseAgreements: "license" } }],
     })
     const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
     await act(async () => undefined)
@@ -128,13 +128,13 @@ describe("Tenant backup coverage", () => {
       coverage: [
         { service: "intune", folders: ["Apps"], readable: [], issues: { Apps: "unknown" } },
         { service: "entra", folders: ["NamedLocations", "ConditionalAccessPolicies"], readable: [], issues: { NamedLocations: "role", ConditionalAccessPolicies: "permission" } },
-        { service: "defender", folders: ["DefenderAttackSimulations"], readable: ["DefenderAttackSimulations"] },
+        { service: "entra", folders: ["TermsOfUseAgreements"], readable: ["TermsOfUseAgreements"] },
       ],
     })
     const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
     await act(async () => undefined)
-    expect([...container.querySelectorAll("dt")].map(heading => heading.textContent)).toEqual(["Defender", "Entra ID", "Intune"])
-    expect(container.querySelector('[aria-label="Defender backup coverage"]')?.textContent).toBe("Defender1 of 1 readable")
+    expect([...container.querySelectorAll("dt")].map(heading => heading.textContent)).toEqual(["Entra ID", "Entra ID", "Intune"])
+    expect(container.querySelector('[aria-label="Entra ID backup coverage"]')?.textContent).toBe("Entra ID1 of 1 readable")
     expect(container.textContent).toContain("Permission not granted")
     expect(container.textContent).toContain("Your role can't do this")
     expect(container.textContent).toContain("Coverage unknown for 1.")

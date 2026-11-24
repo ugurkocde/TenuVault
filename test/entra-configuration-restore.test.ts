@@ -1,3 +1,5 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { describe, expect, it, vi } from "vitest"
 import { moduleForFolder, type Need } from "../src/shared/services/modules"
 import { ENTRA_AREAS } from "../src/shared/services/entra"

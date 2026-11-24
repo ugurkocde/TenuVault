@@ -81,9 +81,9 @@ describe("setupHandoffText", () => {
     expect(listed(setupHandoffText())).toEqual(DESKTOP_APP_PERMISSIONS[0]!.permissions)
     expect(setupHandoffText()).toContain("   ./New-TenuVaultDesktopApp.ps1\n")
     expect(setupHandoffText()).toContain("  Azure Storage: user_impersonation")
-    const choice = { entra: { access: "backup" as const, areas: ["groups"] }, defender: { access: "restore" as const } }
+    const choice = { entra: { access: "backup" as const, areas: ["groups"] } }
     expect(listed(setupHandoffText(choice))).toEqual(graphPermissions(choice, "delegated"))
-    expect(setupHandoffText(choice)).toContain("   ./New-TenuVaultDesktopApp.ps1 -Services Entra,Defender -RestoreAccess Defender -Areas Groups\n")
+    expect(setupHandoffText(choice)).toContain("   ./New-TenuVaultDesktopApp.ps1 -Services Entra -RestoreAccess None -Areas Groups\n")
   })
 
   it("gives another administrator everything they need, without an em dash", () => {

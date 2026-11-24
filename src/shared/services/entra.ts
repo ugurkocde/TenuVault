@@ -1,3 +1,4 @@
+import { expandedEntraScope, includesEntraFolder } from "../intune/entra-scope"
 import { privilegedRestoreEnabled } from "../intune/directory-review-folders"
 import { admittedDirectoryPermissions } from "../intune/restore-matrix"
 import { area, part, type PermissionArea } from "./areas"
@@ -16,7 +17,7 @@ import { area, part, type PermissionArea } from "./areas"
  * policy, feature rollout policies, on-premises authentication policies and application proxy
  * connector groups.
  */
-export const ENTRA_AREAS: readonly PermissionArea[] = [
+const allEntraAreas: readonly PermissionArea[] = [
   area({ id: "tenantSettings", label: "Tenant settings" }, [
     part(["AuthorizationPolicy"], [["Policy.Read.All", "Policy.ReadWrite.Authorization"]], [["Policy.Read.All"]], "unsupported"),
     part(["SecurityDefaults"], [["Policy.Read.All"]], [["Policy.Read.All"]], "unsupported"),
@@ -116,3 +117,12 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     part(["OAuth2PermissionGrants"], [["Directory.Read.All", "DelegatedPermissionGrant.ReadWrite.All", "Directory.ReadWrite.All"]], [["Directory.Read.All"]], "unsupported"),
   ]),
 ]
+
+export const ENTRA_AREAS = expandedEntraScope ? allEntraAreas : allEntraAreas.flatMap(entry => {
+  const parts = entry.parts.flatMap(part => {
+    const folders = part.folders.filter(includesEntraFolder)
+    return folders.length ? [{ ...part, folders }] : []
+  })
+  const label = { tenantSettings: "Device settings", usersAndDevices: "Devices", governance: "Terms of use" }[entry.id] ?? entry.label
+  return parts.length ? [area({ ...entry, label }, parts)] : []
+})

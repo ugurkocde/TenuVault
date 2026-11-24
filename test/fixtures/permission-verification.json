@@ -5,7 +5,7 @@
     "reference": "Microsoft Graph permissions reference on Microsoft Learn (learn.microsoft.com/graph/permissions-reference, dated 2026-09-14): the identifier of each permission as a delegated and as an application permission. A permission with an identifier there is published on Microsoft Graph for that sign-in mode.",
     "model": "Microsoft's permission model for Microsoft Graph (github.com/microsoftgraph/microsoft-graph-devx-content, permissions/new/permissions.json, commit 9f88bf8f23a5), from which the permission tables on Microsoft Learn are generated: whether it lists the permission for the endpoint, method and sign-in mode (listed, not listed, or no entry when it does not know the endpoint).",
     "index": "The local Microsoft Graph documentation index (msgraph api-docs-search): whether it lists the permission for the endpoint, method and sign-in mode, in the same three words.",
-    "live": "Read-only requests against the lab tenant with an app-only token on 2026-11-14 (tasks/0.6-research/entra-inventory.md and defender-inventory.md). No write was made, so no restore permission is confirmed live.",
+    "live": "Read-only requests against the lab tenant with an app-only token on 2026-11-14 (tasks/0.6-research/entra-inventory.md). No write was made, so no restore permission is confirmed live.",
     "live8c": "2026-11-18 approved app-only lab writes: cross-tenant parent displayName and access-review ownership flag changed, read back and restored; catalog create/read/change/restore/delete passed. Custom attribute POST refused 400 AADB2C99039; detection action read-back differed; workflow settings GET refused 403. See external layer-8c report."
   },
   "statuses": {
@@ -15,10 +15,6 @@
     "unconfirmed": "Neither listed nor shown live for this sign-in mode."
   },
   "permissions": {
-    "Workbooks.Read.All": {
-      "delegated": "e37141d2-4e2c-459d-8e5b-5214ae4af482",
-      "application": "d6559210-2a3e-46f8-90b3-e69ef5507772"
-    },
     "APIConnectors.Read.All": {
       "delegated": "1b6ff35f-31df-4332-8571-d31ea5a4893f",
       "application": "b86848a7-d5b1-41eb-a9b4-54a4e6306e97"
@@ -59,10 +55,6 @@
       "delegated": "bdfbf15f-ee85-4955-8675-146e8e5296b5",
       "application": null
     },
-    "AttackSimulation.Read.All": {
-      "delegated": "104a7a4b-ca76-4677-b7e7-2f4bc482f381",
-      "application": "93283d0a-6322-4fa8-966b-8c121624760d"
-    },
     "AuditLog.Read.All": {
       "delegated": "e4c9e354-4dc5-45b8-9e7c-e1393b0b1a20",
       "application": null
@@ -75,28 +67,12 @@
       "delegated": "ba6d575a-1344-4516-b777-1404f5593057",
       "application": null
     },
-    "CaseManagement.Read.All": {
-      "delegated": "7bdc421c-99cd-4b67-a749-aa8e92775f7e",
-      "application": "b328f35f-712c-40d6-b6b4-95449d77b352"
-    },
-    "CaseManagement.ReadWrite.All": {
-      "delegated": "363a0763-d7eb-40bc-9457-6be55acd81e2",
-      "application": null
-    },
     "CustomAuthenticationExtension.Read.All": {
       "delegated": "b2052569-c98c-4f36-a5fb-43e5c111e6d0",
       "application": "88bb2658-5d9e-454f-aacd-a3933e079526"
     },
     "CustomAuthenticationExtension.ReadWrite.All": {
       "delegated": "8dfcf82f-15d0-43b3-bc78-a958a13a5792",
-      "application": null
-    },
-    "CustomDetection.Read.All": {
-      "delegated": "b13ff42e-f321-4d7d-a462-141c46a1b832",
-      "application": "673a007a-9e0f-4c97-b066-3c0164486909"
-    },
-    "CustomDetection.ReadWrite.All": {
-      "delegated": "c34088fb-0649-4714-af0b-bcbfec155897",
       "application": null
     },
     "CustomSecAttributeDefinition.Read.All": {
@@ -395,17 +371,9 @@
       "delegated": "62ade113-f8e0-4bf9-a6ba-5acb31db32fd",
       "application": null
     },
-    "RoleManagement.Read.Defender": {
-      "delegated": "dd689728-6eb8-4deb-bd38-2924a935f3de",
-      "application": "4d6e30d1-e64e-4ae7-bf9d-c706cc928cef"
-    },
     "RoleManagement.Read.Directory": {
       "delegated": "741c54c3-0c1e-44a1-818b-3f97ab4e8c83",
       "application": "483bed4a-2ad3-4361-a73b-c83ccdbdc53c"
-    },
-    "RoleManagement.ReadWrite.Defender": {
-      "delegated": "d8914f8f-9f64-4bd1-b4d3-f5a701ed8457",
-      "application": null
     },
     "RoleManagement.ReadWrite.Directory": {
       "delegated": "d01b97e9-cbc0-49fe-810a-750afd5527a3",
@@ -427,48 +395,12 @@
       "delegated": "1ff1be21-34eb-448c-9ac9-ce1f506b2a68",
       "application": null
     },
-    "SecurityEvents.Read.All": {
-      "delegated": "64733abd-851e-478a-bffb-e47a14b18235",
-      "application": "bf394140-e372-4bf9-a898-299cfc7564e5"
-    },
-    "SecurityEvents.ReadWrite.All": {
-      "delegated": "6aedf524-7e1c-45a7-bd76-ded8cab8d0fc",
-      "application": null
-    },
-    "SecurityIdentitiesAutoConfig.Read.All": {
-      "delegated": "8ff90903-1ecb-4f3a-b8b2-42120374ecd6",
-      "application": "58971758-9844-4fe4-9fba-7e4ce7a659bf"
-    },
-    "SecurityIdentitiesAutoConfig.ReadWrite.All": {
-      "delegated": "b810fdb4-8733-43bd-9b37-fddb7215c69f",
-      "application": null
-    },
-    "SecurityIdentitiesSensors.Read.All": {
-      "delegated": "2c221239-7c5c-4b30-9355-d84663bfcd96",
-      "application": "5f0ffea2-f474-4cf2-9834-61cda2bcea5c"
-    },
-    "SecurityIdentitiesSensors.ReadWrite.All": {
-      "delegated": "087c3ad9-c2ca-4b82-9885-d5e25ce9e183",
-      "application": null
-    },
     "Synchronization.Read.All": {
       "delegated": "7aa02aeb-824f-4fbe-a3f7-611f751f5b55",
       "application": "5ba43d2f-fa88-4db2-bd1c-a67c5f0fb1ce"
     },
     "Synchronization.ReadWrite.All": {
       "delegated": "7bb27fa3-ea8f-4d67-a916-87715b6188bd",
-      "application": null
-    },
-    "ThreatSubmission.Read.All": {
-      "delegated": "7083913a-4966-44b6-9886-c5822a5fd910",
-      "application": "86632667-cd15-4845-ad89-48a88e8412e1"
-    },
-    "ThreatSubmission.ReadWrite.All": {
-      "delegated": "8458e264-4eb9-4922-abe9-768d58f13c7f",
-      "application": null
-    },
-    "ThreatSubmissionPolicy.ReadWrite.All": {
-      "delegated": "059e5840-5353-4c68-b1da-666a033fc5e8",
       "application": null
     },
     "User.Read": {
@@ -2087,199 +2019,6 @@
         "delegated": "unsupported",
         "application": "unsupported"
       }
-    },
-    {
-      "service": "defender",
-      "area": "detection",
-      "folders": ["DefenderCustomDetectionRules"],
-      "read": ["GET /security/rules/detectionRules"],
-      "write": [],
-      "live": "403 names CustomDetection.Read.All",
-      "backup": {
-        "delegated": [
-          {"permission": "CustomDetection.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "CustomDetection.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
-        ],
-        "application": [
-          {"permission": "CustomDetection.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
-    },
-    {
-      "service": "defender",
-      "area": "detection",
-      "folders": ["DefenderWorkbooks"],
-      "read": [
-        "GET /security/workbooks",
-        "GET /security/workbooks/{id}?$select=id,name,content"
-      ],
-      "write": [],
-      "live": "200 on 2026-11-16 with Workbooks.Read.All held; identifiers checked against Microsoft Graph service principal. No isolated least-privilege claim. Microsoft Learn security-workbook-get lists both modes.",
-      "backup": {
-        "delegated": [
-          {"permission": "Workbooks.Read.All", "asked": true, "model": "listed on Microsoft Learn", "index": "no entry", "status": "confirmed"}
-        ],
-        "application": [
-          {"permission": "Workbooks.Read.All", "asked": true, "model": "listed on Microsoft Learn", "index": "no entry", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
-    },
-    {
-      "service": "defender",
-      "area": "detection",
-      "folders": ["DefenderCaseTypeConfigurations"],
-      "read": ["GET /security/caseManagement/caseTypeConfigurations"],
-      "write": [],
-      "live": "400 Tenant's account is not active",
-      "note": "Not restored: Microsoft documents no write for case type configurations.",
-      "backup": {
-        "delegated": [
-          {"permission": "CaseManagement.Read.All", "asked": true, "model": "listed", "index": "no entry", "status": "confirmed"},
-          {"permission": "CaseManagement.ReadWrite.All", "asked": false, "model": "listed", "index": "no entry", "status": "confirmed"}
-        ],
-        "application": [
-          {"permission": "CaseManagement.Read.All", "asked": true, "model": "listed", "index": "no entry", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
-    },
-    {
-      "service": "defender",
-      "area": "email",
-      "folders": ["DefenderAttackSimulations", "DefenderAttackSimulationAutomations", "DefenderAttackSimulationTrainingCampaigns", "DefenderAttackSimulationPayloads", "DefenderAttackSimulationLandingPages", "DefenderAttackSimulationLoginPages", "DefenderAttackSimulationNotifications"],
-      "read": ["GET /security/attackSimulation/simulations", "GET /security/attackSimulation/simulationAutomations", "GET /security/attackSimulation/trainingCampaigns", "GET /security/attackSimulation/payloads", "GET /security/attackSimulation/landingPages", "GET /security/attackSimulation/loginPages", "GET /security/attackSimulation/endUserNotifications"],
-      "write": [],
-      "live": "200",
-      "note": "Never restored: a restored simulation would start a new campaign.",
-      "backup": {
-        "delegated": [
-          {"permission": "AttackSimulation.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
-        ],
-        "application": [
-          {"permission": "AttackSimulation.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
-    },
-    {
-      "service": "defender",
-      "area": "email",
-      "folders": ["DefenderEmailSubmissionPolicies"],
-      "read": ["GET /security/threatSubmission/emailThreatSubmissionPolicies"],
-      "write": [],
-      "live": "401 without the role",
-      "backup": {
-        "delegated": [
-          {"permission": "ThreatSubmission.Read.All", "asked": true, "model": "listed", "index": "no entry", "status": "confirmed"},
-          {"permission": "ThreatSubmission.ReadWrite.All", "asked": false, "model": "listed", "index": "no entry", "status": "confirmed"},
-          {"permission": "ThreatSubmissionPolicy.ReadWrite.All", "asked": false, "model": "listed", "index": "no entry", "status": "confirmed"}
-        ],
-        "application": [
-          {"permission": "ThreatSubmission.Read.All", "asked": true, "model": "listed", "index": "no entry", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
-    },
-    {
-      "service": "defender",
-      "area": "identity",
-      "folders": ["DefenderIdentitySensors", "DefenderIdentitySensorActivation"],
-      "read": ["GET /security/identities/sensors", "GET /security/identities/sensorCandidateActivationConfiguration"],
-      "write": [],
-      "live": "403 Tenant is not onboarded",
-      "backup": {
-        "delegated": [
-          {"permission": "SecurityIdentitiesSensors.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "SecurityIdentitiesSensors.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
-        ],
-        "application": [
-          {"permission": "SecurityIdentitiesSensors.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
-    },
-    {
-      "service": "defender",
-      "area": "identity",
-      "folders": ["DefenderIdentityAutoAuditing"],
-      "read": ["GET /security/identities/settings/autoAuditingConfiguration"],
-      "write": [],
-      "live": "403 Tenant is not onboarded",
-      "backup": {
-        "delegated": [
-          {"permission": "SecurityIdentitiesAutoConfig.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "SecurityIdentitiesAutoConfig.ReadWrite.All", "asked": false, "model": "not listed", "index": "not listed", "status": "implied"}
-        ],
-        "application": [
-          {"permission": "SecurityIdentitiesAutoConfig.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
-    },
-    {
-      "service": "defender",
-      "area": "posture",
-      "folders": ["DefenderSecureScoreControlStates"],
-      "read": ["GET /security/secureScoreControlProfiles"],
-      "write": [],
-      "live": "200",
-      "backup": {
-        "delegated": [
-          {"permission": "SecurityEvents.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "SecurityEvents.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
-        ],
-        "application": [
-          {"permission": "SecurityEvents.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
-    },
-    {
-      "service": "defender",
-      "area": "posture",
-      "folders": ["DefenderRoleDefinitions", "DefenderRoleAssignments"],
-      "read": ["GET /roleManagement/defender/roleDefinitions", "GET /roleManagement/defender/roleAssignments"],
-      "write": [],
-      "live": "403 without the role",
-      "backup": {
-        "delegated": [
-          {"permission": "RoleManagement.Read.Defender", "asked": true, "model": "listed", "index": "no entry", "status": "confirmed"},
-          {"permission": "RoleManagement.ReadWrite.Defender", "asked": false, "model": "listed", "index": "no entry", "status": "confirmed"}
-        ],
-        "application": [
-          {"permission": "RoleManagement.Read.Defender", "asked": true, "model": "listed", "index": "no entry", "status": "confirmed"}
-        ]
-      },
-      "restore": {
-        "delegated": "unsupported",
-        "application": "unsupported"
-      }
     }
   ],
   "leftOut": [
@@ -2318,18 +2057,6 @@
       "folder": "AppProxyConnectorGroups",
       "path": "/onPremisesPublishingProfiles/applicationProxy/connectorGroups",
       "reason": "Microsoft documents only Directory.ReadWrite.All, a write permission, for reading it."
-    },
-    {
-      "service": "defender",
-      "folder": "DefenderCloudScopes",
-      "path": "/security/zones",
-      "reason": "The lab lacks Zone.Read.All and returns empty-message 403. No successful permission verification was possible."
-    },
-    {
-      "service": "defender",
-      "folder": "DefenderContentRepositories",
-      "path": "/security/contentManagement/repositories",
-      "reason": "Its read permission Repository.Read.All is not in Microsoft's permissions reference."
     }
   ]
 }

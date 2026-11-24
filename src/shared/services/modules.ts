@@ -1,8 +1,7 @@
 /**
  * The services TenuVault backs up and restores, each with the Microsoft Graph permissions it needs.
  *
- * A module groups registry folders under one service (Intune, Entra Conditional Access, Entra ID
- * and Defender). Backup and restore have separate permission sets, so an app
+ * A module groups registry folders under one service (Intune, Entra Conditional Access and Entra ID). Backup and restore have separate permission sets, so an app
  * registration can be consented for reading a service without being able to change it. The
  * permission check compares these requirements with the permissions in the token TenuVault already
  * holds; it never asks for consent or calls Graph itself.
@@ -11,13 +10,13 @@
  */
 
 import { area, part, type FolderPermissions, type Need, type PermissionArea, type Requirement, type SignInMode } from "./areas"
-import { DEFENDER_AREAS } from "./defender"
+import { expandedEntraScope } from "../intune/entra-scope"
 import { ENTRA_AREAS } from "./entra"
 import { GRAPH_CLI_READ_ONLY, sharedSignInMethod } from "../tenant-connection"
 
 export type { AnyOf, FolderPermissions, Need, PermissionArea, Requirement, SignInMode } from "./areas"
 
-export type ModuleId = "intune" | "conditionalAccess" | "entra" | "defender"
+export type ModuleId = "intune" | "conditionalAccess" | "entra"
 
 /**
  * What TenuVault asks for when a service is set up for a tenant: read access for backups, or read and
@@ -52,7 +51,7 @@ export interface ServiceModule {
   precheck: boolean
   /**
    * A read Microsoft refuses or throttles ends the type it belongs to, and the backup goes on. The
-   * endpoints of Entra ID and Defender refuse on their own: for a product the tenant has no license
+   * endpoints of Entra ID refuse on their own: for a product the tenant has no license
    * for, a role the account lacks, or a setting only a signed-in admin can read. Off for Intune and
    * Conditional Access, whose refusals keep ending a backup as they always have: there a refused
    * read means the sign-in or its role is gone, which fails every read after it.
@@ -165,28 +164,17 @@ export const MODULES: readonly ServiceModule[] = [
   {
     id: "entra",
     label: "Entra ID",
-    description: "Tenant settings, authentication, external identities, roles and governance. Groups, users, devices and applications are backed up only when you turn them on.",
+    description: expandedEntraScope
+      ? "Tenant settings, authentication, external identities, roles and governance. Groups, users, devices and applications are opt-in."
+      : "Device registration and enrollment, authentication methods and contexts, and terms of use. Groups and device inventory are opt-in.",
     switchable: true,
     defaultOn: false,
     precheck: true,
     isolated: true,
     defaultAccess: "backup",
     roles: "Global Reader to back up; to restore, the administrator role of the setting, such as Security Administrator or Privileged Role Administrator.",
-    readerProbe: { path: "policies/authorizationPolicy?$select=id", role: "Policy.Read.All" },
+    readerProbe: { path: "policies/authenticationMethodsPolicy", role: "Policy.Read.All" },
     areas: ENTRA_AREAS,
-  },
-  {
-    id: "defender",
-    label: "Defender",
-    description: "Detection and response, email and collaboration, identity, and posture and access settings.",
-    switchable: true,
-    defaultOn: false,
-    precheck: true,
-    isolated: true,
-    defaultAccess: "backup",
-    roles: "Security Reader or Global Reader to back up; Security Administrator to restore.",
-    readerProbe: { path: "security/secureScoreControlProfiles?$top=1&$select=id", role: "SecurityEvents.Read.All" },
-    areas: DEFENDER_AREAS,
   },
 ]
 

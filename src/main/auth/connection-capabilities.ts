@@ -1,3 +1,4 @@
+import { expandedEntraScope } from "../../shared/intune/entra-scope"
 import type { TokenGrant } from "./network-client"
 import { graphCliScopes } from "./connection-coverage"
 import { localStorageAccountName, RESOURCE_SCOPES } from "../../shared/constants"
@@ -375,7 +376,7 @@ function restorePackForPath(path: string): string | undefined {
   if (!/^\/[a-z]/.test(graph) || graph.includes("%") || graph.includes("\\") || /\/(?:\.|\.\.)(?:\/|$)/.test(graph)) return
   if (/^\/(?:devicemanagement|deviceappmanagement)(?:\/|$)/.test(graph)) return "intune-restore"
   if (/^\/identity\/conditionalaccess(?:\/|$)/.test(graph)) return "conditionalAccess-restore"
-  if (/^\/security(?:\/|$)/.test(graph) || /^\/rolemanagement\/defender(?:\/|$)/.test(graph)) return "defender-restore"
   if (/^\/(?:applications|serviceprincipals|oauth2permissiongrants|rolemanagement|directory\/(?:deleteditems|administrativeunits)|identitygovernance\/privilegedaccess)(?:\/|$)/.test(graph)) return
-  return "entra-restore"
+  if (/^\/(?:security|rolemanagement)(?:\/|$)/.test(graph)) return
+  if (expandedEntraScope || /^\/groups(?:\/|$)/.test(graph)) return "entra-restore"
 }

@@ -1,5 +1,7 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import { readFileSync } from "node:fs"
-import { expect, it } from "vitest"
+import { expect, it, vi } from "vitest"
 import { MODULES, type PermissionArea } from "../src/shared/services/modules"
 import { areaPermissions, graphPermissions, knownPermissions, missingForChoice, readerRoles, readerScriptArguments } from "../src/shared/services/manifest"
 import { typeForFolder, restoreCapability } from "../src/shared/intune/registry"

@@ -8,5 +8,5 @@ import { moduleForFolder } from "./modules"
 export function backupTypeUse(type: IntuneType) {
   const service = moduleForFolder(type.folder)?.module.id
   const auditService = !type.inventory && (service === "intune" || service === "conditionalAccess") ? service : undefined
-  return { policyCount: !type.inventory, compare: true, hygiene: !type.inventory && service !== "entra" && service !== "defender", auditService }
+  return { policyCount: !type.inventory, compare: true, hygiene: !type.inventory && service !== "entra", auditService }
 }

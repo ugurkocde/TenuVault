@@ -157,27 +157,10 @@ async function launchApp(label) {
 /** Starts first sign-in from Welcome and returns the address and expected next heading. */
 async function startSignIn(page) {
   await page.getByRole("button", { name: "Connect your tenant" }).click({ timeout: 30_000 })
-  // Older installers start at Services with Intune selected, or go straight to Connect.
-  const ownApp = page.getByRole("button", { name: "Choose Your own app registration", exact: true })
-  const card = page.getByRole("button", { name: "Intune", exact: true })
-  const services = page.getByRole("button", { name: /^(Continue|Continue with Intune)$/ })
   const waiting = page.getByText(/^(Finish signing in in your browser|Waiting for sign-in)/)
-  const check = page.getByRole("heading", { name: /^(Check backup access|You.re ready to back up .+\.|TenuVault can.t read any of the services you picked with this sign-in\.|Sign-in results|Where should backups go\?|Choose where backups are stored|Review your chosen permissions)$/ })
+  const check = page.getByRole("heading", { name: /^(Check backup access|You.re ready to back up .+\.|TenuVault can.t read any of the services you picked with this sign-in\.|Sign-in results|Where should backups go\?)$/ })
   const existingRegistration = page.getByRole("button", { name: "I already have an app registration", exact: true })
-  await card.or(ownApp).or(services).or(existingRegistration).first().waitFor()
-  if (await card.isVisible()) {
-    for (const name of ["Defender", "Entra ID"]) {
-      const other = page.getByRole("button", { name, exact: true, pressed: true })
-      if (await other.isVisible()) await other.click()
-    }
-    if (await card.getAttribute("aria-pressed") === "false") await card.click()
-    await services.click()
-    await ownApp.click()
-  } else if (await ownApp.isVisible()) {
-    await ownApp.click()
-    await page.getByRole("checkbox", { name: "Back up Intune", exact: true }).check()
-    await services.click()
-  } else if (await services.isVisible()) await services.click()
+  await page.getByRole("button", { name: "Choose Your own app registration", exact: true }).click()
   const alternateRoutes = page.getByText("Can't sign in as an admin here?", { exact: true })
   if (await alternateRoutes.isVisible()) await alternateRoutes.click()
   await existingRegistration.click()

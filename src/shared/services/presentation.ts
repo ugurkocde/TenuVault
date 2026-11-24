@@ -2,7 +2,6 @@ import { moduleForFolder, type ModuleId } from "./modules"
 import { INTUNE_TYPES } from "../intune/registry"
 
 export const BACKUP_SERVICES = [
-  { id: "defender", label: "Defender" },
   { id: "entra", label: "Entra ID" },
   { id: "intune", label: "Intune" },
 ] as const
@@ -10,7 +9,7 @@ export const BACKUP_SERVICES = [
 export type BackupService = typeof BACKUP_SERVICES[number]["id"]
 
 /** Display order only. Permission requests and stored module IDs keep their own order. */
-export const DISPLAY_MODULE_ORDER: readonly ModuleId[] = ["defender", "entra", "conditionalAccess", "intune"]
+export const DISPLAY_MODULE_ORDER: readonly ModuleId[] = ["entra", "conditionalAccess", "intune"]
 
 export function backupServiceForFolder(folder: string): BackupService | undefined {
   const id = moduleForFolder(folder)?.module.id
@@ -27,7 +26,6 @@ export function restoreAdminCenter(folderOrPath: string): string {
     return path === collection || path.startsWith(`${collection}/`)
   })
   const service = backupServiceForFolder(folder) ?? (type && backupServiceForFolder(type.folder))
-  if (service === "defender") return "the Microsoft Defender portal"
   if (service === "entra") return "the Microsoft Entra admin center"
   if (service === "intune" || ["deviceappmanagement", "devicemanagement", "deviceenrollment"].includes(parts[0] ?? "")) return "the Microsoft Intune admin center"
   return "the target service’s admin center"

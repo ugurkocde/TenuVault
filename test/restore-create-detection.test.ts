@@ -6,6 +6,7 @@ import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedI
 import { RESTORE_MATRIX } from "../src/shared/intune/restore-matrix"
 import { typeForFolder, restoreCapability, type Item } from "../src/shared/intune/registry"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 
 const actor = { tenantId: "tenant", userId: "admin", clientId: "client", applicationObjectId: "app-object", servicePrincipalId: "sp-object", recoveryAccountIds: [] }

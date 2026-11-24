@@ -463,9 +463,9 @@ await check("hung license checks time out and ignore late responses after retry"
     assert(await evaluate(`window.__licenseTimeout.calls === 4 && ${body}.innerText.includes("Welcome to TenuVault")`), "background check did not keep the loaded status")
     await evaluate(`window.__licenseTimeout.onChanged({ ...window.__licenseTimeout.status, hasKey: true })`)
     // With a key and no tenant the app opens the guided setup, which has the window to itself.
-    assert(await waitForCondition(`${body}.innerText.includes("Which services do you want to connect?")`), "license change was not delivered during the pending check")
+    assert(await waitForCondition(`${body}.innerText.includes("How do you want to connect?")`), "license change was not delivered during the pending check")
     assert(await waitForCondition(`window.__licenseTimeout.expired === 2 && window.__licenseTimeout.timers.size === 0`), "hung background check did not time out")
-    assert(await evaluate(`${body}.innerText.includes("Which services do you want to connect?") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
+    assert(await evaluate(`${body}.innerText.includes("How do you want to connect?") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
     await evaluate(`window.__licenseTimeout.refresh()`)
     assert(await waitForCondition(`window.__licenseTimeout.calls === 5 && ${body}.innerText.includes("Welcome to TenuVault")`), "background timeout left the refresh guard locked")
     await evaluate(`window.__licenseTimeout.resolveBackground()`)
@@ -492,8 +492,7 @@ await check("malformed license keys are rejected", async () => {
 // Without a key, Community (or a license shared by the organization) starts at the tenant sign-in.
 await check("Community users can reach the tenant sign-in without a key", async () => {
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant").click()`)
-  assert(await waitForText("Which services do you want to connect?", 15000), "tenant sign-in did not open")
-  assert(await waitForText("Which services do you want to connect?"), "service choice missing")
+  assert(await waitForText("How do you want to connect?", 15000), "tenant sign-in did not open")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
   assert(await evaluate(`[...document.querySelectorAll('nav[aria-label="Help"] > *')].map(item => item.textContent.trim()).join("|") === "Help"`), "first-run header does not show one Help menu")
@@ -503,8 +502,6 @@ await check("Community users can reach the tenant sign-in without a key", async 
     const overflow = await evaluate(`({ height: innerHeight, scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) })`)
     assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `${name} scrolls: ${JSON.stringify(overflow)}`)
   }
-  await assertFit("Service cards")
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
   assert(await waitForText("How do you want to connect?"), "method choice missing")
   assert(await evaluate(`[...document.querySelectorAll("[data-sign-in-method]")].map(card => card.getAttribute("aria-label").replace("Choose ", "")).join("|") === "Start now|TenuVault app|Your own app registration"`), "sign-in method order is wrong")
   await assertFit("Sign-in method cards")
@@ -719,9 +716,7 @@ await check("tenants page offers delegated sign-in", async () => {
   assert(opened, "Connect tenant button not found")
   // Connect tenant opens the guided setup, the one way to connect a tenant on the desktop.
   assert(await waitForCondition(`location.hash === "#/portal/onboarding"`), "Connect tenant did not open the guided setup")
-  assert(await waitForText("Which services do you want to connect?"), "adding a tenant did not open the sign-in wizard")
-  assert(await evaluate(`[...document.querySelectorAll('[data-onboarding-service][aria-pressed="true"]')].map(card => card.dataset.onboardingService).join() === "intune"`), "only Intune should be selected for a new tenant")
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
+  assert(await waitForText("How do you want to connect?"), "adding a tenant did not open the sign-in wizard")
   await evaluate(`document.querySelector('[data-sign-in-method="ownApp"]').click()`)
   assert(await waitForText("Set up with Microsoft sign-in"), "connect step did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
@@ -1809,7 +1804,7 @@ await check("dashboard shows the selected tenant in light and dark", async () =>
 
 await check("backup services use the same alphabetical order in navigation and the filter", async () => {
   await go("#/portal/backup", "Backup & Restore")
-  const order = ["Defender", "Entra ID", "Intune"]
+  const order = ["Entra ID", "Intune"]
   assert(await waitForCondition(`JSON.stringify([...document.querySelectorAll('section[aria-label="Services"] a > span:first-of-type')].map(e => e.textContent)) === ${JSON.stringify(JSON.stringify(order))}`), "sidebar services out of order")
   assert(await waitForCondition(`JSON.stringify([...document.querySelectorAll('#backup-service option')].slice(1).map(e => e.textContent)) === ${JSON.stringify(JSON.stringify(order))}`), "backup service filter out of order")
 })
@@ -1823,7 +1818,7 @@ await check("restore deep links and navigation preserve the selected tab", async
 
 await check("search with no matches and missing dates stay truthful", async () => {
   await go("#/portal/tenants", "Tenant Management")
-  assert(await waitForCondition(`[...document.querySelectorAll('[aria-label^="Backup services for"]')].some(group => [...group.querySelectorAll("a")].map(link => link.innerText).join(", ") === "Defender, Entra ID, Intune")`), "tenant backups are out of order")
+  assert(await waitForCondition(`[...document.querySelectorAll('[aria-label^="Backup services for"]')].some(group => [...group.querySelectorAll("a")].map(link => link.innerText).join(", ") === "Entra ID, Intune")`), "tenant backups are out of order")
   assert(!(await evaluate(`document.body.innerText.includes('NaN') || document.body.innerText.includes('Next backup in 2 hours')`)), "invented time shown")
   await evaluate(`(() => { const input = document.querySelector('[aria-label="Search tenants"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'no-such-tenant'); input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
   assert(await waitForText("No matching tenants"), "search claims no tenants are configured")

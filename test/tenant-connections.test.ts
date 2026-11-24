@@ -88,7 +88,6 @@ describe("tenant connection migration", () => {
       expect(f.modules.get(credentials.tenantId)).toEqual(choices[i])
       expect(choices[i]?.intune).toMatchObject({ enabled: true, connection: "default", access: "restore" })
       expect(choices[i]?.conditionalAccess.enabled).toBe(i === 0)
-      expect(choices[i]?.defender.enabled).toBe(false)
       expect(choices[i]?.entra.enabled).toBe(false)
       await expect(f.connections.switch(credentials.tenantId, { method: "tenuvaultApp" })).rejects.toThrow("new wizard")
     }
@@ -753,7 +752,7 @@ describe("Start now enrollment and coverage", () => {
     expect(f.modules.get(TENANT).intune).toMatchObject({ enabled: true, access: "backup" })
     expect(f.modules.get(TENANT).entra.enabled).toBe(false)
     const byService = graphCliCoverage(new Set(graphScopes))
-    expect(byService.map(entry => entry.service)).toEqual(["defender", "entra", "intune"])
+    expect(byService.map(entry => entry.service)).toEqual(["entra", "intune"])
     expect(byService[1]?.readable).toEqual([])
     expect(byService[2]?.readable?.length).toBeGreaterThan(0)
     expect(byService[2]?.readable?.length).toBeLessThan(byService[2]!.folders.length)

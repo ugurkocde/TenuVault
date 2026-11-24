@@ -21,7 +21,7 @@ it("names the configured services for the selected tenant, including Conditional
   const state = (services: BackupReaderState["services"]): BackupReaderState => ({ supported: true, available: true, reader: null, setupArguments: "", services })
   let finish!: (value: BackupReaderState) => void
   status.mockImplementation((tenant: string) => tenant === "contoso"
-    ? Promise.resolve(state(["conditionalAccess", "defender"]))
+    ? Promise.resolve(state(["conditionalAccess"]))
     : new Promise<BackupReaderState>(resolve => { finish = resolve }))
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
@@ -34,7 +34,7 @@ it("names the configured services for the selected tenant, including Conditional
       select.dispatchEvent(new Event("change", { bubbles: true }))
     })
     expect(container.textContent).not.toContain("This tenant backs up")
-    await act(async () => finish(state(["intune", "entra", "defender"])))
+    await act(async () => finish(state(["intune", "entra"])))
     expect(container.textContent).toContain("This tenant backs up Defender, Entra ID, and Intune.")
   } finally {
     act(() => root.unmount())

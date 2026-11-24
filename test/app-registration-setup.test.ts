@@ -57,7 +57,7 @@ it("hands a choice of services to the provisioning as it is, and none when the a
   const signIn = async () => ({ account: { tenantId: TENANT, username: "admin" }, idTokenClaims: { tid: TENANT }, accessToken: "ephemeral" })
   state.interactive.mockImplementation(signIn)
   state.provision.mockResolvedValue({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
-  const choice = { entra: { access: "backup", areas: ["groups"] }, defender: { access: "backup" } }
+  const choice = { entra: { access: "backup", areas: ["groups"] } }
   await new AppRegistrationSetup(host()).create({ choice })
   expect(state.provision.mock.calls.at(-1)![0].choice).toEqual(choice)
   await new AppRegistrationSetup(host()).create({ tenant: "example.test" })
@@ -77,7 +77,7 @@ it.each([{}, { sharepoint: { access: "backup" } }, { intune: { access: "everythi
   state.provision.mockResolvedValueOnce({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
   await expect(setup.create()).resolves.toMatchObject({ clientId: "client" })
 })
-it.each(["defender"])("refuses unsupported %s restore before any browser or Graph activity", async service => {
+it.each(["retired"])("refuses unsupported %s restore before any browser or Graph activity", async service => {
   const h = host()
   state.interactive.mockImplementation(async (request: InteractiveRequest) => {
     await request.openBrowser("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize")
@@ -85,7 +85,7 @@ it.each(["defender"])("refuses unsupported %s restore before any browser or Grap
   })
   state.provision.mockResolvedValue({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
   state.configuration = null
-  await expect(new AppRegistrationSetup(h).create({ choice: { [service]: { access: "restore" } } })).rejects.toThrow("Restore access is not available")
+  await expect(new AppRegistrationSetup(h).create({ choice: { [service]: { access: "restore" } } })).rejects.toThrow("Choose the services to set up")
   expect(state.configuration).toBeNull()
   expect(state.interactive).not.toHaveBeenCalled()
   expect(h.openBrowser).not.toHaveBeenCalled()

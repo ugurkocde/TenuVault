@@ -37,7 +37,7 @@
     groups do not). Off by default so an admin who is not in the group is not locked out.
 
 .PARAMETER Services
-    The services the app registration can back up: Intune, ConditionalAccess, Entra, Defender.
+    The services the app registration can back up: Intune, ConditionalAccess and Entra.
     Default: Intune and ConditionalAccess, which is what the script has always requested. Each
     service brings its own read permissions; nothing is requested for a service you leave out.
     An empty list is refused; leave the parameter out to get the default.
@@ -51,7 +51,7 @@
     two, because they reach far beyond those settings.
 
 .PARAMETER Areas
-    Areas of Entra that are backed up only on request: Groups, UsersAndDevices, Applications.
+    Areas of Entra that are backed up only on request: Groups and UsersAndDevices.
     Groups and UsersAndDevices hold personal data. Needs Entra in -Services. An empty list is
     refused; leave the parameter out to back up none of these areas.
 
@@ -98,16 +98,16 @@
     ./New-TenuVaultDesktopApp.ps1 -Services Intune,Entra -RestoreAccess Intune
 
 .EXAMPLE
-    ./New-TenuVaultDesktopApp.ps1 -Services Entra,Defender -RestoreAccess None -Areas Groups
+    ./New-TenuVaultDesktopApp.ps1 -Services Entra -RestoreAccess None -Areas Groups
 #>
 [CmdletBinding()]
 param(
     [string]$TenantId,
     [string]$DisplayName = "TenuVault Desktop",
     [string]$AllowedGroupId,
-    [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'Defender')][string[]]$Services,
-    [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'Defender', 'None')][string[]]$RestoreAccess,
-    [ValidateSet('Groups', 'UsersAndDevices', 'Applications')][string[]]$Areas,
+    [ValidateSet('Intune', 'ConditionalAccess', 'Entra')][string[]]$Services,
+    [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'None')][string[]]$RestoreAccess,
+    [ValidateSet('Groups', 'UsersAndDevices')][string[]]$Areas,
     [switch]$IncludeGroupRead,
     [switch]$IncludeNotifications,
     [switch]$IncludeAuditLog,
@@ -146,18 +146,11 @@ $permissionTable = @(
     @{ Service = 'Intune'; Area = 'Scripts'; OptIn = $false; Backup = @('DeviceManagementScripts.Read.All'); Restore = @('DeviceManagementScripts.ReadWrite.All') }
     @{ Service = 'Intune'; Area = 'Roles'; OptIn = $false; Backup = @('DeviceManagementRBAC.Read.All'); Restore = @('DeviceManagementRBAC.ReadWrite.All') }
     @{ Service = 'Intune'; Area = 'Devices'; OptIn = $false; Backup = @('DeviceManagementManagedDevices.Read.All'); Restore = @('DeviceManagementManagedDevices.Read.All') }
-    @{ Service = 'Entra'; Area = 'TenantSettings'; OptIn = $false; Backup = @('Policy.Read.All', 'Policy.Read.PermissionGrant', 'GroupSettings.Read.All', 'Organization.Read.All', 'Domain.Read.All', 'OnPremDirectorySynchronization.Read.All'); Restore = @('Policy.ReadWrite.ApplicationConfiguration', 'Application.Read.All', 'OrganizationalBranding.ReadWrite.All', 'Policy.Read.All', 'Policy.Read.PermissionGrant', 'GroupSettings.Read.All', 'Organization.Read.All', 'Domain.Read.All', 'OnPremDirectorySynchronization.Read.All') }
-    @{ Service = 'Entra'; Area = 'Authentication'; OptIn = $false; Backup = @('Policy.Read.All', 'AuthenticationContext.Read.All', 'Organization.Read.All', 'PublicKeyInfrastructure.Read.All'); Restore = @('Policy.ReadWrite.AuthenticationFlows', 'Policy.Read.All', 'AuthenticationContext.Read.All', 'Organization.Read.All', 'PublicKeyInfrastructure.Read.All') }
-    @{ Service = 'Entra'; Area = 'ExternalIdentities'; OptIn = $false; Backup = @('Policy.Read.All', 'Policy.Read.B2BManagementPolicy', 'IdentityProvider.Read.All', 'IdentityUserFlow.Read.All', 'EventListener.Read.All', 'CustomAuthenticationExtension.Read.All', 'APIConnectors.Read.All', 'MultiTenantOrganization.Read.All'); Restore = @('Policy.ReadWrite.CrossTenantAccess', 'Policy.Read.All', 'Policy.Read.B2BManagementPolicy', 'IdentityProvider.Read.All', 'IdentityUserFlow.Read.All', 'EventListener.Read.All', 'CustomAuthenticationExtension.Read.All', 'APIConnectors.Read.All', 'MultiTenantOrganization.Read.All') }
-    @{ Service = 'Entra'; Area = 'Roles'; OptIn = $false; Backup = @('RoleManagement.Read.Directory', 'PrivilegedEligibilitySchedule.Read.AzureADGroup', 'GroupMember.Read.All', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementAlert.Read.Directory', 'AdministrativeUnit.Read.All', 'CustomSecAttributeDefinition.Read.All'); Restore = @('RoleManagement.Read.Directory', 'PrivilegedEligibilitySchedule.Read.AzureADGroup', 'GroupMember.Read.All', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementAlert.Read.Directory', 'AdministrativeUnit.Read.All', 'CustomSecAttributeDefinition.Read.All') }
-    @{ Service = 'Entra'; Area = 'Governance'; OptIn = $false; Backup = @('EntitlementManagement.Read.All', 'AccessReview.Read.All', 'Policy.Read.All', 'LifecycleWorkflows.Read.All', 'Agreement.Read.All'); Restore = @('EntitlementManagement.ReadWrite.All', 'Policy.ReadWrite.AccessReview', 'AccessReview.Read.All', 'LifecycleWorkflows.Read.All', 'Agreement.Read.All') }
+    @{ Service = 'Entra'; Area = 'TenantSettings'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.Read.All') }
+    @{ Service = 'Entra'; Area = 'Authentication'; OptIn = $false; Backup = @('Policy.Read.All', 'AuthenticationContext.Read.All'); Restore = @('Policy.Read.All', 'AuthenticationContext.Read.All') }
+    @{ Service = 'Entra'; Area = 'Governance'; OptIn = $false; Backup = @('Agreement.Read.All'); Restore = @('Agreement.Read.All') }
     @{ Service = 'Entra'; Area = 'Groups'; OptIn = $true; Backup = @('Group.Read.All', 'Directory.Read.All'); Restore = @('Group.ReadWrite.All', 'GroupMember.ReadWrite.All', 'User.Read.All', 'Application.Read.All', 'Policy.Read.All', 'RoleManagement.Read.Directory', 'Directory.Read.All') }
-    @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Backup = @('User.Read.All', 'Device.Read.All', 'OrgContact.Read.All'); Restore = @('User.Create', 'User.ReadUpdate.All', 'User.ReadWrite.All', 'Application.Read.All', 'Device.Read.All', 'OrgContact.Read.All') }
-    @{ Service = 'Entra'; Area = 'Applications'; OptIn = $true; Backup = @('Application.Read.All', 'Synchronization.Read.All', 'Directory.Read.All'); Restore = @('Application.Read.All', 'Synchronization.Read.All', 'Directory.Read.All') }
-    @{ Service = 'Defender'; Area = 'Detection'; OptIn = $false; Backup = @('CustomDetection.Read.All', 'Workbooks.Read.All', 'CaseManagement.Read.All'); Restore = @('CustomDetection.Read.All', 'Workbooks.Read.All', 'CaseManagement.Read.All') }
-    @{ Service = 'Defender'; Area = 'Email'; OptIn = $false; Backup = @('AttackSimulation.Read.All', 'ThreatSubmission.Read.All'); Restore = @('AttackSimulation.Read.All', 'ThreatSubmission.Read.All') }
-    @{ Service = 'Defender'; Area = 'Identity'; OptIn = $false; Backup = @('SecurityIdentitiesSensors.Read.All', 'SecurityIdentitiesAutoConfig.Read.All'); Restore = @('SecurityIdentitiesSensors.Read.All', 'SecurityIdentitiesAutoConfig.Read.All') }
-    @{ Service = 'Defender'; Area = 'Posture'; OptIn = $false; Backup = @('SecurityEvents.Read.All', 'RoleManagement.Read.Defender'); Restore = @('SecurityEvents.Read.All', 'RoleManagement.Read.Defender') }
+    @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Backup = @('Device.Read.All'); Restore = @('Device.Read.All') }
 )
 # END PERMISSION TABLE
 # A list that was passed empty is refused: taking it for a parameter that was left out would

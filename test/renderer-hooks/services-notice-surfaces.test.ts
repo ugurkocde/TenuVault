@@ -93,7 +93,7 @@ describe("first-run Dashboard", () => {
   }
   function prepare() {
     mocks.scheduled = false
-    mocks.report.mockResolvedValue(healthScene("defender-backup-types"))
+    mocks.report.mockResolvedValue(healthScene("entra-all-areas"))
     tenant.credentials!.appId = GRAPH_CLI_CLIENT_ID
     mocks.stats = stats
     const container = document.body.appendChild(document.createElement("div"))

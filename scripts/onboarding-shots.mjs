@@ -11,6 +11,7 @@ const desktopDir = resolve(import.meta.dirname, "..")
 const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "docs-site/public/images/onboarding"))
 const width = Number(process.env.SHOT_WIDTH ?? 1024)
 const height = Number(process.env.SHOT_HEIGHT ?? 768)
+const expandedEntra = process.env.SHOT_EXPANDED_ENTRA === "1"
 const baseline = process.env.SHOT_BASELINE === "1"
 
 const NOW = Date.parse("2026-11-15T10:00:00Z")
@@ -31,6 +32,8 @@ const MOCK = {
 const restoreAppId = "61eff188-672b-4be4-acac-2d254a6f9e05"
 const backup = { id: "contoso-backup", timestamp: "2026-11-15T10:00:00Z", status: "Completed", type: "manual", totalPolicies: 1, size: 635, duration: 3, changes: null, comparedWith: null }
 const policy = { path: "DeviceConfigurations/windows-security.json", displayName: "Windows security baseline" }
+const flowPath = backup.id + "/AuthenticationFlowsPolicy/flows.json"
+const flowContents = expandedEntra ? [{ folder: "AuthenticationFlowsPolicy", label: "Authentication flows", area: "Authentication", policies: [{ path: flowPath, displayName: "Sign-up policy" }] }] : []
 const MAIN_OVERRIDES = `(() => {
   const req = process.getBuiltinModule("module").createRequire(process.cwd() + "/x.cjs")
   const { ipcMain, BrowserWindow } = req("electron")
@@ -47,16 +50,16 @@ const MAIN_OVERRIDES = `(() => {
   })
   const pending = () => new Promise(() => {})
   const coverage = choice => [
-    ...(choice.defender ? [{ service: "defender", folders: ["DefenderCustomDetectionRules"], readable: [] }] : []),
-    ...(choice.entra ? [{ service: "entra", folders: ["AuthorizationPolicy", "NamedLocations", "AccessPackages"], readable: scene === "04-missing-permissions" ? [] : ["AuthorizationPolicy", "NamedLocations"] }] : []),
+    ...(choice.entra ? [{ service: "entra", folders: ["AuthenticationContexts", "NamedLocations", "TermsOfUseAgreements"], readable: scene === "04-missing-permissions" ? [] : ["AuthenticationContexts", "NamedLocations"] }] : []),
     ...(choice.intune ? [{ service: "intune", folders: ["DeviceConfigurations"], readable: scene === "15-check-no-access" ? [] : ["DeviceConfigurations"] }] : []),
   ]
   const json = value => ({ status: 200, statusText: "OK", headers: { "content-type": "application/json" }, body: new TextEncoder().encode(JSON.stringify(value)) })
   handle("api", ({path}) => {
     const answers = {
       "/api/list-backups": { backups: ${JSON.stringify([backup])} },
-      "/api/list-backup-contents": { content: { groups: [{ folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", policies: ${JSON.stringify([policy])} }] } },
-      "/api/restore-preview": { items: [{ path: ${JSON.stringify(policy.path)}, name: ${JSON.stringify(policy.displayName)} }] },
+      "/api/list-backup-contents": scene === "33-restore-scope" ? { content: { groups: ${JSON.stringify(flowContents)} } } : { content: { groups: [{ folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", policies: ${JSON.stringify([policy])} }] } },
+      "/api/restore-configuration": { runId: "contoso-restore-review", fingerprint: "reviewed-difference", kind: "authentication", changes: [{ property: "selfServiceSignUp", before: { isEnabled: true }, after: { isEnabled: false } }] },
+      "/api/restore-preview": scene === "33-restore-scope" ? { items: [{ path: ${JSON.stringify(flowPath)}, name: "Sign-up policy", blocker: "Use the separate configuration review.", replaceBlocker: "Use the separate configuration review." }] } : { items: [{ path: ${JSON.stringify(policy.path)}, name: ${JSON.stringify(policy.displayName)} }] },
       "/api/backup/start": { jobId: "first-backup" },
       "/api/backup/status": scene === "18-backup-complete" ? {
         status: "Completed", progress: 100, progressMessage: "Backup completed successfully", isComplete: true, isSuccessful: true,
@@ -95,13 +98,13 @@ const MAIN_OVERRIDES = `(() => {
     id: "contoso-sign-in",
     account: { ...M.accounts[0], clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e" },
     organizationName: M.tenants[0].name,
-    coverage: coverage(choice),
-    missing: ["EntitlementManagement.Read.All", "CustomDetection.Read.All"],
+    coverage: coverage({ ...choice, entra: true }),
+    missing: ["Agreement.Read.All"],
   } }))
   handle("auth:wizardFinish", () => ({ result: true }))
   handle("auth:wizardPackConsent", pending)
   handle("auth:wizardDiscard", () => undefined)
-  handle("services:status", () => ({ tenantId: M.accounts[0].tenantId, modules: ["defender", "entra", "intune"].map(id => ({ id, enabled: true })), needsAccess: ["defender"] }))
+  handle("services:status", () => ({ tenantId: M.accounts[0].tenantId, modules: ["entra", "intune"].map(id => ({ id, enabled: true })), needsAccess: ["entra"] }))
   handle("license:checkNewTenant", () => M.license)
   handle("diagnostics:status", () => ({ state: "unasked", policy: false, reminder: { setup: false, signin: false } }))
   handle("diagnostics:record", () => undefined)
@@ -191,9 +194,9 @@ async function connect(wsUrl, awaitPromise = true) {
 }
 
 const scenes = [
-  ["01-services", "Choose Intune, Entra ID or Defender for backup."],
   ["02-connect", "Choose how to connect your tenant."],
   ["03-check", "Review backup access after signing in."],
+  ["03-check-entra", "Review the Entra ID device and access selection."],
   ["04-missing-permissions", "See which Entra ID areas need access and find out how to add it."],
   ["05-storage", "Confirm your tenant and choose where to store backups."],
   ["06-first-backup", "Follow the first backup after saving your storage choice."],
@@ -226,6 +229,7 @@ const extended = [
   ["30-own-setup-details", "Review what creating an app registration does."],
   ["31-check-permission-names", "Expand technical names for access that is missing."],
   ["32-consent-wait", "Wait for administrator approval in the browser."],
+  ["33-restore-scope", "Review authentication flows in a lab build or see stable restore availability."],
 ]
 const captureScenes = process.env.SHOT_ALL || process.env.SHOT_STATES
   ? [...scenes, ...extended].sort(([a], [b]) => a.localeCompare(b)) : scenes
@@ -266,25 +270,25 @@ try {
     for (const theme of ["light", "dark"]) {
       console.log(`Opening ${state}-${theme}`)
       const restore = state === "07-restore-access"
+      const restoreScope = state === "33-restore-scope"
       const welcome = state === "00-welcome"
       const sidebar = state === "26-needs-access"
       const expanded = ["04-missing-permissions", "23-check-partial-expanded", "31-check-permission-names"].includes(state)
       const partial = ["16-check-partial", "23-check-partial-expanded", "31-check-permission-names"].includes(state)
-      const resume = ["03-check", "04-missing-permissions", "05-storage", "06-first-backup", "14-check-wait", "15-check-no-access", "17-storage-azure", "18-backup-complete"].includes(state)
+      const resume = ["03-check", "03-check-entra", "04-missing-permissions", "05-storage", "06-first-backup", "14-check-wait", "15-check-no-access", "17-storage-azure", "18-backup-complete"].includes(state)
       const services = {
-        ...(expanded || partial ? { entra: { access: "backup" }, conditionalAccess: { access: "backup" } } : {}),
-        ...(partial || !resume ? { defender: { access: "backup" }, entra: { access: "backup" }, conditionalAccess: { access: "backup" } } : {}),
+        ...(resume && expanded ? { entra: { access: "backup" }, conditionalAccess: { access: "backup" } } : {}),
         intune: { access: "backup" },
       }
-      const draft = { step: resume ? 4 : -1, tenant: resume ? TENANTS[0].guid : "", clientId: resume ? CLIENT_ID : "", displayName: "", signedInAt: Date.now(), account: resume ? MOCK.accounts[0] : null, services }
-      await main.evaluate(`fixtureScene(${JSON.stringify(state)}, ${welcome || state === "01-services" ? "null" : JSON.stringify(JSON.stringify(draft))})`)
-      const tenants = restore || sidebar ? MOCK.tenants.map(tenant => ({ ...tenant, credentials: { ...tenant.credentials, appId: restoreAppId } })) : []
+      const draft = { step: resume ? 4 : -2, tenant: resume ? TENANTS[0].guid : "", clientId: resume ? CLIENT_ID : "", displayName: "", signedInAt: Date.now(), account: resume ? MOCK.accounts[0] : null, services }
+      await main.evaluate(`fixtureScene(${JSON.stringify(state)}, ${welcome ? "null" : JSON.stringify(JSON.stringify(draft))})`)
+      const tenants = restore || restoreScope || sidebar ? MOCK.tenants.map(tenant => ({ ...tenant, credentials: { ...tenant.credentials, appId: restoreAppId } })) : []
       await evaluate(`Promise.all([
         window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(tenants))}),
         window.tenuvault.storage.setItem("tenuvault_selected_tenant", "1"),
       ])`)
       await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false })
-      const route = welcome ? "#/" : restore ? "#/portal/backup?tab=restore" : sidebar ? "#/portal/dashboard" : "#/portal/onboarding"
+      const route = welcome ? "#/" : restoreScope ? "#/portal/backup" : restore ? "#/portal/backup?tab=restore" : sidebar ? "#/portal/dashboard" : "#/portal/onboarding"
       await evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); location.hash = ${JSON.stringify(route)}; location.reload()`)
       const disclose = async text => {
         const summary = `[...document.querySelectorAll("summary")].find(item => item.textContent.includes(${JSON.stringify(text)}))`
@@ -293,6 +297,17 @@ try {
       }
       if (welcome) {
         await showing("Welcome to TenuVault")
+      } else if (restoreScope) {
+        await click("Restore from this backup", false)
+        await showing("Choose what to restore")
+        if (expandedEntra) {
+          await click("Authentication flows", false)
+          await click("Review this configuration")
+          await click("Preview exact changes")
+          await showing("Confirmation: authentication")
+        } else if (await evaluate(`document.body.innerText.includes("Authentication flows")`)) {
+          throw new Error("A deferred Entra type appeared in stable restore.")
+        }
       } else if (restore) {
         await click("1 items", false)
         await showing("Allow restore for Intune")
@@ -300,7 +315,12 @@ try {
         await showing("Needs access")
       } else if (resume) {
         await showing(state === "14-check-wait" ? "Checking permissions" : state === "15-check-no-access" ? "TenuVault can't read any" : "You're ready to back up Intune.")
-        if (expanded) await disclose("What's missing")
+        if (state === "03-check-entra") {
+          await evaluate(`document.querySelector('input[role="switch"][aria-label^="Also back up Entra ID"]').click()`)
+          await showing("Needs access")
+          await disclose("What's included")
+        }
+        if (expanded) await disclose("Details")
         if (["05-storage", "06-first-backup", "17-storage-azure", "18-backup-complete"].includes(state)) {
           await click("Continue")
           await showing("This device, encrypted")
@@ -320,11 +340,7 @@ try {
           }
         }
       } else {
-        await showing("Which services do you want to connect?")
-        if (state !== "01-services" && state !== "22-help") {
-          await click("Continue with Defender, Entra ID and Intune")
-          await showing("How do you want to connect?")
-        }
+        await showing("How do you want to connect?")
         if (state === "28-setup-file") {
           if (baseline) {
             await click("Choose Your own app registration")
@@ -342,12 +358,14 @@ try {
           else if (!state.startsWith("08")) await click("Sign in with Microsoft")
           if (state.endsWith("-wait")) await showing("Finish signing in in your browser")
           if (partial || state === "24-start-now-storage") {
-            await showing("You're ready to back up Intune and Entra ID")
+            await showing("Also back up Entra ID device and access settings")
+            await evaluate(`document.querySelector('input[role="switch"][aria-label^="Also back up Entra ID"]').click()`)
+            await showing("Needs access")
             if (state === "24-start-now-storage") {
               await click("Continue with Intune and Entra ID")
               await showing("This device, encrypted")
             } else if (expanded) {
-              await disclose("What's missing")
+              await disclose("Details")
               if (state === "31-check-permission-names") await disclose("Show permission names")
             }
           }
@@ -357,7 +375,7 @@ try {
             await click("Sign in with Microsoft")
             await showing("Finish signing in in your browser")
           } else if (state !== "09-tenuvault-app") {
-            await disclose(baseline ? "Permissions an admin will approve" : "See the permissions")
+            await disclose(baseline ? "Permissions an admin will approve" : "Permissions an admin will approve")
             await showing("Open admin consent")
             if (state === "32-consent-wait") {
               await click("Open admin consent")
@@ -419,7 +437,7 @@ try {
         })()`)
         if (truncatedRows.length) throw new Error(`Truncated sidebar service rows: ${truncatedRows.join(", ")}`)
       }
-      const disclosures = [expanded, restore, sidebar, state === "21-own-routes", state === "25-tenuvault-app-permissions", state === "30-own-setup-details"]
+      const disclosures = [expanded, restore, restoreScope, sidebar, state === "21-own-routes", state === "25-tenuvault-app-permissions", state === "03-check-entra", state === "30-own-setup-details"]
       const scrollHeight = await evaluate("document.scrollingElement.scrollHeight")
       if (!baseline && !disclosures.includes(true) && scrollHeight > height + 1) {
         throw new Error(`Screen needs vertical scrolling: ${state} takes ${scrollHeight}px at ${width} by ${height}`)

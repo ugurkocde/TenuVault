@@ -59,7 +59,7 @@ describe("backup results summary", () => {
     // The engine's count wins over the message wording.
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed successfully", results: { types: [], notices: [], warnings: 1 } })).toBe(true)
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed with 2 warnings", results: { types: [], notices: [], warnings: 0 } })).toBe(false)
-    const skipped = { folder: "DefenderCustomDetectionRules", label: "custom detection rules", state: "skipped", saved: 0, failed: 0 } as never
+    const skipped = { folder: "TermsOfUseAgreements", label: "terms of use", state: "skipped", saved: 0, failed: 0 } as never
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed successfully", results: { types: [skipped], notices: [], warnings: 0, coverage: "incomplete" } })).toBe(false)
   })
 })
@@ -67,11 +67,11 @@ describe("backup results summary", () => {
 describe("BackupResults", () => {
   const job = { status: "Completed", startTime: "2026-11-12T10:00:00Z", endTime: "2026-11-12T10:00:05Z", output: "[10:00:00] Found 6 compliance policies.", results, isComplete: true }
 
-  it("keeps all three services visible and in display order even if one service could fill the panel", () => {
-    const folders = ["ConfigurationPolicies", "NamedLocations", "DefenderSecureScoreControlStates", "DefenderCustomDetectionRules", "DefenderIdentitySensors", "DefenderRoleDefinitions", "DefenderAttackSimulations"]
+  it("keeps both services visible and in display order even if one service could fill the panel", () => {
+    const folders = ["ConfigurationPolicies", "NamedLocations", "AuthenticationContexts", "TermsOfUseAgreements"]
     const types = folders.map(folder => type(folder, { label: folder, saved: 1 }))
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: { types, notices: [] } }, compact: true }))
-    const positions = ["DefenderSecureScoreControlStates", "NamedLocations", "ConfigurationPolicies"].map(label => html.indexOf(label))
+    const positions = ["NamedLocations", "ConfigurationPolicies"].map(label => html.indexOf(label))
     expect(positions.every(position => position >= 0)).toBe(true)
     expect(positions).toEqual([...positions].sort((left, right) => left - right))
     expect(html).toContain("2 more")

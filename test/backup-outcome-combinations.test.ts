@@ -1,8 +1,10 @@
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
+
 import JSZip from "jszip"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { importArchive, reviewArchive } from "../src/main/backup/archive"
 import type { BackupEngineDeps, BackupJob, BackupRequest } from "../src/main/backup/engine"
 import { notifiedStatus, scheduledResult } from "../src/main/backup/scheduler"
@@ -33,7 +35,7 @@ const TYPES = [
   testType("TokenLifetimePolicies", "policies/tokenLifetimePolicies", { listOnly: true }),
   testType("FederatedTokenValidationPolicy", "policies/federatedTokenValidationPolicy", { singleton: { id: "federatedTokenValidationPolicy", name: "Federated token validation policy" }, notConfigured: [{ status: 404, code: "Request_ResourceNotFound" }] }),
   testType("MdmEnrollmentPolicies", "policies/mobileDeviceManagementPolicies", { listOnly: true }),
-  testType("DefenderIdentitySensors", "security/identities/sensors", { listOnly: true }),
+  testType("TermsOfUseAgreements", "identityGovernance/termsOfUse/agreements", { listOnly: true }),
 ]
 
 let unregister: () => void
@@ -53,13 +55,13 @@ function tenant(routes: Record<string, GraphRoute> = {}) {
     "/beta/policies/tokenLifetimePolicies": { value: [] },
     "/beta/policies/federatedTokenValidationPolicy": unset,
     "/beta/policies/mobileDeviceManagementPolicies": { value: [] },
-    "/beta/security/identities/sensors": { value: [] },
+    "/beta/identityGovernance/termsOfUse/agreements": { value: [] },
     ...routes,
   })
 }
 
 const INTUNE: ModuleId[] = ["intune"]
-const ALL: ModuleId[] = ["intune", "entra", "defender"]
+const ALL: ModuleId[] = ["intune", "entra"]
 const reader = (roles: string[], excluded: string[] = []): Partial<BackupEngineDeps> => ({
   unattendedTokens: () => ({ mode: "app-only", graph: async () => jwt({ roles }), storage: async () => "storage", excludedTypes: async () => excluded }),
 })
@@ -94,7 +96,7 @@ const UNKNOWN_TYPE = "Unsupported backup item"
 
 const denied = refusal(403, "Forbidden", "Forbidden")
 const broken = refusal(400, "BadRequest", "Something went wrong")
-const notOnboarded = refusal(403, "Forbidden", "Tenant is not onboarded to Microsoft Defender for Identity.")
+const notOnboarded = refusal(403, "Forbidden", "Tenant is not onboarded to this service.")
 /** A backup scope that selects the PowerShell scripts and nothing else. */
 const ONLY_SCRIPTS = INTUNE_TYPES.map((type) => type.folder).filter((folder) => folder !== "PowerShellScripts")
 
@@ -115,7 +117,7 @@ const ROWS: Row[] = [
   { name: "Intune: a type the backup scope leaves out", services: INTUNE, request: { scope: { excluded: ["PowerShellScripts"] } },
     manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
 
-  // A tenant that turned on Entra ID and Defender.
+  // A tenant that turned on Entra ID.
   { name: "new service: a type saved", services: ALL, routes: { "/beta/policies/tokenLifetimePolicies": { value: [{ id: "tl1", displayName: "Lifetime" }] } },
     manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, outcome: ["TokenLifetimePolicies", "saved"], oldBackup: "removed", scheduler: "Completed", notification: "Success", importHere: true, importRelease: UNKNOWN_TYPE },
   { name: "new service: a type not configured", services: ALL,
@@ -123,13 +125,13 @@ const ROWS: Row[] = [
   { name: "new service: a type left out for a permission (401 HTML page)", services: ALL, routes: { "/beta/policies/tokenLifetimePolicies": () => new Response("<html>401</html>", { status: 401 }) },
     manifest: { Status: "Success", Failures: 0, SkippedTypes: ["TokenLifetimePolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "skipped", "permission"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
   { name: "new service: a granted type refused for the account's role", services: ALL, routes: { "/beta/policies/tokenLifetimePolicies": refusal(403, "Authorization_RequestDenied", "Insufficient privileges to complete the operation.") },
-    deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All DeviceManagementScripts.Read.All Policy.Read.All SecurityIdentitiesSensors.Read.All" }) },
+    deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All DeviceManagementScripts.Read.All Policy.Read.All Agreement.Read.All" }) },
     manifest: { Status: "CompletedWithWarnings", Failures: 1, SkippedTypes: [], FailedTypes: ["TokenLifetimePolicies"], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "failed"], oldBackup: "kept", scheduler: "Failed", notification: "CompletedWithWarnings", importHere: INCOMPLETE, importRelease: INCOMPLETE },
   { name: "new service: a type left out because the token lacks its permission", services: ALL, deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All Policy.Read.All" }) },
-    manifest: { Status: "Success", Failures: 0, SkippedTypes: ["DefenderIdentitySensors"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "skipped", "permission"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
-  { name: "new service: a type left out for a missing license or onboarding", services: ALL, routes: { "/beta/security/identities/sensors": refusal(403, "Forbidden", "Tenant is not onboarded to Microsoft Defender for Identity.") },
-    manifest: { Status: "Success", Failures: 0, SkippedTypes: ["DefenderIdentitySensors"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "skipped", "license"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
-  { name: "new service: a type only a signed-in admin can read, in a Backup Reader run", services: ALL, deps: reader(["DeviceManagementConfiguration.Read.All", "DeviceManagementScripts.Read.All", "DeviceManagementApps.Read.All", "DeviceManagementServiceConfig.Read.All", "DeviceManagementRBAC.Read.All", "DeviceManagementManagedDevices.Read.All", "Policy.Read.All", "SecurityIdentitiesSensors.Read.All"]), request: { trigger: "scheduled" },
+    manifest: { Status: "Success", Failures: 0, SkippedTypes: ["TermsOfUseAgreements"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TermsOfUseAgreements", "skipped", "permission"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
+  { name: "new service: a type left out for a missing license or onboarding", services: ALL, routes: { "/beta/identityGovernance/termsOfUse/agreements": refusal(403, "Forbidden", "Tenant is not onboarded to this service.") },
+    manifest: { Status: "Success", Failures: 0, SkippedTypes: ["TermsOfUseAgreements"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TermsOfUseAgreements", "skipped", "license"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
+  { name: "new service: a type only a signed-in admin can read, in a Backup Reader run", services: ALL, deps: reader(["DeviceManagementConfiguration.Read.All", "DeviceManagementScripts.Read.All", "DeviceManagementApps.Read.All", "DeviceManagementServiceConfig.Read.All", "DeviceManagementRBAC.Read.All", "DeviceManagementManagedDevices.Read.All", "Policy.Read.All", "Agreement.Read.All"]), request: { trigger: "scheduled" },
     manifest: { Status: "Success", Failures: 0, SkippedTypes: ["MdmEnrollmentPolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["MdmEnrollmentPolicies", "skipped", "signedIn"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
   { name: "new service: a type that could not be read (asked to wait ten minutes)", services: ALL, routes: { "/beta/policies/tokenLifetimePolicies": () => new Response("", { status: 429, headers: { "retry-after": "600" } }) },
     manifest: { Status: "CompletedWithWarnings", Failures: 1, SkippedTypes: [], FailedTypes: ["TokenLifetimePolicies"], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "failed"], oldBackup: "kept", scheduler: "Failed", notification: "CompletedWithWarnings", importHere: INCOMPLETE, importRelease: INCOMPLETE },
@@ -138,15 +140,15 @@ const ROWS: Row[] = [
     manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
 
   // A tenant that backs up a new service only. A backup that read nothing is a failure; one that read the tenant is not, whatever it found.
-  { name: "new service only: every type left out, nothing read", services: ["defender"], routes: { "/beta/security/identities/sensors": notOnboarded },
-    manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["DefenderIdentitySensors"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "skipped", "license"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
+  { name: "new service only: every type left out, nothing read", services: ["entra"], routes: { "/beta/identityGovernance/termsOfUse/agreements": notOnboarded },
+    manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["TermsOfUseAgreements"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TermsOfUseAgreements", "skipped", "license"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
     message: "Nothing could be read. The selected type was left out because the tenant has no license for the product or never set it up." },
   { name: "new service only: every type left out for different causes, nothing read", services: ["entra"], deps: { concurrency: 1 },
     routes: { "/beta/policies/tokenLifetimePolicies": () => new Response("<html>401</html>", { status: 401 }), "/beta/policies/federatedTokenValidationPolicy": notOnboarded, "/beta/policies/mobileDeviceManagementPolicies": notOnboarded },
     manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["TokenLifetimePolicies", "FederatedTokenValidationPolicy", "MdmEnrollmentPolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "skipped", "permission"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
     message: "Nothing could be read. Every selected type was left out, most of them because the tenant has no license for the product or never set it up." },
-  { name: "new service only: every type left out because the token lacks its permission, before any request", services: ["defender"], deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All" }) },
-    manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["DefenderIdentitySensors"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "skipped", "permission"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
+  { name: "new service only: every type left out because the token lacks its permission, before any request", services: ["entra"], deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All" }) },
+    manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["TermsOfUseAgreements"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TermsOfUseAgreements", "skipped", "permission"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
     message: "Nothing could be read. The selected type was left out because the TenuVault app registration may lack the permission or its admin consent. Services and permissions in Settings shows what is missing." },
   { name: "new service only: every type empty or not configured", services: ["entra"],
     manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, outcome: ["FederatedTokenValidationPolicy", "notConfigured"], oldBackup: "removed", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true,
@@ -157,8 +159,8 @@ const ROWS: Row[] = [
   { name: "new service only: a type empty and the others left out", services: ["entra"], routes: { "/beta/policies/federatedTokenValidationPolicy": notOnboarded, "/beta/policies/mobileDeviceManagementPolicies": notOnboarded }, deps: { concurrency: 1 },
     manifest: { Status: "Success", Failures: 0, SkippedTypes: ["FederatedTokenValidationPolicy", "MdmEnrollmentPolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "saved"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true,
     message: "Backup completed successfully" },
-  { name: "new service only: the one type could not be read", services: ["defender"], routes: { "/beta/security/identities/sensors": broken },
-    manifest: { Status: "Failed", Failures: 1, SkippedTypes: [], FailedTypes: ["DefenderIdentitySensors"], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "failed"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
+  { name: "new service only: the one type could not be read", services: ["entra"], routes: { "/beta/identityGovernance/termsOfUse/agreements": broken },
+    manifest: { Status: "Failed", Failures: 1, SkippedTypes: [], FailedTypes: ["TermsOfUseAgreements"], Coverage: "Incomplete" }, outcome: ["TermsOfUseAgreements", "failed"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
     message: "Backup failed: no policies could be saved" },
   // The same rule for Intune, where it only shows when the backup scope leaves out the four types whose refusal always was a failure.
   { name: "Intune: the only selected type denied, nothing read", services: INTUNE, routes: { "/beta/deviceManagement/deviceManagementScripts": denied }, request: { scope: { excluded: ONLY_SCRIPTS } },
@@ -231,7 +233,7 @@ describe("every outcome combination against what reads a backup's result", () =>
     }
     // A type that is not selected has no outcome: its service is off, or the scope leaves it out.
     const selected = new Set(job.outcomes!.types.map((type) => type.folder))
-    for (const type of TYPES) expect(selected.has(type.folder)).toBe(row.services.includes(type.folder.startsWith("Defender") ? "defender" : "entra"))
+    for (const type of TYPES) expect(selected.has(type.folder)).toBe(row.services.includes("entra"))
     for (const folder of row.request?.scope?.excluded ?? []) expect(selected.has(folder)).toBe(false)
     // What the manifest says of coverage agrees with the folders retention and comparison count as covered.
     const notRead = manifestCoverage(metadata).notRead
@@ -262,7 +264,7 @@ describe("every outcome combination against what reads a backup's result", () =>
 
 describe("a backup that read nothing", () => {
   it("is recorded as failed with the reason, keeps every older backup and says so where the result is read", async () => {
-    const setup = fixture(tenant({ "/beta/security/identities/sensors": notOnboarded }), { services: () => ({ services: ["defender"] }), retentionDays: () => 30, now: () => NOW })
+    const setup = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": notOnboarded }), { services: () => ({ services: ["entra"] }), retentionDays: () => 30, now: () => NOW })
     // An old backup that holds nothing the tenant still backs up would be removed by a backup that worked.
     await seedOld(setup.store, setup.account, [])
     const job = await setup.run({ trigger: "scheduled" })
@@ -279,7 +281,7 @@ describe("a backup that read nothing", () => {
   })
 
   it("fails a run when the Backup Reader is refused on its only granted type", async () => {
-    const setup = fixture(tenant({ "/beta/security/identities/sensors": refusal(403, "Forbidden", "Missing application roles. API required roles: SecurityIdentitiesSensors.Read.All.") }), { services: () => ({ services: ["defender"] }), ...reader(["SecurityIdentitiesSensors.Read.All"]) })
+    const setup = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": refusal(403, "Forbidden", "Missing application roles. API required roles: Agreement.Read.All.") }), { services: () => ({ services: ["entra"] }), ...reader(["Agreement.Read.All"]) })
     const job = await setup.run({ trigger: "scheduled" })
     expect(job.status).toBe("Failed")
     expect(job.outcomes?.types).toMatchObject([{ outcome: "failed", status: 403 }])

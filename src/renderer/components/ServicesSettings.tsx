@@ -1,3 +1,4 @@
+import { expandedEntraScope } from "../../shared/intune/entra-scope"
 import { privilegedRestoreEnabled } from "../../shared/intune/directory-review-folders"
 import { NoticeCard, noticeActionClass } from "./NoticeCard"
 import { BackupCoverage } from "./BackupCoverage"
@@ -32,13 +33,13 @@ async function copy(text: string, what: string) {
   catch { toast(`Could not copy ${what}.`, "error") }
 }
 
-function Switch({ checked, disabled, label, onChange }: { checked: boolean; disabled: boolean; label: string; onChange: (enabled: boolean) => void }) {
+export function Switch({ checked, disabled, label, onChange, showLabel = false }: { checked: boolean; disabled: boolean; label: string; onChange: (enabled: boolean) => void; showLabel?: boolean }) {
   return <label data-no-select className="inline-flex shrink-0 items-center gap-2 text-sm text-gray-700">
     <input type="checkbox" role="switch" aria-label={label} checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} className="peer sr-only" />
     <span aria-hidden="true" className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-disabled:opacity-50 ${checked ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"}`}>
       <span className={`absolute left-0.5 size-4 rounded-full bg-white shadow ${checked ? "translate-x-4" : ""}`} />
     </span>
-    {checked ? "On" : "Off"}
+    {showLabel ? label : checked ? "On" : "Off"}
   </label>
 }
 
@@ -101,7 +102,7 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
       {area.optIn && area.hasTypes && <Switch checked={area.enabled} disabled={busy || !service.enabled} label={`Include ${area.label} in backups`} onChange={enabled => run(() => bridge.services.setArea(report.tenantId, service.id, area.id, enabled))} />}
     </div>
     {service.id === "entra" && area.id === "externalIdentities" && area.hasTypes && <p className="text-xs text-gray-600">API connectors require the Backup Reader. Their delegated read permission has not been verified.</p>}
-    {service.id === "entra" && area.id === "governance" && area.hasTypes && <p className="text-xs text-gray-600">Access packages, review definitions, lifecycle workflows and terms of use. Some features need Entra ID P2 or ID Governance. PDFs, review decisions and workflow history are excluded.</p>}
+    {service.id === "entra" && area.id === "governance" && area.hasTypes && <p className="text-xs text-gray-600">{expandedEntraScope ? "Access packages, review definitions, lifecycle workflows and terms of use. PDFs, review decisions and workflow history are excluded." : "Agreement settings and file metadata. PDFs and individual acceptances are excluded."}</p>}
     {privilegedRestoreEnabled && service.id === "entra" && area.id === "applications" && <ApplicationRestoreDisclosure />}
     {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
     <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: {deferred ? "Available in a later version" : report.readOnly ? "Unavailable with Start now" : <PermissionState state={area.restore} />}.</p>
@@ -145,7 +146,6 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
         <ul className="list-disc pl-4">{backupAreaCoverage(coverage).missing.map(area => <li key={area}>{area}</li>)}</ul>
       </>} />}
     <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
-    {service.id === "defender" && <p className="mt-2 text-xs text-gray-600">Backs up 17 Microsoft Graph configuration types, including tenant attack simulation content. Anti-phishing, Safe Links, Safe Attachments, anti-spam, anti-malware and quarantine policies, the Tenant Allow/Block List and Defender for Endpoint settings are not covered. Restore is not available yet.</p>}
     <div className="mt-3 space-y-1">
       <p className="text-xs text-gray-600">Backup: <PermissionState state={service.permissions} />. Restore: {report.readOnly ? "Unavailable with Start now" : <PermissionState state={restore} />}.</p>
       {!report.readOnly && service.enabled && service.permissions === "present" && service.access === "restore" && service.missing.length > 0 && <p className="text-sm text-gray-600">Backup permissions are present. Restore needs: {service.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}

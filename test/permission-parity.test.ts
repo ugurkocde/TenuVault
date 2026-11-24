@@ -64,8 +64,8 @@ describe("Copies written from the manifest", () => {
     expect(currentBody(artifact)).toBe(artifact.body)
   })
 
-  it("has one table per script and four in the docs, and no other copy in a script", () => {
-    expect(ARTIFACTS.map((artifact) => artifact.file.split("/").at(-1))).toEqual(["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1", "permissions.md", "permissions.md", "backup-reader.md", "backup-reader.md"])
+  it("has one table per script and two in the docs, and no other copy in a script", () => {
+    expect(ARTIFACTS.map((artifact) => artifact.file.split("/").at(-1))).toEqual(["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1", "permissions.md", "backup-reader.md"])
     // Outside its table, a script names a permission only where an existing switch adds one.
     const outside = (script: string) => script.slice(0, script.indexOf("# BEGIN PERMISSION TABLE")) + script.slice(script.indexOf("# END PERMISSION TABLE"))
     const quoted = (script: string) => [...outside(script).matchAll(/\$\w+ \+= "([A-Za-z.-]+)"/g)].map((match) => match[1]!)
@@ -186,12 +186,12 @@ describe("The Backup Reader", () => {
         partial++
       }
     }
-    expect(checked).toBe(107)
-    expect(partial).toBe(107 * READER_ALLOWED_ROLES.size)
+    expect(checked).toBe(29)
+    expect(partial).toBe(29 * READER_ALLOWED_ROLES.size)
     // The sets a renewal used to change: one role of a service, a role next to Intune, and Entra ID short of one role.
     const five = [...readerRoles()]
     const entra = [...readerRoles({ entra: { access: "backup" } })]
-    for (const set of [["Domain.Read.All"], [...five, "Directory.Read.All"], [...five, ...entra.slice(0, -1)], []]) {
+    for (const set of [["Agreement.Read.All"], [...five, "Directory.Read.All"], [...five, ...entra.slice(0, -1)], []]) {
       const command = commandFor(set)
       expect(command).toContain(" -Permissions ")
       expect(scriptRoles(command), command).toEqual(new Set(set))
@@ -214,7 +214,7 @@ describe("The parameters of the setup scripts", () => {
   const validated = (script: string, parameter: string) => new RegExp(`\\[ValidateSet\\(([^)]*)\\)\\]\\[string\\[\\]\\]\\$${parameter}\\b`).exec(script)?.[1]?.split(",").map((value) => value.trim().replace(/'/g, ""))
 
   it("name the services and the opt-in areas of the manifest", () => {
-    expect(SCRIPT_SERVICES).toEqual(["Intune", "ConditionalAccess", "Entra", "Defender"])
+    expect(SCRIPT_SERVICES).toEqual(["Intune", "ConditionalAccess", "Entra"])
     for (const script of [desktopScript, readerScript]) {
       expect(validated(script, "Services")).toEqual(SCRIPT_SERVICES)
       expect(validated(script, "Areas")).toEqual(SCRIPT_AREAS)

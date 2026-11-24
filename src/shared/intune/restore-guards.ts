@@ -29,12 +29,12 @@ export interface SafetyReferences {
   remainingAdministrators?: { global: string[]; privilegedRole: string[] }
 }
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
-const assignments = new Set(["EntraRoleAssignments", "DefenderRoleAssignments", "RoleEligibilitySchedules", "RoleAssignmentSchedules", "PimGroupEligibilitySchedules", "PimGroupAssignmentSchedules"])
+const assignments = new Set(["EntraRoleAssignments", "RoleEligibilitySchedules", "RoleAssignmentSchedules", "PimGroupEligibilitySchedules", "PimGroupAssignmentSchedules"])
 
 /** These restrictions remain in force even when a later layer enables a type. */
 export function restoreOriginBlocker(folder: string, origin: RestoreOrigin): string | undefined {
   if (origin === "import" && (assignments.has(folder) || folder === "OAuth2PermissionGrants")) return "Role assignments and consent grants from imported backups are never restored."
-  if (origin === "cross-tenant") return "Entra ID and Defender policies and directory objects cannot be copied to another tenant in this release."
+  if (origin === "cross-tenant") return "Entra ID policies and directory objects cannot be copied to another tenant in this release."
   return undefined
 }
 

@@ -21,6 +21,7 @@ import { graphPermissions } from "../src/shared/services/manifest"
 import { restoreCapability, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { executeGuardedRun, restoreFingerprint, GuardedRunJournal, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12,"0")}`
 const actor = { tenantId: id(1), userId: id(2), clientId: id(3), applicationObjectId: id(4), servicePrincipalId: id(5), recoveryAccountIds: [id(6)] }

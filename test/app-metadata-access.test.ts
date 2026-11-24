@@ -8,6 +8,7 @@ import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { GRAPH_APP_ID } from "../src/shared/services/manifest"
 import { privilegedRestoreConsent } from "../src/main/restore/privileged-consent"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 
 const [metadata, removal] = APPLICATION_METADATA_RESTORE_PACK.scopes as [string, string]
@@ -217,7 +218,7 @@ describe("temporary app metadata access", () => {
     for (const access of ["backup", "restore"] as const) {
       const packs = tenantPermissionPacks({
         entra: { access, areas: ["applications", "roles", "groups", "usersAndDevices"] },
-        intune: { access }, defender: { access }, conditionalAccess: { access },
+        intune: { access }, conditionalAccess: { access },
       }, { azure: true, audit: true })
       expect(packs.flatMap(pack => pack.scopes)).not.toContain(metadata)
       expect(packs.flatMap(pack => pack.scopes)).not.toContain(removal)

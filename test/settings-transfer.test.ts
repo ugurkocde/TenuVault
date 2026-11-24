@@ -170,9 +170,9 @@ describe("settings file round trip", () => {
     const preview = b.transfer.open(text, "system")
     expect(preview.groups.map((group) => [group.id, group.connected])).toEqual([["app", true], [TENANT, true]])
     expect(everyItem(preview).filter(item => item.id.startsWith(`${TENANT}:service:`)).map(item => item.label))
-      .toEqual(["Defender", "Entra ID", "Entra ID: Conditional Access", "Intune"])
+      .toEqual(["Entra ID: Conditional Access", "Intune"])
     // Services that are the same on both computers have nothing to change.
-    const same = ["intune", "entra", "defender"].map((id) => `${TENANT}:service:${id}`)
+    const same = ["intune", "entra"].map((id) => `${TENANT}:service:${id}`)
     expect(everyItem(preview).filter((item) => same.includes(item.id)).every((item) => item.status === "same")).toBe(true)
     expect(everyItem(preview).filter((item) => !same.includes(item.id)).every((item) => item.status === "change")).toBe(true)
     // Items with a warning start unselected; the others are selected.

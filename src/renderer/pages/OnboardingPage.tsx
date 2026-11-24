@@ -3,13 +3,14 @@ import { OnboardingHeading, onboardingCard, onboardingLink, onboardingPrimary } 
 import { OnboardingSignIn, type MethodAvailability } from "../components/OnboardingSignIn"
 import { BrowserSignInWait, OtherTenant } from "../components/OnboardingConnection"
 import { type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
+import { MODULES } from "../../shared/services/modules"
+import { typeForFolder } from "../../shared/intune/registry"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
 import { tenantPermissionPacks } from "../../shared/services/permission-packs"
 import { serializeTenants } from "~/lib/tenant-state"
-import { OnboardingServices } from "../components/OnboardingServices"
-import { PermissionRoutes } from "../components/ServicesSettings"
-import { checkedOnboardingChoice, choiceLabel, DEFAULT_ONBOARDING_CHOICE, hasOnboardingBackups } from "../../shared/services/onboarding"
-import { graphPermissions, type PermissionChoice } from "../../shared/services/manifest"
+import { PermissionRoutes, Switch } from "../components/ServicesSettings"
+import { choiceLabel, DEFAULT_ONBOARDING_CHOICE, ONBOARDING_ENTRA_CHOICE, hasOnboardingBackups } from "../../shared/services/onboarding"
+import { graphPermissions, missingForChoice, type PermissionChoice } from "../../shared/services/manifest"
 import { chosenBackupCoverage } from "../../shared/services/graph-cli-coverage"
 import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
 import { listNames, needsAccessText, StartNowAccessHelp } from "../components/BackupAccessHelp"
@@ -48,13 +49,6 @@ function sameRegistration(account: SignedInAccount, connection: SetupConnection)
   return account.tenantId.toLowerCase() === connection.tenantId.toLowerCase() && account.clientId.toLowerCase() === connection.clientId.toLowerCase()
 }
 
-// The theme the setup file preview compares against. Read here and not through lib/appearance,
-// whose module applies the theme when it loads.
-/** A service choice setup can continue with: valid and naming at least one service. */
-function confirmedChoice(choice: PermissionChoice): boolean {
-  try { return Object.keys(checkedOnboardingChoice(choice)).length > 0 } catch { return false }
-}
-
 function currentAppearance(): AppearanceSetting {
   try {
     const value = localStorage.getItem("tenuvault-appearance")
@@ -64,10 +58,12 @@ function currentAppearance(): AppearanceSetting {
   }
 }
 
-const STEPS = ["Services", "Connect", "Check", "Storage", "First backup"]
+const STEPS = ["Connect", "Check", "Storage", "First backup"]
+const entraBackupFolders = MODULES.filter(module => module.id === "entra" || module.id === "conditionalAccess")
+  .flatMap(module => module.areas.filter(area => !area.optIn).flatMap(area => area.folders))
 
 type JobStatus = BackupJobDisplay
-type Step = -2 | -1 | 0 | 1 | 2 | 3 | 4
+type Step = -2 | 0 | 1 | 2 | 3 | 4
 type PermissionResult = { missing: string[]; error?: string; coverage?: BackupScopeCoverage[] }
 
 const EMPTY_METHODS: MethodAvailability = { graphCli: null, tenuvaultApp: null }
@@ -93,11 +89,9 @@ export default function OnboardingPage() {
   const { addTenant, updateTenant } = useTenantOperations()
   const { setSelectedTenantId } = useSelectedTenant()
   const [initial] = useState(loadOnboardingDraft)
-  const [step, setStep] = useState<Step>(initial?.step ?? -1)
+  const [step, setStep] = useState<Step>(initial?.step ?? -2)
   const [services, setServices] = useState<PermissionChoice>(initial?.services ?? DEFAULT_ONBOARDING_CHOICE)
-  // A saved choice that could not be read must be confirmed with Continue on the service step; picking a
-  // service there is not enough, so a setup file that arrives meanwhile waits for that Continue.
-  const reconfirm = useRef(initial?.reconfirm === true || !confirmedChoice(initial?.services ?? {}))
+  const [reviewingEntra, setReviewingEntra] = useState(false)
   const [permissionCheck, setPermissionCheck] = useState<{ account: SignedInAccount; services: PermissionChoice; result: PermissionResult } | null>(null)
   const [method, setMethod] = useState<SignInMethod>("ownApp")
   const [available, setAvailable] = useState(EMPTY_METHODS)
@@ -110,7 +104,7 @@ export default function OnboardingPage() {
   const [consentBusy, setConsentBusy] = useState<"open" | "handoff" | null>(null)
   const [consentStatus, setConsentStatus] = useState("")
   const sharedDraft = useRef<string | undefined>(undefined)
-  const appPermissions = useMemo(() => method === "tenuvaultApp" && confirmedChoice(services)
+  const appPermissions = useMemo(() => method === "tenuvaultApp"
     ? [...new Set(tenantPermissionPacks(services, { azure: false, audit: false }).flatMap(item => item.scopes))].filter(scope => scope.includes(".")).sort()
     : [], [method, services])
   const permissionGeneration = useRef(0)
@@ -146,7 +140,6 @@ export default function OnboardingPage() {
   // A setup file another admin exported: its connection details fill in the Connect and Storage steps.
   const [setup, setSetup] = useState<{ importId: string; connection: SetupConnection } | null>(null)
   // A setup file waiting for a service choice that has to be confirmed again; Continue picks it up.
-  const [heldSetup, setHeldSetup] = useState<{ importId: string; connection: SetupConnection } | null>(null)
   const [setupChoices, setSetupChoices] = useState<{ importId: string; connections: SetupConnection[] } | null>(null)
   const [setupError, setSetupError] = useState("")
   const [openingSetup, setOpeningSetup] = useState(false)
@@ -203,9 +196,9 @@ export default function OnboardingPage() {
     if (tenants.some(tenant => tenant.credentials?.tenantId?.toLowerCase() === saved.tenantId.toLowerCase())) {
       setAccount(null)
       setFields({ tenant: "", clientId: "", displayName: "" })
-      setServices({})
+      setServices(DEFAULT_ONBOARDING_CHOICE)
       setResumed(false)
-      setStep(-1)
+      setStep(-2)
       setCheckingResume(false)
       clearOnboardingDraft()
       return
@@ -227,7 +220,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (step === 3) clearOnboardingDraft()
-    else if (method === "ownApp") saveOnboardingDraft({ step, ...fields, account, services, ...(reconfirm.current ? { reconfirm: true } : {}) })
+    else if (method === "ownApp") saveOnboardingDraft({ step, ...fields, account, services })
   }, [step, fields, account, services, method])
 
   useEffect(() => {
@@ -265,7 +258,7 @@ export default function OnboardingPage() {
 
   // Each step starts at its heading, for keyboard and screen reader users too.
   useEffect(() => {
-    if (firstStep.current) { firstStep.current = false; if (step !== -1 && step !== -2) return }
+    if (firstStep.current) { firstStep.current = false; if (step !== -2) return }
     document.getElementById(`setup-step-${step}`)?.focus()
   }, [step])
 
@@ -387,19 +380,6 @@ export default function OnboardingPage() {
     setSetup({ importId, connection })
     setSetupNotice("")
     setAutoSignIn(null)
-    // A saved choice that had to be confirmed again keeps the file waiting on the service step; its
-    // Continue then runs this again with the confirmed choice.
-    if (reconfirm.current || !confirmedChoice(services)) {
-      setHeldSetup({ importId, connection })
-      if (!account) {
-        const next = { tenant: connection.tenantId, clientId: connection.clientId, displayName: connection.name }
-        setFields(next)
-        saveOnboardingDraft({ step: -1, ...next, account: null, services, ...(reconfirm.current ? { reconfirm: true } : {}) })
-      }
-      setStep(-1)
-      return
-    }
-    setHeldSetup(null)
     if (account && !releasingAccount.current) {
       if (sameRegistration(account, connection)) {
         setFields((current) => ({ tenant: connection.tenantId, clientId: connection.clientId, displayName: current.displayName || connection.name }))
@@ -413,31 +393,23 @@ export default function OnboardingPage() {
     setStep(1)
   }
 
-  // The Connect step shows what a setup file could not do. A service choice that has to be confirmed
-  // again comes first: its step shows the error, and its Continue then opens Connect.
-  const showConnect = () => {
-    setStep(current => current === -1 && !reconfirm.current && confirmedChoice(latest.current.services) ? 0 : current)
-  }
-
   /** The tenants of a settings file that can be connected from it: with connection details and not connected yet. */
   const setupFrom = (preview: TransferPreview) => {
     const connections = preview.groups.flatMap((group) => (group.setup && !group.connected ? [group.setup] : []))
     if (connections.length === 0) {
       setSetupError("This file has no connection details for a tenant that is not connected yet. Ask the other admin to export it again with Include connection details.")
-      showConnect()
     } else if (connections.length === 1) {
       continueWithSetup(preview.importId, connections[0]!)
     } else {
       setSetupError("")
       setSetupChoices({ importId: preview.importId, connections })
-      showConnect()
     }
   }
 
   // A file is read asynchronously; what it does is decided with the state of when it arrives, such as
   // a resumed sign-in the check above turned out to be gone.
-  const latest = useRef({ continueWithSetup, setupFrom, services })
-  latest.current = { continueWithSetup, setupFrom, services }
+  const latest = useRef({ continueWithSetup, setupFrom })
+  latest.current = { continueWithSetup, setupFrom }
 
   const openSetupFile = async () => {
     setOpeningSetup(true)
@@ -470,11 +442,9 @@ export default function OnboardingPage() {
         const others = preview.groups.flatMap((entry) => (entry.setup && !entry.connected ? [entry.setup] : []))
         setSetupError(named?.connected ? `${named.title} from this file is already connected.` : "The tenant this link names cannot be connected from the file.")
         setSetupChoices(others.length ? { importId: preview.importId, connections: others } : null)
-        showConnect()
-      } else latest.current.setupFrom(preview)
+        } else latest.current.setupFrom(preview)
     }, (error: unknown) => {
       setSetupError(error instanceof Error ? error.message : String(error))
-      showConnect()
     })
   }, [requestedSetup, requestedTenant, checkingResume])
 
@@ -525,7 +495,6 @@ export default function OnboardingPage() {
     setPublicTenant("")
     setFields({ tenant: "", clientId: "", displayName: "" })
     setSetup(null)
-    setHeldSetup(null)
     setSetupNotice("")
     setAutoSignIn(null)
     if (next !== "ownApp") saveOnboardingDraft({ step: -2, tenant: "", clientId: "", displayName: "", account: null, services })
@@ -759,10 +728,15 @@ export default function OnboardingPage() {
   // tenant that is already connected has its own way on, and a message of the Storage step that
   // is still set after Back is not an error of this step.
   const signInStuck = Boolean(addError?.license)
-  const stageIndex = step === 3 ? 4 : step === 2 ? 3 : step === 4 ? 2 : step === -1 ? 0 : 1
+  const stageIndex = step === 3 ? 3 : step === 2 ? 2 : step === 4 ? 1 : 0
   const coverage = chosenBackupCoverage(sharedSignIn?.coverage ?? permissionResult?.coverage ?? [], services)
   const selectedScopes = method === "tenuvaultApp" ? appPermissions : graphPermissions(services, "delegated")
-  const missing = [...new Set(sharedSignIn?.missing?.filter(scope => selectedScopes.includes(scope)) ?? permissionResult?.missing ?? [])]
+  const sharedMissing = sharedSignIn?.verifiedScopes
+    ? method === "tenuvaultApp"
+      ? appPermissions.filter(scope => !sharedSignIn.verifiedScopes?.includes(scope))
+      : missingForChoice(services, { kind: "delegated", permissions: new Set(sharedSignIn.verifiedScopes) })
+    : sharedSignIn?.missing?.filter(scope => selectedScopes.includes(scope))
+  const missing = [...new Set(sharedMissing ?? permissionResult?.missing ?? [])]
   const serviceChecks = BACKUP_SERVICES.flatMap(({ id, label }) => {
     if (!services[id] && !(id === "entra" && services.conditionalAccess)) return []
     const row = coverage.find(item => item.service === id)
@@ -789,25 +763,24 @@ export default function OnboardingPage() {
     : nothingReadable ? "TenuVault can't read any of the services you picked with this sign-in."
     : "Check backup access"
   const checked = completedCheck?.account === account && completedCheck?.services === services
-  const stageComplete = [stageIndex > 0, stageIndex > 1, stageIndex > 2 && (checked || checkPassed), stageIndex > 3, succeeded]
+  const stageComplete = [stageIndex > 0, stageIndex > 1 && (checked || checkPassed), stageIndex > 2, succeeded]
   const continueToStorage = useCallback(() => {
     if (nothingReadable) return
     setCompletedCheck(names && account ? { account, services } : null)
     setStep(2)
   }, [account, names, nothingReadable, services])
   const stageWarning = [
-    false,
-    stageIndex === 1 && Boolean(addError || publicError),
-    stageIndex >= 2 && !stageComplete[2] && skippedCheck,
-    stageIndex === 3 && Boolean(addError),
-    stageIndex === 4 && (backupFailed || Boolean(displayJob && completedWithWarnings(displayJob))),
+    stageIndex === 0 && Boolean(addError || publicError),
+    stageIndex >= 1 && !stageComplete[1] && skippedCheck,
+    stageIndex === 2 && Boolean(addError),
+    stageIndex === 3 && (backupFailed || Boolean(displayJob && completedWithWarnings(displayJob))),
   ]
 
   useEffect(() => {
-    if (step !== 4 || !checkPassed || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return
+    if (step !== 4 || !checkPassed || reviewingEntra || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return
     const timer = setTimeout(continueToStorage, 1800)
     return () => clearTimeout(timer)
-  }, [step, checkPassed, continueToStorage])
+  }, [step, checkPassed, reviewingEntra, continueToStorage])
 
   // A resumed Storage step can pick up newly removed permissions.
   useEffect(() => {
@@ -860,7 +833,7 @@ export default function OnboardingPage() {
 
   return (
     <div className="flex min-h-[calc(100vh-56px)] flex-col px-4 py-6 sm:px-6">
-      <div className={cn("mx-auto my-auto w-full space-y-4", step === -1 || step === -2 ? "max-w-[960px]" : "max-w-[640px]")}>
+      <div className={cn("mx-auto my-auto w-full space-y-4", step === -2 ? "max-w-[960px]" : "max-w-[640px]")}>
         <h1 className="sr-only">Set up TenuVault</h1>
         <div className="space-y-2 text-center text-sm text-muted-foreground">
           <p>Step {stageIndex + 1} of {STEPS.length} <span aria-hidden="true">·</span> <span className="font-medium text-foreground">{STEPS[stageIndex]}</span></p>
@@ -876,8 +849,8 @@ export default function OnboardingPage() {
           </ol>
         </div>
         <div className={cn(onboardingCard, "relative")}>
-          {addingTenant && step === -1 && <Link to="/portal/dashboard" className={cn(onboardingLink, "mb-4 inline-flex items-center gap-2")}><ArrowLeft className="size-4" aria-hidden="true" /> Back to dashboard</Link>}
-          {step !== -1 && step !== 3 && (
+          {addingTenant && step === -2 && <Link to="/portal/dashboard" className={cn(onboardingLink, "mb-4 inline-flex items-center gap-2")}><ArrowLeft className="size-4" aria-hidden="true" /> Back to dashboard</Link>}
+          {step !== -2 && step !== 3 && (
             <div className={cn("mb-4", step === 2 && "@lg:absolute @lg:top-10 @lg:left-10 @lg:mb-0")}>
               <button type="button" className={cn(onboardingLink, "inline-flex items-center gap-2")} onClick={() => {
                 if (step === 2) setStep(4)
@@ -891,7 +864,6 @@ export default function OnboardingPage() {
                   setStep(1)
                 }
                 else if (step === 1 && method === "ownApp") setStep(0)
-                else if (step === -2) setStep(-1)
                 else {
                   if (method !== "ownApp") { discardShared(); setAccount(null); setMethod("ownApp") }
                   setStep(-2)
@@ -902,12 +874,6 @@ export default function OnboardingPage() {
             </div>
           )}
           {step === -2 && <div className="space-y-4"><OnboardingSignIn available={available} choice={services} onChoose={chooseMethod} />{openSetupAction}</div>}
-          {step === -1 && <OnboardingServices choice={services} onChange={choice => { reconfirm.current = true; setServices(choice) }} onContinue={() => {
-            reconfirm.current = false
-            if (heldSetup) continueWithSetup(heldSetup.importId, heldSetup.connection)
-            else setStep(-2)
-          }} />}
-          {step === -1 && (setupError || setupChoices) && openSetupAction}
           {/* A file handed over from Settings can fail on any step, for example after its review expired. */}
           {step > 0 && setupError && (
             <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -950,7 +916,7 @@ export default function OnboardingPage() {
                   {method === "tenuvaultApp" && <div><button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("handoff")}>Send to my admin</button></div>}
                   <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={Boolean(consentBusy)} expectedTenant={retryTenant} />
                   {method === "tenuvaultApp" && <details className="space-y-3" open={publicError ? true : undefined}>
-                    <summary className={cn("cursor-pointer", onboardingLink)}>See the permissions</summary>
+                    <summary className={cn("cursor-pointer", onboardingLink)}>Permissions an admin will approve ({appPermissions.length})</summary>
                     <ul className="max-h-40 overflow-auto break-words rounded-xl bg-secondary p-3 text-left text-xs">
                       {appPermissions.map(scope => <li key={scope}>{scope}</li>)}
                     </ul>
@@ -1046,6 +1012,26 @@ export default function OnboardingPage() {
               <OnboardingHeading id="setup-step-4" title={checkingPermissions || checkingResume || publicBusy ? "Check backup access" : checkHeading}
                 icon={readable.length && !checkingPermissions && !checkingResume && !publicBusy ? <CheckCircle2 /> : <ScanSearch />}
                 success={readable.length > 0 && !checkingPermissions && !checkingResume && !publicBusy} />
+              <div className="space-y-2" onFocus={() => setReviewingEntra(true)}>
+                <Switch showLabel checked={Boolean(services.entra)} disabled={publicBusy || Boolean(consentBusy)}
+                  label="Also back up Entra ID device and access settings"
+                  onChange={enabled => {
+                    setReviewingEntra(true)
+                    setConsentStatus("")
+                    setServices(enabled ? ONBOARDING_ENTRA_CHOICE : DEFAULT_ONBOARDING_CHOICE)
+                  }} />
+                <details className="text-xs text-muted-foreground">
+                  <summary className={cn("cursor-pointer", onboardingLink)}>What's included</summary>
+                  <p className="mx-auto mt-2 max-w-md">{entraBackupFolders.map(folder => typeForFolder(folder)?.singleton?.name ?? typeForFolder(folder)?.label).filter(Boolean).join(", ")}.</p>
+                  <p className="mt-1">Turn on groups and device inventory later in Settings.</p>
+                  {method === "tenuvaultApp" && services.entra && <div className="mt-2">
+                    <details>
+                      <summary className={cn("cursor-pointer", onboardingLink)}>Permissions an admin will approve ({appPermissions.length})</summary>
+                      <ul className="mt-2 space-y-1">{appPermissions.map(scope => <li key={scope}>{scope}</li>)}</ul>
+                    </details>
+                  </div>}
+                </details>
+              </div>
               {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
               {checkingPermissions || checkingResume || publicBusy ? (
                 publicBusy ? <BrowserSignInWait kind="signin" cancel={() => void bridge.auth.cancelSignIn()} /> : <p role="status" className="space-y-3 text-sm text-muted-foreground"><Loader2 className="mx-auto size-8 motion-safe:animate-spin" aria-hidden="true" /> Checking permissions for your chosen services…</p>

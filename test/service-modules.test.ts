@@ -22,9 +22,9 @@ describe("Service modules", () => {
     const owners = new Map<string, number>()
     for (const module of MODULES) for (const area of module.areas) for (const folder of area.folders) owners.set(folder, (owners.get(folder) ?? 0) + 1)
     for (const type of INTUNE_TYPES) expect(owners.get(type.folder), type.folder).toBe(1)
-    // A folder without a registry type is one of Entra ID or Defender, whose types are added to the registry later.
+    // A folder without a registry type is one of a later Entra type.
     const backedUp = new Set(INTUNE_TYPES.map((type) => type.folder))
-    for (const folder of owners.keys()) if (!backedUp.has(folder)) expect(["entra", "defender"], folder).toContain(moduleForFolder(folder)!.module.id)
+    for (const folder of owners.keys()) if (!backedUp.has(folder)) expect(["entra"], folder).toContain(moduleForFolder(folder)!.module.id)
     for (const id of ["intune", "conditionalAccess"]) for (const folder of MODULES.find((module) => module.id === id)!.areas.flatMap((area) => area.folders)) expect(backedUp.has(folder), folder).toBe(true)
   })
 
@@ -65,14 +65,14 @@ describe("Service modules", () => {
 
   it("leaves out the folders of a service that is off, and of an opt-in area that is off", () => {
     const foldersOf = (...ids: string[]) => MODULES.filter((module) => ids.includes(module.id)).flatMap((module) => module.areas.flatMap((area) => area.folders))
-    expect(disabledFolders({ services: ["conditionalAccess"] })).toEqual(foldersOf("intune", "entra", "defender"))
+    expect(disabledFolders({ services: ["conditionalAccess"] })).toEqual(foldersOf("intune", "entra"))
     expect(disabledFolders({ services: ["conditionalAccess"] }).slice(0, foldersOf("intune").length)).toEqual(foldersOf("intune"))
     // With every service on, only the opt-in areas nobody turned on are left out.
     const entra = MODULES.find((module) => module.id === "entra")!
     const optIn = entra.areas.filter((area) => area.optIn)
     expect(optIn.map((area) => area.id)).toEqual(["groups", "usersAndDevices", "applications"])
-    expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra", "defender"] })).toEqual(optIn.flatMap((area) => area.folders))
-    expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra", "defender"], areas: { entra: optIn.map((area) => area.id) } })).toEqual([])
+    expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra"] })).toEqual(optIn.flatMap((area) => area.folders))
+    expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra"], areas: { entra: optIn.map((area) => area.id) } })).toEqual([])
     // An opt-in area follows its own switch, not only its service.
     expect(disabledFolders({ services: ["entra"] })).toContain("Groups")
     expect(disabledFolders({ services: ["entra"], areas: { entra: ["groups"] } })).not.toContain("Groups")
@@ -93,7 +93,7 @@ function folderCollisions(modules: readonly ServiceModule[]): string[] {
   for (const module of modules) {
     for (const folder of module.areas.flatMap((area) => area.folders)) {
       const key = folder.toLowerCase()
-      const reusesOlder = (module.id === "entra" || module.id === "defender") && taken.has(key)
+      const reusesOlder = (module.id === "entra") && taken.has(key)
       if (seen.has(key) || reusesOlder) collisions.push(`${module.id}/${folder}`)
       seen.add(key)
     }
@@ -109,11 +109,11 @@ describe("Folder names across services", () => {
   it("would catch a new service reusing RoleDefinitions or Branding in another case", () => {
     const withFolders = (id: string, folders: string[]) => MODULES.map((module) => (module.id === id ? { ...module, areas: [{ ...module.areas[0]!, folders }] } : module))
     expect(folderCollisions(withFolders("entra", ["roleDefinitions"]))).toEqual(["entra/roleDefinitions"])
-    expect(folderCollisions(withFolders("defender", ["BRANDING", "DetectionRules"]))).toEqual(["defender/BRANDING"])
+    expect(folderCollisions(withFolders("entra", ["BRANDING"]))).toEqual(["entra/BRANDING"])
     expect(folderCollisions(withFolders("entra", ["devicecompliancepolicies"]))).toEqual(["entra/devicecompliancepolicies"])
     // Two new services may not share a folder either.
-    const both = MODULES.map((module) => (module.id === "entra" || module.id === "defender" ? { ...module, areas: [{ ...module.areas[0]!, folders: ["Shared"] }] } : module))
-    expect(folderCollisions(both)).toEqual(["defender/Shared"])
+    const both = MODULES.map((module) => (module.id !== "intune" ? { ...module, areas: [{ ...module.areas[0]!, folders: ["Shared"] }] } : module))
+    expect(folderCollisions(both)).toEqual(["entra/Shared"])
   })
 })
 

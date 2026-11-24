@@ -55,7 +55,7 @@ describe("staged wizard sign-in", () => {
     const { host, wizard } = fixture()
     const staged = await wizard.stage(TENANT, "graphCli", undefined)
     expect(staged).toMatchObject({ result: { coverage: [
-      { service: "defender", readable: null }, { service: "entra", readable: null }, { service: "intune", readable: null },
+      { service: "entra", readable: null }, { service: "intune", readable: null },
     ] } })
     expect(JSON.stringify(staged)).not.toMatch(/id-proof|staged-cache|homeAccountId/)
     expect(host.enroll).not.toHaveBeenCalled()
@@ -89,7 +89,7 @@ describe("staged wizard sign-in", () => {
 
   it("uses exactly the service choices checked at TenuVault app sign-in", async () => {
     const { host, wizard } = fixture()
-    const request = { entra: { access: "backup" } }
+    const request = { intune: { access: "backup" } }
     const staged = await wizard.stage(TENANT, "tenuvaultApp", request)
     expect(host.stage).toHaveBeenCalledWith(TENANT, "tenuvaultApp", request)
     const id = "result" in staged ? staged.result.id : ""
@@ -142,24 +142,24 @@ describe("staged wizard sign-in", () => {
 
   it("enrolls partial TenuVault app access with all chosen services and only verified token scopes", async () => {
     const { host, wizard } = fixture()
-    const choice = { intune: { access: "backup" }, defender: { access: "backup" } }
+    const choice = { intune: { access: "backup" }, entra: { access: "backup" }, conditionalAccess: { access: "backup" } }
     const held = "DeviceManagementConfiguration.Read.All"
-    const missing = "CustomDetection.Read.All"
+    const missing = "Agreement.Read.All"
     host.stage.mockResolvedValueOnce({
       ...(await host.stage(TENANT, "tenuvaultApp")),
       graphScopes: [held, missing, "offline_access"],
       grantedScopes: [held],
       missingOnboardingScopes: [missing],
     })
-    const staged = await wizard.stage(TENANT, "tenuvaultApp", choice)
+    const staged = await wizard.stage(TENANT, "tenuvaultApp", { intune: { access: "backup" } })
     expect(staged).toMatchObject({ result: { missing: [missing], coverage: expect.arrayContaining([
-      expect.objectContaining({ service: "defender", readable: [] }),
+      expect.objectContaining({ service: "entra", readable: [] }),
       expect.objectContaining({ service: "intune", readable: expect.arrayContaining(["DeviceConfigurations"]) }),
     ]) } })
     expect(host.startTrial).toHaveBeenCalledOnce()
     expect(wizard.trialContactProof(TENANT)).toBe("id-proof")
     const id = "result" in staged ? staged.result.id : ""
-    expect(await wizard.finish(id, "profile", { intune: { access: "backup" } })).toEqual({ result: true })
+    expect(await wizard.finish(id, "profile", choice)).toEqual({ result: true })
     expect(host.enroll).toHaveBeenCalledWith(expect.objectContaining({
       staged: expect.objectContaining({ graphScopes: [held, "offline_access"] }),
     }), "profile", choice)
@@ -174,7 +174,7 @@ describe("staged wizard sign-in", () => {
     const staged = await wizard.stage(TENANT, "graphCli", undefined)
     expect(staged).toHaveProperty("result.id")
     const id = "result" in staged ? staged.result.id : ""
-    await expect(wizard.finish(id, "profile", { defender: { access: "backup" } })).resolves.toMatchObject({ error: { code: "AADSTS65001" } })
+    await expect(wizard.finish(id, "profile", { entra: { access: "backup" } })).resolves.toMatchObject({ error: { code: "AADSTS65001" } })
     expect(host.checkLicense).not.toHaveBeenCalled()
     expect(host.enroll).not.toHaveBeenCalled()
   })

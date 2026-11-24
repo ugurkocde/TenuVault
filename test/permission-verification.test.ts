@@ -4,6 +4,7 @@ import { BASE_PERMISSIONS } from "../src/shared/services/manifest"
 import { MODULES, MODULE_BY_ID, type Need, type SignInMode } from "../src/shared/services/modules"
 import { OPTIONAL_PERMISSIONS } from "../src/shared/services/optional-permissions"
 
+vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 vi.hoisted(() => vi.stubGlobal("__TV_LAB_PRIVILEGED_RESTORE__", true))
 
 /**
@@ -53,8 +54,8 @@ describe("The record of checked permissions", () => {
     for (const [name, ids] of Object.entries(record.permissions)) for (const mode of MODES) expect(Boolean(ids[mode]), `${name} ${mode}`).toBe(names.get(name)!.has(mode))
   })
 
-  it("covers every folder of Entra ID and Defender with exactly the permissions the manifest gives it", () => {
-    const parts = (["entra", "defender"] as const).flatMap((id) => MODULE_BY_ID.get(id)!.areas.flatMap((area) => area.parts.map((part) => ({ service: id, area: area.id, part }))))
+  it("covers every folder of Entra ID with exactly the permissions the manifest gives it", () => {
+    const parts = (["entra"] as const).flatMap((id) => MODULE_BY_ID.get(id)!.areas.flatMap((area) => area.parts.map((part) => ({ service: id, area: area.id, part }))))
     expect(record.parts.map((part) => `${part.service}/${part.area}/${part.folders.join(",")}`)).toEqual(parts.map(({ service, area, part }) => `${service}/${area}/${part.folders.join(",")}`))
     parts.forEach(({ part }, position) => {
       const entry = record.parts[position]!
@@ -83,7 +84,7 @@ describe("The record of checked permissions", () => {
   })
 
   it("names the types of the research that stay out, and none of them has a folder", () => {
-    expect(record.leftOut.map((entry) => entry.folder)).toEqual(["ServicePrincipalCreationPolicies", "EntraUxSetting", "DirectoryRoleAccessReviewPolicy", "FeatureRolloutPolicies", "OnPremAuthenticationPolicies", "AppProxyConnectorGroups", "DefenderCloudScopes", "DefenderContentRepositories"])
+    expect(record.leftOut.map((entry) => entry.folder)).toEqual(["ServicePrincipalCreationPolicies", "EntraUxSetting", "DirectoryRoleAccessReviewPolicy", "FeatureRolloutPolicies", "OnPremAuthenticationPolicies", "AppProxyConnectorGroups"])
     const folders = new Set(MODULES.flatMap((module) => module.areas.flatMap((area) => area.folders)))
     for (const entry of record.leftOut) expect(folders.has(entry.folder), entry.folder).toBe(false)
   })

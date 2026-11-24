@@ -56,13 +56,13 @@
     Name of the app registration. Default: "TenuVault Backup Reader".
 
 .PARAMETER Services
-    The services scheduled backups read with the Backup Reader: Intune, ConditionalAccess, Entra,
-    Defender. Default: Intune, which is what the script has always granted. Name the services the
+    The services scheduled backups read with the Backup Reader: Intune, ConditionalAccess and
+    Entra. Default: Intune, which is what the script has always granted. Name the services the
     tenant backs up in TenuVault; the reader gets the read permissions of each and no others. An
     empty list is refused; leave the parameter out to get the default.
 
 .PARAMETER Areas
-    Areas of Entra that the reader reads only on request: Groups, UsersAndDevices, Applications.
+    Areas of Entra that the reader reads only on request: Groups and UsersAndDevices.
     Groups and UsersAndDevices hold personal data. Needs Entra in -Services. An empty list is
     refused; leave the parameter out to read none of these areas.
 
@@ -103,8 +103,8 @@ param(
     [string]$TenantId,
     [string]$AppId,
     [string]$DisplayName = "TenuVault Backup Reader",
-    [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'Defender')][string[]]$Services,
-    [ValidateSet('Groups', 'UsersAndDevices', 'Applications')][string[]]$Areas,
+    [ValidateSet('Intune', 'ConditionalAccess', 'Entra')][string[]]$Services,
+    [ValidateSet('Groups', 'UsersAndDevices')][string[]]$Areas,
     [string[]]$Permissions,
     [switch]$IncludeDeviceCategories,
     [switch]$IncludeConditionalAccess
@@ -137,18 +137,11 @@ $permissionTable = @(
     @{ Service = 'Intune'; Area = 'Enrollment'; OptIn = $false; Roles = @('DeviceManagementServiceConfig.Read.All') }
     @{ Service = 'Intune'; Area = 'Scripts'; OptIn = $false; Roles = @('DeviceManagementScripts.Read.All') }
     @{ Service = 'Intune'; Area = 'Roles'; OptIn = $false; Roles = @('DeviceManagementRBAC.Read.All') }
-    @{ Service = 'Entra'; Area = 'TenantSettings'; OptIn = $false; Roles = @('Policy.Read.All', 'Policy.Read.PermissionGrant', 'Policy.Read.DeviceConfiguration', 'GroupSettings.Read.All', 'Organization.Read.All', 'Domain.Read.All') }
-    @{ Service = 'Entra'; Area = 'Authentication'; OptIn = $false; Roles = @('Policy.Read.All', 'AuthenticationContext.Read.All', 'Organization.Read.All', 'PublicKeyInfrastructure.Read.All') }
-    @{ Service = 'Entra'; Area = 'ExternalIdentities'; OptIn = $false; Roles = @('Policy.Read.All', 'Policy.Read.B2BManagementPolicy', 'IdentityProvider.Read.All', 'IdentityUserFlow.Read.All', 'EventListener.Read.All', 'CustomAuthenticationExtension.Read.All', 'APIConnectors.Read.All', 'MultiTenantOrganization.Read.All') }
-    @{ Service = 'Entra'; Area = 'Roles'; OptIn = $false; Roles = @('RoleManagement.Read.Directory', 'PrivilegedEligibilitySchedule.Read.AzureADGroup', 'GroupMember.Read.All', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementAlert.Read.Directory', 'AdministrativeUnit.Read.All', 'CustomSecAttributeDefinition.Read.All') }
-    @{ Service = 'Entra'; Area = 'Governance'; OptIn = $false; Roles = @('EntitlementManagement.Read.All', 'AccessReview.Read.All', 'Policy.Read.All', 'LifecycleWorkflows.Read.All', 'Agreement.Read.All') }
+    @{ Service = 'Entra'; Area = 'TenantSettings'; OptIn = $false; Roles = @('Policy.Read.DeviceConfiguration') }
+    @{ Service = 'Entra'; Area = 'Authentication'; OptIn = $false; Roles = @('Policy.Read.All', 'AuthenticationContext.Read.All') }
+    @{ Service = 'Entra'; Area = 'Governance'; OptIn = $false; Roles = @('Agreement.Read.All') }
     @{ Service = 'Entra'; Area = 'Groups'; OptIn = $true; Roles = @('Group.Read.All', 'Directory.Read.All') }
-    @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Roles = @('User.Read.All', 'Device.Read.All', 'OrgContact.Read.All') }
-    @{ Service = 'Entra'; Area = 'Applications'; OptIn = $true; Roles = @('Application.Read.All', 'Synchronization.Read.All', 'Directory.Read.All') }
-    @{ Service = 'Defender'; Area = 'Detection'; OptIn = $false; Roles = @('CustomDetection.Read.All', 'Workbooks.Read.All', 'CaseManagement.Read.All') }
-    @{ Service = 'Defender'; Area = 'Email'; OptIn = $false; Roles = @('AttackSimulation.Read.All', 'ThreatSubmission.Read.All') }
-    @{ Service = 'Defender'; Area = 'Identity'; OptIn = $false; Roles = @('SecurityIdentitiesSensors.Read.All', 'SecurityIdentitiesAutoConfig.Read.All') }
-    @{ Service = 'Defender'; Area = 'Posture'; OptIn = $false; Roles = @('SecurityEvents.Read.All', 'RoleManagement.Read.Defender') }
+    @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Roles = @('Device.Read.All') }
 )
 # END PERMISSION TABLE
 # A list that was passed empty is refused: taking it for a parameter that was left out would
