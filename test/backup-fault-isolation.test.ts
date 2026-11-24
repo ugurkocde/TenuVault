@@ -612,6 +612,23 @@ describe("Start now backup evidence", () => {
     expect(job.coverage).toBe("incomplete")
   })
 
+  it("classifies a refusal with the opaque bearer used after a refresh", async () => {
+    const path = "/beta/security/rules/detectionRules"
+    const f = fixture(scriptedGraph({
+      [path]: (request: Request) => request.headers.get("authorization") === "Bearer initial"
+        ? refusal(401, "Unauthorized", "Access denied")()
+        : refusal(403, "Forbidden", "Access denied")(),
+    }), {
+      services: () => ({ services: ["defender"] }),
+      getToken: async (_tenant, _client, _scope, fresh) => fresh ? "opaque" : "initial",
+      graphCliGrant: token => token === "initial" ? new Set(["CustomDetection.Read.All"]) : undefined,
+    })
+    const job = await f.run({ clientId })
+    expect(f.requests.filter(request => request.path === path).map(request => request.headers.get("authorization")))
+      .toEqual(["Bearer initial", "Bearer opaque"])
+    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "failed", status: 403 })
+  })
+
   it("records an opaque grant's 403 as unread and keeps account details out of history", async () => {
     const f = fixture(tenant({ "/beta/security/rules/detectionRules": refusal(403, "Authorization_RequestDenied", "private-admin@example.test") }), {
       graphCliGrant: () => undefined,

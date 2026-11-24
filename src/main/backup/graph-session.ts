@@ -2,6 +2,7 @@ import { graphContinuation } from "../../shared/graph-continuation"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import { signInRefused } from "../../shared/backup-outcomes"
+import type { GrantedPermissions } from "../../shared/services/modules"
 import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, GraphUnansweredError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
 
@@ -19,6 +20,7 @@ export interface GraphSessionOptions {
    * and unanswered requests count toward the job's circuit, as they always have.
    */
   isolated?: boolean
+  grantForToken?: (token: string) => GrantedPermissions | undefined
 }
 
 export interface ReadControl {
@@ -104,6 +106,7 @@ export class GraphSession {
           if (this.throttleError) throw this.throttleError
           if (this.resumeAt > Date.now()) throw new GraphPauseError()
           control.beforeRequest?.()
+          const grant = this.options.grantForToken?.(token)
           attempted = true
           // The sign-in comes last, so no type can replace it.
           response = await this.fetchImpl(url, { signal, headers: { ...headers, Authorization: `Bearer ${token}` } })
@@ -122,7 +125,7 @@ export class GraphSession {
             /^\/beta\/security\/threatSubmission\/emailThreatSubmissionPolicies(?:\/[^/]+)?$/.test(new URL(url).pathname) &&
             /text\/html/i.test(response.headers.get("content-type") ?? "") &&
             /Access is denied due to invalid credentials/i.test(await response.clone().text())
-          throw await graphFailure(response)
+          throw await graphFailure(response, grant)
         }, signal)
       } catch (error) {
         signal.throwIfAborted()

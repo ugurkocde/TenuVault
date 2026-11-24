@@ -676,7 +676,7 @@ export class BackupEngine {
       const module = moduleForFolder(type.folder)?.module
       const id = module?.id ?? "intune"
       let session = sessions.get(id)
-      if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated })))
+      if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated, grantForToken: startNow ? readGrant : undefined })))
       return { id, module, isolated: module?.isolated === true, session }
     }
     const typeBudgets = new Map<string, ReturnType<typeof typeReadBudget>>()
@@ -727,13 +727,14 @@ export class BackupEngine {
      * may not read it, or it could not be read. The backup goes on with the other types. A read that
      * fails after an earlier one ended the type changes nothing.
      */
-    const scopeEvidence = { mode: tokens.mode, grantUnknown: startNow && !granted }
+    const scopeEvidence = (error: unknown) => ({ mode: tokens.mode, grantUnknown: startNow && !(error instanceof GraphError && error.grant) })
     const endType = (type: IntuneType, error: unknown, ownList = false): void => {
       if (endedTypes.has(type.folder)) return
       endedTypes.add(type.folder)
       const { module } = serviceOf(type)
       const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
-      const verdict = answer ? classifyAnswer(answer, { ...scopeEvidence, held: granted ? canBackUp(type.folder, granted) : undefined, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
+      const refusedGrant = startNow && error instanceof GraphError ? error.grant : granted
+      const verdict = answer ? classifyAnswer(answer, { ...scopeEvidence(error), held: refusedGrant ? canBackUp(type.folder, refusedGrant) : undefined, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
       const code = providerErrorCode(answer?.code)
       const evidence = answer ? { status: answer.status, ...(code ? { code } : {}) } : {}
       const entry = result(type.folder)
@@ -746,7 +747,7 @@ export class BackupEngine {
         return
       }
       if (verdict.outcome === "skipped") {
-        const needed = type.folder === "PolicySets" && !granted ? backupNeed(type.folder, signIn) : undefined
+        const needed = type.folder === "PolicySets" && !refusedGrant ? backupNeed(type.folder, signIn) : undefined
         const permission = needed && needed !== "unsupported" ? describeRequirement(needed) : undefined
         const reason = startNow && verdict.cause === "permission"
           ? `Microsoft refused this read with Start now. ${GRAPH_CLI_NEXT_STEP}`
@@ -996,7 +997,7 @@ export class BackupEngine {
           const code = providerErrorCode(answer?.code)
           const detail = answer ? ` (${providerStatus(answer.status, code)})` : ""
           const reason = `${type.label}${detail}: ${property} could not be read; the parent configuration was kept.`
-          const verdict = answer ? classifyAnswer(answer, scopeEvidence) : { outcome: "failed" as const }
+          const verdict = answer ? classifyAnswer(answer, scopeEvidence(error)) : { outcome: "failed" as const }
           if (verdict.outcome === "skipped") {
             if (!skippedTypes.includes(type.folder)) skippedTypes.push(type.folder)
             settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, status: answer?.status, ...(code ? { code } : {}) })
@@ -1014,7 +1015,7 @@ export class BackupEngine {
         const error = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
         if ((service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
-          const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, scopeEvidence).outcome === "skipped"
+          const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, scopeEvidence(error)).outcome === "skipped"
           if (refused || error instanceof ReadBudgetError || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
             endType(type, error)
             done++
@@ -1134,7 +1135,7 @@ export class BackupEngine {
         // publish the response text or error code into job logs, outcomes or diagnostics.
         if (signInEnded(error)) throw new TokenError("Microsoft Graph sign-in ended during the directory read.")
         const safeError = error instanceof LargeStorageError || error instanceof ReadBudgetError ? error
-          : error instanceof GraphError ? new GraphError("The directory collection could not be read in full.", error.status)
+          : error instanceof GraphError ? new GraphError("The directory collection could not be read in full.", error.status, {}, error.grant)
           : new Error("The directory collection could not be read in full.")
         // Even a refused continuation is incomplete, never a saved prefix of the collection.
         endType(type, safeError)

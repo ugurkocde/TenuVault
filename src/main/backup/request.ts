@@ -1,3 +1,4 @@
+import type { GrantedPermissions } from "../../shared/services/modules"
 import { LARGE_STORAGE_UNAVAILABLE } from "../../shared/backup-storage"
 import { FetchApplicationError, NetworkUnreachableError } from "../api/network-error"
 import { isLocalAccount } from "../storage/blob-emulator"
@@ -41,7 +42,7 @@ export interface GraphAnswer {
  * `answer` keeps what Graph said, for telling a missing permission from a missing license or a setting that was never made.
  */
 export class GraphError extends Error {
-  constructor(message: string, readonly status: number, readonly answer: GraphAnswer = {}) {
+  constructor(message: string, readonly status: number, readonly answer: GraphAnswer = {}, readonly grant?: GrantedPermissions) {
     super(message)
   }
 }
@@ -179,9 +180,9 @@ export function graphAnswer(text: string): GraphAnswer {
 }
 
 /** The error of a failed Graph response, with its message as before and what Graph answered. */
-export async function graphFailure(response: Response): Promise<GraphError> {
+export async function graphFailure(response: Response, grant?: GrantedPermissions): Promise<GraphError> {
   const text = await response.text()
-  return new GraphError(graphErrorMessage(response.status), response.status, graphAnswer(text))
+  return new GraphError(graphErrorMessage(response.status), response.status, graphAnswer(text), grant)
 }
 
 /** Provider code fields can contain free text too. Keep only short error identifiers. */
