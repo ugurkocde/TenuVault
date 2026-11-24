@@ -160,9 +160,8 @@ The table above is the complete configuration inventory across all three Entra p
 ## Screenshots
 
 ![Governance coverage in Settings](/images/services/entra-backup-types-light.png)
-![Governance coverage during setup](/images/onboarding/03-choice-governance-light.png)
 
-See the dark-mode variants in the [Services screenshot inventory](/images/services/README.md) and [onboarding screenshot inventory](/images/onboarding/README.md).
+See the dark-mode variants in the [Services screenshot inventory](/images/services/README.md).
 
 ## Graph references
 

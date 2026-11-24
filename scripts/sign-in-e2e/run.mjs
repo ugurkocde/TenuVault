@@ -159,15 +159,19 @@ async function startSignIn(page) {
   await page.getByRole("button", { name: "Connect your tenant" }).click({ timeout: 30_000 })
   // Older installers start at Services with Intune selected, or go straight to Connect.
   const ownApp = page.getByRole("button", { name: "Choose Your own app registration", exact: true })
+  const card = page.getByRole("button", { name: "Intune", exact: true })
   const services = page.getByRole("button", { name: "Continue with Intune", exact: true })
   const existingRegistration = page.getByRole("button", { name: "I already have an app registration", exact: true })
-  await ownApp.or(services).or(existingRegistration).waitFor()
-  const wizard = await ownApp.isVisible()
-  if (wizard) {
+  await card.or(ownApp).or(services).or(existingRegistration).first().waitFor()
+  if (await card.isVisible()) {
+    if (await card.getAttribute("aria-pressed") === "false") await card.click()
+    await services.click()
+    await ownApp.click()
+  } else if (await ownApp.isVisible()) {
     await ownApp.click()
     await page.getByRole("checkbox", { name: "Back up Intune", exact: true }).check()
-  }
-  if (wizard || await services.isVisible()) await services.click()
+    await services.click()
+  } else if (await services.isVisible()) await services.click()
   await existingRegistration.click()
   await page.getByText("Sign in to your tenant").waitFor()
   await page.locator("#tenant").fill(TENANT_ID)

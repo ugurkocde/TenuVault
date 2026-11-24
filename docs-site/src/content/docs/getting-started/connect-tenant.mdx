@@ -1,9 +1,9 @@
 ---
 title: "Sign in to your tenant"
-description: Choose how TenuVault signs in to a new tenant, then select the services you want to back up.
+description: Choose services for a new tenant, then choose how TenuVault signs in.
 ---
 
-Open **Connect a tenant** and start at **Let's sign in**. The same wizard opens on a new installation and when you add another tenant. Previously connected tenants keep their sign-in method and service settings.
+Open **Connect a tenant** and start at **Which services do you want to connect?**. The same wizard opens on a new installation and when you add another tenant. Previously connected tenants keep their sign-in method and service settings.
 
 | Sign-in method | What it creates in your tenant |
 | --- | --- |
@@ -15,7 +15,7 @@ Start now and the TenuVault app show an availability message when the license se
 
 ## Start now
 
-**Start now** is a read-only option in **Let’s sign in** when the license service enables it. Supply the tenant ID and review the warning before opening Microsoft. It signs in with Microsoft Graph Command Line Tools and uses the Microsoft Graph permissions already available to that sign-in.
+**Start now** is a read-only option in **How do you want to connect?** when the license service enables it. Supply the tenant ID and review the warning before opening Microsoft. It signs in with Microsoft Graph Command Line Tools and uses the Microsoft Graph permissions already available to that sign-in.
 
 1. For an eligible tenant, open **Settings > Sign-in and access**, then select **Use Start now**. Switch to backup storage on this device first if you use Azure storage.
 2. Read the warning before continuing to Microsoft. If Microsoft asks you to approve permissions or request administrator approval, cancel and choose another sign-in method.
@@ -44,13 +44,13 @@ Open the guided setup, **Set up TenuVault**, to connect a tenant. TenuVault open
 * From **Tenants** or the dashboard's **Quick Actions**: **Connect tenant**.
 * From the **All tenants** page: **Connect a tenant**.
 
-The wizard opens at **Let's sign in**, followed by **Services**, **Results**, **Storage** and **First backup**. Start now signs in before asking which services to back up. With the TenuVault app or your own app registration, choose your services before signing in. Use **Previous** to go back a step. While no tenant is connected, the setup has the window to itself: there is no sidebar, only **Free setup call**, **License**, **Share feedback** and **Support** at the top. **Free setup call** opens the [free setup call](/getting-started/#free-setup-call) page in your browser. Once a tenant is connected, the sidebar is back and the setup shows **Back to dashboard**.
+The wizard opens at **Which services do you want to connect?**. Select one or more of **Defender**, **Entra ID** and **Intune**. Entra ID includes Conditional Access. Select **Continue**, then choose a method on **How do you want to connect?**. **Show the exact permissions** lists the backup access for your choices. Sign in or set up your connection, then continue through **Results**, **Storage** and **First backup**. Use **Previous** to go back a step. While no tenant is connected, the setup has the window to itself: there is no sidebar, only **Free setup call**, **License**, **Share feedback** and **Support** at the top. **Free setup call** opens the [free setup call](/getting-started/#free-setup-call) page in your browser. Once a tenant is connected, the sidebar is back and the setup shows **Back to dashboard**.
 
 ### Continue where you left off
 
 TenuVault saves your progress on this computer, in its encrypted app store: the step, the tenant ID, the client ID, the display name, and a sign-in to a tenant that is not saved yet. No token is kept in this record. Your progress survives a restart, so you can close TenuVault while you run the setup script or wait for another administrator. When you come back, TenuVault skips the welcome screen and the setup says **Welcome back. You can continue where you left off**. A saved sign-in is resumed only while it is still signed in on this computer; otherwise you sign in again. A staged Start now or TenuVault app sign-in stays in memory until storage is confirmed. If you quit before confirming storage, start that sign-in again. The **First backup** step is not resumed.
 
-## Step 1: Connect
+## Set up your own app registration
 
 The **Connect** step, **Connect your tenant**, takes one Microsoft sign-in.
 
@@ -74,8 +74,8 @@ The admins who use TenuVault need roles for the services they choose. For Intune
 
 When another admin already uses TenuVault for the tenant, they can send you a settings file exported with **Include connection details**. See [Import and export](/settings/#import-and-export).
 
-1. On **Let’s sign in** or the own registration **Connect** step, select **Set up from a file** and open the file. If it holds several tenants that are not connected yet, choose one under **Which tenant do you want to connect?** If you already signed in to the file's tenant and app registration, TenuVault keeps that sign-in and goes on to **Results**. If you signed in to another tenant that is not saved yet, that sign-in stays until you select **Use a different tenant or account**.
-2. TenuVault opens the **Sign in** step with the tenant ID, the client ID and the display name filled in. The sign-in asks for the permissions of your service choice; the services in the file are applied later, in step 5. If your saved service choice has to be confirmed again, TenuVault first shows **What do you want to back up?** and continues with the file once you choose. If the file cannot be used, TenuVault says why, on the service choice when it comes first and then on the **Connect** step. A notice, **From a setup file**, names the tenant, the app registration and the storage account from the file. Use a setup file only from an admin you trust: it decides which app registration you sign in to and where backups are stored.
+1. On the method or own registration **Connect** step, select **Set up from a file** and open the file. If it holds several tenants that are not connected yet, choose one under **Which tenant do you want to connect?** If you already signed in to the file's tenant and app registration, TenuVault keeps that sign-in and goes on to **Results**. If you signed in to another tenant that is not saved yet, that sign-in stays until you select **Use a different tenant or account**.
+2. TenuVault opens the **Sign in** step with the tenant ID, the client ID and the display name filled in. The sign-in asks for the permissions of your service choice; the services in the file are applied later, in step 5. If you still need to confirm services, TenuVault waits on **Which services do you want to connect?** and then continues with the file. If the file cannot be used, TenuVault says why, on the service choice when it comes first and then on the **Connect** step. A notice, **From a setup file**, names the tenant, the app registration and the storage account from the file. Use a setup file only from an admin you trust: it decides which app registration you sign in to and where backups are stored.
 3. Select **Sign in with Microsoft** and sign in with your own account.
 4. On the **Storage** step, the storage from the file is chosen. For an Azure storage account, select **Check access** to confirm you can use it.
 5. The first backup starts when you confirm storage. To apply the rest of the setup file to future backups, select **Review settings from the file** and review the settings to import.
@@ -96,7 +96,7 @@ The file holds no secret, so the other admin cannot sign in for you, and you get
   <figcaption>Connect explains what setup creates and offers Microsoft sign-in and alternative setup methods. Example tenant data. Select the image to view it full size.</figcaption>
 </figure>
 
-## Step 2: Sign in
+## Sign in with your own app registration
 
 The **Sign in** step is headed **Sign in to your tenant**. After **Set up with Microsoft sign-in** on the **Connect** step you do not use it: TenuVault signs you in by itself and goes on to **Results**. The tenant takes your organization's name and default domain from Microsoft Entra ID; you can rename it later on the **Tenants** page. If that sign-in fails or you cancel it, this step opens with both IDs filled in and the note **The app registration is ready.**; select **Sign in with Microsoft** to try again.
 
@@ -209,12 +209,12 @@ When you sign in again with **Start now**, TenuVault checks availability and sho
 
 ## Follow your service choice
 
-**What do you want to back up?** offers Defender, Entra ID and Intune. Nothing is selected for a new tenant. Turn on **Back up** for at least one service. Turn on **Also restore** where supported to request restore permissions. Conditional Access sits under Entra ID. Start now shows the coverage of its existing permissions and uses backup access only.
+Setup asks for backup access only. You can add restore permissions when you first need them. Manage optional areas and access levels later under **Settings > Services and permissions**. Start now shows coverage for the selected services on **Sign-in results**.
 
 Your own app registration routes use the same permissions for the chosen services:
 
-* **Set up with Microsoft sign-in** creates the registration with your chosen services, opt-in areas and access levels. Before Microsoft opens, TenuVault explains that Microsoft Graph Command Line Tools gets broader setup-only access, Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All, to create the registration and grant consent. Its sign-in stays in memory and is dropped when setup ends. A second sign-in follows through TenuVault with the chosen permissions.
-* **Use the setup script instead** shows the generated command, including `-Services`, `-RestoreAccess` and `-Areas` as needed. Save the script and run the displayed command.
+* **Set up with Microsoft sign-in** creates the registration with backup access for your chosen services. Before Microsoft opens, TenuVault explains that Microsoft Graph Command Line Tools gets broader setup-only access, Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All, to create the registration and grant consent. Its sign-in stays in memory and is dropped when setup ends. A second sign-in follows through TenuVault with the chosen permissions.
+* **Use the setup script instead** shows the generated command, with your choice of `-Services` and `-RestoreAccess None`. Save the script and run the displayed command.
 * **Create it by hand** shows the permission list for your choice next to the manual guide. Use that list when adding delegated API permissions.
 * **Someone else is the admin? Copy instructions** includes the same chosen command and permission list in the message for your administrator.
 * **I already have an app registration** opens the ID form. After sign-in TenuVault checks the chosen permissions in the Microsoft Graph token, without reading or changing the registration.

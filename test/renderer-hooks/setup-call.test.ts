@@ -634,7 +634,7 @@ describe("errors the Sign in step shows after a later step sent the admin back",
     state.tenants = [{ id: 1, name: "Contoso", credentials: { tenantId: TENANT } }]
     state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: ACCOUNT, signedInAt: Date.now() }))
     const container = await render(createElement(OnboardingPage))
-    expect(container.textContent).toContain("Let's sign in")
+    expect(container.textContent).toContain("Which services do you want to connect?")
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(state.enrollOwnApp).not.toHaveBeenCalled()
     expect(links()).toEqual([])
@@ -665,8 +665,7 @@ describe("errors the Sign in step shows after a later step sent the admin back",
 describe("0.6 setup steps", () => {
   it("offers nothing during service selection or after a successful permission check", async () => {
     const container = await render(createElement(OnboardingPage))
-    await act(async () => button(container, "Choose Your own app registration")!.click())
-    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.textContent).toContain("Which services do you want to connect?")
     expect(links()).toEqual([])
     await unmount()
     await runFirstBackup(started)

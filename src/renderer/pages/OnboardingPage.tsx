@@ -17,7 +17,7 @@ import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
-import { AlertTriangle, ArrowLeft, ArrowRight, Ban, CheckCircle2, Database, FileUp, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
+import { AlertTriangle, ArrowLeft, ArrowRight, Ban, Cable, CheckCircle2, Database, FileUp, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants } from "~/contexts/TenantContext"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
@@ -66,8 +66,9 @@ function currentAppearance(): AppearanceSetting {
 }
 
 const STEPS = [
-  { title: "Sign in", icon: KeyRound },
   { title: "Services", icon: ShieldCheck },
+  { title: "Connect method", icon: Cable },
+  { title: "Sign in", icon: KeyRound },
   { title: "Results", icon: CheckCircle2 },
   { title: "Storage", icon: Database },
   { title: "First backup", icon: HardDriveDownload },
@@ -103,7 +104,7 @@ export default function OnboardingPage() {
   const { addTenant, updateTenant } = useTenantOperations()
   const { setSelectedTenantId } = useSelectedTenant()
   const [initial] = useState(loadOnboardingDraft)
-  const [step, setStep] = useState<Step>(initial?.step ?? -2)
+  const [step, setStep] = useState<Step>(initial?.step ?? -1)
   const [services, setServices] = useState<PermissionChoice>(initial?.services ?? {})
   // A saved choice that could not be read must be confirmed with Continue on the service step; picking a
   // service there is not enough, so a setup file that arrives meanwhile waits for that Continue.
@@ -208,7 +209,7 @@ export default function OnboardingPage() {
       setFields({ tenant: "", clientId: "", displayName: "" })
       setServices({})
       setResumed(false)
-      setStep(-2)
+      setStep(-1)
       setCheckingResume(false)
       clearOnboardingDraft()
       return
@@ -230,7 +231,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (step === 3) clearOnboardingDraft()
-    else if (method === "ownApp" && step !== -2) saveOnboardingDraft({ step, ...fields, account, services, ...(reconfirm.current ? { reconfirm: true } : {}) })
+    else if (method === "ownApp") saveOnboardingDraft({ step, ...fields, account, services, ...(reconfirm.current ? { reconfirm: true } : {}) })
   }, [step, fields, account, services, method])
 
   useEffect(() => {
@@ -253,7 +254,7 @@ export default function OnboardingPage() {
 
   // Each step starts at its heading, for keyboard and screen reader users too.
   useEffect(() => {
-    if (firstStep.current) { firstStep.current = false; return }
+    if (firstStep.current) { firstStep.current = false; if (step !== -1 && step !== -2) return }
     document.getElementById(`setup-step-${step}`)?.focus()
   }, [step])
 
@@ -491,8 +492,8 @@ export default function OnboardingPage() {
     setHeldSetup(null)
     setSetupNotice("")
     setAutoSignIn(null)
-    clearOnboardingDraft()
-    setStep(next === "graphCli" ? 1 : forTenant && confirmedChoice(services) ? (next === "ownApp" ? 0 : 1) : -1)
+    if (next !== "ownApp") saveOnboardingDraft({ step: -2, tenant: "", clientId: "", displayName: "", account: null, services })
+    setStep(next === "ownApp" ? 0 : 1)
   }
 
   const signedInShared = (result: WizardSignInResult) => {
@@ -503,7 +504,7 @@ export default function OnboardingPage() {
     sharedDraft.current = result.id
     setSharedSignIn(result)
     setAccount(result.account)
-    setStep(method === "graphCli" ? -1 : 4)
+    setStep(4)
   }
 
   const signInStartNow = async () => {
@@ -693,7 +694,7 @@ export default function OnboardingPage() {
   // tenant that is already connected has its own way on, and a message of the Storage step that
   // is still set after Previous is not an error of this step.
   const signInStuck = Boolean(addError?.license)
-  const stageIndex = step === 3 ? 4 : step === 2 ? 3 : step === 4 ? 2 : step === -1 || step === 0 ? 1 : 0
+  const stageIndex = step === 3 ? 5 : step === 2 ? 4 : step === 4 ? 3 : step === -2 ? 1 : step === -1 ? 0 : 2
   const rawCoverage = sharedSignIn?.coverage ?? permissionResult?.coverage ?? []
   const coverage = method === "graphCli"
     ? chosenBackupCoverage(rawCoverage, services)
@@ -737,13 +738,13 @@ export default function OnboardingPage() {
           <span className="flex size-10 items-center justify-center rounded-full bg-card transition-colors group-hover:bg-secondary" aria-hidden="true"><ArrowLeft className="h-4 w-4" /></span> Back to dashboard
         </Link>
       )}
-      <div className="grid items-start gap-2 @3xl:grid-cols-[1fr_auto]">
+      <div className="grid items-start gap-2 @5xl:grid-cols-[1fr_auto]">
       <div className="contents">
         <h1 className="whitespace-nowrap text-3xl font-medium tracking-tight text-gray-900 @5xl:text-4xl">Set up TenuVault</h1>
 
       </div>
 
-      <ol className="grid grid-cols-5 gap-1 @3xl:pt-1" aria-label="Setup steps">
+      <ol className="grid grid-cols-3 gap-1 @lg:grid-cols-6 @5xl:pt-1" aria-label="Setup steps">
         {STEPS.map((s, i) => (
           <li
             key={s.title}
@@ -770,16 +771,17 @@ export default function OnboardingPage() {
       )}
 
       <div className="@container rounded-3xl bg-card p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-        {step === -2 && <div className="space-y-4"><OnboardingSignIn available={available} onChoose={chooseMethod} />{openSetupAction}</div>}
-        {step === -1 && <OnboardingServices method={method} choice={services} coverage={method === "graphCli" ? sharedSignIn?.coverage : undefined} onChange={setServices} onContinue={() => {
+        {step === -2 && <div className="space-y-4"><OnboardingSignIn available={available} choice={services} onChoose={chooseMethod} />{openSetupAction}</div>}
+        {step === -1 && <OnboardingServices choice={services} onChange={choice => { reconfirm.current = true; setServices(choice) }} onContinue={() => {
           reconfirm.current = false
           if (heldSetup) continueWithSetup(heldSetup.importId, heldSetup.connection)
-          else setStep(method === "graphCli" ? 4 : method === "tenuvaultApp" || setup ? 1 : 0)
+          else setStep(-2)
         }} />}
+        {step === -1 && (setupError || setupChoices) && openSetupAction}
         {/* A file handed over from Settings can fail on any step, for example after its review expired. */}
-        {step !== 0 && step !== -2 && setupError && (
+        {step > 0 && setupError && (
           <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
-            {setupError} Open the file again in Settings, under Import and export, or with Set up from a file on the Connect step.
+            {setupError} Open the file again in Settings, under Import and export, or select Set up from a file in the wizard.
           </p>
         )}
         {step === 0 && method === "ownApp" && (
@@ -907,6 +909,7 @@ export default function OnboardingPage() {
             {publicError && <p role="alert" className="text-sm text-red-700">{publicError}</p>}
             {account && <p className="text-sm text-gray-600">Signed in as {account.username}</p>}
             {checkingPermissions || checkingResume ? <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services…</p> : <>
+              {method === "graphCli" && <p className="text-sm text-gray-600">Start now uses the backup permissions your sign-in already has. Restore is unavailable.</p>}
               <BackupCoverage coverage={coverage} />
               <p className="text-sm text-gray-600">Coverage shows what your permissions allow. If your role can't do this, the first backup reports the refusal separately from missing permissions.</p>
               {(hasScopeGaps || missing.length > 0) && <p className="text-sm text-gray-700">Permission not granted for some of your chosen backup or restore types.</p>}
@@ -1046,16 +1049,18 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {step !== -2 && step !== 3 && (
+        {step !== -1 && step !== 3 && (
           <div className="mt-6 border-t border-gray-100 pt-4">
             <Button variant="ghost" onClick={() => {
               if (step === 2) setStep(4)
-              else if (step === 4 && method === "graphCli" && account) setStep(-1)
-              else if (step === 4) setStep(1)
-              else if (step === 1 && method !== "graphCli") setStep(method === "ownApp" ? 0 : -1)
-              else if (step === 0) setStep(-1)
+              else if (step === 4) {
+                if (method !== "ownApp") { discardShared(); setAccount(null) }
+                setStep(1)
+              }
+              else if (step === 1 && method === "ownApp") setStep(0)
+              else if (step === -2) setStep(-1)
               else {
-                if (method === "graphCli") { discardShared(); setAccount(null) }
+                if (method !== "ownApp") { discardShared(); setAccount(null); setMethod("ownApp") }
                 setStep(-2)
               }
             }} disabled={creating || releasing || setupRunning || publicBusy}>

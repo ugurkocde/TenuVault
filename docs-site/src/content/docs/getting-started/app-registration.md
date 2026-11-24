@@ -161,7 +161,7 @@ The buttons under the checklist:
 | **Create it by hand instead** | Opens [Create the app registration manually](#create-the-app-registration-manually) on this page. |
 | **Setup guide** | Opens this page. |
 
-Select **Next: sign in** under the card when you have the two values. If the app registration already exists, for example from an earlier setup, select **I already have an app registration** instead. Both open [Sign in to your tenant](/getting-started/connect-tenant/#step-2-sign-in).
+Select **Next: sign in** under the card when you have the two values. If the app registration already exists, for example from an earlier setup, select **I already have an app registration** instead. Both open [Sign in to your tenant](/getting-started/connect-tenant/#sign-in-with-your-own-app-registration).
 
 ## Get the script without TenuVault
 

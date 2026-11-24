@@ -67,9 +67,16 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
         step = -1
       }
     }
+    // Older drafts can contain restore access and onboarding opt-ins. Keep only the service choices.
+    const backupOnly: PermissionChoice = {}
+    for (const id of ["defender", "entra", "intune"] as const) {
+      if (services[id] || (id === "entra" && services.conditionalAccess)) backupOnly[id] = { access: "backup" }
+    }
+    if (backupOnly.entra) backupOnly.conditionalAccess = { access: "backup" }
+    services = backupOnly
     // A choice that still has to be confirmed stays on the service step, even after a valid pick was saved.
     const reconfirm = value.reconfirm === true
-    if (reconfirm) step = -1
+    if (reconfirm || !Object.keys(services).length) step = -1
     const account = recentAccount(value)
     const draft: OnboardingDraft = {
       step: (step === 2 || step === 4) && !account ? 1 : step,
@@ -102,7 +109,7 @@ export function pendingSignInTenant(now = Date.now()): string | null {
 
 /** Whether a draft holds nothing worth resuming: the Connect step with no input. */
 export function isEmptyDraft(draft: OnboardingDraft): boolean {
-  return draft.step === -1 && !draft.services && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
+  return draft.step === -1 && (!draft.services || !Object.keys(draft.services).length) && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
 }
 
 let pending: Promise<void> = Promise.resolve()
