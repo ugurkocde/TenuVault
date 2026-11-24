@@ -1,7 +1,8 @@
+import { onboardingLink, onboardingPrimary } from "./OnboardingCard"
 import { BrowserSignInWait, OtherTenant } from "./OnboardingConnection"
 import { DEFAULT_SETUP_CHOICE, type PermissionChoice } from "../../shared/services/manifest"
 import { useEffect, useRef, useState } from "react"
-import { AlertCircle, Building2, Check, ChevronDown, Circle, HardDrive, Info, KeyRound, Loader2, Send, ShieldCheck, UserCheck, X } from "lucide-react"
+import { AlertCircle, Building2, Check, HardDrive, KeyRound, Loader2, Send, ShieldCheck, UserCheck } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
 import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION_URL, setupHandoffText, suggestsCreatingByHand } from "../../shared/app-registration"
@@ -163,9 +164,9 @@ export function ConnectTenantSetup({ onManual, onRegistered, onRunningChange, ch
   }
 
   return (
-    <div data-tenant-connect className="space-y-4 text-sm text-gray-700">
+    <div data-tenant-connect className="space-y-4 text-center text-sm text-muted-foreground">
       <div className="min-w-0 space-y-2">
-        <p className="text-base text-gray-600">TenuVault creates its app registration for your chosen services, then signs you in through it.</p>
+        {!running && <p>TenuVault creates an app registration and signs you in through it.</p>}
 
         {error && (
           <Alert variant="destructive" role="alert">
@@ -184,80 +185,86 @@ export function ConnectTenantSetup({ onManual, onRegistered, onRunningChange, ch
         )}
 
         {running ? (
-          <div role="status" aria-live="polite" className="space-y-4 rounded-3xl bg-gray-50 p-5">
-            <p className="font-medium text-gray-900">Setting up your tenant</p>
-            <ol className="space-y-2.5">
-              {steps.map((label, index) => (
-                <li key={PHASES[index]} className={`flex items-center gap-2.5 ${index > current ? "text-gray-500" : "text-gray-900"}`} aria-current={index === current ? "step" : undefined}>
-                  {index < current
-                    ? <Check className="h-4 w-4 flex-shrink-0 text-green-700" aria-hidden="true" />
-                    : index === current
-                      ? <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" aria-hidden="true" />
-                      : <Circle className="h-4 w-4 flex-shrink-0 text-gray-300" aria-hidden="true" />}
-                  <span>{label}<span className="sr-only">{index < current ? " (done)" : index === current ? " (in progress)" : ""}</span></span>
-                </li>
-              ))}
-            </ol>
-            {phase === "signingIn" && completing ? (
-              <p className="flex items-center gap-2 border-t border-gray-200 pt-4">
-                <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" aria-hidden="true" />
-                Completing sign-in...
-              </p>
-            ) : phase === "signingIn" ? (
+          <div className="space-y-4 pt-3">
+            {phase === "signingIn" && !completing ? (
               <BrowserSignInWait kind="setup" cancel={() => void cancel()} cancelling={cancelling} />
             ) : (
-              <p className="border-t border-gray-200 pt-4 text-xs text-gray-600">
-                {phase === "publishing"
-                  ? "Microsoft needs a moment before a new app registration can be used, usually a few seconds and at most a minute and a half. When it is ready, your browser opens once more to sign you in to TenuVault, with nothing to enter."
-                  : "This takes a few seconds."}
-              </p>
+              <>
+                <div role="status" className="space-y-3">
+                  <Loader2 className="mx-auto size-8 motion-safe:animate-spin" aria-hidden="true" />
+                  <p>{completing ? "Completing sign-in..." : phase === "publishing" ? "Microsoft may take up to 90 seconds before your browser opens again." : steps[current]}</p>
+                </div>
+                <button type="button" className={onboardingLink} onClick={() => void cancel()} disabled={cancelling}>{cancelling ? "Cancelling…" : "Cancel"}</button>
+              </>
             )}
-            {(phase !== "signingIn" || completing) && <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
-              <X className="mr-2 h-4 w-4" aria-hidden="true" />
-              {cancelling ? "Cancelling..." : "Cancel"}
-            </Button>}
+            {setupFile}
             {waitedLong && <SignInRecoveryPanel choice={choice} kind="setup" onTryAgain={() => void tryAgain()} retrying={retrying} />}
           </div>
         ) : (
           <div className="space-y-3">
-            {/* An app name the admin does not expect in a consent prompt looks like phishing, so it is announced here. */}
-            <p className="flex items-start gap-2.5 rounded-2xl bg-gray-50 px-4 py-2 text-gray-700">
-              <Info className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
-              <span>
-                Microsoft will ask you to approve <span className="font-medium text-gray-900">Microsoft Graph Command Line Tools</span> with extra access for setup.
-                Leave &quot;Consent on behalf of your organization&quot; unticked. Then sign in to TenuVault.
-              </span>
-            </p>
-            <Button type="button" size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700 sm:w-auto" onClick={() => void start()}>
-              <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
+            <Button type="button" className={onboardingPrimary} onClick={() => void start()}>
+              <KeyRound className="size-4" aria-hidden="true" />
               {error ? "Try again" : "Set up with Microsoft sign-in"}
             </Button>
-            <p className="text-xs text-gray-600">
-              Sign in as a {CONSENT_ROLES_TEXT}, because the setup creates an app registration and grants admin consent. TenuVault
-              connects tenants in Microsoft&apos;s global cloud; GCC High, DoD and 21Vianet tenants are not supported.
+            <p className="mx-auto max-w-md text-xs">
+              Microsoft will ask you to approve Microsoft Graph Command Line Tools for setup. Leave &quot;Consent on behalf of your organization&quot; unticked.
             </p>
             <OtherTenant tenant={tenant} onChange={setTenant} disabled={running} expectedTenant={expectedTenant} />
           </div>
         )}
 
-        {/* A named group, so the chevron of the permission list inside follows its own state. */}
-        <details className="group/setup rounded-2xl border border-gray-200 px-4 py-3">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-medium text-gray-900">
-            What the setup does
-            <ChevronDown className="h-4 w-4 transition-transform group-open/setup:rotate-180" aria-hidden="true" />
-          </summary>
-          <div className="mt-3 space-y-4">
-      <ul className="space-y-2 rounded-2xl border border-border bg-muted/40 p-4">
-        {REASONS.map(({ icon: Icon, title, text }) => (
-          <li key={title} className="flex gap-3">
-            <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-card text-gray-900" aria-hidden="true"><Icon className="h-4 w-4" /></span>
-            <div className="min-w-0 space-y-0.5">
-              <p className="font-medium text-gray-900">{title}</p>
-              <p className="text-gray-600">{text}</p>
+      </div>
+      {!running && <>
+        <details open={manualGuide || script || copied || undefined} className="space-y-3">
+          <summary className={`cursor-pointer ${onboardingLink}`}>Can&apos;t sign in as an admin here?</summary>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button type="button" variant="outline" size="sm" disabled={running} onClick={() => void copyHandoff()}>
+              {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
+              {copied ? "Copied" : "Copy instructions for my admin"}
+            </Button>
+            <Button type="button" variant="ghost" size="sm" disabled={running} onClick={openManualGuide}>Create it by hand</Button>
+            <Button type="button" variant="ghost" size="sm" disabled={running} onClick={toggleScript} aria-expanded={script}>
+              Use the setup script instead
+            </Button>
+            <Button type="button" variant="ghost" size="sm" disabled={running} onClick={manual}>
+              I already have an app registration
+            </Button>
+          </div>
+          {setupFile}
+          {copied && (
+            <p role="status" className="text-xs text-gray-600">
+              Send the instructions to your Entra administrator by email or chat. TenuVault keeps your place here, so you can close
+              it. When they send back the two lines, select &quot;I already have an app registration&quot; and paste them.
+            </p>
+          )}
+          {manualGuide && <section className="space-y-3 rounded-2xl bg-secondary/60 p-4 @3xl:col-span-2"><h3 className="font-medium text-gray-900">Create the app registration manually</h3><p>Create a single-tenant public client with a localhost redirect, no secret and no certificate. Add and consent to the delegated permissions for your choice below, then return with the tenant ID and client ID.</p><PermissionList choice={choice} /><Button variant="outline" onClick={() => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)}>Open the manual guide</Button></section>}
+          {copied && <details className="rounded-2xl bg-secondary/60 p-4 @3xl:col-span-2" open><summary className="font-medium">Instructions for your administrator</summary><pre className="mt-3 whitespace-pre-wrap break-words text-xs">{setupHandoffText(choice)}</pre></details>}
+          {script && (
+            <div className="space-y-4 @3xl:col-span-2">
+              <SetupScriptCard choice={choice} />
+              <div className="flex justify-end">
+                <Button type="button" variant="outline" onClick={onManual}>Next: sign in</Button>
+              </div>
             </div>
-          </li>
-        ))}
-      </ul>
+          )}
+        </details>
+        <details className="space-y-3">
+          <summary className={`cursor-pointer ${onboardingLink}`}>
+            What the setup does
+          </summary>
+          <div className="mt-3 space-y-4 rounded-2xl bg-secondary/60 p-4 text-left">
+            <ul className="space-y-2 rounded-2xl border border-border bg-muted/40 p-4">
+              {REASONS.map(({ icon: Icon, title, text }) => (
+                <li key={title} className="flex gap-3">
+                  <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-card text-gray-900" aria-hidden="true"><Icon className="h-4 w-4" /></span>
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="font-medium text-gray-900">{title}</p>
+                    <p className="text-gray-600">{text}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <p>Sign in as a {CONSENT_ROLES_TEXT}, because the setup creates an app registration and grants admin consent. Setup supports Microsoft's global cloud. GCC High, DoD and 21Vianet tenants are not supported.</p>
             <ol className="list-decimal space-y-1.5 pl-5">
               <li>Your browser opens and you sign in with Microsoft. Microsoft asks you to approve Microsoft Graph Command Line Tools with two permissions: Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All.</li>
               <li>TenuVault creates the app registration &quot;TenuVault Desktop&quot; in your tenant. If the tenant already has one from an earlier setup, it uses that one and changes nothing in it.</li>
@@ -276,41 +283,7 @@ export function ConnectTenantSetup({ onManual, onRegistered, onRunningChange, ch
             </Button>
           </div>
         </details>
-
-      </div>
-      <details open={manualGuide || script || copied || undefined} className="space-y-3">
-        <summary className="cursor-pointer font-medium underline underline-offset-2">Can&apos;t sign in as an admin here?</summary>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" disabled={running} onClick={() => void copyHandoff()}>
-            {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
-            {copied ? "Copied" : "Copy instructions for my admin"}
-          </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={openManualGuide}>Create it by hand</Button>
-          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={toggleScript} aria-expanded={script}>
-            Use the setup script instead
-          </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={manual}>
-            I already have an app registration
-          </Button>
-        </div>
-        {setupFile}
-        {copied && (
-          <p role="status" className="text-xs text-gray-600">
-            Send the instructions to your Entra administrator by email or chat. TenuVault keeps your place here, so you can close
-            it. When they send back the two lines, select &quot;I already have an app registration&quot; and paste them.
-          </p>
-        )}
-      {manualGuide && <section className="space-y-3 rounded-2xl bg-blue-50 p-4 @3xl:col-span-2"><h3 className="font-medium text-gray-900">Create the app registration manually</h3><p>Create a single-tenant public client with a localhost redirect, no secret and no certificate. Add and consent to the delegated permissions for your choice below, then return with the tenant ID and client ID.</p><PermissionList choice={choice} /><Button variant="outline" onClick={() => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)}>Open the manual guide</Button></section>}
-      {copied && <details className="rounded-2xl bg-blue-50 p-4 @3xl:col-span-2" open><summary className="font-medium">Instructions for your administrator</summary><pre className="mt-3 whitespace-pre-wrap break-words text-xs">{setupHandoffText(choice)}</pre></details>}
-      {script && (
-        <div className="space-y-4 @3xl:col-span-2">
-          <SetupScriptCard choice={choice} />
-          <div className="flex justify-end">
-            <Button type="button" variant="outline" onClick={onManual}>Next: sign in</Button>
-          </div>
-        </div>
-      )}
-      </details>
+      </>}
     </div>
   )
 }

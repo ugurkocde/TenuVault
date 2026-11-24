@@ -1,5 +1,6 @@
 import { ArrowRight, DatabaseBackup, GitCompare, RotateCcw } from "lucide-react"
 import { Button } from "~/components/ui/button"
+import { onboardingCard, onboardingPrimary } from "./OnboardingCard"
 import { BrandMark } from "./BrandMark"
 import { TrialOrKey } from "./PlanChoice"
 import { recordSetup, WhatTenuVaultSends } from "./SetupDiagnostics"
@@ -21,15 +22,15 @@ const POINTS = [
 export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-3">
-      <div className="w-full max-w-lg space-y-4 rounded-3xl bg-card px-9 py-7 shadow-[0_24px_60px_-30px_rgba(22,21,20,0.25)]">
-        <div className="flex items-center gap-3">
+      <div className={`${onboardingCard} max-w-[640px] space-y-6 text-center`}>
+        <div className="flex flex-col items-center gap-4">
           <BrandMark className="size-12" />
           <div>
             <h1 className="text-3xl font-medium tracking-tight text-gray-900">Welcome to TenuVault</h1>
           </div>
         </div>
 
-        <ul className="space-y-3 text-sm text-gray-700">
+        <ul className="mx-auto w-fit space-y-3 text-left text-sm text-gray-700">
           {POINTS.map(({ icon: Icon, text }) => (
             <li key={text} className="flex items-center gap-3">
               <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Icon className="h-4 w-4" /></span>
@@ -39,12 +40,12 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
         </ul>
 
         <div className="space-y-3">
-          <Button size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => { recordSetup({ name: "welcome_continue" }); onSignIn() }}>
+          <Button className={onboardingPrimary} onClick={() => { recordSetup({ name: "welcome_continue" }); onSignIn() }}>
             Connect your tenant <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Button>
         </div>
 
-        <div className="border-t border-gray-100 pt-4">
+        <div className="text-left">
           <TrialOrKey source="welcome" />
         </div>
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { Activity, CheckCircle2 } from "lucide-react"
 import { Button } from "~/components/ui/button"
+import { onboardingLink } from "./OnboardingCard"
 import type { RendererSetupEvent, SetupDiagnosticsStatus } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 
@@ -72,7 +73,7 @@ export function SetupDiagnosticsCard() {
   }
 
   return (
-    <section aria-labelledby="setup-diagnostics-title" className="space-y-3 rounded-2xl border border-gray-200 p-4">
+    <section aria-labelledby="setup-diagnostics-title" className="space-y-3 rounded-2xl border border-border bg-card p-4">
       <div className="flex items-start gap-3">
         <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Activity className="h-4 w-4" /></span>
         <div className="min-w-0 space-y-1">
@@ -88,7 +89,7 @@ export function SetupDiagnosticsCard() {
       </div>
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
       <p className="text-xs text-gray-600">
-        <button type="button" className={linkClass} onClick={openDocs}>See exactly what is sent</button>
+        <button type="button" className={`${onboardingLink} text-xs`} onClick={openDocs}>See exactly what is sent</button>
         <span aria-hidden="true"> · </span>
         Change it anytime in Settings
       </p>

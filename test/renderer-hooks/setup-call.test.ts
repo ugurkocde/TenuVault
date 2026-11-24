@@ -310,25 +310,33 @@ describe("welcome screen", () => {
   })
 })
 
-describe("first-run header", () => {
-  it("lists Free setup call next to License, Share feedback and Support while no tenant is connected", async () => {
+async function openSetupHelp(container: ParentNode) {
+  const trigger = container.querySelector('nav[aria-label="Help"] button')!
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })))
+}
+
+describe("setup header", () => {
+  it("groups setup help and license in one menu", async () => {
     const container = await render(createElement(DesktopLayout), "/portal/onboarding")
-    expect([...container.querySelectorAll('nav[aria-label="Help"] > *')].map((item) => item.textContent)).toEqual(["Free setup call", "License", "Share feedback", "Support"])
-    await expectOpens("setup-header", container)
+    expect(container.querySelector('nav[aria-label="Help"]')?.textContent?.trim()).toBe("Help")
+    await openSetupHelp(container)
+    expect([...document.querySelectorAll('[role="menuitem"]')].map(item => item.textContent)).toEqual(["Free setup call", "License", "Share feedback", "Support"])
+    await expectOpens("setup-header")
   })
 
-  it("belongs to the first-run header only: the sidebar of a connected tenant has no such entry", async () => {
+  it("keeps the wizard header when adding another tenant", async () => {
     state.tenants = [{ id: 1, name: "Contoso", credentials: { tenantId: TENANT } }]
     state.license = COMMUNITY
     const container = await render(createElement(DesktopLayout), "/portal/onboarding")
-    expect(container.querySelector('nav[aria-label="Help"]')).toBeNull()
-    expect(container.querySelector('nav[aria-label="Main navigation"]')).not.toBeNull()
+    expect(container.querySelector('nav[aria-label="Help"]')).not.toBeNull()
+    expect(container.querySelector('nav[aria-label="Main navigation"]')).toBeNull()
     expect(links()).toEqual([])
   })
 
   it("opens the Support dialog with the call as its third button", async () => {
     const container = await render(createElement(DesktopLayout), "/portal/onboarding")
-    await act(async () => { button(container, "Support")!.click() })
+    await openSetupHelp(container)
+    await act(async () => { [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === "Support")!.click() })
     await advance()
     const dialog = document.querySelector('[role="dialog"]')!
     expect([...dialog.querySelectorAll("button")].map((item) => item.textContent?.trim()).filter((label) => label !== "Close")).toEqual(["Documentation", "Open GitHub issue", LABEL])
@@ -628,12 +636,12 @@ describe("errors the Sign in step shows after a later step sent the admin back",
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Start first backup")!.click() })
     await advance()
-    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.textContent).toContain("Where should backups go?")
     expect(container.querySelector('[role="alert"]')!.textContent).toBe("This tenant is on Community now, which keeps backups on this device. Choose This device to continue.")
     expect(links()).toEqual([])
 
-    await act(async () => { button(container, "Previous")!.click() })
-    await act(async () => { button(container, "Previous")!.click() })
+    await act(async () => { button(container, "Back")!.click() })
+    await act(async () => { button(container, "Back")!.click() })
     await advance()
     expect(container.textContent).toContain("Sign in to your tenant")
     expect(container.textContent).toContain("This tenant is on Community now, which keeps backups on this device.")
@@ -692,7 +700,7 @@ describe("Support dialog", () => {
 
 describe("every placement on every plan", () => {
   const PLACEMENTS: readonly (readonly [string, SetupCallSource, () => Promise<unknown>])[] = [
-    ["first-run header", "setup-header", () => render(createElement(DesktopLayout), "/portal/onboarding")],
+    ["setup header", "setup-header", async () => openSetupHelp(await render(createElement(DesktopLayout), "/portal/onboarding"))],
     ["waiting panel of the first sign-in", "signin-waiting", async () => { await waitingSignIn(); await advance(RECOVERY_DELAY_MS) }],
     ["waiting panel of the setup sign-in", "signin-waiting", async () => { await waitingSetup(); await advance(RECOVERY_DELAY_MS) }],
     ["setup error", "setup-error", () => failedSetup("Microsoft Graph refused to create the app registration.")],

@@ -1,3 +1,4 @@
+import { onboardingLink, onboardingPrimary } from "./OnboardingCard"
 import { BrowserSignInWait } from "./OnboardingConnection"
 import { DEFAULT_SETUP_CHOICE, requestedPermissions, setupScriptArguments, type PermissionChoice } from "../../shared/services/manifest"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
@@ -481,30 +482,35 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       {field("displayName", "Display name (optional)", displayName, setDisplayName, "Contoso Production")}
   </>
 
+  if (wizard && busy) return status
+
+  const pasteMessage = <p id="setup-output-note" role="status" className={pasteNote && !pasteNote.ok ? "text-xs text-red-700" : "text-xs text-muted-foreground"}>
+    {pasteNote?.text ?? "Or type the values below."}
+  </p>
+  const pasteOutput = !hidePaste && (
+    <div className="space-y-1.5 text-left">
+      <Label htmlFor="setup-output" className={wizard ? "sr-only" : "flex items-center gap-2"}>
+        <ClipboardPaste className="h-4 w-4" aria-hidden="true" /> Paste the script output
+      </Label>
+      <textarea
+        id="setup-output"
+        rows={4}
+        value={pasted}
+        onChange={(e) => onPasteOutput(e.target.value)}
+        disabled={busy}
+        spellCheck={false}
+        placeholder={"Tenant id:                00000000-0000-0000-0000-000000000000\nApplication (client) id:  00000000-0000-0000-0000-000000000000"}
+        aria-describedby={!wizard || pasteNote ? "setup-output-note" : undefined}
+        className="flex w-full rounded-2xl border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+      />
+      {!wizard && pasteMessage}
+    </div>
+  )
+
   return (
     <div className="space-y-4">
       {automatic && status}
-      {!hidePaste && (
-        <div className="space-y-1.5">
-          <Label htmlFor="setup-output" className="flex items-center gap-2">
-            <ClipboardPaste className="h-4 w-4" aria-hidden="true" /> Paste the script output
-          </Label>
-          <textarea
-            id="setup-output"
-            rows={4}
-            value={pasted}
-            onChange={(e) => onPasteOutput(e.target.value)}
-            disabled={busy}
-            spellCheck={false}
-            placeholder={"Tenant id:                00000000-0000-0000-0000-000000000000\nApplication (client) id:  00000000-0000-0000-0000-000000000000"}
-            aria-describedby="setup-output-note"
-            className="flex w-full rounded-2xl border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          />
-          <p id="setup-output-note" role="status" className={pasteNote && !pasteNote.ok ? "text-xs text-red-700" : "text-xs text-gray-600"}>
-            {pasteNote?.text ?? "Or type the values below."}
-          </p>
-        </div>
-      )}
+      {!wizard && pasteOutput}
       {wizard && initial?.tenant && initial.clientId
         ? <details open={Boolean(errors.tenant || errors.clientId) || undefined} className="space-y-3 text-sm">
             <summary className="cursor-pointer underline underline-offset-2">Connection details</summary>
@@ -522,10 +528,17 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         </Alert>
       )}
       {!wizard && errors.form && <SetupDiagnosticsReminder step="signin" />}
-      {!(wizard && busy) && <Button onClick={() => void submit()} disabled={busy || !tenant || !clientId} className="w-full bg-blue-600 hover:bg-blue-700">
+      <Button onClick={() => void submit()} disabled={busy || !tenant || !clientId} className={wizard ? `mx-auto flex ${onboardingPrimary}` : "w-full bg-blue-600 hover:bg-blue-700"}>
         {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
         {busy ? "Waiting for sign-in..." : submitLabel}
-      </Button>}
+      </Button>
+      {wizard && pasteOutput && <div className="space-y-2 text-center">
+        <details className="space-y-3">
+          <summary className={`cursor-pointer ${onboardingLink}`}>Paste the script output</summary>
+          {pasteOutput}
+        </details>
+        {pasteNote && pasteMessage}
+      </div>}
       {!automatic && status}
     </div>
   )

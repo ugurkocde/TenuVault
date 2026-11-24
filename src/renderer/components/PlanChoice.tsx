@@ -1,3 +1,4 @@
+import { onboardingLink } from "./OnboardingCard"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { useId, useRef, useState } from "react"
 import { AlertCircle, Building2, CheckCircle2, KeyRound, Loader2, Sparkles } from "lucide-react"
@@ -104,10 +105,10 @@ export function TrialOrKey({ source, initialEmail, onSaved, setupTenantId }: { s
   const [open, setOpen] = useState<"trial" | "key" | null>(null)
   const { status } = useLicense()
   const [trialSent, setTrialSent] = useState(false)
-  const link = "rounded-full px-1 text-sm font-medium text-blue-600 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+  const link = source === "welcome" ? onboardingLink : "rounded-full px-1 text-sm font-medium text-blue-600 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-x-4 gap-y-1">
+      <div className={`flex flex-wrap gap-x-4 gap-y-1${source === "welcome" ? " justify-center" : ""}`}>
         {!status?.tenantTrialsEnabled && <button type="button" className={link} aria-expanded={open === "trial"} onClick={() => setOpen(open === "trial" ? null : "trial")}>
           Try Pro free for 30 days, no card
         </button>}

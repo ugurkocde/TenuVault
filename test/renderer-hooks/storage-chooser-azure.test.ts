@@ -100,7 +100,7 @@ describe("storage chooser Azure path", () => {
 
     const { container, last } = await renderChooser(undefined, true)
     expect(last()).toEqual({ kind: "local" })
-    await clickText(container, "Use my Azure storage account instead")
+    await chooseAzure(container)
     await selectAccount(container, ACCOUNT.name)
 
     expect(backups.verifyAzureStorage).toHaveBeenCalledExactlyOnceWith(TENANT, "client", ACCOUNT.name)

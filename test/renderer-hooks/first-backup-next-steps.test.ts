@@ -40,13 +40,11 @@ describe("first backup next steps", () => {
   it("asks to save the recovery key for backups on this device", async () => {
     const container = await render(true)
     expect(container.textContent).toContain("Save your recovery key")
-    expect(container.textContent).toContain("Keep this key to read your backups after a reinstall or on another device.")
   })
 
   it("leaves the recovery key out for Azure storage, which does not depend on it", async () => {
     const container = await render(false)
-    expect(container.textContent).toContain("Turn on automatic backups")
-    expect(container.textContent).toContain("TenuVault runs scheduled backups while open or in the tray.")
+    expect(container.textContent).toContain("Turn on daily backups")
     expect(container.textContent).not.toContain("recovery key")
     expect(bridge.backups.settings).not.toHaveBeenCalled()
   })

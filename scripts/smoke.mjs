@@ -492,11 +492,11 @@ await check("malformed license keys are rejected", async () => {
 // Without a key, Community (or a license shared by the organization) starts at the tenant sign-in.
 await check("Community users can reach the tenant sign-in without a key", async () => {
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant").click()`)
-  assert(await waitForText("Set up TenuVault", 15000), "tenant sign-in did not open")
+  assert(await waitForText("Which services do you want to connect?", 15000), "tenant sign-in did not open")
   assert(await waitForText("Which services do you want to connect?"), "service choice missing")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
-  assert(await evaluate(`[...document.querySelectorAll('nav[aria-label="Help"] > *')].map(item => item.textContent).join("|") === "Free setup call|License|Share feedback|Support"`), "first-run header does not list Free setup call, License, Share feedback and Support")
+  assert(await evaluate(`[...document.querySelectorAll('nav[aria-label="Help"] > *')].map(item => item.textContent.trim()).join("|") === "Help"`), "first-run header does not show one Help menu")
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
   await sleep(300)
   const assertFit = async name => {
@@ -505,12 +505,12 @@ await check("Community users can reach the tenant sign-in without a key", async 
   }
   await assertFit("Service cards")
   for (const id of ["defender", "entra"]) await evaluate(`document.querySelector('[data-onboarding-service="${id}"][aria-pressed="true"]')?.click()`)
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue").click()`)
   assert(await waitForText("How do you want to connect?"), "method choice missing")
-  assert(await evaluate(`[...document.querySelectorAll("[data-sign-in-method]")].map(card => card.querySelector("h3").textContent).join("|") === "Start now|TenuVault app|Your own app registration"`), "sign-in method order is wrong")
+  assert(await evaluate(`[...document.querySelectorAll("[data-sign-in-method]")].map(card => card.getAttribute("aria-label").replace("Choose ", "")).join("|") === "Start now|TenuVault app|Your own app registration"`), "sign-in method order is wrong")
   await assertFit("Sign-in method cards")
   await screenshot("00b-setup-connect")
-  await evaluate(`document.querySelector('[data-sign-in-method="ownApp"] button').click()`)
+  await evaluate(`document.querySelector('[data-sign-in-method="ownApp"]').click()`)
   assert(await waitForText("Set up with Microsoft sign-in"), "own registration setup missing")
   await assertFit("Own registration Connect step")
   await send("Emulation.clearDeviceMetricsOverride")
@@ -723,8 +723,8 @@ await check("tenants page offers delegated sign-in", async () => {
   assert(await waitForText("Which services do you want to connect?"), "adding a tenant did not open the sign-in wizard")
   assert(await evaluate(`[...document.querySelectorAll('[data-onboarding-service]')].every(card => card.getAttribute("aria-pressed") === "true")`), "all three services should be selected for a new tenant")
   for (const id of ["defender", "entra"]) await evaluate(`document.querySelector('[data-onboarding-service="${id}"][aria-pressed="true"]')?.click()`)
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
-  await evaluate(`document.querySelector('[data-sign-in-method="ownApp"] button').click()`)
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue").click()`)
+  await evaluate(`document.querySelector('[data-sign-in-method="ownApp"]').click()`)
   assert(await waitForText("Set up with Microsoft sign-in"), "connect step did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
   await screenshot("03-add-tenant")
@@ -741,7 +741,7 @@ await check("tenants page offers delegated sign-in", async () => {
 })
 
 await check("onboarding is the desktop wizard, without client secrets", async () => {
-  await go("#/portal/onboarding", "Set up TenuVault")
+  await go("#/portal/onboarding", "Set up with Microsoft sign-in")
   assert(await waitForText("Set up with Microsoft sign-in"), "Microsoft setup button missing")
   await evaluate(`[...document.querySelectorAll("summary")].find(item => item.textContent.includes("What the setup does")).click()`)
   assert(await waitForText("Permissions the app registration gets"), "permission list missing")
@@ -1837,7 +1837,7 @@ await check("appearance can switch to dark and back", async () => {
   await evaluate(`(() => { const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'dark')); select.value = 'dark'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
   assert(await evaluate(`document.documentElement.classList.contains('dark')`), "dark appearance was not applied")
   await screenshot("12-settings-dark")
-  await go("#/portal/onboarding", "Connect your tenant")
+  await go("#/portal/onboarding", "Set up with Microsoft sign-in")
   const contrast = await evaluate(`(() => {
     const style = getComputedStyle(document.querySelector('[data-tenant-connect]'));
     const luminance = color => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const ctx = canvas.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0); };
