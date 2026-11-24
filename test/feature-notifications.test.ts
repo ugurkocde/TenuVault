@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { routes } from "../src/main/features/notifications"
-import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP } from "../src/shared/tenant-connection"
 import { DOMAINS } from "../src/main/features/domains"
 import { channelsOf, checkWatcher, flushOutbox, outboxOf, pollAuditWatch, saveAuditWatch, signBody, tick } from "../src/main/features/notifications/service"
 import { emitBackupOutcome, emitCredentialExpiring, emitLateBackup } from "../src/main/features/notifications/producers"
@@ -252,6 +252,22 @@ describe("editing and removing channels", () => {
 })
 
 describe("email delivery and group resolution", () => {
+  it("refuses a group-addressed email test on Start now before looking up members", async () => {
+    const graph = vi.fn(() => async () => ({
+      status: 200, body: { value: [{ "@odata.type": "#microsoft.graph.user" }] },
+    }))
+    const w = world({ graph })
+    const profile = w.deps.tenant(TENANT_A)!
+    w.deps.tenant = id => id === TENANT_A ? { ...profile, clientId: GRAPH_CLI_CLIENT_ID } : null
+    const created = await call(w.routes, PATH, {
+      tenantId: TENANT_A, action: "add-channel", kind: "email",
+      recipients: [{ type: "group", groupId: "44444444-4444-4444-4444-444444444444" }],
+    })
+    const result = await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-channel", channelId: created.body.channel.id })
+    expect(result.body.delivery).toMatchObject({ ok: false, error: expect.stringContaining(GRAPH_CLI_NEXT_STEP) })
+    expect(graph).not.toHaveBeenCalled()
+  })
+
   it("expands group recipients without guests and sends through Graph", async () => {
     const graphCalls: Array<{ method: string; path: string; body?: unknown }> = []
     const w = world({
