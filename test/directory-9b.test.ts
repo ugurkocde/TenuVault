@@ -1,3 +1,7 @@
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { AppMetadataAccess } from "../src/main/restore/app-metadata-access"
+import { executionMetadata } from "../src/main/api/execution-metadata"
+import { GRAPH_APP_ID } from "../src/shared/services/manifest"
 import { graphAssignment } from "./fixtures/directory-graph-v1"
 import { graphNotFound } from "./fixtures/directory-response"
 import { approveDirectory } from "../src/main/restore/directory-9a"
@@ -292,6 +296,68 @@ function persisted(env = world(), protectedIds: string[] = []) {
 }
 const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
 const metadataRequest = (saved: Item = { ...app, displayName: "Saved", description: "Saved description" }) => ({ path: `backup/Applications/${app.id}.json`, snapshot: saved, origin: "restore" as const })
+it("uses just-in-time access for an approved method B update and removes it after the 9b result", async () => {
+  const env = persisted()
+  const owner = { tenantId: actor.tenantId, userId: actor.userId, clientId: TENUVAULT_CLIENT_ID }
+  const normal = { ...owner, token: "read-token", authorization: { ...owner, scopes: ["Application.Read.All", "Directory.Read.All"] } }
+  const elevated = { ...owner, token: "write-token", authorization: { ...owner, scopes: scopes.split(" ") } }
+  const resourceId = id(91), principalId = id(92)
+  const events: string[] = []
+  let grantScope = "Directory.Read.All Application.Read.All"
+  const original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path.includes(`appId='${TENUVAULT_CLIENT_ID}'`)) return Response.json({ id: principalId, appId: TENUVAULT_CLIENT_ID })
+    if (path.includes(`appId='${GRAPH_APP_ID}'`)) return Response.json({ id: resourceId, appId: GRAPH_APP_ID })
+    if (path === "/beta/oauth2PermissionGrants") return Response.json({ value: [{ id: "test-grant", clientId: principalId, resourceId, scope: grantScope, consentType: "AllPrincipals", principalId: null }] })
+    if (init?.method === "PATCH") {
+      expect(executionMetadata.getStore()?.directoryTemporaryWrite?.path).toBe(path)
+      expect(new Headers(init.headers).get("Authorization")).toBe("Bearer write-token")
+      if (path === "/beta/oauth2PermissionGrants/test-grant") {
+        grantScope = JSON.parse(String(init.body)).scope
+        events.push("remove")
+        return new Response(null, { status: 204 })
+      }
+      events.push("restore")
+    }
+    return original(input, init)
+  })
+  const consent = vi.fn(async () => {
+    events.push("consent")
+    grantScope += " Application.ReadWrite.All DelegatedPermissionGrant.ReadWrite.All"
+    return { status: "received" as const }
+  })
+  const access = new AppMetadataAccess(env.store, {
+    available: async () => true, consent, token: async () => elevated, verifyOwner: async () => {},
+  }, env.fetcher)
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), async () => normal, async () => owner, env.fetcher, undefined, env.settings, undefined, () => "tenuvaultApp", access)
+  const request = metadataRequest(), page = await service.prepare(actor.tenantId, request, options, async () => request.snapshot)
+  expect(page.temporaryAccess?.cleanup.checked).toBe(true)
+  expect(page.rows[0]?.review.blocker).toBeUndefined()
+  await expect(service.execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, {})).rejects.toThrow("Approve each selected row")
+  expect(consent).not.toHaveBeenCalled()
+  const result = await service.execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  expect(result).toMatchObject({ status: "complete", removal: { status: "verified" } })
+  expect(events).toEqual(["consent", "restore", "remove", "remove"])
+  expect(grantScope).toBe("Directory.Read.All Application.Read.All")
+  await expect(service.execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).resolves.toMatchObject({ status: "complete" })
+  expect(consent).toHaveBeenCalledTimes(1)
+})
+
+it.each(["tenuvaultApp", "ownApp"] as const)("preserves the execution boundary when the removal service is unavailable for %s", async method => {
+  const env = persisted(), request = metadataRequest()
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), async () => ({ ...actor, token }), async () => actor, env.fetcher, undefined, env.settings, undefined, () => method)
+  const page = await service.prepare(actor.tenantId, request, options, async () => request.snapshot)
+  const execute = service.execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  if (method === "tenuvaultApp") {
+    await expect(execute).rejects.toThrow("permission removal can be verified")
+    expect(env.writes).toEqual([])
+  } else {
+    await expect(execute).resolves.toMatchObject({ status: "complete" })
+    expect(env.writes).toEqual([`applications/${app.id}`])
+  }
+})
+
 const optOutVariants = ["area", "service", "backup"] as const
 function optOut(settings: ModuleSettings, variant: typeof optOutVariants[number]) {
   if (variant === "area") settings.setArea(actor.tenantId, "entra", "applications", false)

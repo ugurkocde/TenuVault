@@ -6,6 +6,10 @@ export function directoryRestoreUnfinished(tenant: string) {
   if (!service) throw new Error("A signed-in desktop connection is required.")
   return service.unfinished(tenant)
 }
+export function directoryRestoreRetryAppMetadataRemoval(tenant: string) {
+  if (!service) throw new Error("A signed-in desktop connection is required.")
+  return service.retryAppMetadataRemoval(tenant)
+}
 export function directoryRestoreVerifyOwner(tenant: string, id: string) {
   if (!service) throw new Error("A signed-in desktop connection is required.")
   return service.verifySavedOwner(tenant, id)

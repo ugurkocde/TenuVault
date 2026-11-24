@@ -87,8 +87,10 @@ export const PRIVILEGED_ENTRA_PACK: PermissionPack = {
   id: "entra-privileged", label: "Privileged Entra restore", resource: "graph", scopes: PRIVILEGED_WRITES,
 }
 
+export const GRANT_REMOVAL_SCOPE = "DelegatedPermissionGrant.ReadWrite.All"
+
 export const APPLICATION_METADATA_RESTORE_PACK: PermissionPack = {
-  id: "entra-app-metadata", label: "Entra app metadata restore", resource: "graph", scopes: ["Application.ReadWrite.All"],
+  id: "entra-app-metadata", label: "Entra app metadata restore", resource: "graph", scopes: ["Application.ReadWrite.All", GRANT_REMOVAL_SCOPE],
 }
 
 export function tenantPermissionPacks(choice: PermissionChoice, features: { azure: boolean; audit: boolean }): PermissionPack[] {

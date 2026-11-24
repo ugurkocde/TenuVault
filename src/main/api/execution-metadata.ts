@@ -14,6 +14,8 @@ export interface ExecutionMetadata {
   registrationAddition?: { tenantId: string; clientId: string; tokenDigest: string }
   /** Set only around the final write after a fresh deleted-object type check. */
   directoryRecycle?: { path: string; type: "user" | "group" }
+  /** Bound to one approved metadata write or one journaled grant removal. */
+  directoryTemporaryWrite?: { tenantId: string; tokenDigest: string; path: string; method: "PATCH" | "DELETE"; kind: "metadata" | "removal" }
   /** Installer restore also binds its source for metadata reads and content uploads. */
   appRestoreDestination?: string
   /** The source and destinations admitted for a cross-tenant backup copy. */

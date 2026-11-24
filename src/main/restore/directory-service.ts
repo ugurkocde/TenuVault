@@ -1,3 +1,4 @@
+import { withTemporaryDirectoryWrite, type AppMetadataAccess } from "./app-metadata-access"
 import { privilegedRestoreConsent } from "./privileged-consent"
 import type { SignInMethod } from "../../shared/tenant-connection"
 import { guardedRestoreJournal } from "../storage/restore-journal"
@@ -59,7 +60,7 @@ export class DirectoryRestoreService {
   private readonly unpublishedCleanup = new Set<() => void>()
   private readonly running = new Map<string, AbortController>()
   private readonly store: PartitionedRestoreStore
-  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now(), private readonly signInMethod?: (tenant: string) => SignInMethod | undefined) {
+  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now(), private readonly signInMethod?: (tenant: string) => SignInMethod | undefined, private readonly appMetadataAccess?: AppMetadataAccess) {
     this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
   }
   private async actorContext(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, readByAppId = false) {
@@ -157,6 +158,11 @@ export class DirectoryRestoreService {
     } catch (error) { if (isRestorePersistenceError(error)) throw error }
     return false
   }
+  async retryAppMetadataRemoval(tenant: string) {
+    if (!this.appMetadataAccess?.status(tenant)) return
+    return this.appMetadataAccess.retry(await this.connection(tenant))
+  }
+
   async verifySavedOwner(tenant: string, id: string) { await this.verifyLocalOwner(this.load(tenant, id)) }
   private async ownerConnection(page: DirectoryPage) {
     const connection = await this.connection(page.run.tenant)
@@ -385,7 +391,7 @@ export class DirectoryRestoreService {
     }
     for (const step of steps) {
       let review: DirectoryReview
-      try { await io.hydrate(step); review = await io.preview(step) }
+      try { await io.hydrate(step); review = await io.preview(step, folder === "Applications" && Boolean(this.appMetadataAccess) && this.signInMethod?.(tenant) === "tenuvaultApp") }
       catch (error) {
         if (isRestorePersistenceError(error)) throw error
         // An admitted update must resolve to the saved identity before any preview is persisted.
@@ -488,7 +494,9 @@ export class DirectoryRestoreService {
   }
   private view(page: DirectoryPage) {
     const runs = this.history(page), entries = runs.flatMap(({ run }) => run.entries)
-    return { outcomes: this.outcomes(page, runs), ...this.pageState(page, entries), canDiscard: this.canDiscard(page, runs), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
+    const temporaryAccess = page.run.source?.path.split("/")[1] === "Applications" && this.signInMethod?.(page.run.tenant) === "tenuvaultApp" && this.appMetadataAccess
+      ? privilegedRestoreConsent("tenuvaultApp", "Applications") : null
+    return { ...(temporaryAccess ? { temporaryAccess } : {}), outcomes: this.outcomes(page, runs), ...this.pageState(page, entries), canDiscard: this.canDiscard(page, runs), runId: page.run.id, selection: page.selection, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item, ...(page.inventory?.principalMappings ? { principalMappings: page.inventory.principalMappings.fingerprint } : {}) }), rows: page.rows, more: page.more, options: page.options }
   }
   private canDiscard(page: DirectoryPage, runs = this.history(page)) {
     return !directoryObjectState(this.store, page.run.tenant, page.run.id).discarded() && !runs.some(({ batch, run }) => {
@@ -529,12 +537,15 @@ export class DirectoryRestoreService {
     try { return await work(operation.signal) }
     catch (error) {
       if (isRestorePersistenceError(error)) throw error
-      if (operation.signal.aborted) return { cancelled: true }
+      if (operation.signal.aborted) {
+        const removal = this.appMetadataAccess?.status(tenant, id)
+        return { cancelled: true, ...(removal ? { removal } : {}) }
+      }
       throw error
     }
     finally { operation.finish() }
   }
-  async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>, operationSignal?: AbortSignal): Promise<ReturnType<DirectoryRestoreService["results"]>> {
+  async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>, operationSignal?: AbortSignal): Promise<ReturnType<DirectoryRestoreService["results"]> & { removal?: ReturnType<AppMetadataAccess["status"]> }> {
     if (!operationSignal) {
       const operation = await this.register(tenant, request.runId!)
       try { return await this.execute(tenant, request, fingerprint, approvals, operation.signal) }
@@ -546,11 +557,34 @@ export class DirectoryRestoreService {
     const folder = request.path.split("/")[1] ?? ""
     if (PRIVILEGED_REVIEW_FOLDERS.includes(folder)) fail(PRIVILEGED_RESTORE_BLOCKER)
     const consent = privilegedRestoreConsent(this.signInMethod?.(tenant), folder)
-    if (consent) fail(`${consent.pack.label} is unavailable with the TenuVault app until temporary access and permission removal can be verified.`)
+    const temporary = folder === "Applications" && consent ? this.appMetadataAccess : undefined
+    if (consent && !temporary) fail(`${consent.pack.label} is unavailable with the TenuVault app until temporary access and permission removal can be verified.`)
     const connection = await this.pageConnection(page)
     const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
     if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")
+    const entries = page.run.entries.filter(entry => selection.includes(entry.step.key))
+    if (temporary) {
+      directoryObjectState(this.store, tenant, page.run.id).assertActive()
+      const cursor = this.store.get(directoryPagePrefix(tenant, page.run.id) + "cursor")
+      if (cursor && JSON.parse(cursor).done === true) {
+        const result = await this.executePage(tenant, request, fingerprint, page, connection, entries, operationSignal)
+        return { ...result, removal: temporary.status(tenant, page.run.id) }
+      }
+      this.requireAccess(tenant, folder)
+      const target = entries.length === 1 ? entries[0]?.step.targetId : undefined
+      if (!isGuid(target) || entries.some(({ step }) => applicationAdmission(step))) return fail("Only a reviewed application metadata change can use temporary access.")
+      const result = await temporary.run(connection, page.run.id, operationSignal, async elevated => {
+        page.selection = selection; this.save(page)
+        return withTemporaryDirectoryWrite(elevated, `/beta/applications/${target.toLowerCase()}`, "PATCH", "metadata", () =>
+          this.executePage(tenant, request, fingerprint, page, elevated, entries, operationSignal))
+      })
+      return { ...result, removal: temporary.status(tenant, page.run.id) }
+    }
     page.selection = selection; this.save(page)
+    return this.executePage(tenant, request, fingerprint, page, connection, entries, operationSignal)
+  }
+
+  private async executePage(tenant: string, request: IdentityRestoreRequest, fingerprint: string, page: DirectoryPage, connection: RestoreConnection, entries: GuardedRun["entries"], operationSignal: AbortSignal) {
     const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id), actor = context.actor
     const rawIO = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
     const principalValidation = page.inventory ? new DirectoryPrincipalMappings(this.store, tenant, page.inventory.id) : undefined
@@ -565,7 +599,6 @@ export class DirectoryRestoreService {
       beforeSend()
     }, run, signal, onUnapplied)) as typeof rawIO.write }
     if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
-    const entries = page.run.entries.filter(entry => selection.includes(entry.step.key))
     for (const entry of entries) for (const kind of page.rows.find(row => row.key === entry.step.key)!.review.approvals) approveDirectory(entry.step, page.run, kind)
     const { entries: _entries, mappings: _mappings, ...identity } = page.run
     const result = await executeDirectoryBatches(this.store, { ...identity, actor }, { fingerprint, page: async (cursor, limit) => {

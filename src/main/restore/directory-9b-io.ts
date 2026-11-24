@@ -180,7 +180,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     const blocker = permissionBlocker(step)
     if (blocker) throw new RestoreWriteDeferredError(blocker)
   }
-  const preview = async (step: GuardedStep) => {
+  const preview = async (step: GuardedStep, temporaryPack = false) => {
     requireApplicationRestoreAccess(settings())
     const current = await read(step, step.targetId)
     assertNoSecrets(current)
@@ -191,7 +191,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     }
     const result = await review(step, current)
     const missingPermission = permissionBlocker(step)
-    if (missingPermission) result.blocker ??= missingPermission
+    if (missingPermission && !temporaryPack) result.blocker ??= missingPermission
     return result
   }
   const references: GuardedIO["references"] = async (step, _current, _desired, signal) => {

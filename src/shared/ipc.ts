@@ -475,6 +475,8 @@ export interface TenuVaultBridge {
     packConsentPlan: (tenantId: string) => Promise<PackConsentPlan | null>
     packConsent: (tenantId: string, packId: string, action: PackConsentAction) => Promise<PackConsentResult>
     switchConnection: (tenantId: string, target: ConnectionTarget) => Promise<ConnectionSwitchResponse>
+    onAppMetadataRemovalChanged: (cb: (tenantId: string) => void) => () => void
+    appMetadataRemoval: (tenantId: string, retry?: boolean) => Promise<import("./app-metadata-removal").AppMetadataRemoval | undefined>
     savedDirectoryRestores: (tenantId: string) => Promise<{ owner: string; pages: Array<{ runId: string; path: string }> }>
     /** Called after an account is saved or removed, before any old verification is reused. */
     onAccountsChanged: (listener: (tenantId: string) => void) => () => void

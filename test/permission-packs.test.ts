@@ -68,7 +68,7 @@ describe("TenuVault app permission packs", () => {
     expect(privilegedRestoreConsent("ownApp", "Applications")).toBeNull()
     expect(privilegedRestoreConsent("tenuvaultApp", "Users")).toBeNull()
     expect(privilegedRestoreConsent("tenuvaultApp", "Applications")).toEqual({
-      pack: { id: "entra-app-metadata", label: "Entra app metadata restore", resource: "graph", scopes: ["Application.ReadWrite.All"] },
+      pack: { id: "entra-app-metadata", label: "Entra app metadata restore", resource: "graph", scopes: ["Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"] },
       cleanup: { label: "Remove this permission", checked: true, operationScopesOnly: true, required: true },
     })
   })

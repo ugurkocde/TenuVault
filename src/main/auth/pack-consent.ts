@@ -85,7 +85,7 @@ export class PackConsentFlow {
     signInForPack: (tenant: string, pack: PermissionPack, checkOnly: boolean) => Promise<void>
   }) {}
 
-  async act(tenant: string, packId: unknown, action: unknown, plan = this.host.plan): Promise<PackConsentResult> {
+  async act(tenant: string, packId: unknown, action: unknown, plan = this.host.plan, signal?: AbortSignal): Promise<PackConsentResult> {
     if (typeof packId !== "string" || (action !== "open" && action !== "handoff" && action !== "request" && action !== "check")) {
       return { status: "error", issue: { code: "invalid_request", message: "Choose a permission pack." } }
     }
@@ -101,7 +101,7 @@ export class PackConsentFlow {
         await this.host.signInForPack(tenant, pack, action === "check")
         return { status: "verified" }
       }
-      const result = await openPackConsent(tenant, pack, this.host.openBrowser, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000)]))
+      const result = await openPackConsent(tenant, pack, this.host.openBrowser, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000), ...(signal ? [signal] : [])]))
       return result.status === "error" && result.issue.code === "AADSTS90095" ? { status: "waiting", issue: result.issue } : result
     } catch (error) {
       const issue = consentIssue(error instanceof Error ? error.message : "")

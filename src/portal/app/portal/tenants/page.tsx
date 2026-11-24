@@ -1,5 +1,6 @@
 "use client"
 
+import { AppMetadataRemovalNotice } from "~/components/tenants/app-metadata-removal-notice"
 import { Link } from "react-router-dom"
 import { BACKUP_SERVICES } from "@desktop/lib/backup-service"
 import { ServiceBackupNotice } from "@desktop/components/ServiceBackupNotice"
@@ -1166,7 +1167,7 @@ function TenantsPageContent() {
                   )}
                 </Button>
               </div>
-              {tenant.credentials && <div className="mt-3"><ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage /></div>}
+              {tenant.credentials && <div className="mt-3"><ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage /><AppMetadataRemovalNotice tenantId={tenant.credentials.tenantId} /></div>}
             </div>
           </div>
         ))}
@@ -1323,7 +1324,7 @@ function TenantsPageContent() {
                           <div className="text-sm text-gray-500">{tenant.domain}</div>
                         </div>
                       </div>
-                      {tenant.credentials && <div className="mt-3 w-64 space-y-2 whitespace-normal"><TenantBackupLinks tenant={tenant} /><ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage /></div>}
+                      {tenant.credentials && <div className="mt-3 w-64 space-y-2 whitespace-normal"><TenantBackupLinks tenant={tenant} /><ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage /><AppMetadataRemovalNotice tenantId={tenant.credentials.tenantId} /></div>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={cn(

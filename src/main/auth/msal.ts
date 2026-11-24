@@ -430,6 +430,22 @@ export class AuthManager {
     }
   }
 
+  /** Force a silent acquisition in a disposable cache. This never opens a consent prompt. */
+  async temporaryGraphToken(tenant: string, cache: ICachePlugin, scopes: readonly string[]): Promise<SilentTokenResult> {
+    const stored = this.host.accountStore.get(tenant)
+    if (stored?.clientId !== TENUVAULT_CLIENT_ID) throw new Error("Sign in to the TenuVault app in this tenant.")
+    const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
+    const account = await this.findAccount(app, stored.homeAccountId)
+    if (!account) throw new Error("Sign in to the TenuVault app again.")
+    const result = await app.acquireTokenSilent({ account, scopes: resourceScopes("graph", scopes), authority: authority(tenant), forceRefresh: true })
+    if (!result || this.host.accountStore.get(tenant)?.homeAccountId !== stored.homeAccountId) throw new Error("The signed-in account changed.")
+    const acquisition = { ...result, ...this.tokenGrants.get(app)?.forResult(result) }
+    if (missingPackScopes(scopes, sharedTokenScopes(result.accessToken, acquisition.grantedScopes)).length) throw new Error("Microsoft has not issued the temporary permissions.")
+    const cachedAccount = accountForTenant(account, tenant)
+    if (!cachedAccount) throw new Error("The signed-in account does not belong to this tenant.")
+    return { ...acquisition, cachedAccount }
+  }
+
   private async connectionScopes(tenant: string, clientId: string, scope: string, freshHealth = false): Promise<string[]> {
     if (normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID) {
       if (scope !== RESOURCE_SCOPES.graph) throw new Error(GRAPH_CLI_NEXT_STEP)

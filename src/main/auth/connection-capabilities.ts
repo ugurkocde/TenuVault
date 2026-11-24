@@ -5,7 +5,7 @@ import { isGuid, normalizeGuid } from "../../shared/security"
 import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix"
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { accessTokenDigest, sharedTokenScopes, tokenIdentity } from "./token-identity"
-import { isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
+import { APPLICATION_METADATA_RESTORE_PACK, GRANT_REMOVAL_SCOPE, isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
@@ -234,6 +234,26 @@ export class ConnectionCapabilities {
     if (tenantWrite && tenantId && !writeConnections.has(tenantId)) {
       // A Backup Reader token names an unattended app, so bind the tenant's sign-in instead.
       writeConnections.set(tenantId, azureWrite && acquisition?.reader ? this.record(tenantId)?.clientId : clientId ?? undefined)
+    }
+
+    const temporary = metadata?.directoryTemporaryWrite
+    if (graph && temporary && graphWrite) {
+      const scopes = temporary.kind === "metadata" ? APPLICATION_METADATA_RESTORE_PACK.scopes : [GRANT_REMOVAL_SCOPE]
+      const pathAllowed = temporary.kind === "metadata"
+        ? method === "PATCH" && isGuid(url.pathname.split("/")[3]) && /^\/beta\/applications\/[^/]+$/.test(url.pathname)
+        : ["PATCH", "DELETE"].includes(method) && /^\/beta\/oauth2PermissionGrants\/[A-Za-z0-9_-]+$/.test(url.pathname)
+      if (!token || !acquisition || !tenantId || shared !== "tenuvaultApp" || temporary.tenantId !== tenantId ||
+        temporary.tokenDigest !== digest || temporary.method !== method || temporary.path !== url.pathname ||
+        url.search || !pathAllowed || (routeTenant && normalizeGuid(routeTenant) !== tenantId) ||
+        acquisition.scope !== RESOURCE_SCOPES.graph || missingPackScopes(scopes, sharedTokenScopes(token, acquisition.grantedScopes)).length) throw new Error(TOKEN_UNVERIFIED)
+      return { url, beforeDispatch: () => {
+        this.requireBoundParticipant(tenantId, clientId)
+        if (acquisition.expiresAt <= Date.now()) throw new Error(TOKEN_UNVERIFIED)
+        if (temporary.kind === "metadata") {
+          this.requireWrite([tenantId])
+          this.requireSharedEnabledNow(shared)
+        }
+      } }
     }
 
     const check = () => {

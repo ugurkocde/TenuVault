@@ -2,13 +2,14 @@ import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_DISABLED, GRA
 import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
 import { ConnectionSwitchError } from "./auth/switch-failure"
-import { tenantPermissionPacks, resourcePackScopes, resourceScopes } from "../shared/services/permission-packs"
+import { APPLICATION_METADATA_RESTORE_PACK, tenantPermissionPacks, resourcePackScopes, resourceScopes } from "../shared/services/permission-packs"
 import type { AuditWatchRecord } from "./features/notifications/model"
 import { DOMAINS } from "./features/domains"
 import { backupStoragePath } from "../shared/backup-storage"
 import { DirectoryRestoreStore } from "./storage/directory-restore-store"
+import { AppMetadataAccess } from "./restore/app-metadata-access"
 import { DirectoryRestoreService } from "./restore/directory-service"
-import { directoryRestoreUnfinished, setDirectoryRestoreService } from "./restore/directory-dispatch"
+import { directoryRestoreRetryAppMetadataRemoval, directoryRestoreUnfinished, setDirectoryRestoreService } from "./restore/directory-dispatch"
 import { IdentityRestoreService } from "./restore/service"
 import { restoreSignIn } from "./restore/restore-actor"
 import { RecoveryAccounts } from "./restore/safety-resolvers"
@@ -517,10 +518,7 @@ async function bootstrap(): Promise<void> {
     const plan = await license.requireEntitlement(tenant).catch(() => null)
     if (!plan || !allows(plan, "replaceRestore")) throw new PlanRequired("replaceRestore")
   })
-  setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, tenant => auth.cachedAccountIdentity(tenant), bridgedFetch, tenant => {
-    const id = backupReader.status(tenant)?.clientId
-    return id ? [id] : []
-  }, moduleSettings, undefined, tenant => connections.get(tenant)?.method))
+  const directoryStore = new DirectoryRestoreStore(join(userData, "directory-restore"), cipher)
   setIdentityRestorePreviews(identityRestore)
   setIdentityRestoreDispatch((tenant, request) => identityRestore.restore(tenant, request))
 
@@ -914,6 +912,34 @@ async function bootstrap(): Promise<void> {
       return auth.signInForPack(tenant, staged.plugin, pack, checkOnly)
     },
   })
+
+  const metadataAccess = new AppMetadataAccess(directoryStore, {
+    changed: tenant => {
+      try { mainWindow?.webContents.send("auth:appMetadataRemovalChanged", tenant) } catch { /* The durable status is available when the window opens. */ }
+    },
+    available: async tenant => connections.get(tenant)?.method === "tenuvaultApp" && await license.tenuvaultAppEnabled(true),
+    consent: (tenant, signal) => packConsent.act(tenant, APPLICATION_METADATA_RESTORE_PACK.id, "open",
+      async () => connections.get(tenant)?.method === "tenuvaultApp" && await license.tenuvaultAppEnabled(true) ? [APPLICATION_METADATA_RESTORE_PACK] : null,
+      signal).finally(returnToApp),
+    token: async (tenant, requested, forRestore) => {
+      const account = accounts.get(tenant)
+      const connection = connections.get(tenant)
+      if (!account || account.clientId !== TENUVAULT_CLIENT_ID || connection?.method !== "tenuvaultApp") throw new Error("Sign in to the TenuVault app in this tenant.")
+      const ordinary = forRestore ? resourcePackScopes(currentPacks(tenant), "graph").filter(scope => connection.graphScopes?.includes(scope)) : []
+      const token = await auth.temporaryGraphToken(tenant, stageConnectionCache(cache, TENUVAULT_CLIENT_ID).plugin, [...new Set([...ordinary, ...requested])])
+      const identity = restoreSignIn(tenant, account, token)
+      capabilities.requireIssuedToken(tenant, account.clientId, RESOURCE_SCOPES.graph, token.accessToken, token)
+      return identity
+    },
+    verifyOwner: async connection => {
+      const current = await auth.cachedAccountIdentity(connection.tenantId)
+      if (current.tenantId !== connection.tenantId || current.clientId !== connection.clientId || current.userId !== connection.userId) throw new Error("The signed-in account changed.")
+    },
+  }, bridgedFetch)
+  setDirectoryRestoreService(new DirectoryRestoreService(directoryStore, recoveryAccounts, restoreConnection, tenant => auth.cachedAccountIdentity(tenant), bridgedFetch, tenant => {
+    const id = backupReader.status(tenant)?.clientId
+    return id ? [id] : []
+  }, moduleSettings, undefined, tenant => connections.get(tenant)?.method, metadataAccess))
 
   const missingReaderAuditContainers = new Set<string>()
   const readerAuditKey = (tenantId: string, account: string) => `${tenantId.toLowerCase()}:${account}`
@@ -1760,6 +1786,12 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:savedDirectoryRestores", (_event, tenantId: unknown) => {
     if (typeof tenantId !== "string") throw new Error("Choose a signed-in tenant.")
     return directoryRestoreUnfinished(tenantId)
+  })
+  handleTrusted("auth:appMetadataRemoval", (_event, tenant: unknown, retry: unknown) => {
+    if (!isGuid(tenant)) throw new Error("Choose a signed-in tenant.")
+    const id = tenant.toLowerCase()
+    if (!accounts.get(id)) throw new Error("Sign in to this tenant.")
+    return retry === true ? directoryRestoreRetryAppMetadataRemoval(id) : metadataAccess.status(id)
   })
   // Stops waiting for a sign-in the admin abandoned in the browser.
   handleTrusted("auth:cancelSignIn", () => { const consent = packConsent.cancel(); return auth.cancelInteractive() || consent })

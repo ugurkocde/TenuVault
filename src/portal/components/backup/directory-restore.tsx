@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react"
 import { bridge } from "../../../renderer/lib/bridge"
+import { AppMetadataRemovalNotice } from "~/components/tenants/app-metadata-removal-notice"
+import type { AppMetadataRemoval } from "../../../shared/app-metadata-removal"
+import type { PermissionPack } from "../../../shared/services/permission-packs"
 import { Button } from "~/components/ui/button"
 import type { BackupTenant } from "./types"
 import type { ReplacedReference } from "../../../shared/intune/restore-references"
@@ -10,7 +13,7 @@ import type { DirectoryReview } from "../../../main/restore/directory-9a"
 import { APPLICATION_REVIEW_FOLDERS, PRIVILEGED_REVIEW_FOLDERS, PRIVILEGED_RESTORE_BLOCKER } from "../../../shared/intune/directory-review-folders"
 import { directoryPageUnresolved } from "../../../shared/intune/directory-page-state"
 
-interface Review { options?: DirectoryOptions; runId: string; fingerprint: string; more: boolean; discarded?: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
+interface Review { temporaryAccess?: { pack: PermissionPack; cleanup: { label: string; checked: boolean } }; options?: DirectoryOptions; runId: string; fingerprint: string; more: boolean; discarded?: boolean; unresolved?: boolean; selection?: string[]; rows: Array<{ key: string; review: DirectoryReview }> }
 const approvalLabel: Record<string, string> = { "directory-item": "Approve this individual change", "privileged-relationship": "Approve this privileged relationship", "security-response": "Approve undoing the apparent security response", "recycle-relationships": "Approve recovered relationships and account state", "exact-group": "Approve this removal for this group", "exact-unit": "Approve this removal for this administrative unit" }
 const legacyPrivilegeBlocker = "This relationship is available for review. A live restore and cleanup round trip is required before execution."
 
@@ -55,6 +58,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
   const [open, setOpen] = useState(savedOnly), [busy, setBusy] = useState(false)
   const [stage, setStage] = useState("object"), [exactMembers, setExactMembers] = useState(false), [exactOwners, setExactOwners] = useState(false)
   const [review, setReview] = useState<Review | null>(null), [approvals, setApprovals] = useState<Record<string, string[]>>({}), [message, setMessage] = useState("")
+  const [removal, setRemoval] = useState<AppMetadataRemoval>()
   const [references, setReferences] = useState<ReplacedReference[]>([])
   const [outcomes, setOutcomes] = useState<Array<{ key: string; state: string; reason?: string; targetId?: string; retryAt?: number; deferralCause?: "throttle" | "proxy" | "role" | "authentication" | "replication" }>>([])
   const [canDiscard, setCanDiscard] = useState<boolean | null>(null)
@@ -82,7 +86,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
   }
   useEffect(() => {
     const clear = () => {
-      generation.current++; setActiveRestore(null); setBusy(false); setCanDiscard(null); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage(""); setResumeId(""); setInputCanDiscard(null)
+      generation.current++; setRemoval(undefined); setActiveRestore(null); setBusy(false); setCanDiscard(null); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage(""); setResumeId(""); setInputCanDiscard(null)
       setStage("object"); setExactMembers(false); setExactOwners(false)
     }
     clear(); setSavedPages([]); savedOwner.current = ""
@@ -104,13 +108,14 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
     const pageId = action === "resume" ? resumeId : action === "cancel" ? activeRestore : action === "discard" ? discardId : action === "reconcile" ? (review?.runId ?? resumeId) : review?.runId
     const affectsReview = action !== "discard" || !review || pageId === review.runId
     if (action !== "cancel") { setBusy(true); setActiveRestore(action === "restore" ? pageId ?? null : null) }
-    if (action === "restore") { setOutcomes([]); setReview(previous => previous && { ...previous, selection: previous.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key), unresolved: true }) }
+    if (action === "restore") { setRemoval(undefined); setOutcomes([]); setReview(previous => previous && { ...previous, selection: previous.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key), unresolved: true }) }
     setMessage("")
     try {
       const response = await fetch("/api/restore-directory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId, path, action: action === "next" ? "preview" : action, ...(action === "next" ? { ...(review?.options ?? { stage, exactMembers, exactOwners }), previousRunId: review?.runId } : { stage, exactMembers, exactOwners }), approvals, runId: pageId, fingerprint: review?.fingerprint, mode: "replace", restoreType: "selective", selectedPolicies: [path] }) })
       const data = await response.json()
       if (generation.current !== run) return
       if (!response.ok) throw new Error(data.error ?? "Directory restore could not finish.")
+      if (data.removal) setRemoval(data.removal)
       if (data.cancelled === true && action !== "cancel") {
         if (pageId) { setResumeId(pageId); setInputCanDiscard(null) }
         setCanDiscard(null); setReview(null); setApprovals({}); setOutcomes([]); setReferences([])
@@ -145,6 +150,7 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
     <p className="font-medium">Saved directory restores</p>
     <p>Confirm saved results even when the backup has been deleted. Confirmation only reads Microsoft Graph. Discard is available after every uncertain result is resolved and never undoes applied changes.</p>
     <div className="flex flex-wrap items-end gap-2"><label>Saved directory page ID<input className="block w-full rounded border bg-card p-1" disabled={busy} value={resumeId} onChange={event => { invalidate(); setResumeId(event.target.value); setInputCanDiscard(null) }} /></label><Button size="sm" variant="outline" disabled={busy || !resumeId} onClick={() => void send("reconcile")}>Confirm saved page results</Button>{resumeId && inputCanDiscard !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => void send("discard", resumeId)}>Discard entered page</Button>}</div>
+    <AppMetadataRemovalNotice tenantId={tenant.credentials.tenantId} />
     {unfinished}{resultRows}<p role="status" aria-live="polite">{message}</p>
   </div>
   const folder = path.split("/")[1]!
@@ -189,9 +195,15 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
           {row.blocker ? <p role="status">Blocked: {row.blocker === legacyPrivilegeBlocker ? PRIVILEGED_RESTORE_BLOCKER : row.blocker}</p> : row.approvals.map(kind => <label key={kind} className="flex items-start gap-2"><input type="checkbox" disabled={busy || review.discarded} checked={approvals[key]?.includes(kind) ?? false} onChange={event => setApprovals(previous => ({ ...previous, [key]: event.target.checked ? [...(previous[key] ?? []), kind] : (previous[key] ?? []).filter(value => value !== kind) }))} />{approvalLabel[kind] ?? kind}</label>)}
         </div>)}</div>
         {review.more && <div className="space-y-2"><p>{unresolved ? "Resolve or discard this saved page before previewing the next page. Unresolved changes keep their objects locked." : unit ? "More relationships remain to be checked." : "More changes remain. Completed differences are omitted. Blocked rows do not prevent reviewing the next page."}</p><Button size="sm" variant="outline" disabled={busy || unresolved} onClick={() => void send("next")}>Preview next page</Button></div>}
+        {review.temporaryAccess && selected && !review.discarded && <div className="space-y-2 rounded-md border bg-card p-3">
+          <p className="font-medium">Temporary permission for app metadata restore</p>
+          <p>Microsoft asks for <strong>{review.temporaryAccess.pack.scopes.join(" and ")}</strong> when you start the approved restore.</p>
+          <label className="flex items-start gap-2"><input type="checkbox" checked={review.temporaryAccess.cleanup.checked} disabled readOnly />Remove permissions added by this restore when it ends (required)</label>
+        </div>}
         {!privileged && <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || review.discarded || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && activeRestore === review.runId && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>}
       </>}
       {resultRows}
+      {folder === "Applications" && <AppMetadataRemovalNotice tenantId={tenant.credentials.tenantId} result={removal} />}
       {references.length > 0 && <div className="space-y-2"><p>Policies that still reference old IDs need review:</p>{references.map((reference, index) => <p className="break-all" key={index}>{reference.path}, {reference.property}. Old ID: {reference.mapping.source}. New ID: {reference.mapping.target}.</p>)}</div>}
       <p role="status" aria-live="polite">{message}</p>
     </div>}
