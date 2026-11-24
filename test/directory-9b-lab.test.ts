@@ -9,7 +9,7 @@ function world() {
   const owners = new Map<string, Set<string>>()
   const intents = new Map<string, AppLabIntent>(), active = new Map<string, Record<string, unknown>>(), deleted = new Map<string, Record<string, unknown>>(), writes: Array<{ path: string; body: Record<string, unknown> }> = []
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input)), path = url.pathname.replace("/v1.0/", ""), method = init?.method ?? "GET", body = JSON.parse(String(init?.body ?? "{}"))
+    const url = new URL(String(input)), path = url.pathname.replace("/beta/", ""), method = init?.method ?? "GET", body = JSON.parse(String(init?.body ?? "{}"))
     if (method !== "GET") writes.push({ path, body })
     const parts = path.split("/")
     if (path.endsWith("/owners/$ref") && method === "POST") { const parent = parts.slice(0,2).join("/"), links = owners.get(parent) ?? new Set<string>(); links.add(String(body["@odata.id"]).split("/").at(-1)!); owners.set(parent, links); return new Response(null, { status: 204 }) }

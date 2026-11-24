@@ -143,6 +143,11 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
     expect(state.objects.size).toBe(0)
     const writes = state.calls.filter(call => call.method !== "GET")
     expect(writes.length).toBeGreaterThan(0)
+    if (folder === "AccessPackageCatalogs") {
+      expect(writes[0]!.path).toBe("/beta/identityGovernance/entitlementManagement/accessPackageCatalogs")
+      expect(writes[0]!.body).toMatchObject({ catalogStatus: "Unpublished", isExternallyVisible: false })
+      expect(writes[0]!.body).not.toHaveProperty("state")
+    }
     if (["ExternalIdentitiesPolicy", "LifecycleWorkflowSettings"].includes(folder)) {
       expect(writes).toHaveLength(1)
       expect(writes[0]!.body).toEqual(state.original[writes[0]!.path.split("/").at(-1)!])

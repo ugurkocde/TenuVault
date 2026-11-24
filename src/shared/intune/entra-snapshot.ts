@@ -1,3 +1,4 @@
+import { RestoreSafetyError } from "./restore-guards"
 import type { Item, Json } from "./registry"
 
 const subjectTypes = new Set(["subjectSet", "userSet", "singleUser", "singleServicePrincipal", "groupMembers", "connectedOrganizationMembers", "internalSponsors", "externalSponsors", "requestorManager", "targetManager", "targetUserSponsors", "targetApplicationOwners", "targetAgentIdentitySponsorsOrOwners", "attributeRuleMembers", "ruleBasedSubjectSet", "groupBasedSubjectSet"])
@@ -67,4 +68,17 @@ export function accessPackageCatalogSnapshot(snapshot: Item): Item {
     return fields
   })
   return content
+}
+
+export function accessPackageCatalogReply(reply: Item): Item {
+  return Array.isArray(reply.value)
+    ? { ...reply, value: reply.value.map(item => item && typeof item === "object" && !Array.isArray(item) ? accessPackageCatalogSnapshot(item) : item) }
+    : accessPackageCatalogSnapshot(reply)
+}
+
+export function accessPackageCatalogWrite(body: Item): Item {
+  if (!Object.hasOwn(body, "state")) return body
+  const { state, ...metadata } = body
+  if (state !== "unpublished") throw new RestoreSafetyError("The catalog must remain unpublished.")
+  return { ...metadata, catalogStatus: "Unpublished" }
 }

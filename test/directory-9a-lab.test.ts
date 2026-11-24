@@ -10,7 +10,7 @@ function setup(mode: "normal" | "lost-create" | "cleanup-refused" | "throttle" =
   const active = new Map<string, Item>(), deleted = new Map<string, Item>(), durable = new Map<string, DirectoryLabIntent>(), evidence: Item[] = []
   let throttle = mode === "throttle", secret = "", managerId = ""
   const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
-    const path = new URL(String(input)).pathname.replace("/v1.0/", ""), method = options?.method ?? "GET"
+    const path = new URL(String(input)).pathname.replace("/beta/", ""), method = options?.method ?? "GET"
     if (throttle && method === "GET") { throttle = false; return new Response(null, { status: 429, headers: { "Retry-After": "1" } }) }
     if (method === "POST" && path === "users") {
       const body = JSON.parse(String(options?.body)); secret = body.passwordProfile.password
@@ -92,7 +92,7 @@ it("verifies the prepared group lifecycle, membership and owner round trip under
   const active = new Map<string, Item>(), deleted = new Map<string, Item>(), links = new Set<string>(), intents = new Map<string, DirectoryLabIntent>()
   let next = 1
   const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
-    const path = new URL(String(input)).pathname.replace("/v1.0/", ""), parts = path.split("/"), method = options?.method ?? "GET", body = options?.body ? JSON.parse(String(options.body)) : undefined
+    const path = new URL(String(input)).pathname.replace("/beta/", ""), parts = path.split("/"), method = options?.method ?? "GET", body = options?.body ? JSON.parse(String(options.body)) : undefined
     if (method === "GET") {
       if (parts[2] === "memberOf") return Response.json({ value: [] })
       if (parts.length === 1) return Response.json({ value: [...active.values()].filter(value => value.fixtureFolder === path) })

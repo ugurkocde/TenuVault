@@ -13,7 +13,7 @@ export function directory9bLab(token: string, tenant: string, labApp: string, re
   const claims = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString())
   if (tenant !== LAB_8C_TENANT || labApp !== LAB_8C_APP || claims.tid !== tenant || (claims.appid ?? claims.azp) !== labApp || claims.scp) throw new Error("Outside the approved app-only lab connection")
   for (const role of ["Application.ReadWrite.OwnedBy", "Application.Read.All", "DelegatedPermissionGrant.ReadWrite.All", "AppRoleAssignment.ReadWrite.All"]) if (!claims.roles?.includes(role)) throw new Error(`Missing lab permission: ${role}`)
-  const root = "https://graph.microsoft.com/v1.0/", created = new Map<string, AppLabIntent>()
+  const root = "https://graph.microsoft.com/beta/", created = new Map<string, AppLabIntent>()
   const request = async (path: string, method = "GET", body?: Item): Promise<Item> => {
     const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
     recovery.evidence({ method, path: path.split("?")[0]!, status: response.status, ...(body ? { body } : {}) })

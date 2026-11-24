@@ -1,3 +1,4 @@
+import { accessPackageCatalogReply, accessPackageCatalogWrite } from "../../src/shared/intune/entra-snapshot"
 import { configurationPayload } from "../../src/main/restore/entra-configuration"
 import { restoreMatrixRow } from "../../src/shared/intune/restore-matrix"
 import type { Item } from "../../src/shared/intune/registry"
@@ -52,7 +53,9 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
     const allowed = LAB_8C_FOLDERS.some(folder => parsed.pathname === new URL(urlFor(folder)).pathname || (collections.includes(folder) && parsed.pathname.startsWith(new URL(urlFor(folder)).pathname + "/") && /^[A-Za-z0-9_-]+$/.test(parsed.pathname.slice(new URL(urlFor(folder)).pathname.length + 1))))
     if (parsed.origin !== "https://graph.microsoft.com" || parsed.hash || parsed.username || parsed.password || !allowed || (method !== "GET" && parsed.search)) throw new Error("Outside the 8c lab path allowlist")
     if (body) safe(body)
-    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Accept-Language": "0" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
+    const catalog = parsed.pathname.includes("/accessPackageCatalogs")
+    const wireBody = body && catalog ? accessPackageCatalogWrite(body) : body
+    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Accept-Language": "0" }, ...(wireBody ? { body: JSON.stringify(wireBody) } : {}), signal: AbortSignal.timeout(60_000) })
     recovery?.recordEvidence?.({ kind: "http", method, path: parsed.pathname, status: response.status })
     if (response.status === 429 && ["GET", "DELETE"].includes(method) && throttleAttempt < 4) {
       const seconds = Math.min(60, Math.max(1, Number(response.headers.get("Retry-After")) || 30))
@@ -64,7 +67,9 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
       const code = (await response.json().catch(() => ({})))?.error?.code
       throw new Error(`Lab ${method} ${parsed.pathname} failed (HTTP ${response.status}, ${typeof code === "string" ? code : "unknown"}). Response bodies are not logged.`)
     }
-    return response.status === 204 ? {} : response.json()
+    if (response.status === 204) return {}
+    const reply = await response.json() as Item
+    return catalog ? accessPackageCatalogReply(reply) : reply
   }
   const request = async (url: string, method = "GET", body?: Item): Promise<Item> => {
     for (let attempt = 0; ; attempt++) {

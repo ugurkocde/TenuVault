@@ -7,7 +7,7 @@ export const LAB_9A_DOMAIN = "sl6ll.onmicrosoft.com"
 export const LAB_9A_PREFIX = "TV06-TEST-"
 export const LAB_9A_GROUP_BLOCKER = "Group cleanup requires the owner-approved soft-delete retention policy."
 export const LAB_9A_GROUP_CLEANUP = { admitted: true }
-const root = "https://graph.microsoft.com/v1.0/"
+const root = "https://graph.microsoft.com/beta/"
 const prefixed = (item: Item, folder: "users" | "groups") => typeof item.displayName === "string" && item.displayName.startsWith(LAB_9A_PREFIX) && (String(item.mailNickname ?? "").startsWith(LAB_9A_PREFIX) || (folder === "users" && String(item.userPrincipalName ?? "").startsWith(LAB_9A_PREFIX)))
 export interface DirectoryLabIntent { name: string; folder: string; id?: string; state: "intent" | "created" | "removed" | "refused" }
 class LabRefusal extends Error { constructor(message: string, readonly status: number) { super(message) } }
@@ -28,7 +28,7 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
   const request = async (path: string, method = "GET", body?: Item): Promise<Item | null> => {
     const url = new URL(root + path)
     if (method === "GET" && /^(users|groups|directory\/deletedItems\/microsoft.graph.(user|group))([?]|$)/.test(path)) url.searchParams.set("$select", path.includes("group") ? "id,displayName,mailNickname,deletedDateTime" : "id,displayName,userPrincipalName,mailNickname,accountEnabled,deletedDateTime")
-    if (url.origin !== "https://graph.microsoft.com" || url.hash || !/^\/v1\.0\/(users|groups|directory\/deletedItems)(\/|\?|$)/.test(url.pathname + url.search)) throw new Error("Outside the 9a lab path scope")
+    if (url.origin !== "https://graph.microsoft.com" || url.hash || !/^\/beta\/(users|groups|directory\/deletedItems)(\/|\?|$)/.test(url.pathname + url.search)) throw new Error("Outside the 9a lab path scope")
     for (let attempt = 0; ; attempt++) {
       const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
       recovery.evidence({ method, path: url.pathname, status: response.status })
