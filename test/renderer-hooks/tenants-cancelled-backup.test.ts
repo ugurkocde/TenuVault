@@ -3,9 +3,13 @@ import { act, createElement, useState, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import type { AppMetadataRemoval } from "../../src/shared/app-metadata-removal"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const removalStatus = vi.hoisted(() => vi.fn<(_tenant: string, _retry?: boolean) => Promise<AppMetadataRemoval | undefined>>())
+vi.mock("@desktop/lib/bridge", () => ({ bridge: { auth: { appMetadataRemoval: removalStatus } } }))
 
 const tenant: Tenant = {
   id: 1, name: "Contoso", domain: "contoso.onmicrosoft.com", status: "active", lastBackup: "", configCount: 0, storageUsed: "", client: "", license: "", region: "",
@@ -53,6 +57,7 @@ afterEach(() => {
   document.body.replaceChildren()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  removalStatus.mockReset()
 })
 
 const backupNow = () => [...document.querySelectorAll("button")].find((button) => /Backup Now|Backing up|Backup queued|Backup running/.test(button.textContent ?? "")) as HTMLButtonElement
@@ -90,4 +95,25 @@ describe("Tenants page after a backup the user cancelled", () => {
     expect(backupNow().disabled).toBe(false)
     expect(backupNow().textContent).toContain("Backup Now")
   })
+
+  it("shows saved permission removal on the tenant card and reports a verified retry", async () => {
+    const pending: AppMetadataRemoval = {
+      runId: "directory-page",
+      status: "pending",
+      scopes: [{ consentType: "AllPrincipals", principalId: null, scope: "DelegatedPermissionGrant.ReadWrite.All" }],
+    }
+    removalStatus.mockImplementation(async (_tenant, retry) => retry ? { ...pending, status: "verified" } : pending)
+    const container = document.body.appendChild(document.createElement("div"))
+    const root = createRoot(container)
+    roots.push(root)
+    await act(async () => root.render(createElement(Harness, null, createElement(MemoryRouter, null, createElement(TenantsPage)))))
+    const notice = container.querySelector('[aria-label="Temporary permission removal pending"]')
+    expect(notice?.textContent).toContain("DelegatedPermissionGrant.ReadWrite.All")
+    const retry = [...notice!.querySelectorAll("button")].find(button => button.textContent === "Retry removal")
+    await act(async () => retry!.click())
+    expect(removalStatus).toHaveBeenCalledWith(tenant.credentials!.tenantId, true)
+    expect(container.textContent).toContain("Temporary permission removal verified")
+    expect(container.querySelector('[aria-label="Temporary permission removal pending"]')).toBeNull()
+  })
+
 })
