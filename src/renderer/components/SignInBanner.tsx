@@ -7,6 +7,7 @@ import { settingsHref } from "../lib/settings-section"
 import { Button } from "~/components/ui/button"
 import type { SignInRequiredEvent } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
+import { StartNowRecovery } from "./StartNowRecovery"
 import { toast } from "../lib/toast"
 
 const promptKey = (event: SignInRequiredEvent) => `${event.tenantId.toLowerCase()} ${event.scope}`
@@ -20,6 +21,7 @@ export function SignInBanner({ hidden = false }: { hidden?: boolean }) {
   const tenants = useTenants()
   const [queue, setQueue] = useState<SignInRequiredEvent[]>([])
   const [busy, setBusy] = useState(false)
+  const [browserSignIn, setBrowserSignIn] = useState<SignInRequiredEvent>()
 
   useEffect(() => bridge.auth.onSignInRequired((event) =>
     setQueue((current) => (current.some((entry) => promptKey(entry) === promptKey(event)) ? current : [...current, event]))), [])
@@ -30,13 +32,19 @@ export function SignInBanner({ hidden = false }: { hidden?: boolean }) {
   const pending = queue[0]
   if (!pending || hidden) return null
   const others = queue.length - 1
+  const needsBrowserSignIn = browserSignIn === pending
   const resolve = () => setQueue((current) => current.filter((entry) => promptKey(entry) !== promptKey(pending)))
   const tenant = tenants.find((t) => t.credentials?.tenantId?.toLowerCase() === pending.tenantId.toLowerCase())
 
   const signIn = async () => {
     setBusy(true)
+    setBrowserSignIn(undefined)
     try {
       const account = await bridge.auth.reauthenticate(pending.tenantId, pending.clientId, pending.scope)
+      if ("error" in account) {
+        setBrowserSignIn(pending)
+        return
+      }
       resolve()
       // Reloading would drop the prompts still queued, so it waits for the last one.
       if (others > 0) {
@@ -58,20 +66,24 @@ export function SignInBanner({ hidden = false }: { hidden?: boolean }) {
       <span className="flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-card text-amber-700" aria-hidden="true">
         <KeyRound className="h-4 w-4" />
       </span>
-      <p className="flex-1">
-        <span className="font-medium">{tenant?.name ?? pending.tenantId}: </span>
-        {pending.message}
-        {others > 0 && <span className="block text-xs text-amber-800">{others === 1 ? "1 more sign-in is waiting." : `${others} more sign-ins are waiting.`}</span>}
-        {suggestsBackupReader(pending.message) && (
-          <span className="block text-xs text-amber-800">
-            If this keeps stopping scheduled backups, the optional <Link to={settingsHref("background")} className="font-medium underline">Backup Reader</Link> runs them without your sign-in.
-          </span>
-        )}
-      </p>
-      <Button size="sm" onClick={() => void signIn()} disabled={busy}>
-        {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-        Sign in
-      </Button>
+      {needsBrowserSignIn
+        ? <StartNowRecovery className="flex-1" tenantName={tenant?.name ?? pending.tenantId} onRetry={() => void signIn()} />
+        : <>
+          <p className="flex-1">
+            <span className="font-medium">{tenant?.name ?? pending.tenantId}: </span>
+            {pending.message}
+            {others > 0 && <span className="block text-xs text-amber-800">{others === 1 ? "1 more sign-in is waiting." : `${others} more sign-ins are waiting.`}</span>}
+            {suggestsBackupReader(pending.message) && (
+              <span className="block text-xs text-amber-800">
+                If this keeps stopping scheduled backups, the optional <Link to={settingsHref("background")} className="font-medium underline">Backup Reader</Link> runs them without your sign-in.
+              </span>
+            )}
+          </p>
+          <Button size="sm" onClick={() => void signIn()} disabled={busy}>
+            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Sign in
+          </Button>
+        </>}
       <button type="button" onClick={resolve} className="flex size-9 flex-shrink-0 items-center justify-center rounded-full text-amber-700 transition-colors hover:bg-amber-100" aria-label="Dismiss">
         <X className="h-4 w-4" />
       </button>

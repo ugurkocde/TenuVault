@@ -106,7 +106,7 @@ What each field is:
 
 * **License key:** the key from your purchase email. Community sends no key.
 * **Installation ID:** a random identifier generated on your machine and kept in its encrypted store. It identifies this installation, not you or your device.
-* **Tenant ID:** when the service supports tenant hashes and a recent Microsoft ID token is available, key activation and refresh send a SHA-256 hash of the tenant ID. Older services and key requests without proof receive the tenant ID. Organization license and trial requests use the tenant claim in the ID token and can include the same hash. The ID token still contains the original tenant ID. Licenses are counted per tenant.
+* **Tenant ID:** key activation and refresh send a SHA-256 hash of the tenant ID when the service advertises tenant hash support and the request includes a recent Microsoft ID token as proof. If the service does not advertise support or the request has no proof, the app sends the original tenant ID as a separate field. Organization license and trial requests use the tenant claim in the ID token and can include the same hash. The ID token still contains the original tenant ID. Licenses are counted per tenant.
 * **Client ID:** the application (client) ID of your app registration. When you share a license with your tenant, only admins who sign in through this app registration are licensed by it.
 * **Operating system and app version:** `win32` or `darwin`, and the TenuVault version number.
 * **Microsoft ID token:** proof of which tenant and app registration you signed in to. It contains identity claims, such as your name and user principal name. The app only sends a token issued within the last few minutes, and never sends access tokens or refresh tokens.

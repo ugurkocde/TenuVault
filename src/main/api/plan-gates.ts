@@ -76,8 +76,8 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       return features
     }
     case "/api/sync": {
-      // A Sync run to more than one target is an MSP action on every tenant it names. One
-      // target outside the Pro license pair is refused by the route, which knows the licenses.
+      // A Sync run to more than one target is an MSP action on every tenant it names. For one
+      // target, the route checks that both tenants have an active Pro or MSP entitlement.
       const features = typeof body.action === "string" ? featureRouteFeatures(pathname, body.action) : []
       if (features.length && Array.isArray(body.targetTenants) && body.targetTenants.length > 1) features.push("bulkActions")
       return features

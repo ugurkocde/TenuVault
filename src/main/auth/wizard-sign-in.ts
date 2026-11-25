@@ -34,6 +34,7 @@ interface PendingSignIn {
   choice?: PermissionChoice
   coverage: BackupScopeCoverage[]
   trialEligible: boolean
+  azureLicenseChecked?: boolean
 }
 
 export class WizardSignIn {
@@ -87,6 +88,11 @@ export class WizardSignIn {
       const choice = method === "tenuvaultApp" || services !== undefined ? wizardChoice(services) : undefined
       await this.requireMethod(method)
       const tenant = await (this.host.resolveTenant ?? resolveOnboardingTenant)(tenantId)
+      if (this.pending?.azureLicenseChecked) {
+        const { staged } = this.pending
+        this.clear()
+        if (!this.host.connected(staged.account.tenantId)) await this.host.releaseLicense(staged).catch(() => undefined)
+      }
       if (tenant !== ORGANIZATIONS && this.host.connected(tenant)) throw new ConnectionSwitchError("conflict", "This tenant is already connected.")
       const staged = await this.host.stage(tenant, method, choice)
       const clientId = method === "graphCli" ? GRAPH_CLI_CLIENT_ID : TENUVAULT_CLIENT_ID
@@ -128,8 +134,36 @@ export class WizardSignIn {
     this.pending = undefined
   }
 
-  discard(id: unknown): void {
-    if (this.pending?.id === id) this.clear()
+  async discard(id: unknown): Promise<void> {
+    const pending = this.pending
+    if (!pending || pending.id !== id) return
+    this.clear()
+    if (pending.azureLicenseChecked && !this.busy && !this.host.connected(pending.staged.account.tenantId)) {
+      await this.host.releaseLicense(pending.staged).catch(() => undefined)
+    }
+  }
+
+  async checkAzureStorageLicense(id: unknown, tenant: string): Promise<void> {
+    const pending = this.pending
+    if (!pending || !this.azureStorageSignIn(id, tenant)) throw new ConnectionSwitchError("sign_in_required", EXPIRED)
+    if (this.busy) throw new ConnectionSwitchError("conflict", "Finish the current sign-in request and try again.")
+    this.busy = true
+    pending.azureLicenseChecked = true
+    try {
+      await this.requireMethod("tenuvaultApp")
+      if (this.pending !== pending) throw new ConnectionSwitchError("sign_in_required", EXPIRED)
+      await this.host.checkLicense(pending.staged)
+    } finally {
+      if (this.pending !== pending && !this.host.connected(tenant)) await this.host.releaseLicense(pending.staged).catch(() => undefined)
+      this.busy = false
+    }
+  }
+
+  azureStorageSignIn(id: unknown, tenant: string): StagedSignIn | undefined {
+    const pending = this.pending
+    if (pending && pending.id === id && pending.method === "tenuvaultApp" && pending.staged.account.tenantId === tenant && !this.host.connected(tenant)) {
+      return pending.staged
+    }
   }
 
   trialContactProof(tenant: string): string | undefined {
@@ -172,7 +206,8 @@ export class WizardSignIn {
       this.clear()
       return { result: true as const }
     } catch (error) {
-      if (checkedLicense && !this.host.connected(pending.staged.account.tenantId)) {
+      if ((checkedLicense || pending.azureLicenseChecked) && !this.host.connected(pending.staged.account.tenantId)) {
+        pending.azureLicenseChecked = false
         await this.host.releaseLicense(pending.staged).catch(() => undefined)
       }
       return wizardFailure(error)

@@ -13,10 +13,9 @@ export function targetIds(value: unknown): unknown[] {
 }
 
 /**
- * The tenants of a Sync action. Every involved tenant needs a plan with Sync. More than one
- * target, or one target outside the license, needs MSP on every involved tenant; on Pro the
- * source and its one target must be the two tenants of the same license, or two tenants that
- * each run a Pro trial, as for Dev to Prod.
+ * Every tenant of a Sync action needs a plan with Sync. A single target can pair with any
+ * entitled Pro or MSP source, including trials. A run with multiple targets needs MSP on
+ * every involved tenant.
  * Checked on every gated action, also when a run's target is acted on alone.
  */
 export async function requireSyncTenants(deps: FeatureDeps, sourceTenantId: unknown, targetTenantIds: unknown[]): Promise<{ source: string; targets: string[] }> {
@@ -36,7 +35,10 @@ export async function requireSyncTenants(deps: FeatureDeps, sourceTenantId: unkn
   if (!targets.every((id) => connected.has(id))) throw new FeatureError("A target tenant is not connected to this app.", 403)
   const plans = await Promise.all([source, ...targets].map((id) => deps.plan(id)))
   if (plans.some((plan) => !allows(plan, "sync"))) throw new PlanRequired("sync")
-  if (plans.every((plan) => allows(plan, "bulkActions"))) return { source, targets }
-  if (targets.length === 1 && deps.sameLicense(source, targets[0]!)) return { source, targets }
-  throw new PlanRequired("bulkActions")
+  if (targets.length === 1) {
+    if (!deps.proPair(source, targets[0]!)) throw new PlanRequired("sync")
+  } else if (!plans.every((plan) => allows(plan, "bulkActions"))) {
+    throw new PlanRequired("bulkActions")
+  }
+  return { source, targets }
 }

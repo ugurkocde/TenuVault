@@ -291,7 +291,7 @@ export function signInLogCode(text: string): string | undefined {
 
 export function oauthSignInCode(error: unknown): string | undefined {
   if (typeof error === "string" && [
-    "access_denied", "consent_required", "interaction_required", "invalid_client", "invalid_grant", "invalid_request",
+    "access_denied", "account_selection_required", "consent_required", "interaction_required", "invalid_client", "invalid_grant", "invalid_request",
     "invalid_scope", "login_required", "server_error", "temporarily_unavailable", "unauthorized_client",
   ].includes(error)) return error
 }

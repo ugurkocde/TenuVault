@@ -253,7 +253,7 @@ changes reach nightly users first.
 The audit log (viewing, searching, exporting and removing old entries) is Pro and MSP. Every
 plan records events; Community sees a locked preview on the Audit Log page.
 
-## Compatibility notes for the next release
+## Compatibility notes for 0.6.0
 
 Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
 
@@ -270,6 +270,10 @@ Backups that only skip types for missing access count as successful and still sh
   Before downgrading to 0.5.x, switch to your own app registration in 0.6 if the tenant has
   only used Start now or the TenuVault app. If you already downgraded, return to 0.6 to
   recover the connection. Removing the tenant in 0.5.x deletes its backup schedule.
+
+- **Start now.** Connecting or signing in again requires an active Microsoft browser session
+  and an existing grant for Microsoft Graph Command Line Tools. If Microsoft requires
+  consent or another sign-in step, choose the TenuVault app or your own app registration.
 
 - **Intune policy sets.** Policy sets stay under Apps. Standard Intune setup already includes the Configuration permission. A signed-in backup with neither Configuration permission marks policy sets **Not read**. A Backup Reader without the Configuration read role fails its credential check. The restore preview blocks policy sets that lack the Configuration write scope and names the missing permission.
 - **Stable Entra coverage.** Back up device registration and enrollment, authentication methods and contexts, terms of use, and optional groups and devices. Eligible group directory restore requires individual review. The expanded Entra catalog is available for lab testing.

@@ -2,7 +2,8 @@
 
 import { NoticeCard } from "@desktop/components/NoticeCard"
 import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
-import { deferredPrivilegedRestore, DEFERRED_RESTORE_MESSAGE, DIRECTORY_REVIEW_FOLDERS } from "../../../shared/intune/directory-review-folders"
+import { DIRECTORY_REVIEW_FOLDERS } from "../../../shared/intune/directory-review-folders"
+import { backupOnlyRestoreMessage } from "../../../shared/intune/restore-availability"
 import { DirectoryRestore } from "./directory-restore"
 import { ConfigurationRestore } from "./configuration-restore"
 import { INTUNE_TYPES, restoreCapability } from "../../../shared/intune/registry"
@@ -474,9 +475,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     return () => { controller.abort(); setPageLoading(false) }
   }, [backupId, companionId, tenant, largePage, contentsService, accessRevision])
 
-  const accessIssues = access.issuesFor((items ?? []).filter(item => !deferredPrivilegedRestore(item.folder)).map(item => item.folder))
+  const accessIssues = access.issuesFor((items ?? []).filter(item => !backupOnlyRestoreMessage(item.folder)).map(item => item.folder))
   const selectionBlocker = (item: BackupItem) => {
-    if (deferredPrivilegedRestore(item.folder)) return DEFERRED_RESTORE_MESSAGE
+    const backupOnly = backupOnlyRestoreMessage(item.folder)
+    if (backupOnly) return backupOnly
     const issue = access.issueFor(item.folder)
     // Backup access in the source is enough when the selected policies will be copied elsewhere.
     if (issue && (issue.method === "graphCli" || !canCopyToTenants || !copyCandidates.length)) return "Restore access is required."
@@ -488,7 +490,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   useEffect(() => {
     setSelected((current) => new Set([...current].filter((path) => {
       const item = itemByPath.get(path)
-      return item && !deferredPrivilegedRestore(item.folder) && !(mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker)
+      return item && !backupOnlyRestoreMessage(item.folder) && !(mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker)
     })))
   }, [itemByPath, mode, community, copying])
 
@@ -567,7 +569,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     if (state.live === "same" || (state.assignmentsOnly && !assignments)) return "skip"
     return "overwrite"
   }
-  const selectedPaths = [...selected]
+  const selectedPaths = [...selected].filter(path => {
+    const item = itemByPath.get(path)
+    return item && !backupOnlyRestoreMessage(item.folder)
+  })
   const deprecatedSelected = selectedPaths.filter((path) => deprecatedByPath.has(path))
   const plans = review ? selectedPaths.map((path) => ({ path, plan: planFor(path) })) : []
   const actionable = plans.filter((entry) => !["skip", "cannot"].includes(entry.plan)).map((entry) => entry.path)
@@ -975,7 +980,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                     </span>
                                   </label>
                                   {!copying && !access.issueFor(item.folder) && DIRECTORY_REVIEW_FOLDERS.includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} />}
-                                  {!copying && !access.issueFor(item.folder) && (!DIRECTORY_REVIEW_FOLDERS.includes(item.folder) || item.folder === "AdministrativeUnits") && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
+                                  {!copying && !backupOnlyRestoreMessage(item.folder) && !access.issueFor(item.folder) && (!DIRECTORY_REVIEW_FOLDERS.includes(item.folder) || item.folder === "AdministrativeUnits") && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}
                               <li className="pl-11">

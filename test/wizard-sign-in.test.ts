@@ -34,6 +34,15 @@ describe("staged wizard sign-in", () => {
     const { host, wizard } = fixture()
     const staged = await wizard.stage("", method, CHOICE)
     expect(staged).toMatchObject({ result: { organizationName: "Contoso Ltd" } })
+    if ("result" in staged) {
+      const { id } = staged.result
+      expect(wizard.azureStorageSignIn("wrong-id", TENANT)).toBeUndefined()
+      expect(wizard.azureStorageSignIn(id, GRAPH_CLI_CLIENT_ID)).toBeUndefined()
+      if (method === "tenuvaultApp") expect(wizard.azureStorageSignIn(id, TENANT)?.account.clientId).toBe(TENUVAULT_CLIENT_ID)
+      else expect(wizard.azureStorageSignIn(id, TENANT)).toBeUndefined()
+      wizard.discard(id)
+      expect(wizard.azureStorageSignIn(id, TENANT)).toBeUndefined()
+    }
     expect(host.fetch).toHaveBeenCalledWith("https://graph.microsoft.com/beta/organization?$select=id,displayName", expect.objectContaining({
       headers: { Authorization: "Bearer opaque" }, redirect: "error",
     }))
@@ -85,6 +94,19 @@ describe("staged wizard sign-in", () => {
     expect("result" in resumed && await restarted.finish(resumed.result.id, "profile", CHOICE)).toEqual({ result: true })
     expect(host.checkLicense).toHaveBeenCalledOnce()
     expect(slots.has(TENANT)).toBe(true)
+  })
+
+  it("releases a license checked for pending Azure storage when onboarding is discarded", async () => {
+    const { host, wizard } = fixture()
+    const staged = await wizard.stage(TENANT, "tenuvaultApp", CHOICE)
+    const id = "result" in staged ? staged.result.id : ""
+    expect(host.checkLicense).not.toHaveBeenCalled()
+    await expect(wizard.checkAzureStorageLicense(id, GRAPH_CLI_CLIENT_ID)).rejects.toThrow("Sign in again")
+    await wizard.checkAzureStorageLicense(id, TENANT)
+    expect(host.checkLicense).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ idToken: "id-proof" }))
+    await wizard.discard(id)
+    expect(host.releaseLicense).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ idToken: "id-proof" }))
+    expect(host.enroll).not.toHaveBeenCalled()
   })
 
   it("uses exactly the service choices checked at TenuVault app sign-in", async () => {

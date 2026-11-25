@@ -1,5 +1,6 @@
 import { TenantConnectionSettings } from "../components/TenantConnectionSettings"
-import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
+import { StartNowRecovery } from "../components/StartNowRecovery"
+import { GRAPH_CLI_CLIENT_ID, sharedSignInMethod } from "../../shared/tenant-connection"
 import { IdentityRestoreSafety } from "../components/IdentityRestoreSafety"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
@@ -412,7 +413,7 @@ export function ProxySignInSettings() {
   )
 }
 
-function TenantSettings({ active }: { active: boolean }) {
+export function TenantSettings({ active }: { active: boolean }) {
   const { hash } = useLocation()
   const [params] = useSearchParams()
   const { confirm, confirmDialog } = useConfirm()
@@ -424,6 +425,7 @@ function TenantSettings({ active }: { active: boolean }) {
   // The Change storage dialog closes while its section is hidden; its chooser draft lives here so the reopened dialog picks up where the admin left off.
   const [storageDraft, setStorageDraft] = useState<StorageChooserDraft | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [browserSignIn, setBrowserSignIn] = useState<Record<string, string | undefined>>({})
 
   const refresh = () => void bridge.auth.accounts().then(setAccounts)
   useEffect(refresh, [])
@@ -431,9 +433,20 @@ function TenantSettings({ active }: { active: boolean }) {
   const signIn = async (tenant: Tenant) => {
     const { tenantId, appId } = tenant.credentials!
     setBusy(tenantId)
+    setBrowserSignIn(current => ({ ...current, [tenant.id]: undefined }))
     try {
-      const account = await bridge.auth.reauthenticate(tenantId, appId)
-      toast(`Signed in as ${account.username}.`, "success")
+      if (sharedSignInMethod(appId) === "tenuvaultApp") {
+        const outcome = await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
+        if ("error" in outcome) throw new Error(outcome.error.message)
+        toast("TenuVault app permissions verified.", "success")
+      } else {
+        const account = await bridge.auth.reauthenticate(tenantId, appId)
+        if ("error" in account) {
+          setBrowserSignIn(current => ({ ...current, [tenant.id]: appId }))
+          return
+        }
+        toast(`Signed in as ${account.username}.`, "success")
+      }
       refresh()
     } catch (error) {
       toast(error instanceof Error ? error.message : "Sign-in failed.", "error")
@@ -470,6 +483,7 @@ function TenantSettings({ active }: { active: boolean }) {
             {tenants.map((tenant) => {
               const tenantId = tenant.credentials?.tenantId ?? ""
               const account = accounts.find((a) => a.tenantId === tenantId.toLowerCase())
+              const needsBrowserSignIn = tenant.credentials && browserSignIn[tenant.id] === tenant.credentials.appId
               return (
                 <div key={tenant.id} id={`sign-in-${tenantId.toLowerCase()}`} className="flex scroll-mt-4 items-center gap-3 py-4 first:pt-1 last:pb-0">
                   <div className="min-w-0 flex-1">
@@ -487,11 +501,12 @@ function TenantSettings({ active }: { active: boolean }) {
                         refresh()
                       }}
                     />}
+                    {needsBrowserSignIn && <StartNowRecovery className="mt-3" onRetry={() => void signIn(tenant)} />}
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
+                  {!needsBrowserSignIn && <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     {account ? "Sign in again" : "Sign in"}
-                  </Button>
+                  </Button>}
                   <Button variant="ghost" size="sm" onClick={() => { setChoice(null); setStorageDraft(null); setEditing(tenant) }} disabled={!tenant.credentials}>
                     Change storage
                   </Button>

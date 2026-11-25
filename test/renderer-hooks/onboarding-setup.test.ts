@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SignedInAccount } from "../../src/shared/ipc"
+import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
 import { graphCliCoverage } from "../../src/shared/services/graph-cli-coverage"
 import { graphPermissions, type PermissionChoice } from "../../src/shared/services/manifest"
 
@@ -15,7 +16,7 @@ const state = vi.hoisted(() => ({
   graphCliAvailable: vi.fn(async () => false),
   tenuvaultAppAvailable: vi.fn(async () => false),
   wizardStage: vi.fn(),
-  wizardFinish: vi.fn(async () => ({ result: true })),
+  wizardFinish: vi.fn(async (_id: string, _profile: string, _services: PermissionChoice) => ({ result: true })),
   wizardDiscard: vi.fn(async () => undefined),
   wizardPackConsent: vi.fn(),
   cancelCreateRegistration: vi.fn(async () => undefined),
@@ -1459,10 +1460,41 @@ describe("sign-in method wizard", () => {
     return container
   }
 
+  it("opens Microsoft browser sign-in and retries Start now after a session refusal", async () => {
+    state.wizardStage.mockResolvedValue({ error: {
+      code: "browser_sign_in_required", message: "Sign in to Microsoft in your browser first, then try again.",
+    } })
+    const container = await publicConnect("Start now")
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(container.textContent).toContain("Sign in to Microsoft in your browser first, then try again.")
+    expect(container.textContent).not.toContain("Start now is not available")
+    await act(async () => button(container, "Open Microsoft sign-in")!.click())
+    expect(state.openExternal).toHaveBeenCalledExactlyOnceWith("https://intune.microsoft.com")
+    expect(state.wizardStage).toHaveBeenCalledTimes(1)
+    await act(async () => button(container, "Try again")!.click())
+    expect(state.wizardStage).toHaveBeenCalledTimes(2)
+  })
+
+  it("offers other methods after a consent refusal without opening Microsoft browser sign-in", async () => {
+    state.wizardStage.mockResolvedValue({ error: {
+      code: "AADSTS65001", message: "Start now is not available in this tenant. Choose the TenuVault app or use your own app registration in Sign-in and access.",
+    } })
+    const container = await publicConnect("Start now")
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Choose the TenuVault app or use your own app registration.")
+    expect(button(container, "Open Microsoft sign-in")).toBeUndefined()
+    // Trying again cannot help, so the primary action is another method.
+    const primary = button(container, "Use your own app registration")
+    expect(primary).toBeDefined()
+    expect(container.querySelector('[role="alert"]')?.className).not.toContain("text-red-700")
+    await act(async () => primary!.click())
+    expect(container.textContent).toContain("Create your TenuVault app registration")
+  })
+
   it("starts in the signed-in user's tenant by default and shows Microsoft's decline code", async () => {
     state.wizardStage.mockResolvedValue({ error: { code: "AADSTS65004", message: "Microsoft declined consent." } })
     const container = await publicConnect("Start now")
-    expect(container.textContent).toContain("If Microsoft asks for new permissions")
+    expect(container.textContent).toContain("uses an existing Microsoft browser session")
     expect(container.querySelector("input")?.closest("details")?.open).toBe(false)
     await act(async () => button(container, "Sign in with Microsoft")!.click())
     expect(state.wizardStage).toHaveBeenCalledWith("", "graphCli", { intune: { access: "backup" } })
@@ -1471,14 +1503,18 @@ describe("sign-in method wizard", () => {
     expect(button(container, "Try again")).toBeDefined()
   })
 
-  it("shows the shared tenant name on Check and Storage before enrollment", async () => {
+  it.each([
+    ["Start now", GRAPH_CLI_CLIENT_ID],
+    ["TenuVault app", TENUVAULT_CLIENT_ID],
+  ] as const)("enrolls the verified organization name shown during %s setup", async (method, clientId) => {
     state.wizardStage.mockResolvedValue({ result: {
       ...stageResult,
-      account: { ...stageResult.account, username: "guest@fabrikam.test" },
+      account: { ...stageResult.account, clientId, username: "guest@fabrikam.test" },
       coverage: [{ service: "intune", folders: ["DeviceConfigurations"], readable: ["DeviceConfigurations"] }],
       organizationName: "Contoso Ltd",
     } })
-    const container = await publicConnect("Start now")
+    state.storageChoice = { kind: "local" }
+    const container = await publicConnect(method)
     await act(async () => button(container, "Sign in with Microsoft")!.click())
     expect(container.textContent).toContain("Signed in as guest@fabrikam.test")
     expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
@@ -1487,6 +1523,10 @@ describe("sign-in method wizard", () => {
     expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
     expect(state.wizardFinish).not.toHaveBeenCalled()
     expect(loadOnboardingDraft()?.account).toBeFalsy()
+    await act(async () => button(container, "Start first backup")!.click())
+    const [, profile] = state.wizardFinish.mock.calls[0]!
+    expect(JSON.parse(profile)).toEqual([expect.objectContaining({ name: "Contoso Ltd" })])
+    expect(state.addTenant).toHaveBeenCalledWith(expect.objectContaining({ name: "Contoso Ltd" }))
   })
 
   it("keeps every chosen service when Start now can read Intune and part of Entra ID", async () => {

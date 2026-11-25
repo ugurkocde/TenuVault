@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip } from "~/components/dashboard/tiles"
 import { cn } from "~/lib/utils"
-import type { Plan } from "../../../shared/plans"
 import { getCustomBaseline, type Comparison, type Deployment } from "./api"
 import { VersionEditor } from "./VersionEditor"
 import { DeployPanel } from "./DeployPanel"
@@ -17,7 +16,7 @@ type Section = (typeof SECTIONS)[number][0]
  * One baseline: its versions and settings, deployments, rebases onto newer OIB releases and
  * comparisons. Without the plan every section is read-only and shows stored records only.
  */
-export default function BaselineDetail({ tenant, baselineId, allowed, plan, deployments, comparisons, onChanged }: { tenant: Tenant; baselineId: string; allowed: boolean; plan: Plan | null; deployments: Deployment[]; comparisons: Comparison[]; onChanged: () => void }) {
+export default function BaselineDetail({ tenant, baselineId, allowed, deployments, comparisons, onChanged }: { tenant: Tenant; baselineId: string; allowed: boolean; deployments: Deployment[]; comparisons: Comparison[]; onChanged: () => void }) {
   const [section, setSection] = useState<Section>("settings")
   const [viewing, setViewing] = useState<number | null>(null)
   const detail = useQuery({ queryKey: ["custom-baselines", tenant.credentials?.tenantId, baselineId, viewing], queryFn: () => getCustomBaseline(tenant, baselineId, viewing ?? undefined) })
@@ -57,7 +56,7 @@ export default function BaselineDetail({ tenant, baselineId, allowed, plan, depl
       </nav>
 
       {section === "settings" && <VersionEditor key={version.version} tenant={tenant} baseline={baseline} version={version} allowed={allowed && version.version === baseline.currentVersion} onViewVersion={setViewing} onSaved={() => { setViewing(null); refresh() }} />}
-      {section === "deploy" && <DeployPanel tenant={tenant} baseline={baseline} version={version} allowed={allowed} plan={plan} deployments={deployments} onChanged={refresh} />}
+      {section === "deploy" && <DeployPanel tenant={tenant} baseline={baseline} version={version} allowed={allowed} deployments={deployments} onChanged={refresh} />}
       {section === "updates" && <RebasePanel tenant={tenant} baseline={baseline} rebases={rebases} allowed={allowed} onChanged={() => { setViewing(null); refresh() }} />}
       {section === "compare" && <ComparePanel tenant={tenant} baseline={baseline} version={version} allowed={allowed} comparisons={comparisons} onChanged={refresh} />}
       {section === "history" && (

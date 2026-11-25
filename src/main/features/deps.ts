@@ -32,8 +32,8 @@ export interface FeatureDeps {
   records: TenantRecords
   /** The tenant's plan; throws when the tenant is not signed in or not licensed. */
   plan: (tenantId: string) => Promise<Plan>
-  /** Whether two tenants form a Pro pair: covered by the same license, or each by a Pro trial (Pro promotion stays inside it). */
-  sameLicense: (a: string, b: string) => boolean
+  /** Whether both tenants have an active Pro or MSP entitlement, including Pro trials (two-tenant actions). */
+  proPair: (a: string, b: string) => boolean
   /** A connected tenant, or null. */
   tenant: (tenantId: string) => TenantProfile | null
   /** IDs of every connected tenant. */

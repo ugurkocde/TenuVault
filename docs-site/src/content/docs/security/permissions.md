@@ -11,7 +11,7 @@ For the step-by-step setup, see [Create the app registration](/getting-started/a
 
 Start now uses Microsoft Graph Command Line Tools and requests the Microsoft Graph `.default` scope. TenuVault uses the delegated scopes in the access token to show which Entra ID and Intune backup types those scopes cover. For an opaque token, an explicit grant in the token response can provide the evidence. Without that evidence coverage is unknown. The scopes requested during sign-in do not establish coverage.
 
-Use another sign-in method if Microsoft asks for consent or approval. Start now permits Graph reads and uses encrypted backups on this device. Microsoft Graph write calls are blocked even when the granted scopes include write access. Azure Storage, Azure Resource Manager and Win32 installer capture require a different sign-in method.
+Start now requires a Microsoft browser session and existing consent. It stops if Microsoft requires approval or another sign-in step. Start now permits Graph reads and uses encrypted backups on this device. Microsoft Graph write calls are blocked even when the granted scopes include write access. Azure Storage, Azure Resource Manager and Win32 installer capture require a different sign-in method.
 
 Start now allows outbound alerts to Teams Workflows and webhook URLs configured by the admin, while email alerts require a different sign-in method because sending through Microsoft Graph is a write.
 

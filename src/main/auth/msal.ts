@@ -20,11 +20,12 @@ import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { accessTokenClaims, sharedTokenScopes, tokenIdentity } from "./token-identity"
-import { missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
+import { AZURE_STORAGE_PACKS, missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { graphCliSignInFailure } from "./graph-cli-failure"
 import { verifyGraphCliGrant } from "./connection-coverage"
 import { consentIssue } from "./pack-consent"
 import type { PackConsentCode } from "../../shared/pack-consent"
+import type { StoredAccount } from "./stores"
 import type { StagedSignIn } from "./tenant-connections"
 import type { AppDeviceCode } from "../../shared/app-sources/types"
 
@@ -123,7 +124,7 @@ function resourceName(scope: string): string {
   return isResourceScope(scope) ? RESOURCE_NAMES[scope]! : "Microsoft"
 }
 
-type SilentRefusal = { errorNo?: unknown; errorCode?: unknown; errorMessage?: string }
+type SilentRefusal = { errorNo?: unknown; errorCode?: unknown; errorMessage?: string; subError?: unknown }
 
 function silentRefusalCode(refusal?: SilentRefusal): string | undefined {
   const number = refusal?.errorNo
@@ -343,7 +344,9 @@ export class AuthManager {
 
   async stageGraphCliSignIn(tenant: string, cache: ICachePlugin): Promise<StagedSignIn> {
     await this.requireGraphCli(true)
-    const result = await this.acquireGraphCli(tenant, this.createApp(GRAPH_CLI_CLIENT_ID, cache, true))
+    const stored = this.host.accountStore.get(normalizeGuid(tenant))
+    const loginHint = stored && normalizeGuid(stored.clientId) === GRAPH_CLI_CLIENT_ID ? stored.username : undefined
+    const result = await this.acquireGraphCli(tenant, this.createApp(GRAPH_CLI_CLIENT_ID, cache, true), loginHint)
     const { account, accessToken, grantedScopes, idToken, actualTenant } = result
     const graphScopes = verifyGraphCliGrant(accessToken, grantedScopes)
     await this.requireGraphCli(true)
@@ -353,13 +356,16 @@ export class AuthManager {
     }
   }
 
-  private async acquireGraphCli(tenant: string, staged: PublicClientApplication) {
+  private async acquireGraphCli(tenant: string, staged: PublicClientApplication, loginHint?: string) {
+    // Even an OpenID-only interactive request can prompt for consent. Require browser SSO
+    // and existing grants, with no interactive fallback if Microsoft cannot issue a code.
     const result = await this.acquireInteractive(GRAPH_CLI_CLIENT_ID, tenant, RESOURCE_SCOPES.graph,
-      "select_account", undefined, true, undefined, staged).catch((error: unknown) => {
+      "none", loginHint, true, undefined, staged).catch((error: unknown) => {
       if (error instanceof SignInCancelledError) throw new ConnectionSwitchError("cancelled", GRAPH_CLI_CONSENT_CANCELLED)
       if (error instanceof SignInTimeoutError) throw new ConnectionSwitchError("timeout", `${GRAPH_CLI_CONSENT_CANCELLED} ${FIRST_SIGN_IN_TIMEOUT_MESSAGE}`)
       const refusal = error as SilentRefusal | null
-      throw graphCliSignInFailure(error instanceof Error ? error.message : "", silentRefusalCode(refusal ?? undefined))
+      throw graphCliSignInFailure(silentRefusalCode(refusal ?? undefined) ?? namedSignInCode(error instanceof Error ? error.message : ""),
+        oauthSignInCode(refusal?.errorCode), refusal?.subError)
     })
     const actualTenant = signedInTenant(tenant, result)
     const account = result.account!
@@ -414,12 +420,15 @@ export class AuthManager {
   }
 
   /** Check a fresh delegated token for just the selected pack, without saving the account. */
-  async signInForPack(tenant: string, cache: ICachePlugin, pack: PermissionPack, checkOnly: boolean): Promise<void> {
+  async signInForPack(tenant: string, cache: ICachePlugin, pack: PermissionPack, checkOnly: boolean, homeAccountId?: string): Promise<void> {
     const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
     try {
       const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes(pack.resource, pack.scopes),
         checkOnly ? "none" : "select_account", undefined, true, undefined, app)
       if (!result.account || normalizeGuid(result.account.tenantId) !== normalizeGuid(tenant)) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      if (homeAccountId !== undefined && result.account.homeAccountId !== homeAccountId) {
+        throw new ConnectionSwitchError("wrong_account", "Microsoft signed in with a different account. Use the account selected in TenuVault to verify Azure storage.")
+      }
       const identity = tokenIdentity(result.accessToken)
       if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) {
         throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")
@@ -429,6 +438,27 @@ export class AuthManager {
     } catch (error) {
       throw sharedSignInFailure(error, checkOnly)
     }
+  }
+
+  /** Use only the named Azure pack and the account already selected for this connection. */
+  async azureStorageToken(stored: StoredAccount, cache: ICachePlugin, resource: "management" | "storage"): Promise<string> {
+    const pack = AZURE_STORAGE_PACKS.find(pack => pack.resource === resource)!
+    const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
+    const cached = await this.findAccount(app, stored.homeAccountId)
+    const account = cached && accountForTenant(cached, stored.tenantId)
+    if (!cached || !account) throw new Error("Sign in to the TenuVault app again.")
+    try {
+      const result = await app.acquireTokenSilent({ account: cached, scopes: resourceScopes(resource, pack.scopes), authority: authority(stored.tenantId), forceRefresh: true })
+      const identity = tokenIdentity(result?.accessToken ?? "")
+      const sameConnection = !identity.decoded || (identity.tenantId === stored.tenantId && identity.clientId === TENUVAULT_CLIENT_ID)
+      if (sameConnection && result?.accessToken && matchesSelectedAccount(account, result) &&
+        !missingPackScopes(pack.scopes, sharedTokenScopes(result.accessToken, this.tokenGrants.get(app)?.forResult(result).grantedScopes)).length) {
+        return result.accessToken
+      }
+    } catch {
+      // This operation never opens a browser. The pack dialog owns interactive consent.
+    }
+    throw new Error(`Check the ${pack.label} permission pack again with your signed-in account.`)
   }
 
   /** Force a silent acquisition in a disposable cache. This never opens a consent prompt. */
@@ -530,7 +560,7 @@ export class AuthManager {
         const code = silentRefusalCode(error)
         const oauth = oauthSignInCode(error.errorCode) ?? "token_request_failed"
         const guidance = normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID
-          ? graphCliSignInFailure("", code).message
+          ? graphCliSignInFailure(code).message
           : signInErrorRow(code)?.firstSignIn ?? "Try again."
         throw new ServerError(oauth, "", `${resourceName(scope)} token request failed${code ? ` (${code})` : ""}. ${guidance}`, undefined, code?.slice("AADSTS".length), error.status)
       }
@@ -725,7 +755,7 @@ export class AuthManager {
 }
 
 /** Refreshes can omit identity fields. Compare the ones Microsoft supplied to the selected account. */
-function matchesSelectedAccount(account: AccountInfo, result: AuthenticationResult): boolean {
+function matchesSelectedAccount(account: Pick<AccountInfo, "tenantId" | "homeAccountId" | "localAccountId" | "idTokenClaims">, result: AuthenticationResult): boolean {
   const matches = (value: unknown, expected: string | undefined) =>
     value === undefined || value === "" || value === expected ||
     (isGuid(value) && isGuid(expected) && normalizeGuid(value) === normalizeGuid(expected))

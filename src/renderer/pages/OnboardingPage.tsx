@@ -2,7 +2,8 @@ import { NoticeCard } from "../components/NoticeCard"
 import { OnboardingHeading, onboardingCard, onboardingLink, onboardingPrimary } from "../components/OnboardingCard"
 import { OnboardingSignIn, type MethodAvailability } from "../components/OnboardingSignIn"
 import { BrowserSignInWait, OtherTenant } from "../components/OnboardingConnection"
-import { type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
+import { StartNowRecovery } from "../components/StartNowRecovery"
+import { GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, GRAPH_CLI_SIGN_IN_REQUIREMENTS, type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
 import { MODULES } from "../../shared/services/modules"
 import { typeForFolder } from "../../shared/intune/registry"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
@@ -106,6 +107,9 @@ export default function OnboardingPage() {
   const [sharedSignIn, setSharedSignIn] = useState<WizardSignInResult | null>(null)
   const [retryTenant, setRetryTenant] = useState<string>()
   const [publicCode, setPublicCode] = useState("")
+  const needsBrowserSignIn = method === "graphCli" && publicCode === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED
+  // Start now cannot work in this tenant (for example no existing grant): trying again cannot help, so the next step is another method.
+  const startNowRefused = method === "graphCli" && Boolean(publicCode) && !needsBrowserSignIn && publicCode !== "AADSTS65004" && publicCode !== "cancelled"
   const [consentBusy, setConsentBusy] = useState<"open" | "handoff" | null>(null)
   const [consentStatus, setConsentStatus] = useState("")
   const sharedDraft = useRef<string | undefined>(undefined)
@@ -560,6 +564,10 @@ export default function OnboardingPage() {
     } finally { if (mounted.current) setConsentBusy(null) }
   }
 
+  const organizationName = method === "ownApp"
+    ? (organization?.account === account ? organization?.name : undefined)
+    : (sharedSignIn?.account === account ? sharedSignIn?.organizationName : undefined)
+
   // The license is checked before the tenant is saved. A
   // tenant the license does not cover is not added and its sign-in is removed in the main
   // process, so the admin signs in again with the same IDs once the license is sorted.
@@ -606,7 +614,7 @@ export default function OnboardingPage() {
       return
     }
     try {
-      const creds = desktopTenantCredentials(account, fields.displayName, choice)
+      const creds = desktopTenantCredentials(account, fields.displayName || organizationName || "", choice)
       const tenant = { ...(await buildTenantProfile(creds, method === "ownApp", tenantDetails.current?.account === account ? tenantDetails.current.result : undefined)), createdAt: new Date().toISOString() }
       if (!mounted.current) return
       const profile = serializeTenants([tenant])
@@ -811,9 +819,6 @@ export default function OnboardingPage() {
     }
   }
 
-  const organizationName = method === "ownApp"
-    ? (organization?.account === account ? organization?.name : undefined)
-    : (sharedSignIn?.account === account ? sharedSignIn?.organizationName : undefined)
   const connectedTenant = account && <details className="text-center text-xs text-muted-foreground open:w-full">
     <summary className={cn("cursor-pointer", onboardingLink)}>{organizationName ?? "Connected tenant"}</summary>
     <div className="mt-2 space-y-1 break-words">
@@ -902,23 +907,30 @@ export default function OnboardingPage() {
 
           {step === 1 && method !== "ownApp" && (
             <div className="space-y-4 text-center">
-              <OnboardingHeading id="setup-step-1" title="Sign in with Microsoft" icon={method === "graphCli" ? <Zap /> : <Cloud />}
-                subtitle={publicBusy || consentBusy === "open" ? undefined : method === "graphCli"
+              <OnboardingHeading id="setup-step-1" title={needsBrowserSignIn ? "Sign in to Microsoft first" : "Sign in with Microsoft"} icon={method === "graphCli" ? <Zap /> : <Cloud />}
+                subtitle={publicBusy || consentBusy === "open" || needsBrowserSignIn ? undefined : method === "graphCli"
                   ? "Use existing read access. Nothing is created in your tenant."
                   : "An admin approves read access for TenuVault once."} />
-              {publicError && <div role="alert" className="space-y-1 text-sm text-red-700">
+              {publicError && !needsBrowserSignIn && <div role="alert" className={cn("space-y-1 text-sm", startNowRefused ? "text-foreground" : "text-red-700")}>
                 <p>{publicError}</p>
-                {method === "graphCli" && publicCode.startsWith("AADSTS") && <p className="text-xs">{publicCode}</p>}
+                {method === "graphCli" && publicCode.startsWith("AADSTS") && !publicError.includes(publicCode) && <p className="text-xs">{publicCode}</p>}
               </div>}
               {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
               {publicBusy || consentBusy === "open"
                 ? <BrowserSignInWait kind={consentBusy === "open" ? "consent" : "signin"} cancel={() => void bridge.auth.cancelSignIn()} />
-                : <>
+                : needsBrowserSignIn ? <>
+                  <StartNowRecovery centered buttonClassName={onboardingPrimary} onRetry={() => void signInShared()} />
+                  <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={false} expectedTenant={retryTenant} />
+                </> : startNowRefused ? <>
+                  <Button className={onboardingPrimary} onClick={() => void chooseMethod("ownApp")}>Use your own app registration</Button>
+                  <div><button type="button" className={onboardingLink} onClick={() => void signInShared()}>Try again</button></div>
+                  <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={false} expectedTenant={retryTenant} />
+                </> : <>
                   <Button className={onboardingPrimary} disabled={Boolean(consentBusy)} onClick={() => void signInShared()}>
                     <span aria-hidden="true" className="grid size-4 grid-cols-2 gap-0.5"><span className="bg-[#f25022]" /><span className="bg-[#7fba00]" /><span className="bg-[#00a4ef]" /><span className="bg-[#ffb900]" /></span>
                     {publicError ? "Try again" : "Sign in with Microsoft"}
                   </Button>
-                  {method === "graphCli" && <p className="mx-auto max-w-md text-xs text-muted-foreground">If Microsoft asks for new permissions, go back and choose another connection method.</p>}
+                  {method === "graphCli" && <p className="mx-auto max-w-md text-xs text-muted-foreground">{GRAPH_CLI_SIGN_IN_REQUIREMENTS}</p>}
                   {method === "tenuvaultApp" && <div><button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("handoff")}>Send to my admin</button></div>}
                   <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={Boolean(consentBusy)} expectedTenant={retryTenant} />
                   {method === "tenuvaultApp" && <details className="space-y-3" open={publicError ? true : undefined}>
@@ -1105,7 +1117,8 @@ export default function OnboardingPage() {
                 key={setup ? `setup:${setup.importId}` : "manual"}
                 tenantId={account.tenantId}
                 clientId={account.clientId}
-                localOnly={method !== "ownApp"}
+                wizardId={sharedSignIn?.id}
+                localOnly={method === "graphCli"}
                 onboarding
                 initial={setup && setup.connection.tenantId === account.tenantId.toLowerCase() ? setup.connection.storage : undefined}
                 onChange={setChoice}

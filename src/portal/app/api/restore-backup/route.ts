@@ -10,6 +10,7 @@ import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, ApprovalCompletionRefused, DependencyMappingError, RestoreReconcileRequired, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
+import { backupOnlyRestoreMessage } from "../../../../shared/intune/restore-availability"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { type NextRequest, NextResponse } from "next/server"
@@ -117,6 +118,66 @@ export async function POST(request: NextRequest) {
 
     const jobId = randomUUID()
     const destinations: string[] = targetTenants?.map((target: { tenantId: string }) => target.tenantId.toLowerCase()) ?? [tenantId.toLowerCase()]
+    const results: Array<RestoreOutcome & { targetTenantId?: string; retryJobId?: string }> = []
+    let restoredCount = 0
+    let approvalCount = 0
+    let failedCount = 0
+    let skippedCount = 0
+    let unchangedCount = 0
+    let partialCount = 0
+
+    const finish = (duration: number) => {
+      const done = targetTenants
+        ? `Copied ${restoredCount} item${restoredCount === 1 ? '' : 's'} to ${targetTenants.length} tenant${targetTenants.length === 1 ? '' : 's'}`
+        : mode === 'copy'
+        ? `Created ${restoredCount} ${assignments ? '' : 'unassigned '}[Restored] cop${restoredCount === 1 ? 'y' : 'ies'}`
+        : `Restored ${restoredCount} item${restoredCount === 1 ? '' : 's'} in place`
+      // Replace in place leaves items that already match the backup alone; they count as done.
+      const handled = restoredCount + unchangedCount
+      return NextResponse.json({
+        success: failedCount === 0 && approvalCount === 0 && handled > 0,
+        jobId: jobId,
+        status: handled === 0 && approvalCount > 0 && failedCount === 0 && partialCount === 0 ? "AwaitingApproval" : partialCount > 0 || approvalCount > 0 ? "PartiallyCompleted" : handled === 0 ? "Failed" : failedCount > 0 ? "PartiallyCompleted" : "Completed",
+        message: `${done}${approvalCount ? `; ${approvalCount} awaiting approval` : ""}; ${failedCount} failed${unchangedCount ? `; ${unchangedCount} already matched the backup` : ''}${skippedCount ? `; ${skippedCount} kept as reference only` : ''}`,
+        details: {
+          approvalCount,
+          restoredCount,
+          failedCount,
+          partialCount,
+          skippedCount,
+          unchangedCount,
+          duration,
+          results
+        }
+      })
+    }
+
+    const selectablePaths: string[] = []
+    const backupOnly = new Map<string, RestoreOutcome>()
+    if (restoreType === 'selective') {
+      for (const { path } of selectedPolicies as Array<{ path: string }>) {
+        const message = backupOnlyRestoreMessage(path.split('/')[1] ?? '')
+        if (message) backupOnly.set(path, { path, success: false, action: 'skipped', error: message })
+        else selectablePaths.push(path)
+      }
+      if (!selectablePaths.length) {
+        for (const destination of destinations) {
+          for (const result of backupOnly.values()) {
+            results.push(targetTenants ? { ...result, targetTenantId: destination } : { ...result, retryJobId: jobId })
+          }
+        }
+        skippedCount = results.length
+        if (progressId) {
+          const progress = startProgress(progressId, skippedCount)
+          progress.done = skippedCount
+          progress.results.push(...results)
+          progress.finished = true
+        }
+        return finish(0)
+      }
+    }
+    const eligibleRepairs = repairSelections.filter((p: { path: string }) => !backupOnly.has(p.path))
+
     const action = mode === 'replace' ? 'Restore backup in place' : 'Restore backup as policy copies'
     const destinationTokens: string[] = []
     let correlated: string = jobId
@@ -154,17 +215,10 @@ export async function POST(request: NextRequest) {
 
     // Start the restore process
     const startTime = new Date()
-    const results = []
-    let restoredCount = 0
-    let approvalCount = 0
-    let failedCount = 0
-    let skippedCount = 0
-    let unchangedCount = 0
-    let partialCount = 0
 
     let paths: string[]
-    if (restoreType === 'selective' && selectedPolicies) {
-      paths = selectedPolicies.map((policy: { path: string }) => policy.path)
+    if (restoreType === 'selective') {
+      paths = selectablePaths
     } else if (owned.metadata?.LargeItems) {
       paths = Object.entries(owned.metadata.Items ?? {}).map(([key, value]) => `${backupId}/${key.split('/')[0]}/${(value as { file: string }).file}`)
     } else {
@@ -215,12 +269,12 @@ export async function POST(request: NextRequest) {
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
     const manifest = checked.manifest
 
-    const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
+    const progress = progressId ? startProgress(progressId, (paths.length + backupOnly.size) * targets.length) : null
     preparationFailed = undefined
     try {
-      const ordered = restoreOrder(paths)
+      const ordered = restoreOrder([...paths, ...backupOnly.keys()])
       for (const { restorer, targetTenantId, graphToken: targetToken } of targets) {
-        const firstRepair = repairSelections[0]
+        const firstRepair = eligibleRepairs[0]
         const operationId = (firstRepair && restorer.repairOperationId(firstRepair.path, firstRepair.repairToken)) || correlated
         const audit = beginRestoreAudit({
           destination: targetTenantId ?? tenantId, sourceTenantId: tenantId, graphToken: targetToken, sourceBackupId: backupId, operationId, runId: jobId,
@@ -243,7 +297,8 @@ export async function POST(request: NextRequest) {
                 eventType: AuditEventType.CONFIG_UPDATED, items: [item],
               })?.finish()
             }
-            const result = await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
+            const result = backupOnly.get(path) ??
+              await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), eligibleRepairs.find((p: any) => p.path === path)?.repairToken)
             auditProgress.save(result)
             auditProgress.save = undefined
             auditProgress.submitted = undefined
@@ -277,29 +332,7 @@ export async function POST(request: NextRequest) {
     const endTime = new Date()
     const duration = Math.round((endTime.getTime() - startTime.getTime()) / 1000)
 
-    const done = targetTenants
-      ? `Copied ${restoredCount} item${restoredCount === 1 ? '' : 's'} to ${targetTenants.length} tenant${targetTenants.length === 1 ? '' : 's'}`
-      : mode === 'copy'
-      ? `Created ${restoredCount} ${assignments ? '' : 'unassigned '}[Restored] cop${restoredCount === 1 ? 'y' : 'ies'}`
-      : `Restored ${restoredCount} item${restoredCount === 1 ? '' : 's'} in place`
-    // Replace in place leaves items that already match the backup alone; they count as done.
-    const handled = restoredCount + unchangedCount
-    return NextResponse.json({
-      success: failedCount === 0 && approvalCount === 0 && handled > 0,
-      jobId: jobId,
-      status: handled === 0 && approvalCount > 0 && failedCount === 0 && partialCount === 0 ? "AwaitingApproval" : partialCount > 0 || approvalCount > 0 ? "PartiallyCompleted" : handled === 0 ? "Failed" : failedCount > 0 ? "PartiallyCompleted" : "Completed",
-      message: `${done}${approvalCount ? `; ${approvalCount} awaiting approval` : ""}; ${failedCount} failed${unchangedCount ? `; ${unchangedCount} already matched the backup` : ''}${skippedCount ? `; ${skippedCount} kept as reference only` : ''}`,
-      details: {
-        approvalCount,
-        restoredCount,
-        failedCount,
-        partialCount,
-        skippedCount,
-        unchangedCount,
-        duration,
-        results
-      }
-    })
+    return finish(duration)
   } catch (error) {
     console.error("Restore backup could not finish")
 

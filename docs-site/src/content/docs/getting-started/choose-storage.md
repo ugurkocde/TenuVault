@@ -11,6 +11,8 @@ You can change the location later in **Settings** > **Sign-in** > **Change stora
 
 Open the tenant name or **Connected tenant** to see the signed-in account. Open **Plan details** to see the tenant’s plan.
 
+TenuVault uses the organization name verified during setup as the default name on the sidebar and **Tenants** page. You can rename it from **Tenants**.
+
 * **This tenant uses Community, the free plan**: manual and weekly backups on this device, kept for 30 days. Next to it are **I have a license key** and, while the tenant can still start its trial, **Try Pro free** (no card, no email). See [Start TenuVault for the first time](/getting-started/first-launch/#start-a-trial).
 * **This tenant uses Pro** or **MSP**, from your license key, **This tenant uses your Pro trial**, or **This tenant uses Pro, through the license your organization shares with it.**
 
@@ -55,7 +57,7 @@ On Community, the Azure option is locked. Azure storage is included in Pro and M
 
 You need an existing storage account in a subscription of the tenant you signed in to. TenuVault does not create Azure resources. If none exists yet, ask your Azure administrator to create one with [Create a storage account for TenuVault](/getting-started/create-storage-account/): the page has a script that creates the account and grants your admin group access in one run.
 
-1. Select **Your Azure storage account**. TenuVault shows **Loading your storage accounts...** while it lists the storage accounts your account can see across your subscriptions.
+1. Select **Your Azure storage account**. With the TenuVault app, select **Review Azure permission packs** and verify **Azure Service Management** and **Azure Storage** with your signed-in account. If Microsoft uses a different account, switch to the account shown in TenuVault and check the pack again. TenuVault then lists the storage accounts your account can see across your subscriptions. Settings uses the same pack review when you choose a new Azure account under **Change storage**.
 2. In **Storage account**, choose the account. Each entry shows its name, resource group and region. If the account was created while this step is open, select **Refresh** to list the accounts again.
 3. TenuVault checks access automatically. It creates the `intune-backups` container if it does not exist, then writes and deletes a small test file to confirm you can store backups there.
 4. When you see **Access confirmed**, select **Start first backup**.

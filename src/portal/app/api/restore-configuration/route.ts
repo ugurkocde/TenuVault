@@ -1,3 +1,4 @@
+import { backupOnlyRestoreMessage } from "../../../../shared/intune/restore-availability"
 import { PlanRequired } from "../../../../shared/plans"
 import { NextResponse, type NextRequest } from "next/server"
 import { backupStoragePath } from "../../../../shared/backup-storage"
@@ -17,7 +18,10 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const { tenantId, appId, clientSecret, storageAccountName, backupId, path, action, operation } = body
   if (![tenantId, appId, clientSecret, storageAccountName, backupId, path].every(value => typeof value === "string" && value) || !/^[a-zA-Z0-9_-]+$/.test(backupId) || !validPolicyPath(path, backupId) || !["preview", "restore"].includes(action) || !["create", "update"].includes(operation)) return NextResponse.json({ error: "Choose one configuration policy from this backup." }, { status: 400 })
-  const type = typeForFolder(path.split("/")[1] ?? "")
+  const folder = path.split("/")[1] ?? ""
+  const backupOnly = backupOnlyRestoreMessage(folder)
+  if (backupOnly) return NextResponse.json({ error: backupOnly }, { status: 422 })
+  const type = typeForFolder(folder)
   if (!type || type.restoreSafety !== "identity" || ["none", "metadata"].includes(restoreCapability(type))) return NextResponse.json({ error: "This type remains backup-only." }, { status: 409 })
   try {
     const [storageToken, graphToken] = await Promise.all([token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"), token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")])

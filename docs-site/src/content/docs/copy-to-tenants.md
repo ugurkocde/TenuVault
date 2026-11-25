@@ -27,10 +27,10 @@ Use [Dev to Prod](/changes/#dev-to-prod) to promote assignments and map groups i
 
 | | Community | Pro | MSP |
 | --- | --- | --- | --- |
-| Copy settings to other tenants | | Yes (the two tenants of your license, or two tenants on a Pro trial) | Yes |
+| Copy settings to other tenants | | Yes, one target per run | Yes |
 
-* **Pro** copies between the two tenants of your license, in either direction. During a Pro trial, two tenants that each run a Pro trial on this computer can copy to each other the same way, one target per copy.
-* **MSP** copies from one tenant to several tenants at once. Every tenant in the copy needs MSP.
+* A copy with one target can run between any two connected tenants with Pro, a Pro trial or MSP. Each tenant can have its own license.
+* A copy with several targets needs **MSP** on every tenant in the run.
 * **Community** sees a preview of what Copy to Tenants does, with **See plans**.
 
 When the selected tenant's plan does not include Copy to Tenants, the **Copy to Tenants** entry in the sidebar shows a **Pro** badge. It still opens the page. See [Plans and features](/licensing/).
@@ -67,7 +67,7 @@ The status is read again when you start a new copy, after a copy or rollback fin
 Every other connected tenant shows as a card with its name and domain.
 
 * Click a card to choose it. A card shows **N policies linked** when earlier copies from this source wrote policies to it.
-* On Pro, only the other tenant of your license can be chosen. It shows **Available on Pro**. When the source runs a Pro trial, every other tenant that runs a Pro trial can be chosen in the same way. The other tenants show **MSP** and the note "Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP."
+* Targets that can be chosen only one at a time show **Available on Pro**. You can choose several targets together when the source and all selected targets have MSP.
 * A tenant whose plan does not include Copy to Tenants, or that you are not signed in to, cannot be chosen.
 
 Click **Review N tenants**. TenuVault plans the copy and reads every target tenant. Nothing is written.

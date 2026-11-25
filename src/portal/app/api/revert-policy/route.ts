@@ -4,6 +4,7 @@ import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } 
 import { AuditEventType } from "~/lib/audit/types"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
+import { backupOnlyRestoreMessage } from "../../../../shared/intune/restore-availability"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId, isGuid } from "../../../../shared/security"
@@ -94,7 +95,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid policy backup path' }, { status: 400 })
     }
 
-    const backupId = backupPath.split('/')[0] ?? ''
+    const [backupId = '', folder = ''] = backupPath.split('/')
+    const backupOnly = backupOnlyRestoreMessage(folder)
+    if (backupOnly) return NextResponse.json({ error: backupOnly }, { status: 422 })
     const operationId = randomUUID()
     const auditAction = action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy"
     let auditToken: string | undefined

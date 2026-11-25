@@ -19,7 +19,7 @@ export type SyncRun = SyncRunRecord & { id: string; createdAt: string; updatedAt
 /** One target of a run with its stored records; promotion and change set are null when it could not be planned. */
 export type SyncTarget = SyncRunRecord["targets"][number] & { promotion: Promotion | null; changeSet: ChangeSet | null; rollbackChangeSet: ChangeSet | null }
 export type SyncBackup = "new" | "none"
-export interface SyncTargetOption { tenantId: string; eligible: boolean; multiple: boolean; reason: "msp" | "plan" | "unavailable" | null }
+export interface SyncTargetOption { tenantId: string; eligible: boolean; multiple: boolean; reason: "plan" | "unavailable" | null }
 export type SyncPreview = Omit<PromotionPreview, "promotion"> & { promotion: Promotion }
 
 /** The four policy types Sync writes, by the folder the engine uses. */

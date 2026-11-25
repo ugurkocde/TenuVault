@@ -91,6 +91,10 @@ export const APPLICATION_METADATA_RESTORE_PACK: PermissionPack = {
   id: "entra-app-metadata", label: "Entra app metadata restore", resource: "graph", scopes: ["Application.ReadWrite.All", GRANT_REMOVAL_SCOPE],
 }
 
+export const AZURE_STORAGE_PACKS = (["management", "storage"] as const).map(resource => ({
+  id: resource, label: PACK_RESOURCES[resource].label, resource, scopes: ["user_impersonation"],
+}))
+
 export function tenantPermissionPacks(choice: PermissionChoice, features: { azure: boolean; audit: boolean }): PermissionPack[] {
   return [
     { id: "basics", label: "Basics", resource: "graph", scopes: [...IDENTITY_SCOPES, ...BASE_PERMISSIONS] },
@@ -98,9 +102,7 @@ export function tenantPermissionPacks(choice: PermissionChoice, features: { azur
       const picked = choice[id]
       return picked ? [servicePack(id, picked.access, picked.areas)] : []
     }),
-    ...(features.azure ? (["management", "storage"] as const).map(resource => ({
-      id: resource, label: PACK_RESOURCES[resource].label, resource, scopes: ["user_impersonation"],
-    })) : []),
+    ...(features.azure ? AZURE_STORAGE_PACKS : []),
     ...(features.audit ? [{
       id: "audit", label: "Audit log", resource: "graph" as const,
       scopes: [...OPTIONAL_PERMISSIONS.find(permission => permission.id === "conditionalAccessWatching")!.permissions],

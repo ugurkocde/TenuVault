@@ -39,7 +39,8 @@ export function promotionActions(tenant: Tenant, promotion: Promotion, onSourceC
       return result.changeSet
     },
     approve: (input) => featureCall(PATH, tenant, "approve", { ...base, ...input }),
-    reject: (input) => featureCall(PATH, tenant, "reject", { ...base, ...input }),
+    // Reject names no source tenant, so a pending promotion can be cancelled after the source's plan lapses.
+    reject: (input) => featureCall(PATH, tenant, "reject", { id: promotion.id, ...input }),
     apply: (contentHash) => featureCall(PATH, tenant, "apply", { ...base, contentHash, confirm: true }),
     retry: (contentHash) => featureCall(PATH, tenant, "retry", { ...base, contentHash, confirm: true }),
     rollbackPreview: () => featureCall<RollbackPreview>(PATH, tenant, "rollback-preview", base),

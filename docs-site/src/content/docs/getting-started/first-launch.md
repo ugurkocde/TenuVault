@@ -47,7 +47,7 @@ If the key is rejected, TenuVault shows the reason under the field. For activati
 
 ## What the license check sends
 
-License checks go to tenuvault.com. They send the license key or your Microsoft sign-in token, the tenant ID and a random installation ID. Tenant configuration and backups are never sent. See [Network connections and data flows](/security/data-flows/).
+License checks go to tenuvault.com. They send a random installation ID and can include your license key, Microsoft ID token, or both. Key activation and refresh send the original tenant ID if the service does not advertise hash support or the request has no ID token as proof. Otherwise they send a hash in the tenant ID's place. The ID token itself contains the original tenant ID. Tenant configuration and backups are never sent. See [Network connections and data flows](/security/data-flows/).
 
 ## If TenuVault cannot unlock its saved data
 

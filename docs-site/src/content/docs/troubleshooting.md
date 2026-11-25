@@ -78,14 +78,16 @@ If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration
 
 ### Start now sign-in
 
-If Microsoft asks for consent or administrator approval, cancel in the browser and in TenuVault. In **Settings > Sign-in and access**, select **Upgrade to the TenuVault app** when available, or **Use your own app registration**.
+Start now uses existing browser sessions and permissions. If TenuVault asks you to sign in first, select **Open Microsoft sign-in**. Sign in to the Microsoft Intune admin center with your work account in the default browser, return to TenuVault and select **Try again**. If consent is required, open **Settings > Sign-in and access** and select **Upgrade to the TenuVault app** when available, or **Use your own app registration**.
 
 | What you see | What to do |
 | --- | --- |
-| `AADSTS65001`, `AADSTS65004`, `AADSTS90094`, `AADSTS90095` | Microsoft needs a grant or approval, or the consent prompt was declined. Cancel and choose another sign-in method. |
+| `consent_required`, `AADSTS65001`, `AADSTS65004`, `AADSTS90094`, `AADSTS90095` | Microsoft did not find an existing grant that allows this sign-in. Choose another sign-in method. |
+| `login_required`, `account_selection_required`, `AADSTS50058` | Use **Open Microsoft sign-in** to sign in with the work account for this tenant, then select **Try again**. |
+| `interaction_required` | Follow the recovery action in TenuVault. If the error indicates missing consent, choose another sign-in method. |
 | `AADSTS50105` | Your account lacks an assignment to Microsoft Graph Command Line Tools. Choose a sign-in method your organization allows. |
 | `AADSTS53000`, `AADSTS53001`, `AADSTS53003` | Conditional Access requires a compliant or joined device, or blocked the sign-in. Ask your Entra administrator which device and sign-in method the policy allows. |
-| `AADSTS50076`, `AADSTS50079` | Complete or set up multifactor authentication for your admin account. Choose another method if Start now remains unavailable. |
+| `AADSTS50076`, `AADSTS50079` | Complete or set up multifactor authentication for your admin account in Microsoft, then try Start now again. Choose another method if Start now remains unavailable. |
 | `AADSTS700016`, `AADSTS500011`, `AADSTS7000112`, `AADSTS7000229` | Microsoft Graph Command Line Tools or its resource is unavailable in this tenant. Choose another sign-in method. |
 | `AADSTS7000218` | Microsoft rejected public-client sign-in. Choose another sign-in method. |
 | `AADSTS50020`, `AADSTS90072` | Use an admin account that belongs to the target tenant, or choose another method. |

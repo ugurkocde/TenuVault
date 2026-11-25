@@ -53,7 +53,7 @@ export default function BaselinesPage() {
 
       {baselineId ? (
         <Suspense fallback={<div className="h-24 animate-pulse rounded-3xl bg-card" />}>
-          <BaselineDetail key={`${baselineId}:${selectedTenant.id}`} tenant={selectedTenant} baselineId={baselineId} allowed={allowed} plan={plan} deployments={(list.data?.deployments ?? []).filter((entry) => entry.baselineId === baselineId)} comparisons={(list.data?.comparisons ?? []).filter((entry) => entry.baselineId === baselineId)} onChanged={() => void list.refetch()} />
+          <BaselineDetail key={`${baselineId}:${selectedTenant.id}`} tenant={selectedTenant} baselineId={baselineId} allowed={allowed} deployments={(list.data?.deployments ?? []).filter((entry) => entry.baselineId === baselineId)} comparisons={(list.data?.comparisons ?? []).filter((entry) => entry.baselineId === baselineId)} onChanged={() => void list.refetch()} />
         </Suspense>
       ) : (
         <>

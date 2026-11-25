@@ -1,9 +1,10 @@
+import { discoverAzureResources } from "../shared/azure-discovery"
 import { ORGANIZATIONS, resolveOnboardingTenant } from "./auth/onboarding-tenant"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
+import { GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, GRAPH_CLI_CLIENT_ID, GRAPH_CLI_SIGN_IN_REQUIREMENTS, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
 import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
 import { ConnectionSwitchError } from "./auth/switch-failure"
-import { APPLICATION_METADATA_RESTORE_PACK, tenantPermissionPacks, resourcePackScopes, resourceScopes, servicePack, isPackWriteScope } from "../shared/services/permission-packs"
+import { APPLICATION_METADATA_RESTORE_PACK, AZURE_STORAGE_PACKS, tenantPermissionPacks, resourcePackScopes, resourceScopes, servicePack, isPackWriteScope } from "../shared/services/permission-packs"
 import type { AuditWatchRecord } from "./features/notifications/model"
 import { DOMAINS } from "./features/domains"
 import { backupStoragePath } from "../shared/backup-storage"
@@ -48,7 +49,7 @@ import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
 import { notifyTenantTrial, runTrialNotificationCheck } from "./license/notifications"
 import { licenseStatusHandler } from "./license/status"
-import { sameLicense } from "./license/same-license"
+import { proPair } from "./license/same-license"
 import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
 import { requestTrialKey } from "./license/trial"
@@ -685,7 +686,7 @@ async function bootstrap(): Promise<void> {
   const featureDeps: FeatureDeps = {
     records,
     plan: (tenantId) => license.requireEntitlement(tenantId),
-    sameLicense: (a, b) => sameLicense(license.status([]).tenants, a, b),
+    proPair: (a, b) => proPair(license.status([]).tenants, a, b),
     tenant: (tenantId) => {
       const profile = tenantProfile(tenantId)
       return profile ? { tenantId: tenantId.toLowerCase(), ...profile } : null
@@ -943,7 +944,7 @@ async function bootstrap(): Promise<void> {
     available: async tenant => connections.get(tenant)?.method === "tenuvaultApp" && await license.tenuvaultAppEnabled(true),
     consent: (tenant, signal) => packConsent.act(tenant, APPLICATION_METADATA_RESTORE_PACK.id, "open",
       async () => connections.get(tenant)?.method === "tenuvaultApp" && await license.tenuvaultAppEnabled(true) ? [APPLICATION_METADATA_RESTORE_PACK] : null,
-      signal).finally(returnToApp),
+      { signal }).finally(returnToApp),
     token: async (tenant, requested, forRestore) => {
       const account = accounts.get(tenant)
       const connection = connections.get(tenant)
@@ -1667,7 +1668,13 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:reauthenticate", async (_event, tenantId: unknown, clientId: unknown, scope?: unknown) => {
     if (!isGuid(tenantId) || !isGuid(clientId)) throw new Error("Choose a tenant and a valid application ID.")
     if (scope !== undefined && !isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
-    const account = await reauthenticate(tenantId, clientId, scope)
+    const account = await reauthenticate(tenantId, clientId, scope).catch((error: unknown) => {
+      if (error instanceof ConnectionSwitchError && error.code === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED) {
+        return { error: { code: GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, message: error.message } }
+      }
+      throw error
+    })
+    if ("error" in account) return account
     void health.check(tenantId, "signIn").catch(() => undefined)
     try {
       await license.requireEntitlement(tenantId, { retry: true })
@@ -1682,13 +1689,18 @@ async function bootstrap(): Promise<void> {
       if (clientId.toLowerCase() !== GRAPH_CLI_CLIENT_ID) throw new Error("Reload the tenant and try again.")
       if (!await license.connectMethodEnabled("graphCli", true)) throw new Error(`${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}`)
       const response = await dialog.showMessageBox(mainWindow!, {
-        title: "Sign in with Start now", message: GRAPH_CLI_CONSENT_WARNING,
+        title: "Sign in with Start now", message: GRAPH_CLI_SIGN_IN_REQUIREMENTS,
         buttons: ["Cancel", "Continue to Microsoft"], defaultId: 0, cancelId: 0,
       })
       if (response.response !== 1) throw new Error("Sign-in cancelled.")
       if (!capabilities.isGraphOnly(tenantId)) throw new Error("The sign-in method changed. Reload the tenant and try again.")
       const outcome = await connections.switchForIpc(tenantId, { method: "graphCli" }, returnToApp)
-      if ("error" in outcome) throw new Error(outcome.error.message)
+      if ("error" in outcome) {
+        if (outcome.error.code === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED) {
+          throw new ConnectionSwitchError(outcome.error.code, outcome.error.message)
+        }
+        throw new Error(outcome.error.message)
+      }
       notifyAccountChange(outcome.result.account.tenantId)
       return outcome.result.account
     }
@@ -1790,6 +1802,60 @@ async function bootstrap(): Promise<void> {
       try { notifyAccountChange(signedIn.tenantId) } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
       return { result: true }
     } catch (error) { return wizardFailure(error) }
+  })
+  // Pending storage uses only these operations. Ordinary tokens and saved permission plans still
+  // follow the current profile until the storage selection is committed.
+  const azureStorageSession = (tenant: string, wizardId: unknown) => {
+    if (wizardId !== undefined) {
+      const staged = wizard.azureStorageSignIn(wizardId, tenant)
+      return staged && { account: staged.account, cache: staged.cacheWrites?.() }
+    }
+    const account = accounts.get(tenant)
+    if (tenantProfile(tenant) && connections.get(tenant)?.method === "tenuvaultApp" && account?.clientId === TENUVAULT_CLIENT_ID) return { account, cache: undefined }
+  }
+  const pendingAzurePlan = async (tenant: string, wizardId: unknown) => {
+    if (wizardId === undefined) return license.requireEntitlement(tenant, { retry: true })
+    if (!license.plan(tenant)) await wizard.checkAzureStorageLicense(wizardId, tenant)
+    return license.plan(tenant)
+  }
+  const azureStorageToken = async (tenantId: unknown, wizardId: unknown, resource: "management" | "storage") => {
+    if (!isGuid(tenantId)) throw new Error("Choose a valid tenant.")
+    const tenant = tenantId.toLowerCase()
+    const before = azureStorageSession(tenant, wizardId)
+    if (!before || !await license.tenuvaultAppEnabled(true)) throw new Error("Sign in to the TenuVault app in this tenant.")
+    const plan = await pendingAzurePlan(tenant, wizardId)
+    if (!plan || !allows(plan, "azureStorage")) throw new PlanRequired("azureStorage")
+    const staged = stageConnectionCache(wizardId === undefined ? cache : { get: key => before.cache?.[key] ?? null }, TENUVAULT_CLIENT_ID)
+    const token = await auth.azureStorageToken(before.account, staged.plugin, resource)
+    if (azureStorageSession(tenant, wizardId)?.account.homeAccountId !== before.account.homeAccountId ||
+      !license.connectMethodEnabledNow("tenuvaultApp")) throw new Error("The sign-in changed. Choose storage again.")
+    return token
+  }
+  handleTrusted("auth:azureStoragePackConsent", async (_event, tenantId: unknown, pack: unknown, action: unknown, wizardId?: unknown) => {
+    const tenant = isGuid(tenantId) ? tenantId.toLowerCase() : ""
+    return packConsent.act(tenant, pack, action, async id => {
+      if (!await license.tenuvaultAppEnabled(true) || !azureStorageSession(id, wizardId)) return null
+      const plan = await pendingAzurePlan(id, wizardId).catch(() => null)
+      return plan && allows(plan, "azureStorage") && azureStorageSession(id, wizardId) ? AZURE_STORAGE_PACKS : null
+    }, {
+      signInForPack: async (id, selectedPack, checkOnly) => {
+        const session = azureStorageSession(id, wizardId)
+        const changed = () => new ConnectionSwitchError("wrong_account", "The sign-in changed. Choose storage again.")
+        if (!session) throw changed()
+        const { homeAccountId } = session.account
+        const staged = stageConnectionCache(wizardId === undefined ? cache : { get: key => session.cache?.[key] ?? null }, TENUVAULT_CLIENT_ID)
+        await auth.signInForPack(id, staged.plugin, selectedPack, checkOnly, homeAccountId)
+        if (azureStorageSession(id, wizardId)?.account.homeAccountId !== homeAccountId ||
+          !license.connectMethodEnabledNow("tenuvaultApp")) throw changed()
+      },
+    }).finally(returnToApp)
+  })
+  const fetchPendingAzure = withNetworkErrors((input, init) => chromiumFetch(input, { ...init, redirect: "error" }))
+  handleTrusted("backups:discoverAzureStorage", async (_event, tenant, wizardId) => {
+    const token = await azureStorageToken(tenant, wizardId, "management")
+    const result = await discoverAzureResources(fetchPendingAzure, token)
+    if (!result) throw new Error("Failed to access Azure subscriptions")
+    return result.storageAccounts
   })
   handleTrusted("auth:packConsentPlan", async (_event, tenant: unknown) => {
     const packs = typeof tenant === "string" ? await consentPlan(tenant.toLowerCase()) : null
@@ -2179,7 +2245,12 @@ async function bootstrap(): Promise<void> {
     checkStore = null
     return backupSettings()
   })
-  handleTrusted("backups:verifyAzureStorage", async (_event, tenantId: string, clientId: string, account: string) => {
+  handleTrusted("backups:verifyAzureStorage", async (_event, tenantId: string, clientId: string, account: string, wizardId?: unknown) => {
+    if (typeof clientId === "string" && clientId.toLowerCase() === TENUVAULT_CLIENT_ID) {
+      if (isLocalAccount(account)) throw new Error("Choose an Azure storage account.")
+      const token = await azureStorageToken(tenantId, wizardId, "storage")
+      return verifyStorageAccess(fetchPendingAzure, account, async () => token)
+    }
     capabilities.requireResource(tenantId, RESOURCE_SCOPES.storage)
     await license.requireEntitlement(tenantId, { retry: true })
     await verifyStorageAccess(bridgedFetch, account, async () =>

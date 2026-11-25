@@ -5,6 +5,7 @@ import { validPolicyPath } from "~/lib/policies/restore"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { graphCaller, locateLive, readLive } from "~/lib/policies/graph-restore"
 import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
+import { backupOnlyRestoreMessage } from "../../../../shared/intune/restore-availability"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
@@ -64,12 +65,13 @@ export async function POST(request: NextRequest) {
 
   try {
     const startNow = sharedSignInMethod(appId) === "graphCli"
+    const reviewable = paths.filter(path => !backupOnlyRestoreMessage(String(path).split("/")[1] ?? ""))
     const [storageToken, graphToken] = await Promise.all([
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       // Check the app registration's permissions for these folders even without a live comparison.
-      live === true
+      live === true && reviewable.length > 0
         ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
-        : !startNow && paths.some((path) => checksRestorePermission(String(path).split("/")[1] ?? ""))
+        : !startNow && reviewable.some((path) => checksRestorePermission(String(path).split("/")[1] ?? ""))
           // Without the token the restore still checks the permission before its first write.
           ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => "")
           : Promise.resolve(""),
@@ -87,14 +89,20 @@ export async function POST(request: NextRequest) {
       const folder = path.split("/")[1] ?? ""
       const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
       const fallbackName = (path.split("/")[2] ?? "").replace(/\.json$/, "")
+      const backupOnly = backupOnlyRestoreMessage(folder)
+      if (backupOnly) return { path, folder: type?.folder ?? folder, name: fallbackName, blocker: backupOnly, replaceBlocker: backupOnly }
       if (!type) return { path, folder, name: fallbackName, blocker: "This backup file is not an Intune type TenuVault can restore.", replaceBlocker: "This type cannot be replaced." }
-      if (type.volume === "large") return { path, folder: type.folder, name: fallbackName, blocker: type.limitation ?? "This inventory cannot be restored.", replaceBlocker: type.limitation ?? "This inventory cannot be restored." }
+      if (type.volume === "large") {
+        const blocker = type.limitation ?? "This inventory cannot be restored."
+        return { path, folder: type.folder, name: fallbackName, blocker, replaceBlocker: blocker }
+      }
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(path)}`, {
         headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
       })
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }
       const snapshot = (await response.json()) as Item
-      const item: PreviewItem = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot), ...restoreCapabilities(type, snapshot) }
+      const details = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot) }
+      const item: PreviewItem = { ...details, ...restoreCapabilities(type, snapshot) }
       if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item
       try {
