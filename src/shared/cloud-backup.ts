@@ -151,8 +151,8 @@ export function parseCloudStatus(value: unknown, tenantId: string, auditStatus?:
 /** The first runbook that writes plain JSON and reads no Key Vault. */
 export const PLAIN_CLOUD_RUNBOOK = "1.2.0"
 
-/** The first runbook that verifies policy details and records comparison coverage. */
-export const COVERAGE_CLOUD_RUNBOOK = "1.6.0"
+/** The minimum runbook for the 0.6 comparison coverage updates. */
+export const COVERAGE_CLOUD_RUNBOOK = "1.6.1"
 
 /** Whether the reported runbook predates the minimum version. Unknown versions are not flagged. */
 export function cloudRunbookNeedsUpgrade(version: string, minimum = COVERAGE_CLOUD_RUNBOOK): boolean {

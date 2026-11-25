@@ -257,7 +257,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
 
-- **Azure backup coverage.** Run the cloud backup setup script again with the existing values to deploy backup runbook 1.6.0. This version verifies policy details and records incomplete reads so change reports can qualify comparisons. The Schedule tab prompts for an update when the last run reports an older version. The setup keeps its existing audit capability threshold of 1.5.0.
+- **Azure backup coverage.** Run the cloud backup setup script again with the existing values to deploy backup runbook 1.6.1. This version verifies policy details and records incomplete reads so change reports can qualify comparisons. The Schedule tab prompts for an update when the last run reports a version earlier than 1.6.1. The audit capability threshold remains 1.5.0.
 
 - Comparisons of pre-0.6 backups continue to show deletions for types with no recorded failure. An older backup with an unassigned read failure adds a warning about those deletions. Backups that record per-type outcomes need a complete read for each compared type.
 
