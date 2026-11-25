@@ -56,7 +56,7 @@ TenuVault talks to its own server, tenuvault.com, to check your license, to ask 
 | TenuVault can see | When |
 | --- | --- |
 | Your license key | When this machine activates, refreshes or releases a key. Community sends no key. |
-| Your tenant ID | Each time a tenant is activated or refreshed. |
+| Your tenant ID or its SHA-256 hash | Key activation and refresh send the hash when the license service advertises hash support and a recent Microsoft ID token is available as proof. Otherwise the request sends the original tenant ID. The ID token itself contains the original tenant ID. |
 | The client ID of your app registration | When a license key is activated or refreshed for a tenant you are signed in to, so the license can be shared with that tenant's other admins. |
 | A random installation ID | Each activation and refresh. It is generated on your machine and identifies this installation, not you. |
 | Your operating system (Windows or macOS) and the TenuVault version | When a tenant is activated, and with organization license checks. The App Backup capture check also names them, in its standard `User-Agent` header. |
