@@ -1,5 +1,5 @@
 import { TenantConnectionSettings } from "../components/TenantConnectionSettings"
-import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, sharedSignInMethod } from "../../shared/tenant-connection"
 import { IdentityRestoreSafety } from "../components/IdentityRestoreSafety"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
@@ -412,7 +412,7 @@ export function ProxySignInSettings() {
   )
 }
 
-function TenantSettings({ active }: { active: boolean }) {
+export function TenantSettings({ active }: { active: boolean }) {
   const { hash } = useLocation()
   const [params] = useSearchParams()
   const { confirm, confirmDialog } = useConfirm()
@@ -432,8 +432,14 @@ function TenantSettings({ active }: { active: boolean }) {
     const { tenantId, appId } = tenant.credentials!
     setBusy(tenantId)
     try {
-      const account = await bridge.auth.reauthenticate(tenantId, appId)
-      toast(`Signed in as ${account.username}.`, "success")
+      if (sharedSignInMethod(appId) === "tenuvaultApp") {
+        const outcome = await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
+        if ("error" in outcome) throw new Error(outcome.error.message)
+        toast("TenuVault app permissions verified.", "success")
+      } else {
+        const account = await bridge.auth.reauthenticate(tenantId, appId)
+        toast(`Signed in as ${account.username}.`, "success")
+      }
       refresh()
     } catch (error) {
       toast(error instanceof Error ? error.message : "Sign-in failed.", "error")
