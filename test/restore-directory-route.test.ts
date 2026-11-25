@@ -29,7 +29,7 @@ it("refuses another tenant, malformed stage, bulk paths and unrelated types", as
   expect(execute).not.toHaveBeenCalled()
   expect((await POST(request({ ...base, stage: "all" }))).status).toBe(400)
   expect((await POST(request({ ...base, path: [path] }))).status).toBe(400)
-  expect((await POST(request({ ...base, path: "backup/Organization/o.json" }))).status).toBe(409)
+  expect((await POST(request({ ...base, path: "backup/Organization/o.json" }))).status).toBe(422)
 })
 it("leaves directory restore ungated and requires first-write acknowledgement only for execution", () => {
   expect(requiredFeatures("/api/restore-directory", base)).toEqual([])

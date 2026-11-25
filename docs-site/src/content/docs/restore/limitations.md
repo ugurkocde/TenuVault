@@ -19,12 +19,12 @@ Most Intune items restore directly from a backup. A few cannot, because Intune d
 
 ## Items that cannot be restored
 
-The **Backup & Restore** configuration wizard marks these items as **Cannot be restored** (or greys them out on **Choose what to restore**) and shows the reason under the item.
+The **Backup & Restore** configuration wizard disables selection for backup-only types and shows **Restore of this item type comes in a later version**. This includes Entra device registration and MDM and MAM enrollment policies. For supported types, the wizard explains when a particular snapshot or restore mode is unavailable.
 
 | Item | Reason shown | What to do |
 | --- | --- | --- |
 | Apps that use an installer file, such as Win32, line-of-business and MSI apps | "Intune does not let apps download installer files. Upload the installer again to restore this app." | This message applies to the metadata-only restore wizard. For a supported Win32 app captured earlier, use [App Backup's restore flow](/apps/app-backup/#restore-to-the-same-or-another-tenant). Otherwise obtain the original installer from its trusted source and upload it through Intune. |
-| Apple automated device enrollment tokens and profiles | "The Apple token must be uploaded again in Intune. Its enrollment profiles are kept for reference." | Renew or upload the token through Apple Business Manager or Apple School Manager and Intune. Use the backed-up profiles as a reference. |
+| Apple automated device enrollment tokens and profiles | "Restore of this item type comes in a later version." | Renew or upload the token through Apple Business Manager or Apple School Manager and Intune. Use the backed-up profiles as a reference. |
 | Windows Autopilot devices that are not registered in the tenant, and every Autopilot device with **Create copies** or **Copy to other tenants instead** | "This device is not registered in Windows Autopilot in this tenant. Backups cannot include its hardware hash, so it cannot be registered again from a backup: import it again with its hardware hash, then restore it to bring back its group tag, user and device name." | Import the device again in Intune with its hardware hash, from the file you imported it with or from your OEM or reseller. Then restore it with **Replace in place**: TenuVault finds it by its serial number and puts its group tag, user and device name back. |
 | Device configuration profiles with a masked OMA-URI secret | "This backup holds a masked OMA-URI value (****). Create a new backup to restore it; restoring would send **** to devices." | Run a new backup, then restore from it. |
 | The tenant default enrollment configuration | "This is the tenant default. Restore updates it in place." | Use **Replace in place**. The default cannot be copied. |

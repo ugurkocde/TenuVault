@@ -243,6 +243,33 @@ it("reloads the open approval list after consecutive restores with the same resu
   }
 })
 
+it("disables a backup-only Entra row even when preview provides no blocker", async () => {
+  const path = "backup-1/DeviceRegistrationPolicy/registration.json"
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith("/api/list-backup-contents")) return Response.json({ content: { groups: [
+      { folder: "DeviceRegistrationPolicy", label: "Device registration policy", area: "Tenant settings", policies: [{ path }] },
+    ] } })
+    if (String(input).endsWith("/api/restore-preview")) return Response.json({ items: [{ path, name: "Contoso device registration" }] })
+    return Response.json({})
+  })
+  vi.stubGlobal("fetch", fetcher)
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container)
+  roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    service: "entra", tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 1, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  await act(async () => buttonNamed(container, "Device registration policy")!.click())
+  expect(itemBoxes(container).at(0)?.disabled).toBe(true)
+  expect(container.textContent).toContain("Restore of this item type comes in a later version")
+  expect(buttonNamed(container, "Review this configuration")).toBeUndefined()
+  expect(buttonNamed(container, "Next")?.disabled).toBe(true)
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/api/restore-configuration"))).toBe(false)
+})
+
 it("limits restore lists and preview reads to the selected service", async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).endsWith("/api/list-backup-contents")) return Response.json({ content: { groups: [

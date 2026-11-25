@@ -1,3 +1,4 @@
+import { DEFERRED_RESTORE_MESSAGE } from "../src/shared/intune/directory-review-folders"
 import { moduleForFolder, restoreAccessGuidance } from "../src/shared/services/modules"
 import { createHash } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -333,10 +334,10 @@ describe("a test-only type, as the new services will add them", () => {
     world(TYPE)
     const contents = (await (await listBackupContents(post("list-backup-contents", { ...credentials, subscriptionId: "sub", resourceGroupName: "rg", backupId: BACKUP }))).json()) as { content: { groups: Array<{ folder: string; limitation?: string }> } }
     expect(contents.content.groups).toMatchObject([{ folder: "AuthenticationFlowsPolicy", limitation: NOT_WRITTEN }])
-    // With and without a look at the live object, which is read and never written.
+    // The live option also reports the backup-only classification.
     for (const live of [false, true]) {
       const preview = (await (await restorePreview(post("restore-preview", { ...credentials, backupId: BACKUP, paths: [fileOf(TYPE)], live }))).json()) as { items: Array<{ blocker?: string; replaceBlocker?: string }> }
-      expect(preview.items).toMatchObject([{ blocker: NOT_WRITTEN, replaceBlocker: NOT_WRITTEN }])
+      expect(preview.items).toMatchObject([{ blocker: DEFERRED_RESTORE_MESSAGE, replaceBlocker: DEFERRED_RESTORE_MESSAGE }])
     }
   })
 
