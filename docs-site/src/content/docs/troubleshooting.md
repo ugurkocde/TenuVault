@@ -78,7 +78,7 @@ If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration
 
 ### Start now sign-in
 
-Start now uses existing browser sessions and permissions. If TenuVault asks you to sign in first, select **Open Microsoft sign-in**. Sign in to the Microsoft Intune admin center with your work account in the default browser, return to TenuVault and select **Try again**. If consent is required, open **Settings > Sign-in and access** and select **Upgrade to the TenuVault app** when available, or **Use your own app registration**.
+Start now uses existing browser sessions and permissions. If TenuVault asks you to sign in first, select **Open Microsoft sign-in**. Sign in to the Microsoft Intune admin center with your work account in the default browser, return to TenuVault and select **Try again**. If consent is required, choose **Your own app registration** in setup or select **Use your own app registration** in **Settings > Sign-in and access** for an existing tenant.
 
 | What you see | What to do |
 | --- | --- |
@@ -94,39 +94,9 @@ Start now uses existing browser sessions and permissions. If TenuVault asks you 
 | Graph HTTP 403 | Check **Services and permissions** for the affected backup types. If the scope is present, ask your administrator to check your role. If the scope is missing, choose another sign-in method. |
 | Intune is not licensed | Check whether the tenant has an Intune license. An unavailable service has no verified backup coverage. |
 
-Microsoft can show a refusal on its own page without returning to TenuVault. Cancel the waiting sign-in and select another method. If Start now is disabled by the license service, the other permitted sign-in methods remain available.
+Microsoft can show a refusal on its own page without returning to TenuVault. Cancel the waiting sign-in and select another method. If Start now is unavailable, choose **Your own app registration**.
 
 [Microsoft Entra sign-in error reference](https://learn.microsoft.com/en-us/entra/identity-platform/reference-error-codes)
-
-## TenuVault app consent
-
-When this connection method is enabled, use **Sign-in and access** to review the pack returned by Microsoft. **Check again** requests a fresh token and checks the pack's scopes. A browser returning to TenuVault after admin consent only confirms that Microsoft returned a response.
-
-| Code or refusal | Next step |
-| --- | --- |
-| `AADSTS65001` | Ask a tenant administrator to approve the missing permission pack. |
-| `AADSTS65004` | Consent was declined. Try again or send the pack to your administrator. |
-| `AADSTS90094` | An administrator must approve this pack. Use Send to my admin. |
-| `AADSTS90095` | Choose the permission pack and select **Request approval**. |
-| `AADSTS50105` | Ask your Entra administrator to assign your account to the TenuVault enterprise app. |
-| `AADSTS53000` | Use a device that meets your tenant's compliance requirements. |
-| `AADSTS53001` | Use a device joined to the domain required by your tenant. |
-| `AADSTS53003` | Ask your Entra administrator to identify the Conditional Access policy in the sign-in logs. |
-| `AADSTS50076` | Sign in again and complete multifactor authentication. |
-| `AADSTS50079` | Register for multifactor authentication, then sign in again. |
-| `AADSTS700016` | Confirm the tenant ID and ask your administrator to check whether the TenuVault enterprise app is available. |
-| `AADSTS500011` | Ask your administrator to check that the API named in the pack is available in this tenant. |
-| `AADSTS50011` | Contact TenuVault support to check the registered redirect URI. |
-| `AADSTS7000218` | Contact TenuVault support to check the public-client configuration. |
-| `AADSTS50020` | Sign in with an account that belongs to this tenant or has accepted a guest invitation. |
-| `AADSTS90072` | Ask your administrator to invite this account to the tenant or sign in with a tenant account. |
-| `AADSTS650057` | Ask your administrator to check the API permissions for this pack, then try again. |
-| `AADSTS7000112` | Ask your administrator whether the TenuVault enterprise app can be enabled for sign-in. |
-| `AADSTS7000229` | Ask your administrator to approve the TenuVault app in this tenant. |
-| `AADSTS90002` | Check the tenant ID and try again. |
-| `AADSTS900023` | Check the tenant ID and try again. |
-| Microsoft Graph HTTP 403 | Ask your administrator to check your Microsoft role for this service. The permission pack alone does not grant that role. |
-| Intune not licensed | Check the tenant's Intune license and the account's Intune access before trying again. |
 
 ### Read the connection health report
 

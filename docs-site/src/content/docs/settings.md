@@ -30,8 +30,6 @@ If no tenant is connected, the card shows **No tenants yet.** with a link to **S
 | **Sign in** / **Sign in again** | Opens a Microsoft sign-in for the tenant, pre-filled with the account last used. You must sign in to the same tenant; otherwise TenuVault shows **You signed in to a different tenant. Sign in with an account from this tenant.** Signing in again also rechecks the tenant's license. |
 | **Change storage** | Opens **Backup storage for &lt;tenant&gt;**, where you choose between **This device, encrypted** and **Your Azure storage account**. For Azure, **Save** is available once **Check access** shows **Access confirmed**. |
 
-For a tenant connected with the TenuVault app, **Sign in** and **Sign in again** verify the permission packs for its configured services and storage. If an administrator needs to approve permissions, select **Review permission packs**.
-
 ### Change storage
 
 1. Select **Change storage** for the tenant.

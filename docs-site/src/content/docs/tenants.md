@@ -61,8 +61,7 @@ Each tenant shows **X of Z** backup types for the services it has enabled. Expan
 | Entra ID | Shows the count for selected Entra ID configuration types, including Conditional Access when enabled. |
 | Intune | Shows the count for selected Intune configuration types. |
 
-* **Start now** opens sign-in upgrade options for missing permissions. If the service needs a license or setup, check the service in Microsoft 365.
-* **TenuVault app** opens sign-in settings so you can add the relevant permission pack or send it to your administrator.
+* **Start now** offers a switch to your own app registration for missing permissions. If the service needs a license or setup, check the service in Microsoft 365.
 * **Your own app registration** opens **Services and permissions** for that tenant to review and repair missing permissions.
 
 For a role refusal, ask your administrator to check your access to the affected service. For unknown coverage, use **Check again** in **Settings > Services and permissions** and run a backup to verify the read.
@@ -213,7 +212,7 @@ Existing backups are kept in their storage location, and nothing in the tenant i
 
 ## Share your license with other admins
 
-If a tenant is licensed with your license key, the **Tenants** card on the **License** page shows **Let other admins in this tenant use this license** for it. When it is on, anyone who signs in to that tenant with the same app registration is licensed automatically, and your key stays on your machine. If TenuVault asks you to, sign in to the tenant again so it can share the license. See [Activate and manage your license](/licensing/manage/).
+If a tenant is licensed with your license key, the **Tenants** card on the **License** page shows **Let other admins in this tenant use this license** for it. When it is on, anyone who signs in to that tenant with the same app registration is licensed automatically, and your key stays on your machine. When the license service supports Start now sharing, turn on **Let admins who sign in with Start now use this license** after enabling tenant sharing. If TenuVault asks you to, sign in to the tenant again so it can share the license. See [Activate and manage your license](/licensing/manage/).
 
 ## Plan requirements
 
@@ -236,4 +235,4 @@ See [Plans and features](/licensing/) for the full comparison.
 
 Tenants connected with the original setup keep their own app registration and existing backup choices. If **Change app registration** appears for a tenant under **Settings > Sign-in**, you can sign in with a different app registration for the same tenant. TenuVault checks the tenant ID and permissions before saving the change. Your backups, history, schedules, settings and trial remain with the tenant. If you use an organization license, ask the key holder to share it from the new app registration. TenuVault keeps the cached license usable until it expires and checks for sharing during license checks. The license service must support the shared sign-in client for your tenant before you can renew through that client.
 
-Before downgrading to 0.5.x, switch to your own app registration in 0.6 if the tenant has only used Start now or the TenuVault app. If you already downgraded, return to 0.6 to recover the connection. Removing the tenant in 0.5.x deletes its backup schedule.
+Before downgrading to 0.5.x, switch to your own app registration in 0.6 if the tenant has only used Start now. If you already downgraded, return to 0.6 to recover the connection. Removing the tenant in 0.5.x deletes its backup schedule.
