@@ -376,7 +376,7 @@ export function saveVersion(deps: FeatureDeps, tenantId: string, id: string, inp
  * different platform or template are left out and reported. Deploying a baseline of another
  * tenant needs that tenant in `targetTenants`; both tenants need an active Pro or MSP entitlement, including Pro trials.
  */
-export async function deployVersion(deps: FeatureDeps, context: { tenantId: string; plan: Plan; targetTenants: string[] }, input: { baselineId: string; sourceTenantId: string | null; version: number | null; policyKeys: string[] | null; title: string | null; ticket: string | null }, actor: Actor): Promise<{ deployment: Stored<DeploymentRecord>; changeSet: Stored<ChangeSetRecord> }> {
+export async function deployVersion(deps: FeatureDeps, context: { tenantId: string; targetTenants: string[] }, input: { baselineId: string; sourceTenantId: string | null; version: number | null; policyKeys: string[] | null; title: string | null; ticket: string | null }, actor: Actor): Promise<{ deployment: Stored<DeploymentRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const target = context.tenantId
   const owner = input.sourceTenantId && input.sourceTenantId.toLowerCase() !== target ? requireSourceTenant({ ...context, deps }, input.sourceTenantId) : target
   const baseline = getBaseline(deps, owner, input.baselineId)
