@@ -1,4 +1,4 @@
-import { DEFERRED_RESTORE_MESSAGE } from "../src/shared/intune/directory-review-folders"
+import { DEFERRED_RESTORE_MESSAGE, DIRECTORY_REVIEW_FOLDERS } from "../src/shared/intune/directory-review-folders"
 import { moduleForFolder, restoreAccessGuidance } from "../src/shared/services/modules"
 import { createHash } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -45,6 +45,7 @@ const OTHER_TENANT = "22222222-2222-2222-2222-222222222222"
 const BACKUP = "backup-2026-11-10-020000"
 const OBJECT = "33333333-3333-4333-8333-333333333333"
 const NOT_WRITTEN = "TenuVault backs this type up and compares it, and never writes it to a tenant."
+const routeBlocker = (type: IntuneType, reason: string) => DIRECTORY_REVIEW_FOLDERS.includes(type.folder) ? reason : DEFERRED_RESTORE_MESSAGE
 
 const hash = (snapshot: Item) => createHash("sha256").update(JSON.stringify(comparableSnapshot(snapshot))).digest("base64").slice(0, 22)
 const snapshotOf = (type: IntuneType): Item => ({ id: type.singleton?.id ?? OBJECT, [type.nameKey]: "Example", displayName: "Example" })
@@ -101,28 +102,28 @@ async function revert(type: IntuneType, action: "revert" | "restore"): Promise<{
 const PATHS: Array<{ name: string; where: string; refuses: (type: IntuneType, reason: string) => Promise<void> }> = [
   {
     name: "restore as a copy",
-    where: "restore-backup route > Restorer.restore (create)",
-    refuses: async (type, reason) => expect(await restore(type, { mode: "copy", assignments: true })).toMatchObject({ success: false, action: "skipped", error: reason }),
+    where: "restore-backup route",
+    refuses: async (type, reason) => expect(await restore(type, { mode: "copy", assignments: true })).toMatchObject({ success: false, action: "skipped", error: routeBlocker(type, reason) }),
   },
   {
     name: "restore in place over the live object",
-    where: "restore-backup route > Restorer.restore (update)",
-    refuses: async (type, reason) => expect(await restore(type, { mode: "replace", assignments: true })).toMatchObject({ success: false, action: "skipped", error: reason }),
+    where: "restore-backup route",
+    refuses: async (type, reason) => expect(await restore(type, { mode: "replace", assignments: true })).toMatchObject({ success: false, action: "skipped", error: routeBlocker(type, reason) }),
   },
   {
     name: "copy to another tenant",
-    where: "restore-backup route, targetTenants > Restorer.restore (cross-tenant create)",
-    refuses: async (type, reason) => expect(await restore(type, { mode: "copy", assignments: false, targetTenants: [{ tenantId: OTHER_TENANT, appId: OBJECT }] })).toMatchObject({ success: false, action: "skipped", error: reason }),
+    where: "restore-backup route, targetTenants",
+    refuses: async (type, reason) => expect(await restore(type, { mode: "copy", assignments: false, targetTenants: [{ tenantId: OTHER_TENANT, appId: OBJECT }] })).toMatchObject({ success: false, action: "skipped", error: routeBlocker(type, reason) }),
   },
   {
     name: "revert a drifted object to its backup",
-    where: "revert-policy route, action revert > Restorer.restore (update)",
-    refuses: async (type, reason) => expect(await revert(type, "revert")).toMatchObject({ error: reason }),
+    where: "revert-policy route, action revert",
+    refuses: async (type, reason) => expect(await revert(type, "revert")).toMatchObject({ error: routeBlocker(type, reason) }),
   },
   {
     name: "restore a drifted object as a copy",
-    where: "revert-policy route, action restore > Restorer.restore (create)",
-    refuses: async (type, reason) => expect(await revert(type, "restore")).toMatchObject({ error: reason }),
+    where: "revert-policy route, action restore",
+    refuses: async (type, reason) => expect(await revert(type, "restore")).toMatchObject({ error: routeBlocker(type, reason) }),
   },
   {
     name: "the restore plan builders",
@@ -308,6 +309,67 @@ describe("a type without a restore capability is refused by every path that can 
   })
 })
 
+describe("backup-only requests", () => {
+  const type = typeForFolder("MdmEnrollmentPolicies")!
+  const path = fileOf(type)
+
+  it.each(["revert", "restore"] as const)("refuses drift %s before requesting tokens", async (action) => {
+    const fetch = vi.fn(async () => new Response(null, { status: 403 }))
+    vi.stubGlobal("fetch", fetch)
+
+    const response = await revert(type, action)
+    expect(fetch).not.toHaveBeenCalled()
+    expect(response).toEqual({ status: 422, error: DEFERRED_RESTORE_MESSAGE })
+  })
+
+  it("skips a backup-only selection before requesting any token", async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 403 }))
+    vi.stubGlobal("fetch", fetch)
+
+    const result = await restore(type, {})
+    expect(fetch).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ path, success: false, action: "skipped", error: DEFERRED_RESTORE_MESSAGE })
+  })
+
+  it("skips backup-only files in a mixed selection while restoring the supported files", async () => {
+    const supported = typeForFolder("DeviceCategories")!
+    const seen = world(supported)
+    const response = await restoreBackup(post("restore-backup", {
+      ...credentials, backupId: BACKUP, restoreType: "selective",
+      selectedPolicies: [{ path }, { path: fileOf(supported) }],
+    }))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      success: true,
+      details: {
+        restoredCount: 1, skippedCount: 1, failedCount: 0,
+        results: [
+          expect.objectContaining({ path: fileOf(supported), success: true }),
+          expect.objectContaining({ path, action: "skipped", error: DEFERRED_RESTORE_MESSAGE }),
+        ],
+      },
+    })
+    expect(writes(seen)).toEqual(["POST /beta/deviceManagement/deviceCategories"])
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith(path))).toBe(false)
+  })
+
+  it("shows the preview blocker without downloading a backup-only snapshot", async () => {
+    const seen = world(type)
+    const response = await restorePreview(post("restore-preview", {
+      ...credentials, backupId: BACKUP, paths: [path], live: true,
+    }))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      backupId: BACKUP,
+      items: [{ path, folder: type.folder, name: "Example", blocker: DEFERRED_RESTORE_MESSAGE, replaceBlocker: DEFERRED_RESTORE_MESSAGE }],
+    })
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith(path))).toBe(false)
+    expect(seen.graph).toEqual([])
+  })
+})
+
 describe("a test-only type, as the new services will add them", () => {
   const TYPE = testType("AuthenticationFlowsPolicy", "policies/authenticationFlowsPolicy", { apiVersion: "v1.0", headers: { ConsistencyLevel: "eventual" } })
   let unregister: () => void
@@ -325,8 +387,8 @@ describe("a test-only type, as the new services will add them", () => {
   it("is refused from an imported backup as from any other", async () => {
     // What an import adds to the manifest (see importArchive).
     const seen = world(TYPE, { SourceTenantId: OTHER_TENANT, Import: { sha256: "0".repeat(64), reviewedAt: "2026-11-10T02:00:00Z", provenance: "User-reviewed ZIP; source identity is not cryptographically verified" } })
-    expect(await restore(TYPE, { mode: "copy", assignments: false })).toMatchObject({ success: false, action: "skipped", error: NOT_WRITTEN })
-    expect(await restore(TYPE, { mode: "replace", assignments: false })).toMatchObject({ success: false, action: "skipped", error: NOT_WRITTEN })
+    expect(await restore(TYPE, { mode: "copy", assignments: false })).toMatchObject({ success: false, action: "skipped", error: DEFERRED_RESTORE_MESSAGE })
+    expect(await restore(TYPE, { mode: "replace", assignments: false })).toMatchObject({ success: false, action: "skipped", error: DEFERRED_RESTORE_MESSAGE })
     expect(seen.graph).toEqual([])
   })
 

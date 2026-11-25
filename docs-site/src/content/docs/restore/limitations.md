@@ -19,7 +19,7 @@ Most Intune items restore directly from a backup. A few cannot, because Intune d
 
 ## Items that cannot be restored
 
-The **Backup & Restore** configuration wizard disables selection for backup-only types and shows **Restore of this item type comes in a later version**. This includes Entra device registration and MDM and MAM enrollment policies. For supported types, the wizard explains when a particular snapshot or restore mode is unavailable.
+The **Backup & Restore** configuration wizard disables selection for backup-only types and shows **Restore of this item type comes in a later version**. This includes Entra device registration and MDM and MAM enrollment policies. Restore previews show the backup-only message without opening the snapshot, and selective restore requests skip those items. For supported types, the wizard explains when a particular snapshot or restore mode is unavailable.
 
 | Item | Reason shown | What to do |
 | --- | --- | --- |

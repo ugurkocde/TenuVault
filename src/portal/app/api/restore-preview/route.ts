@@ -90,9 +90,10 @@ export async function POST(request: NextRequest) {
       const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
       const fallbackName = (path.split("/")[2] ?? "").replace(/\.json$/, "")
       const backupOnly = backupOnlyRestoreMessage(folder)
-      if (!type) return { path, folder, name: fallbackName, blocker: backupOnly ?? "This backup file is not an Intune type TenuVault can restore.", replaceBlocker: backupOnly ?? "This type cannot be replaced." }
+      if (backupOnly) return { path, folder: type?.folder ?? folder, name: fallbackName, blocker: backupOnly, replaceBlocker: backupOnly }
+      if (!type) return { path, folder, name: fallbackName, blocker: "This backup file is not an Intune type TenuVault can restore.", replaceBlocker: "This type cannot be replaced." }
       if (type.volume === "large") {
-        const blocker = backupOnly ?? type.limitation ?? "This inventory cannot be restored."
+        const blocker = type.limitation ?? "This inventory cannot be restored."
         return { path, folder: type.folder, name: fallbackName, blocker, replaceBlocker: blocker }
       }
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(path)}`, {
@@ -101,7 +102,6 @@ export async function POST(request: NextRequest) {
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }
       const snapshot = (await response.json()) as Item
       const details = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot) }
-      if (backupOnly) return { ...details, blocker: backupOnly, replaceBlocker: backupOnly }
       const item: PreviewItem = { ...details, ...restoreCapabilities(type, snapshot) }
       if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item
