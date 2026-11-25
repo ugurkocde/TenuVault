@@ -1483,6 +1483,12 @@ describe("sign-in method wizard", () => {
     await act(async () => button(container, "Sign in with Microsoft")!.click())
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Choose the TenuVault app or use your own app registration.")
     expect(button(container, "Open Microsoft sign-in")).toBeUndefined()
+    // Trying again cannot help, so the primary action is another method.
+    const primary = button(container, "Use your own app registration")
+    expect(primary).toBeDefined()
+    expect(container.querySelector('[role="alert"]')?.className).not.toContain("text-red-700")
+    await act(async () => primary!.click())
+    expect(container.textContent).toContain("Create your TenuVault app registration")
   })
 
   it("starts in the signed-in user's tenant by default and shows Microsoft's decline code", async () => {

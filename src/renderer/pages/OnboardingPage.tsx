@@ -108,6 +108,8 @@ export default function OnboardingPage() {
   const [retryTenant, setRetryTenant] = useState<string>()
   const [publicCode, setPublicCode] = useState("")
   const needsBrowserSignIn = method === "graphCli" && publicCode === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED
+  // Start now cannot work in this tenant (for example no existing grant): trying again cannot help, so the next step is another method.
+  const startNowRefused = method === "graphCli" && Boolean(publicCode) && !needsBrowserSignIn && publicCode !== "AADSTS65004" && publicCode !== "cancelled"
   const [consentBusy, setConsentBusy] = useState<"open" | "handoff" | null>(null)
   const [consentStatus, setConsentStatus] = useState("")
   const sharedDraft = useRef<string | undefined>(undefined)
@@ -909,7 +911,7 @@ export default function OnboardingPage() {
                 subtitle={publicBusy || consentBusy === "open" || needsBrowserSignIn ? undefined : method === "graphCli"
                   ? "Use existing read access. Nothing is created in your tenant."
                   : "An admin approves read access for TenuVault once."} />
-              {publicError && !needsBrowserSignIn && <div role="alert" className="space-y-1 text-sm text-red-700">
+              {publicError && !needsBrowserSignIn && <div role="alert" className={cn("space-y-1 text-sm", startNowRefused ? "text-foreground" : "text-red-700")}>
                 <p>{publicError}</p>
                 {method === "graphCli" && publicCode.startsWith("AADSTS") && !publicError.includes(publicCode) && <p className="text-xs">{publicCode}</p>}
               </div>}
@@ -918,6 +920,10 @@ export default function OnboardingPage() {
                 ? <BrowserSignInWait kind={consentBusy === "open" ? "consent" : "signin"} cancel={() => void bridge.auth.cancelSignIn()} />
                 : needsBrowserSignIn ? <>
                   <StartNowRecovery centered buttonClassName={onboardingPrimary} onRetry={() => void signInShared()} />
+                  <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={false} expectedTenant={retryTenant} />
+                </> : startNowRefused ? <>
+                  <Button className={onboardingPrimary} onClick={() => void chooseMethod("ownApp")}>Use your own app registration</Button>
+                  <div><button type="button" className={onboardingLink} onClick={() => void signInShared()}>Try again</button></div>
                   <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={false} expectedTenant={retryTenant} />
                 </> : <>
                   <Button className={onboardingPrimary} disabled={Boolean(consentBusy)} onClick={() => void signInShared()}>
