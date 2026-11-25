@@ -511,9 +511,10 @@ Both maintainers have the same rights and follow the same rules; nobody can bypa
 - A stable release promotes the newest nightly's commit, so stable only ships a build nightly
   users already ran. That commit's nightly must also have passed the nightly verification. Any maintainer may start one.
 - Releases only build commits reachable from `main`, and manual runs must be started from `main`.
-- Pull request installers are unsigned and receive no signing credentials. Manual CI builds
-  are also unsigned unless `signed_windows` is explicitly selected. That option uses the
-  release signing credentials and production helper signature guard, verifies both app and
-  helper publishers, and uploads a portable x64 verification ZIP alongside the installers.
-  It does not publish a release. Run it before accepting the signed helper on a test PC:
-  `gh workflow run ci.yml --ref <reviewed-branch> -f signed_windows=true`.
+- Pull request installers are unsigned and receive no signing credentials. For manual CI,
+  select `signed_windows` to verify the signed Windows app and capture helper and upload a
+  portable x64 verification ZIP alongside the installers. Select `signed_macos` to verify
+  Developer ID signatures and notarization and upload both architectures' DMGs and ZIPs.
+  Both options use release signing credentials and deliver the installers through GitHub
+  Actions artifacts. To request both:
+  `gh workflow run ci.yml --ref <reviewed-branch> -f signed_windows=true -f signed_macos=true`.
