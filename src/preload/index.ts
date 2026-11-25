@@ -57,6 +57,7 @@ const bridge: TenuVaultPreloadBridge = {
     wizardPackConsent: (tenantId, choice, packId, action) => invoke("auth:wizardPackConsent", tenantId, choice, packId, action),
     packConsentPlan: tenantId => invoke("auth:packConsentPlan", tenantId),
     packConsent: (tenantId, packId, action) => invoke("auth:packConsent", tenantId, packId, action),
+    azureStoragePackConsent: (tenantId, packId, action, wizardId) => invoke("auth:azureStoragePackConsent", tenantId, packId, action, wizardId),
     restorePackConsent: (tenantId, service, action) => invoke("auth:restorePackConsent", tenantId, service, action),
     switchConnection: (tenantId, target) => invoke("auth:switchConnection", tenantId, target),
     onAppMetadataRemovalChanged: (listener) => subscribe<string>("auth:appMetadataRemovalChanged", listener),
@@ -102,8 +103,9 @@ const bridge: TenuVaultPreloadBridge = {
     openFolder: (tenantId) => invoke("backups:openFolder", tenantId),
     exportRecoveryKey: () => invoke("backups:exportRecoveryKey"),
     importRecoveryKey: (recoveryKey) => invoke("backups:importRecoveryKey", recoveryKey),
-    verifyAzureStorage: (tenantId, clientId, storageAccountName) =>
-      invoke("backups:verifyAzureStorage", tenantId, clientId, storageAccountName),
+    discoverAzureStorage: (tenantId, wizardId) => invoke("backups:discoverAzureStorage", tenantId, wizardId),
+    verifyAzureStorage: (tenantId, clientId, storageAccountName, wizardId) =>
+      invoke("backups:verifyAzureStorage", tenantId, clientId, storageAccountName, wizardId),
     scope: (tenantId) => invoke("backups:scope", tenantId),
     setScope: (tenantId, scope) => invoke("backups:setScope", tenantId, scope),
     failedAttempts: (tenantId) => invoke("backups:failedAttempts", tenantId),

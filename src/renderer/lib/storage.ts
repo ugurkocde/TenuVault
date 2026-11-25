@@ -1,3 +1,5 @@
+import type { AzureStorageAccount } from "../../shared/azure-discovery"
+export type { AzureStorageAccount } from "../../shared/azure-discovery"
 import type { Tenant } from "~/contexts/TenantContext"
 import { DELEGATED_CLIENT_SECRET, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 
@@ -5,13 +7,6 @@ import { DELEGATED_CLIENT_SECRET, LOCAL_STORAGE_PREFIX, localStorageAccountName 
 export type StorageChoice =
   | { kind: "local" }
   | { kind: "azure"; storageAccountName: string; subscriptionId: string; resourceGroupName: string; location: string }
-
-export interface AzureStorageAccount {
-  name: string
-  subscriptionId: string
-  resourceGroup: string
-  location: string
-}
 
 /**
  * Tenant resource fields for a storage choice. Local storage uses placeholder

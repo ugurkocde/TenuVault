@@ -5,6 +5,9 @@ import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
 import { cn } from "~/lib/utils"
 import storageSetupScript from "../../../resources/New-TenuVaultStorage.ps1?raw"
+import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { AZURE_STORAGE_PACKS } from "../../shared/services/permission-packs"
+import { TenuVaultConsent } from "./TenuVaultConsent"
 import { bridge } from "../lib/bridge"
 import { useTenantPlan } from "../lib/license"
 import { useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
@@ -24,6 +27,7 @@ export interface StorageChooserDraft {
 interface StorageChooserProps {
   tenantId: string
   clientId: string
+  wizardId?: string
   localOnly?: boolean
   onboarding?: boolean
   initial?: StorageChoice
@@ -60,7 +64,7 @@ export function azureStorageBlocker(state: {
  * Azure choice is complete once access is confirmed: Azure encrypts the backups at rest and the
  * account's role assignments decide who reads them, so no recovery key is involved.
  */
-export function StorageChooser({ tenantId, clientId, localOnly, onboarding = false, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
+export function StorageChooser({ tenantId, clientId, wizardId, localOnly, onboarding = false, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
   const [kind, setKind] = useState<StorageChoice["kind"]>(initialDraft?.kind ?? initial?.kind ?? "local")
   const [settings, setSettings] = useBackupSettings()
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
@@ -77,6 +81,9 @@ export function StorageChooser({ tenantId, clientId, localOnly, onboarding = fal
   const [verifyError, setVerifyError] = useState("")
   const [verifyAttempt, setVerifyAttempt] = useState(0)
   const [loadAttempt, setLoadAttempt] = useState(0)
+  const sharedApp = clientId.toLowerCase() === TENUVAULT_CLIENT_ID
+  const [azureConsentVerified, setAzureConsentVerified] = useState(false)
+  const needsAzureConsent = sharedApp && !azureConsentVerified
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState("")
   // Community keeps backups on this device; Azure storage is a paid feature.
@@ -87,9 +94,10 @@ export function StorageChooser({ tenantId, clientId, localOnly, onboarding = fal
   const affected = inventory.affected.length > 0
 
   useEffect(() => {
-    if (kind !== "azure" || accounts || community || savedSelected) return
+    if (kind !== "azure" || accounts || community || savedSelected || needsAzureConsent) return
     let active = true
-    listStorageAccounts(tenantId, clientId)
+    const discovery = sharedApp ? bridge.backups.discoverAzureStorage(tenantId, wizardId) : listStorageAccounts(tenantId, clientId)
+    discovery
       .then((list) => {
         if (!active) return
         setAccounts(list)
@@ -103,7 +111,7 @@ export function StorageChooser({ tenantId, clientId, localOnly, onboarding = fal
         if (active) setLoadError(error instanceof Error ? error.message : String(error))
       })
     return () => { active = false }
-  }, [kind, accounts, tenantId, clientId, community, savedSelected, loadAttempt])
+  }, [kind, accounts, tenantId, clientId, wizardId, community, savedSelected, loadAttempt, needsAzureConsent, sharedApp])
 
   useEffect(() => {
     onDraftChange?.({ kind, selectedAccount: selected, verifiedAccount: verifiedFor })
@@ -125,7 +133,7 @@ export function StorageChooser({ tenantId, clientId, localOnly, onboarding = fal
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, selected, verified, accounts, community, savedSelected, savedAzure?.storageAccountName, savedAzure?.subscriptionId, savedAzure?.resourceGroupName, savedAzure?.location])
 
-  const blocker = kind === "local" || savedSelected ? null : azureStorageBlocker({
+  const blocker = kind === "local" || savedSelected ? null : !community && needsAzureConsent ? "Review the Azure permission packs to continue." : azureStorageBlocker({
     community,
     accountsLoaded: Boolean(accounts),
     accountCount: accounts?.length ?? 0,
@@ -163,7 +171,9 @@ export function StorageChooser({ tenantId, clientId, localOnly, onboarding = fal
     setVerifying(true)
     setVerifyError("")
     try {
-      await bridge.backups.verifyAzureStorage(tenantId, clientId, accountName)
+      await (sharedApp
+        ? bridge.backups.verifyAzureStorage(tenantId, clientId, accountName, wizardId)
+        : bridge.backups.verifyAzureStorage(tenantId, clientId, accountName))
       setVerifiedFor(accountName)
     } catch (error) {
       if (selectedRef.current === accountName) {
@@ -180,13 +190,16 @@ export function StorageChooser({ tenantId, clientId, localOnly, onboarding = fal
     setVerifying(true)
     setVerifyError("")
     setVerifiedFor("")
-    void bridge.backups.verifyAzureStorage(tenantId, clientId, selected).then(() => {
+    const check = sharedApp
+      ? bridge.backups.verifyAzureStorage(tenantId, clientId, selected, wizardId)
+      : bridge.backups.verifyAzureStorage(tenantId, clientId, selected)
+    void check.then(() => {
       if (current) setVerifiedFor(selected)
     }).catch((error: unknown) => {
       if (current) setVerifyError(error instanceof Error ? error.message : String(error))
     }).finally(() => { if (current) setVerifying(false) })
     return () => { current = false }
-  }, [onboarding, kind, community, savedSelected, accounts, selected, tenantId, clientId, verifyAttempt])
+  }, [onboarding, kind, community, savedSelected, accounts, selected, tenantId, clientId, wizardId, sharedApp, verifyAttempt])
 
   const option = (value: StorageChoice["kind"], icon: React.ReactNode, title: string, description: string, locked = false) => (
     <button
@@ -253,7 +266,13 @@ export function StorageChooser({ tenantId, clientId, localOnly, onboarding = fal
         {!onboarding && community && <UpgradeNote feature="azureStorage" />}
         {kind === "azure" && !community && !savedSelected && (
           <div className={cn("space-y-3", onboarding ? "px-4 pb-4" : "ml-14")}>
-            {!accounts && !loadError && (
+            {sharedApp && (needsAzureConsent || loadError || verifyError) && (
+              <TenuVaultConsent tenantId={tenantId} plan={{ packs: AZURE_STORAGE_PACKS }} active storage={{ wizardId, onVerified: () => {
+                setAzureConsentVerified(true)
+                refreshAccounts()
+              } }} />
+            )}
+            {!needsAzureConsent && !accounts && !loadError && (
               <p className="flex items-center gap-2 text-sm text-gray-600">
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading your storage accounts...
               </p>

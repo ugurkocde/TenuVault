@@ -1105,7 +1105,8 @@ export default function OnboardingPage() {
                 key={setup ? `setup:${setup.importId}` : "manual"}
                 tenantId={account.tenantId}
                 clientId={account.clientId}
-                localOnly={method !== "ownApp"}
+                wizardId={sharedSignIn?.id}
+                localOnly={method === "graphCli"}
                 onboarding
                 initial={setup && setup.connection.tenantId === account.tenantId.toLowerCase() ? setup.connection.storage : undefined}
                 onChange={setChoice}

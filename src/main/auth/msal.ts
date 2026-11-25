@@ -20,11 +20,12 @@ import { loopbackSignIn } from "./loopback-sign-in"
 import { deviceCodeSignIn } from "./device-code-sign-in"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { accessTokenClaims, sharedTokenScopes, tokenIdentity } from "./token-identity"
-import { missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
+import { AZURE_STORAGE_PACKS, missingPackScopes, resourcePackScopes, resourceScopes, type PermissionPack } from "../../shared/services/permission-packs"
 import { graphCliSignInFailure } from "./graph-cli-failure"
 import { verifyGraphCliGrant } from "./connection-coverage"
 import { consentIssue } from "./pack-consent"
 import type { PackConsentCode } from "../../shared/pack-consent"
+import type { StoredAccount } from "./stores"
 import type { StagedSignIn } from "./tenant-connections"
 import type { AppDeviceCode } from "../../shared/app-sources/types"
 
@@ -431,6 +432,27 @@ export class AuthManager {
     }
   }
 
+  /** Use only the named Azure pack and the account already selected for this connection. */
+  async azureStorageToken(stored: StoredAccount, cache: ICachePlugin, resource: "management" | "storage"): Promise<string> {
+    const pack = AZURE_STORAGE_PACKS.find(pack => pack.resource === resource)!
+    const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
+    const cached = await this.findAccount(app, stored.homeAccountId)
+    const account = cached && accountForTenant(cached, stored.tenantId)
+    if (!cached || !account) throw new Error("Sign in to the TenuVault app again.")
+    try {
+      const result = await app.acquireTokenSilent({ account: cached, scopes: resourceScopes(resource, pack.scopes), authority: authority(stored.tenantId), forceRefresh: true })
+      const identity = tokenIdentity(result?.accessToken ?? "")
+      const sameConnection = !identity.decoded || (identity.tenantId === stored.tenantId && identity.clientId === TENUVAULT_CLIENT_ID)
+      if (sameConnection && result?.accessToken && matchesSelectedAccount(account, result) &&
+        !missingPackScopes(pack.scopes, sharedTokenScopes(result.accessToken, this.tokenGrants.get(app)?.forResult(result).grantedScopes)).length) {
+        return result.accessToken
+      }
+    } catch {
+      // This operation never opens a browser. The pack dialog owns interactive consent.
+    }
+    throw new Error(`Check the ${pack.label} permission pack again with your signed-in account.`)
+  }
+
   /** Force a silent acquisition in a disposable cache. This never opens a consent prompt. */
   async temporaryGraphToken(tenant: string, cache: ICachePlugin, scopes: readonly string[]): Promise<SilentTokenResult> {
     const stored = this.host.accountStore.get(tenant)
@@ -725,7 +747,7 @@ export class AuthManager {
 }
 
 /** Refreshes can omit identity fields. Compare the ones Microsoft supplied to the selected account. */
-function matchesSelectedAccount(account: AccountInfo, result: AuthenticationResult): boolean {
+function matchesSelectedAccount(account: Pick<AccountInfo, "tenantId" | "homeAccountId" | "localAccountId" | "idTokenClaims">, result: AuthenticationResult): boolean {
   const matches = (value: unknown, expected: string | undefined) =>
     value === undefined || value === "" || value === expected ||
     (isGuid(value) && isGuid(expected) && normalizeGuid(value) === normalizeGuid(expected))

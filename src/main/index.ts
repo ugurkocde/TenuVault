@@ -1,9 +1,10 @@
+import { discoverAzureResources } from "../shared/azure-discovery"
 import { ORGANIZATIONS, resolveOnboardingTenant } from "./auth/onboarding-tenant"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
 import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
 import { ConnectionSwitchError } from "./auth/switch-failure"
-import { APPLICATION_METADATA_RESTORE_PACK, tenantPermissionPacks, resourcePackScopes, resourceScopes, servicePack, isPackWriteScope } from "../shared/services/permission-packs"
+import { APPLICATION_METADATA_RESTORE_PACK, AZURE_STORAGE_PACKS, tenantPermissionPacks, resourcePackScopes, resourceScopes, servicePack, isPackWriteScope } from "../shared/services/permission-packs"
 import type { AuditWatchRecord } from "./features/notifications/model"
 import { DOMAINS } from "./features/domains"
 import { backupStoragePath } from "../shared/backup-storage"
@@ -1791,6 +1792,49 @@ async function bootstrap(): Promise<void> {
       return { result: true }
     } catch (error) { return wizardFailure(error) }
   })
+  // Pending storage uses only these operations. Ordinary tokens and saved permission plans still
+  // follow the current profile until the storage selection is committed.
+  const azureStorageSession = (tenant: string, wizardId: unknown) => {
+    if (wizardId !== undefined) {
+      const staged = wizard.azureStorageSignIn(wizardId, tenant)
+      return staged && { account: staged.account, cache: staged.cacheWrites?.() }
+    }
+    const account = accounts.get(tenant)
+    if (tenantProfile(tenant) && connections.get(tenant)?.method === "tenuvaultApp" && account?.clientId === TENUVAULT_CLIENT_ID) return { account, cache: undefined }
+  }
+  const pendingAzurePlan = async (tenant: string, wizardId: unknown) => {
+    if (wizardId === undefined) return license.requireEntitlement(tenant, { retry: true })
+    if (!license.plan(tenant)) await wizard.checkAzureStorageLicense(wizardId, tenant)
+    return license.plan(tenant)
+  }
+  const azureStorageToken = async (tenantId: unknown, wizardId: unknown, resource: "management" | "storage") => {
+    if (!isGuid(tenantId)) throw new Error("Choose a valid tenant.")
+    const tenant = tenantId.toLowerCase()
+    const before = azureStorageSession(tenant, wizardId)
+    if (!before || !await license.tenuvaultAppEnabled(true)) throw new Error("Sign in to the TenuVault app in this tenant.")
+    const plan = await pendingAzurePlan(tenant, wizardId)
+    if (!plan || !allows(plan, "azureStorage")) throw new PlanRequired("azureStorage")
+    const staged = stageConnectionCache(wizardId === undefined ? cache : { get: key => before.cache?.[key] ?? null }, TENUVAULT_CLIENT_ID)
+    const token = await auth.azureStorageToken(before.account, staged.plugin, resource)
+    if (azureStorageSession(tenant, wizardId)?.account.homeAccountId !== before.account.homeAccountId ||
+      !license.connectMethodEnabledNow("tenuvaultApp")) throw new Error("The sign-in changed. Choose storage again.")
+    return token
+  }
+  handleTrusted("auth:azureStoragePackConsent", async (_event, tenantId: unknown, pack: unknown, action: unknown, wizardId?: unknown) => {
+    const tenant = isGuid(tenantId) ? tenantId.toLowerCase() : ""
+    return packConsent.act(tenant, pack, action, async id => {
+      if (!await license.tenuvaultAppEnabled(true) || !azureStorageSession(id, wizardId)) return null
+      const plan = await pendingAzurePlan(id, wizardId).catch(() => null)
+      return plan && allows(plan, "azureStorage") && azureStorageSession(id, wizardId) ? AZURE_STORAGE_PACKS : null
+    }).finally(returnToApp)
+  })
+  const fetchPendingAzure = withNetworkErrors((input, init) => chromiumFetch(input, { ...init, redirect: "error" }))
+  handleTrusted("backups:discoverAzureStorage", async (_event, tenant, wizardId) => {
+    const token = await azureStorageToken(tenant, wizardId, "management")
+    const result = await discoverAzureResources(fetchPendingAzure, token)
+    if (!result) throw new Error("Failed to access Azure subscriptions")
+    return result.storageAccounts
+  })
   handleTrusted("auth:packConsentPlan", async (_event, tenant: unknown) => {
     const packs = typeof tenant === "string" ? await consentPlan(tenant.toLowerCase()) : null
     return packs ? { packs } : null
@@ -2179,7 +2223,12 @@ async function bootstrap(): Promise<void> {
     checkStore = null
     return backupSettings()
   })
-  handleTrusted("backups:verifyAzureStorage", async (_event, tenantId: string, clientId: string, account: string) => {
+  handleTrusted("backups:verifyAzureStorage", async (_event, tenantId: string, clientId: string, account: string, wizardId?: unknown) => {
+    if (typeof clientId === "string" && clientId.toLowerCase() === TENUVAULT_CLIENT_ID) {
+      if (isLocalAccount(account)) throw new Error("Choose an Azure storage account.")
+      const token = await azureStorageToken(tenantId, wizardId, "storage")
+      return verifyStorageAccess(fetchPendingAzure, account, async () => token)
+    }
     capabilities.requireResource(tenantId, RESOURCE_SCOPES.storage)
     await license.requireEntitlement(tenantId, { retry: true })
     await verifyStorageAccess(bridgedFetch, account, async () =>
