@@ -103,6 +103,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Test release bundle guard
+        run: |
+          npm run build:lab
+          npm run test:release-bundle
+
       - name: Smoke test
         timeout-minutes: 5
         run: xvfb-run -a npm run smoke -- out/smoke

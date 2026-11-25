@@ -1,12 +1,16 @@
 const assert = require("node:assert/strict")
-const { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs")
+const { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs")
 const { tmpdir } = require("node:os")
 const { dirname, join } = require("node:path")
 const { checkReleaseBundle, checkPrivilegedRestoreOff } = require("./check-release-bundle.cjs")
 
+const lab = "out-lab"
+if (!["main/version.json", "main/index.js", "preload/index.cjs", "renderer/index.html"].every(file => existsSync(join(lab, file)))) {
+  console.error("Lab build is missing or incomplete. Run npm run build:lab before npm run test:release-bundle.")
+  process.exit(1)
+}
 checkReleaseBundle("out")
 assert.throws(() => checkReleaseBundle("out", "0.6.0-lab.202611241530"), /lab version cannot be used/)
-const lab = "out-lab"
 const version = JSON.parse(readFileSync(join(lab, "main/version.json"), "utf8"))
 assert.match(version, /^0\.6\.0-lab\.\d{12}$/)
 assert.equal(require("../electron-builder.lab.config.cjs").extraMetadata.version, version)
