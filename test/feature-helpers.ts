@@ -45,7 +45,6 @@ export function fakeDeps(options: { plans?: Record<string, Plan>; graph?: (tenan
       return plan
     },
     proPair: () => true,
-    sameLicense: () => true,
     tenant: profile,
     tenants: () => Object.keys(plans),
     actor: () => ({ id: "admin@contoso.test", name: "Admin" }),
