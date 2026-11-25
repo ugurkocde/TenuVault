@@ -253,7 +253,7 @@ changes reach nightly users first.
 The audit log (viewing, searching, exporting and removing old entries) is Pro and MSP. Every
 plan records events; Community sees a locked preview on the Audit Log page.
 
-## Compatibility notes for the next release
+## Compatibility notes for 0.6.0
 
 Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
 

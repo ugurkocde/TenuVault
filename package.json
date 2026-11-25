@@ -1,7 +1,7 @@
 {
   "name": "tenuvault-desktop",
   "productName": "TenuVault",
-  "version": "0.3.0",
+  "version": "0.6.0",
   "private": true,
   "description": "TenuVault Desktop: back up Intune configuration and Entra ID device and access settings, restore supported policies and detect drift on your machine.",
   "author": "Ugur Koc",
