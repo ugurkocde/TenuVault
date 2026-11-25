@@ -19,7 +19,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { assert, checker, launch, sleep } from "./app.mjs"
+import { assert, checker, launch, openWelcome, sleep } from "./app.mjs"
 import { completeLogin, signInEach } from "./login.mjs"
 import { hidden, hide, maskedCapture, maskPage, matchesTestAccount } from "./secrets.mjs"
 
@@ -44,19 +44,26 @@ async function signInWith(browserName, playwright, secrets) {
   let browser = null
   try {
     app = await launch(appPath, profile, shotsDir)
-    assert(await app.waitForText("Welcome to TenuVault", 60_000), "The welcome screen did not appear.")
+    await openWelcome(app)
     await app.click("Connect your tenant")
-    // Older nightlies have no service-choice step; verify either version's real setup route.
+    // Nightlies can start with service selection, method selection, or the registration form.
     const services = `[...document.querySelectorAll("button")].find(button => button.textContent.trim() === "Continue with Intune")`
-    assert(await app.waitFor(`Boolean(${services}) || document.body.textContent.includes("I already have an app registration")`), "The service choice or tenant connection step did not open.")
+    const ownApp = `document.querySelector('[aria-label="Choose Your own app registration"]')`
+    const registration = `[...document.querySelectorAll("button")].find(button => button.textContent.trim() === "I already have an app registration")`
+    const connect = `Boolean(${ownApp} || ${registration})`
+    assert(await app.waitFor(`Boolean(${services}) || ${connect}`), "The service choice or tenant connection step did not open.")
     if (await app.evaluate(`Boolean(${services})`)) await app.click("Continue with Intune")
-    assert(await app.waitForText("I already have an app registration"), "The tenant setup did not open.")
+    assert(await app.waitFor(connect), "The tenant setup did not open.")
+    await app.evaluate(`${ownApp}?.click()`)
+    assert(await app.waitFor(`Boolean(${registration})`), "The app registration option did not appear.")
+    const alternateRoutes = `[...document.querySelectorAll("details:not([open]) > summary")].find(summary => summary.textContent.trim() === "Can't sign in as an admin here?")`
+    await app.evaluate(`${alternateRoutes}?.click()`)
     await app.click("I already have an app registration")
     assert(await app.waitFor(`Boolean(document.querySelector("input#tenant"))`), "The sign-in step did not open.")
     await app.fill("input#tenant", secrets.TENUVAULT_E2E_TENANT_ID)
     await app.fill("input#clientId", secrets.TENUVAULT_E2E_CLIENT_ID)
     await app.click("Sign in with Microsoft")
-    assert(await app.waitForText("Complete the sign-in in your browser"), "The app did not start the sign-in.")
+    assert(await app.waitFor(`/Complete the sign-in in your browser|Finish signing in in your browser|Waiting for sign-in/.test(document.body.innerText)`), "The app did not start the sign-in.")
 
     // The link the sign-in recovery panel's "Copy sign-in link" copies, for another browser.
     let link = ""

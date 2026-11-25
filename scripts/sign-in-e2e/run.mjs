@@ -156,7 +156,11 @@ async function launchApp(label) {
 
 /** Starts first sign-in from Welcome and returns the address and expected next heading. */
 async function startSignIn(page) {
-  await page.getByRole("button", { name: "Connect your tenant" }).click({ timeout: 30_000 })
+  const splash = page.getByRole("button", { name: "Get started", exact: true })
+  const welcome = page.getByRole("button", { name: "Connect your tenant" })
+  await splash.or(welcome).waitFor({ timeout: 30_000 })
+  if (await splash.isVisible()) await splash.click()
+  await welcome.click({ timeout: 30_000 })
   const waiting = page.getByText(/^(Finish signing in in your browser|Waiting for sign-in)/)
   const check = page.getByRole("heading", { name: /^(Check backup access|You.re ready to back up .+\.|TenuVault can.t read any of the services you picked with this sign-in\.|Sign-in results|Where should backups go\?)$/ })
   const existingRegistration = page.getByRole("button", { name: "I already have an app registration", exact: true })
@@ -214,7 +218,6 @@ async function signInWith(engine, standIn) {
   const app = await launchApp(engine.name)
   let browser
   try {
-    await app.page.getByText("Welcome to TenuVault").waitFor({ timeout: 30_000 })
     const { url, check } = await startSignIn(app.page)
     const port = redirectPort(url)
     assert(await listening(port), "the app's listener is not open while the sign-in waits")
@@ -256,7 +259,6 @@ async function refusals(standIn) {
   const app = await launchApp("refusals")
   let browser
   try {
-    await app.page.getByText("Welcome to TenuVault").waitFor({ timeout: 30_000 })
     const { url } = await startSignIn(app.page)
     const port = redirectPort(url)
     const opened = await openBrowser({ type: chromium }, standIn)

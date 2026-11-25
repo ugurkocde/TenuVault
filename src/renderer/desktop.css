@@ -203,6 +203,69 @@ html:has([data-flow-shell]) {
   .run-overlay, .run-panel, .run-indeterminate, .run-results-reveal { animation: none; }
 }
 
+.tv-splash-screen {
+  --tv-splash-ease: cubic-bezier(0.84, 0, 0.16, 1);
+  --tv-splash-fade: cubic-bezier(0.45, 0, 0.55, 1);
+  --tv-splash-tile-size: clamp(7rem, 15.3vw, 13.75rem);
+  --tv-splash-restore-fill: #f3ede4;
+  grid-template-rows: minmax(0, 1fr) calc(var(--tv-splash-tile-size) * 0.72);
+  transition: opacity var(--tv-splash-exit-duration) var(--tv-splash-fade);
+}
+.tv-splash-exiting { opacity: 0; }
+:root:not(.dark) .tv-splash-screen {
+  --muted-foreground: #6b665f;
+  --tv-splash-restore-fill: #d1baa0;
+}
+.tv-splash-title {
+  font-size: clamp(3.5rem, 5.6vw, 5rem);
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.tv-splash-overlay { opacity: 0; animation: tv-splash-fade-out var(--tv-splash-intro-duration) var(--tv-splash-fade) var(--tv-splash-intro-delay) backwards; }
+.tv-splash-mark { animation: tv-splash-fade-in var(--tv-splash-intro-duration) var(--tv-splash-fade) var(--tv-splash-intro-delay) backwards; }
+.tv-splash-rise { animation: tv-splash-rise 1s var(--tv-splash-ease) calc(var(--tv-splash-content-start) + var(--tv-splash-rise-delay, 0s)) backwards; }
+.tv-splash-second-line { --tv-splash-rise-delay: 0.1s; }
+.tv-splash-subtitle { --tv-splash-rise-delay: 0.2s; }
+.tv-splash-action { --tv-splash-rise-delay: 0.4s; }
+.tv-splash-tiles {
+  display: flex;
+  justify-content: center;
+  gap: clamp(0.625rem, 1.2vw, 1rem);
+}
+.tv-splash-slot {
+  position: relative;
+  flex: 0 0 var(--tv-splash-tile-size);
+  height: var(--tv-splash-tile-size);
+  animation: tv-splash-slide var(--tv-splash-slot-duration) var(--tv-splash-ease) calc(var(--tv-splash-content-start) + var(--tv-splash-slot-delay)) backwards;
+}
+.tv-splash-tile {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #161514;
+}
+.tv-splash-tile svg { width: 38%; height: 38%; translate: 0 -18%; }
+.tv-splash-tile-alternate { transform: scale(0); }
+.tv-splash-tile-circle { border-radius: 50%; }
+.tv-splash-tile-square { border-radius: 1.5rem; }
+.tv-splash-tile-tag {
+  border-radius: 1.5rem;
+  clip-path: polygon(0 0, 68% 0, 71% 1%, 99% 47%, 100% 50%, 99% 53%, 71% 99%, 68% 100%, 0 100%);
+}
+.tv-splash-tile-tag svg { translate: -12% -18%; }
+
+@keyframes tv-splash-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes tv-splash-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tv-splash-rise { from { opacity: 0; transform: translateY(80px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes tv-splash-slide { from { transform: translateY(110%); } to { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .tv-splash-screen, .tv-splash-screen button { transition: none; }
+  .tv-splash-overlay, .tv-splash-mark, .tv-splash-rise, .tv-splash-slot { animation: none; }
+  .tv-splash-tile-primary { transform: none !important; }
+  .tv-splash-tile-alternate { display: none; }
+}
+
 /* Sidebar (components/SidebarNavigation, TenantSwitcher, DesktopLayout's Help menu).
    Folding groups ease their row between full and zero height, after the Details Vault accordion,
    shortened for a sidebar. The rows themselves never fade or blur, so every label in view keeps its

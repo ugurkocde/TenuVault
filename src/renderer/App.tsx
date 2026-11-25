@@ -1,7 +1,7 @@
 import { IntunePageGuard } from "./components/IntunePageGuard"
 import { CommunityTenantPicker } from "./components/CommunityTenantPicker"
 import "./lib/appearance"
-import { lazy, Suspense, useState, type ReactNode } from "react"
+import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react"
 import { QueryClientProvider } from "@tanstack/react-query"
 import { HashRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 import { BackupProgressProvider } from "~/contexts/BackupProgressContext"
@@ -12,6 +12,7 @@ import { Button } from "~/components/ui/button"
 import { DesktopLayout } from "./components/DesktopLayout"
 import { ErrorBoundary, ErrorPanel } from "./components/ErrorBoundary"
 import { ActivationScreen } from "./components/ActivationScreen"
+import { markSplashSeen, shouldShowSplash, SplashScreen } from "./components/SplashScreen"
 import { PlanDialogs } from "./components/PlanDialogs"
 import { DisclaimerHost } from "./components/DisclaimerHost"
 import { ProxySignInHost } from "./components/ProxySignInHost"
@@ -66,7 +67,14 @@ export function LicenseGate({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const { status, error, refresh } = useLicense()
   const tenants = useTenants()
+  const tenantsLoaded = useTenantsLoaded()
   const [signingIn, setSigningIn] = useState(hasOnboardingDraft)
+  // An install that already has a tenant, a license or a setup in progress is past its first start:
+  // remember that, so removing the last tenant or key later never brings the splash back.
+  const established = !!status && tenantsLoaded && !(isUnlicensed(status) && tenants.length === 0 && !signingIn)
+  useEffect(() => {
+    if (established) markSplashSeen()
+  }, [established])
   if (isAppBackupPath(pathname)) return children
   if (!status) {
     if (error !== null) {
@@ -79,8 +87,9 @@ export function LicenseGate({ children }: { children: ReactNode }) {
     return <Spinner />
   }
   if (isUnlicensed(status) && tenants.length === 0 && !signingIn) {
+    if (!tenantsLoaded) return <Spinner />
     return (
-      <ActivationScreen
+      <FirstStart
         onSignIn={() => {
           location.hash = "#/portal/onboarding"
           setSigningIn(true)
@@ -89,6 +98,13 @@ export function LicenseGate({ children }: { children: ReactNode }) {
     )
   }
   return children
+}
+
+function FirstStart({ onSignIn }: { onSignIn: () => void }) {
+  const [screen, setScreen] = useState(() => shouldShowSplash() ? "splash" : "welcome")
+  const splashDone = useCallback(() => setScreen("welcome-after-splash"), [])
+  if (screen === "splash") return <SplashScreen onDone={splashDone} />
+  return <ActivationScreen onSignIn={onSignIn} focusHeading={screen === "welcome-after-splash"} />
 }
 
 function BillingDialogs() {
