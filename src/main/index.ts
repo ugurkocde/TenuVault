@@ -944,7 +944,7 @@ async function bootstrap(): Promise<void> {
     available: async tenant => connections.get(tenant)?.method === "tenuvaultApp" && await license.tenuvaultAppEnabled(true),
     consent: (tenant, signal) => packConsent.act(tenant, APPLICATION_METADATA_RESTORE_PACK.id, "open",
       async () => connections.get(tenant)?.method === "tenuvaultApp" && await license.tenuvaultAppEnabled(true) ? [APPLICATION_METADATA_RESTORE_PACK] : null,
-      signal).finally(returnToApp),
+      { signal }).finally(returnToApp),
     token: async (tenant, requested, forRestore) => {
       const account = accounts.get(tenant)
       const connection = connections.get(tenant)
@@ -1826,6 +1826,17 @@ async function bootstrap(): Promise<void> {
       if (!await license.tenuvaultAppEnabled(true) || !azureStorageSession(id, wizardId)) return null
       const plan = await pendingAzurePlan(id, wizardId).catch(() => null)
       return plan && allows(plan, "azureStorage") && azureStorageSession(id, wizardId) ? AZURE_STORAGE_PACKS : null
+    }, {
+      signInForPack: async (id, selectedPack, checkOnly) => {
+        const session = azureStorageSession(id, wizardId)
+        const changed = () => new ConnectionSwitchError("wrong_account", "The sign-in changed. Choose storage again.")
+        if (!session) throw changed()
+        const { homeAccountId } = session.account
+        const staged = stageConnectionCache(wizardId === undefined ? cache : { get: key => session.cache?.[key] ?? null }, TENUVAULT_CLIENT_ID)
+        await auth.signInForPack(id, staged.plugin, selectedPack, checkOnly, homeAccountId)
+        if (azureStorageSession(id, wizardId)?.account.homeAccountId !== homeAccountId ||
+          !license.connectMethodEnabledNow("tenuvaultApp")) throw changed()
+      },
     }).finally(returnToApp)
   })
   const fetchPendingAzure = withNetworkErrors((input, init) => chromiumFetch(input, { ...init, redirect: "error" }))

@@ -415,12 +415,15 @@ export class AuthManager {
   }
 
   /** Check a fresh delegated token for just the selected pack, without saving the account. */
-  async signInForPack(tenant: string, cache: ICachePlugin, pack: PermissionPack, checkOnly: boolean): Promise<void> {
+  async signInForPack(tenant: string, cache: ICachePlugin, pack: PermissionPack, checkOnly: boolean, homeAccountId?: string): Promise<void> {
     const app = this.createApp(TENUVAULT_CLIENT_ID, cache, true)
     try {
       const result = await this.acquireInteractive(TENUVAULT_CLIENT_ID, tenant, resourceScopes(pack.resource, pack.scopes),
         checkOnly ? "none" : "select_account", undefined, true, undefined, app)
       if (!result.account || normalizeGuid(result.account.tenantId) !== normalizeGuid(tenant)) throw new ConnectionSwitchError("wrong_tenant", "Sign in with an account from this tenant.")
+      if (homeAccountId !== undefined && result.account.homeAccountId !== homeAccountId) {
+        throw new ConnectionSwitchError("wrong_account", "Microsoft signed in with a different account. Use the account selected in TenuVault to verify Azure storage.")
+      }
       const identity = tokenIdentity(result.accessToken)
       if (identity.decoded && (identity.tenantId !== normalizeGuid(tenant) || identity.clientId !== TENUVAULT_CLIENT_ID)) {
         throw new ConnectionSwitchError("switch_failed", "Microsoft returned an access token that could not be verified for this tenant and app. Sign in again.")

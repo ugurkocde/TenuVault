@@ -1,4 +1,5 @@
-import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
+import { PackConsentFlow } from "../src/main/auth/pack-consent"
+import { AZURE_STORAGE_PACKS, resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { LogLevel, type Configuration } from "@azure/msal-node"
 import { describe, expect, it, vi } from "vitest"
@@ -422,6 +423,30 @@ describe("TenuVault app token verification", () => {
       prompt: "none", scopes: ["openid", "profile", "offline_access", "https://graph.microsoft.com/User.Read", "https://graph.microsoft.com/Organization.Read.All"],
     }))
     expect(auth.accounts()).toEqual([])
+  })
+
+  it.each(AZURE_STORAGE_PACKS)("binds $label pack verification to the selected account", async pack => {
+    const auth = manager()
+    const signInForPack = vi.fn(async () => undefined)
+    const flow = new PackConsentFlow({ plan: async () => [pack], openBrowser, signInForPack })
+    const check = () => flow.act(TENANT, pack.id, "check", undefined, {
+      signInForPack: (tenant, selectedPack, checkOnly) => auth.signInForPack(tenant, cache, selectedPack, checkOnly, account.homeAccountId),
+    })
+
+    msal.interactive.mockResolvedValueOnce({
+      account: { ...account, homeAccountId: "other" }, accessToken: token(pack.scopes),
+    })
+    await expect(check()).resolves.toEqual({
+      status: "error",
+      issue: {
+        code: "wrong_account",
+        message: "Microsoft signed in with a different account. Use the account selected in TenuVault to verify Azure storage.",
+      },
+    })
+
+    msal.interactive.mockResolvedValueOnce({ account, accessToken: token(pack.scopes) })
+    await expect(check()).resolves.toEqual({ status: "verified" })
+    expect(signInForPack).not.toHaveBeenCalled()
   })
 
   it.each([{ tid: CLIENT }, { azp: CLIENT }, { appid: CLIENT }, { tid: undefined }, { appid: undefined }])(

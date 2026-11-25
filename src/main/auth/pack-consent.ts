@@ -82,6 +82,8 @@ export function handoffPack(tenant: string, pack: PermissionPack): PackConsentRe
   return { status: "handoff", url, message: `Please review the ${pack.label} permissions for the TenuVault app in ${directory}. If you approve, open this Microsoft consent link, then let me know so I can check the granted permissions in TenuVault.\n\n${url}` }
 }
 
+type SignInForPack = (tenant: string, pack: PermissionPack, checkOnly: boolean) => Promise<void>
+
 export class PackConsentFlow {
   private readonly pending = new Map<string, AbortController>()
   private browserLink: string | null = null
@@ -91,10 +93,10 @@ export class PackConsentFlow {
   constructor(private readonly host: {
     plan: (tenant: string) => Promise<readonly PermissionPack[] | null>
     openBrowser: (url: string) => Promise<void>
-    signInForPack: (tenant: string, pack: PermissionPack, checkOnly: boolean) => Promise<void>
+    signInForPack: SignInForPack
   }) {}
 
-  async act(tenant: string, packId: unknown, action: unknown, plan = this.host.plan, signal?: AbortSignal): Promise<PackConsentResult> {
+  async act(tenant: string, packId: unknown, action: unknown, plan = this.host.plan, options?: { signal?: AbortSignal; signInForPack?: SignInForPack }): Promise<PackConsentResult> {
     if (typeof packId !== "string" || (action !== "open" && action !== "handoff" && action !== "request" && action !== "check")) {
       return { status: "error", issue: { code: "invalid_request", message: "Choose a permission pack." } }
     }
@@ -107,19 +109,23 @@ export class PackConsentFlow {
     this.pending.set(tenant, controller)
     try {
       if (action === "request" || action === "check") {
-        await this.host.signInForPack(tenant, pack, action === "check")
+        const signInForPack = options?.signInForPack ?? this.host.signInForPack
+        await signInForPack(tenant, pack, action === "check")
         return { status: "verified" }
       }
       const result = await openPackConsent(tenant, pack, url => {
         this.browserLink = url
         return this.host.openBrowser(url)
-      }, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000), ...(signal ? [signal] : [])]))
+      }, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000), ...(options?.signal ? [options.signal] : [])]))
       return result.status === "error" && result.issue.code === "AADSTS90095" ? { status: "waiting", issue: result.issue } : result
     } catch (error) {
       const issue = consentIssue(error instanceof Error ? error.message : "")
       if (issue?.code === "AADSTS90095" || ((action === "request" || action === "check") && issue?.code === "AADSTS65001")) return { status: "waiting", issue }
       if (action === "check" && error instanceof Error && "code" in error && error.code === "sign_in_required") {
         return { status: "waiting", issue: { code: error.code, message: error.message } }
+      }
+      if (error instanceof Error && "code" in error && error.code === "wrong_account") {
+        return { status: "error", issue: { code: error.code, message: error.message } }
       }
       return { status: "error", issue: issue ?? { code: "consent_interrupted", message: "The permission request ended. Try again or send the pack to your administrator." } }
     } finally {
