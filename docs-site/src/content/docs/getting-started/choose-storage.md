@@ -11,6 +11,8 @@ You can change the location later in **Settings** > **Sign-in** > **Change stora
 
 Open the tenant name or **Connected tenant** to see the signed-in account. Open **Plan details** to see the tenant’s plan.
 
+TenuVault uses the organization name verified during setup as the default name on the sidebar and **Tenants** page. You can rename it from **Tenants**.
+
 * **This tenant uses Community, the free plan**: manual and weekly backups on this device, kept for 30 days. Next to it are **I have a license key** and, while the tenant can still start its trial, **Try Pro free** (no card, no email). See [Start TenuVault for the first time](/getting-started/first-launch/#start-a-trial).
 * **This tenant uses Pro** or **MSP**, from your license key, **This tenant uses your Pro trial**, or **This tenant uses Pro, through the license your organization shares with it.**
 

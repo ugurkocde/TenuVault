@@ -560,6 +560,10 @@ export default function OnboardingPage() {
     } finally { if (mounted.current) setConsentBusy(null) }
   }
 
+  const organizationName = method === "ownApp"
+    ? (organization?.account === account ? organization?.name : undefined)
+    : (sharedSignIn?.account === account ? sharedSignIn?.organizationName : undefined)
+
   // The license is checked before the tenant is saved. A
   // tenant the license does not cover is not added and its sign-in is removed in the main
   // process, so the admin signs in again with the same IDs once the license is sorted.
@@ -606,7 +610,7 @@ export default function OnboardingPage() {
       return
     }
     try {
-      const creds = desktopTenantCredentials(account, fields.displayName, choice)
+      const creds = desktopTenantCredentials(account, fields.displayName || organizationName || "", choice)
       const tenant = { ...(await buildTenantProfile(creds, method === "ownApp", tenantDetails.current?.account === account ? tenantDetails.current.result : undefined)), createdAt: new Date().toISOString() }
       if (!mounted.current) return
       const profile = serializeTenants([tenant])
@@ -811,9 +815,6 @@ export default function OnboardingPage() {
     }
   }
 
-  const organizationName = method === "ownApp"
-    ? (organization?.account === account ? organization?.name : undefined)
-    : (sharedSignIn?.account === account ? sharedSignIn?.organizationName : undefined)
   const connectedTenant = account && <details className="text-center text-xs text-muted-foreground open:w-full">
     <summary className={cn("cursor-pointer", onboardingLink)}>{organizationName ?? "Connected tenant"}</summary>
     <div className="mt-2 space-y-1 break-words">
