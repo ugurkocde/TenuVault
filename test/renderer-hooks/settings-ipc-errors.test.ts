@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   tenants: vi.fn<() => Pick<Tenant, "id" | "name" | "credentials">[]>(),
   accounts: vi.fn(),
   reauthenticate: vi.fn(),
+  openExternal: vi.fn(),
   switchConnection: vi.fn(),
   toast: vi.fn(),
   schedulesResult: { schedules: [] as unknown[], error: null as string | null, loading: false, reload: vi.fn() },
@@ -27,7 +28,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
-    app: { info: state.info },
+    app: { info: state.info, openExternal: state.openExternal },
     auth: {
       accounts: state.accounts,
       connection: async () => null,
@@ -115,6 +116,25 @@ describe("Settings tenant sign-in", () => {
     await act(async () => { button(container, "Sign in")!.click() })
     expect(state.toast).toHaveBeenCalledWith(message, "error")
     expect(button(container, "Sign in")?.disabled).toBe(false)
+  })
+
+  it("recovers a Start now session when signing in again from Settings", async () => {
+    state.reauthenticate.mockResolvedValueOnce({ error: {
+      code: "browser_sign_in_required", message: "Sign in to Microsoft in your browser first, then try again.",
+    } }).mockResolvedValueOnce(account)
+    state.openExternal.mockResolvedValue(undefined)
+    const container = await renderTenant(GRAPH_CLI_CLIENT_ID, true)
+    await act(async () => button(container, "Sign in again")!.click())
+    expect(container.textContent).toContain("Sign in to Microsoft in your browser first, then try again.")
+    expect(state.toast).not.toHaveBeenCalled()
+    await act(async () => button(container, "Open Microsoft sign-in")!.click())
+    expect(state.openExternal).toHaveBeenCalledExactlyOnceWith("https://intune.microsoft.com")
+    expect(state.reauthenticate).toHaveBeenCalledExactlyOnceWith(tenantId, GRAPH_CLI_CLIENT_ID)
+    await act(async () => button(container, "Try again")!.click())
+    expect(state.reauthenticate).toHaveBeenLastCalledWith(tenantId, GRAPH_CLI_CLIENT_ID)
+    expect(state.reauthenticate).toHaveBeenCalledTimes(2)
+    expect(button(container, "Open Microsoft sign-in")).toBeUndefined()
+    expect(state.toast).toHaveBeenCalledWith(`Signed in as ${account.username}.`, "success")
   })
 
   it.each([GRAPH_CLI_CLIENT_ID, "bbbbbbbb-1111-1111-1111-111111111111"])("keeps generic reauthentication for %s", async clientId => {

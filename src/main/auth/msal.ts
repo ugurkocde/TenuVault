@@ -124,7 +124,7 @@ function resourceName(scope: string): string {
   return isResourceScope(scope) ? RESOURCE_NAMES[scope]! : "Microsoft"
 }
 
-type SilentRefusal = { errorNo?: unknown; errorCode?: unknown; errorMessage?: string }
+type SilentRefusal = { errorNo?: unknown; errorCode?: unknown; errorMessage?: string; subError?: unknown }
 
 function silentRefusalCode(refusal?: SilentRefusal): string | undefined {
   const number = refusal?.errorNo
@@ -344,7 +344,9 @@ export class AuthManager {
 
   async stageGraphCliSignIn(tenant: string, cache: ICachePlugin): Promise<StagedSignIn> {
     await this.requireGraphCli(true)
-    const result = await this.acquireGraphCli(tenant, this.createApp(GRAPH_CLI_CLIENT_ID, cache, true))
+    const stored = this.host.accountStore.get(normalizeGuid(tenant))
+    const loginHint = stored && normalizeGuid(stored.clientId) === GRAPH_CLI_CLIENT_ID ? stored.username : undefined
+    const result = await this.acquireGraphCli(tenant, this.createApp(GRAPH_CLI_CLIENT_ID, cache, true), loginHint)
     const { account, accessToken, grantedScopes, idToken, actualTenant } = result
     const graphScopes = verifyGraphCliGrant(accessToken, grantedScopes)
     await this.requireGraphCli(true)
@@ -354,15 +356,16 @@ export class AuthManager {
     }
   }
 
-  private async acquireGraphCli(tenant: string, staged: PublicClientApplication) {
+  private async acquireGraphCli(tenant: string, staged: PublicClientApplication, loginHint?: string) {
     // Even an OpenID-only interactive request can prompt for consent. Require browser SSO
     // and existing grants, with no interactive fallback if Microsoft cannot issue a code.
     const result = await this.acquireInteractive(GRAPH_CLI_CLIENT_ID, tenant, RESOURCE_SCOPES.graph,
-      "none", undefined, true, undefined, staged).catch((error: unknown) => {
+      "none", loginHint, true, undefined, staged).catch((error: unknown) => {
       if (error instanceof SignInCancelledError) throw new ConnectionSwitchError("cancelled", GRAPH_CLI_CONSENT_CANCELLED)
       if (error instanceof SignInTimeoutError) throw new ConnectionSwitchError("timeout", `${GRAPH_CLI_CONSENT_CANCELLED} ${FIRST_SIGN_IN_TIMEOUT_MESSAGE}`)
       const refusal = error as SilentRefusal | null
-      throw graphCliSignInFailure(error instanceof Error ? error.message : "", silentRefusalCode(refusal ?? undefined) ?? oauthSignInCode(refusal?.errorCode))
+      throw graphCliSignInFailure(silentRefusalCode(refusal ?? undefined) ?? namedSignInCode(error instanceof Error ? error.message : ""),
+        oauthSignInCode(refusal?.errorCode), refusal?.subError)
     })
     const actualTenant = signedInTenant(tenant, result)
     const account = result.account!
@@ -557,7 +560,7 @@ export class AuthManager {
         const code = silentRefusalCode(error)
         const oauth = oauthSignInCode(error.errorCode) ?? "token_request_failed"
         const guidance = normalizeGuid(clientId) === GRAPH_CLI_CLIENT_ID
-          ? graphCliSignInFailure("", code).message
+          ? graphCliSignInFailure(code).message
           : signInErrorRow(code)?.firstSignIn ?? "Try again."
         throw new ServerError(oauth, "", `${resourceName(scope)} token request failed${code ? ` (${code})` : ""}. ${guidance}`, undefined, code?.slice("AADSTS".length), error.status)
       }

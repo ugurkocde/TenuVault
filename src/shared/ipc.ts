@@ -1,6 +1,6 @@
 import type { AzureStorageAccount } from "./azure-discovery"
 import type { PackConsentAction, PackConsentPlan, PackConsentResult } from "./pack-consent"
-import type { ConnectionSwitchResponse, ConnectionTarget, TenantConnection, BackupScopeCoverage, WizardSignInMethod, WizardSignInResponse, WizardFinishResponse } from "./tenant-connection"
+import type { GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, ConnectionSwitchResponse, ConnectionTarget, TenantConnection, BackupScopeCoverage, WizardSignInMethod, WizardSignInResponse, WizardFinishResponse } from "./tenant-connection"
 import type { PermissionAdditionPreview, PermissionAdditionResult } from "./registration-additions"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
@@ -486,7 +486,8 @@ export interface TenuVaultBridge {
     /** Called after an account is saved or removed, before any old verification is reused. */
     onAccountsChanged: (listener: (tenantId: string) => void) => () => void
     /** Signs in again to an existing tenant profile, for `scope` (Microsoft Graph when omitted). */
-    reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount>
+    reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount |
+      { error: { code: typeof GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED; message: string } }>
     /** Called when a background request needs the admin to sign in again. Returns an unsubscribe function. */
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
     /**

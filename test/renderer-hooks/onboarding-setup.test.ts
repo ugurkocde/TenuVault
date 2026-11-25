@@ -1460,6 +1460,31 @@ describe("sign-in method wizard", () => {
     return container
   }
 
+  it("opens Microsoft browser sign-in and retries Start now after a session refusal", async () => {
+    state.wizardStage.mockResolvedValue({ error: {
+      code: "browser_sign_in_required", message: "Sign in to Microsoft in your browser first, then try again.",
+    } })
+    const container = await publicConnect("Start now")
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(container.textContent).toContain("Sign in to Microsoft in your browser first, then try again.")
+    expect(container.textContent).not.toContain("Start now is not available")
+    await act(async () => button(container, "Open Microsoft sign-in")!.click())
+    expect(state.openExternal).toHaveBeenCalledExactlyOnceWith("https://intune.microsoft.com")
+    expect(state.wizardStage).toHaveBeenCalledTimes(1)
+    await act(async () => button(container, "Try again")!.click())
+    expect(state.wizardStage).toHaveBeenCalledTimes(2)
+  })
+
+  it("offers other methods after a consent refusal without opening Microsoft browser sign-in", async () => {
+    state.wizardStage.mockResolvedValue({ error: {
+      code: "AADSTS65001", message: "Start now is not available in this tenant. Choose the TenuVault app or use your own app registration in Sign-in and access.",
+    } })
+    const container = await publicConnect("Start now")
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Choose the TenuVault app or use your own app registration.")
+    expect(button(container, "Open Microsoft sign-in")).toBeUndefined()
+  })
+
   it("starts in the signed-in user's tenant by default and shows Microsoft's decline code", async () => {
     state.wizardStage.mockResolvedValue({ error: { code: "AADSTS65004", message: "Microsoft declined consent." } })
     const container = await publicConnect("Start now")

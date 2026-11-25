@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { AuthorizationUrlRequest, PublicClientApplication } from "@azure/msal-node"
 import { connect } from "node:net"
 import { loopbackSignIn, MAX_ANSWER_BYTES, sameState, validAnswer, type LoopbackSignInRequest } from "../src/main/auth/loopback-sign-in"
-import { firstSignInError } from "../src/main/auth/msal"
+import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
+import { AuthManager, firstSignInError } from "../src/main/auth/msal"
 import { signInResult } from "../src/main/setup-diagnostics/events"
 import { answer, authCodeUrl, codeAnswer, listenerClosed, loopbackOf } from "./helpers/fake-browser"
 
@@ -36,6 +37,38 @@ function start(overrides: Partial<LoopbackSignInRequest> = {}) {
 }
 
 afterEach(() => { vi.useRealTimers() })
+
+describe("Start now authorization URL", () => {
+  it.each([false, true])("requests silent sign-in (stored account: %s)", async returning => {
+    const tenant = "aaaaaaaa-1111-1111-1111-111111111111"
+    const authority = `https://login.microsoftonline.com/${tenant}`
+    const username = "admin@contoso.example"
+    const stored = { username, tenantId: tenant, clientId: GRAPH_CLI_CLIENT_ID, homeAccountId: "contoso-admin" }
+    const openBrowser = vi.fn(async (url: string) => {
+      await answer(url, { state: new URL(url).searchParams.get("state")!, error: "login_required" })
+    })
+    const auth = new AuthManager({
+      graphCliEnabled: async () => true,
+      openBrowser,
+      accountStore: { get: () => returning ? stored : null, list: () => [], set: vi.fn(), delete: vi.fn() },
+      cachePlugin: () => cache,
+      fetch: async input => {
+        if (!String(input).includes(".well-known/openid-configuration")) throw new Error("Unexpected fixture request")
+        return Response.json({
+          issuer: `${authority}/v2.0`,
+          authorization_endpoint: `${authority}/oauth2/v2.0/authorize`,
+          token_endpoint: `${authority}/oauth2/v2.0/token`,
+        })
+      },
+    })
+    const cache = { beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }
+    await expect(auth.stageGraphCliSignIn(tenant, cache)).rejects.toMatchObject({ code: "browser_sign_in_required" })
+    expect(openBrowser).toHaveBeenCalledExactlyOnceWith(expect.any(String))
+    const params = new URL(openBrowser.mock.calls[0]![0]).searchParams
+    expect(params.getAll("prompt")).toEqual(["none"])
+    expect(params.get("login_hint")).toBe(returning ? username : null)
+  })
+})
 
 describe("loopbackSignIn", () => {
   it("signs in with PKCE and a state of its own, and redeems the code once through MSAL", async () => {

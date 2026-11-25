@@ -1,6 +1,6 @@
 import { discoverAzureResources } from "../shared/azure-discovery"
 import { ORGANIZATIONS, resolveOnboardingTenant } from "./auth/onboarding-tenant"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_SIGN_IN_REQUIREMENTS, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
+import { GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, GRAPH_CLI_CLIENT_ID, GRAPH_CLI_SIGN_IN_REQUIREMENTS, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
 import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
 import { ConnectionSwitchError } from "./auth/switch-failure"
@@ -1668,7 +1668,13 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:reauthenticate", async (_event, tenantId: unknown, clientId: unknown, scope?: unknown) => {
     if (!isGuid(tenantId) || !isGuid(clientId)) throw new Error("Choose a tenant and a valid application ID.")
     if (scope !== undefined && !isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
-    const account = await reauthenticate(tenantId, clientId, scope)
+    const account = await reauthenticate(tenantId, clientId, scope).catch((error: unknown) => {
+      if (error instanceof ConnectionSwitchError && error.code === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED) {
+        return { error: { code: GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, message: error.message } }
+      }
+      throw error
+    })
+    if ("error" in account) return account
     void health.check(tenantId, "signIn").catch(() => undefined)
     try {
       await license.requireEntitlement(tenantId, { retry: true })
@@ -1689,7 +1695,12 @@ async function bootstrap(): Promise<void> {
       if (response.response !== 1) throw new Error("Sign-in cancelled.")
       if (!capabilities.isGraphOnly(tenantId)) throw new Error("The sign-in method changed. Reload the tenant and try again.")
       const outcome = await connections.switchForIpc(tenantId, { method: "graphCli" }, returnToApp)
-      if ("error" in outcome) throw new Error(outcome.error.message)
+      if ("error" in outcome) {
+        if (outcome.error.code === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED) {
+          throw new ConnectionSwitchError(outcome.error.code, outcome.error.message)
+        }
+        throw new Error(outcome.error.message)
+      }
       notifyAccountChange(outcome.result.account.tenantId)
       return outcome.result.account
     }

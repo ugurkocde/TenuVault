@@ -519,9 +519,8 @@ describe("Start now loopback sign-in", () => {
 
   it.each([
     ["consent_required", "", "consent_required"],
-    ["interaction_required", "", "interaction_required"],
     ["interaction_required", "AADSTS65001: no consent", "AADSTS65001"],
-    ["login_required", "", "login_required"],
+    ["interaction_required", "AADSTS90095: admin approval", "AADSTS90095"],
   ])("refuses %s without retrying with an interactive prompt", async (oauth, detail, code) => {
     const auth = manager(undefined, async () => true)
     msal.interactive.mockReset().mockRejectedValueOnce(new ServerError(oauth, "", detail))
@@ -530,6 +529,30 @@ describe("Start now loopback sign-in", () => {
     })
     expect(msal.interactive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prompt: "none" }))
     expect(auth.accounts()).toEqual([])
+  })
+
+  it.each([
+    ["login_required", ""],
+    ["login_required", "AADSTS50058: no session"],
+    ["account_selection_required", ""],
+    ["interaction_required", ""],
+    ["interaction_required", "AADSTS50076: MFA needed"],
+  ])("offers browser recovery for %s (%s) without changing the prompt", async (oauth, detail) => {
+    const auth = manager(undefined, async () => true)
+    msal.interactive.mockReset().mockRejectedValueOnce(new ServerError(oauth, "", detail))
+    await expect(auth.stageGraphCliSignIn(TENANT, cache)).rejects.toMatchObject({
+      code: "browser_sign_in_required",
+      message: "Sign in to Microsoft in your browser first, then try again.",
+    })
+    expect(msal.interactive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prompt: "none" }))
+    expect(auth.accounts()).toEqual([])
+  })
+
+  it("treats the consent suberror as a refusal", async () => {
+    msal.interactive.mockReset().mockRejectedValueOnce(new ServerError("interaction_required", "", undefined, "consent_required"))
+    await expect(manager(undefined, async () => true).stageGraphCliSignIn(TENANT, cache)).rejects.toMatchObject({
+      code: "consent_required", message: expect.stringContaining(GRAPH_CLI_NEXT_STEP),
+    })
   })
 
   it("uses the signed-in tenant on organizations and refuses it during another tenant's switch", async () => {

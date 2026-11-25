@@ -15,7 +15,7 @@ Start now and the TenuVault app show an availability message when the license se
 
 ## Start now
 
-**Start now** is a read-only option in **How do you want to connect?** when the license service enables it. Sign in to Microsoft in your browser with the work account you want to use before selecting **Sign in with Microsoft**. Start now uses that session and the permissions already granted to Microsoft Graph Command Line Tools. If Microsoft requires consent or another sign-in step, choose the TenuVault app or your own app registration.
+**Start now** is a read-only option in **How do you want to connect?** when the license service enables it. Sign in to Microsoft in your browser with the work account you want to use before selecting **Sign in with Microsoft**. Start now uses that session and the permissions already granted to Microsoft Graph Command Line Tools. If TenuVault asks you to sign in first, select **Open Microsoft sign-in**. It opens the [Microsoft Intune admin center](https://intune.microsoft.com) in your default browser to establish a Microsoft session without asking for consent to Microsoft Graph Command Line Tools. Sign in with your work account, return to TenuVault and select **Try again**. If Microsoft says consent is required, choose the TenuVault app or your own app registration.
 
 1. For an eligible tenant, open **Settings > Sign-in and access**, then select **Use Start now**. Switch to backup storage on this device first if you use Azure storage.
 2. Use a browser session already signed in with an account in the same tenant, then select **Continue to Microsoft**.
@@ -202,7 +202,7 @@ See [Activate and manage your license](/licensing/manage/) for all license messa
 
 TenuVault keeps your sign-in in a token cache encrypted with Windows data protection or the macOS Keychain. Background tasks such as scheduled backups never open a sign-in window. When Microsoft needs you to sign in again, a banner appears with a **Sign in** button, or you use **Settings** > **Sign-in**. See [Settings reference](/settings/#sign-in).
 
-When you sign in again with **Start now**, TenuVault checks availability and uses your existing Microsoft browser session. To renew a **TenuVault app** sign-in, open **Settings > Sign-in and access**, choose **Review permission packs**, then select **Sign in**.
+When you sign in again with **Start now**, TenuVault checks availability and uses your saved account to find its browser session. If the session has ended, use **Open Microsoft sign-in** and **Try again** in Settings or in the scheduled backup sign-in banner. To renew a **TenuVault app** sign-in, open **Settings > Sign-in and access**, choose **Review permission packs**, then select **Sign in**.
 
 ## Next step
 
