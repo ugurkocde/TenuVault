@@ -238,10 +238,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     /** Source policies to select; the selected tenant is the source. */
     policies: async ({ tenantId, body }) => ({ source: await policies(deps, tenantId, typeof body.folder === "string" && body.folder ? body.folder : PROMOTION_FOLDER) }),
     /**
-     * Every other connected tenant and whether it can be a target of a Sync from the selected
-     * tenant, by the rule requireSyncTenants applies: both plans need Sync; one target outside
-     * MSP must share the source's license. `multiple` is false when a run may name only one
-     * target. Reads plans only; a tenant whose plan cannot be read is not eligible.
+     * Lists connected targets using the same plan and entitlement checks as requireSyncTenants.
+     * A target can be combined with others when both it and the source have MSP.
      */
     targets: async ({ tenantId, plan }) => {
       const multiple = allows(plan, "bulkActions")
@@ -249,10 +247,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const targets = await Promise.all(others.map(async (id) => {
         const targetPlan: Plan | null = await deps.plan(id).catch(() => null)
         if (!targetPlan) return { tenantId: id, eligible: false, multiple: false, reason: "unavailable" as const }
-        if (!allows(targetPlan, "sync")) return { tenantId: id, eligible: false, multiple: false, reason: "plan" as const }
-        if (multiple && allows(targetPlan, "bulkActions")) return { tenantId: id, eligible: true, multiple: true, reason: null }
-        if (deps.sameLicense(tenantId, id)) return { tenantId: id, eligible: true, multiple: false, reason: null }
-        return { tenantId: id, eligible: false, multiple: false, reason: "msp" as const }
+        if (!allows(targetPlan, "sync") || !deps.proPair(tenantId, id)) return { tenantId: id, eligible: false, multiple: false, reason: "plan" as const }
+        return { tenantId: id, eligible: true, multiple: multiple && allows(targetPlan, "bulkActions"), reason: null }
       }))
       return { multiple, targets }
     },

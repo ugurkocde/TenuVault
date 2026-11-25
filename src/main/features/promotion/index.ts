@@ -24,9 +24,9 @@ const hashField = (body: Body, key: string): string => {
   return value
 }
 
-/** Re-checks the two-tenant rule on every paid action of an existing promotion. */
+/** Re-checks the two-tenant rule on every paid action of an existing promotion that can write (reject cannot). */
 function checkTenants(context: ActionContext, promotion: PromotionRecord): void {
-  requireSourceTenant(context, promotion.sourceTenantId, { distinct: true })
+  requireSourceTenant(context, promotion.sourceTenantId)
 }
 
 export async function policies(deps: FeatureDeps, tenantId: string, folder: string) {
@@ -45,9 +45,7 @@ export async function policies(deps: FeatureDeps, tenantId: string, folder: stri
 /**
  * /api/promotion (#145). The selected tenant is the destination (its plan is checked by the
  * route); the source is named in `sourceTenantId` and in `targetTenants`, so its plan is
- * checked too. On Pro both must be the two tenants of the same license, or two Pro trial
- * tenants. No MSP bulk or
- * portfolio endpoint is used or unlocked.
+ * checked too. Both tenants need an active Pro or MSP entitlement.
  */
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   /** The ID of a Dev to Prod promotion; a record a Sync run planned is not found here (see features/sync). */
@@ -66,7 +64,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
     /** Source policies to select and destination policies an update may target explicitly. */
     policies: async (context) => {
-      const source = requireSourceTenant(context, context.body.sourceTenantId, { distinct: true })
+      const source = requireSourceTenant(context, context.body.sourceTenantId)
       const folder = typeof context.body.folder === "string" && context.body.folder ? context.body.folder : PROMOTION_FOLDER
       const [sourcePolicies, destinationPolicies] = await Promise.all([policies(deps, source, folder), policies(deps, context.tenantId, folder)])
       return { source: sourcePolicies, destination: destinationPolicies }
@@ -88,7 +86,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
     plan: async (context) => {
       const { tenantId, body, actor } = context
-      const source = requireSourceTenant(context, body.sourceTenantId, { distinct: true })
+      const source = requireSourceTenant(context, body.sourceTenantId)
       const items = body.items
       if (!Array.isArray(items)) throw new FeatureError("Select policies to promote.")
       let mappings
@@ -127,6 +125,9 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const changeSet = await approvePromotion(deps, context.tenantId, promotion.id, { contentHash: hashField(context.body, "contentHash"), targetFingerprint: hashField(context.body, "targetFingerprint"), reviewer: optionalText(context.body, "reviewer", 200), note: optionalText(context.body, "note", 2000) }, context.actor)
       return { promotion: syncPromotion(deps, context.tenantId, promotion.id), changeSet }
     },
+    // Rejecting writes to neither tenant, so it skips the source check and the app sends no
+    // source in targetTenants: a pending promotion can still be cancelled after the source
+    // tenant's plan lapses. The route still checks Dev to Prod on this tenant.
     reject: async (context) => {
       const promotion = getPromotion(deps, context.tenantId, idOf(context.tenantId, context.body))
       const changeSet = promotionChangeSet(deps, context.tenantId, promotion.id)

@@ -1,8 +1,8 @@
 import type { RouteModule } from "../../api/host"
 import type { FeatureDeps } from "../deps"
-import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
+import { featureRoute, FeatureError, optionalText, text, type ActionHandler, type Body } from "../route"
 import { changeSetActions } from "../baseline-upgrades/change-actions"
-import { listChangeSets } from "../change-sets/engine"
+import { getChangeSet, listChangeSets } from "../change-sets/engine"
 import type { Choice } from "../baseline-upgrades/merge"
 import { OIB_PLATFORMS, type OibPlatform } from "../../../shared/oib/types"
 import { validateAssessmentScope } from "../../frameworks/native"
@@ -139,11 +139,29 @@ const comparisonSummary = (record: ReturnType<typeof listComparisons>[number]) =
  *
  * Tenant isolation: a baseline belongs to the tenant it was created in. `deploy` into another
  * tenant runs with that tenant as `tenantId`, names the baseline's tenant in `sourceTenantId`
- * and in `targetTenants` (so its plan is checked); on Pro both tenants must share the license.
+ * and in `targetTenants` (so its plan is checked); both tenants need an active Pro or MSP
+ * entitlement, including Pro trials. Preview, approve and apply of such a deployment check that
+ * pair again; reject and rollbacks do not, so a deployment can still be cancelled or undone after
+ * the baseline's tenant loses its plan.
  */
 export function routes(deps: FeatureDeps, sources: CustomBaselineSources = defaultSources): Record<string, RouteModule> {
+  const changeActions = changeSetActions(deps, { prefix: "", workflow: WORKFLOW, exists: (tenantId, id) => void getDeployment(deps, tenantId, id), sync: (tenantId, id) => syncDeployment(deps, tenantId, id) })
+  /** Re-checks the two-tenant rule before a deployment from another tenant's baseline is reviewed or written. */
+  const paired = (action: ActionHandler): ActionHandler => async (context) => {
+    const deployment = getDeployment(deps, context.tenantId, text(context.body, "id", 100))
+    const owner = deployment.baselineTenantId.toLowerCase()
+    const rollback = getChangeSet(deps, context.tenantId, text(context.body, "changeSetId", 100)).kind === "rollback"
+    if (owner !== context.tenantId && !rollback) {
+      if (!deps.tenants().some((id) => id.toLowerCase() === owner)) throw new FeatureError("The baseline's tenant is no longer connected to this app.", 403)
+      if (!deps.proPair(owner, context.tenantId)) throw new FeatureError("Both tenants need an active Pro or MSP plan, including Pro trials.", 403)
+    }
+    return action(context)
+  }
   return featureRoute("/api/custom-baselines", deps, {
-    ...changeSetActions(deps, { prefix: "", workflow: WORKFLOW, exists: (tenantId, id) => void getDeployment(deps, tenantId, id), sync: (tenantId, id) => syncDeployment(deps, tenantId, id) }),
+    ...changeActions,
+    "change-preview": paired(changeActions["change-preview"]!),
+    "change-approve": paired(changeActions["change-approve"]!),
+    "change-apply": paired(changeActions["change-apply"]!),
 
     list: ({ tenantId }) => ({
       baselines: listBaselines(deps, tenantId).map(plainOf),
@@ -191,11 +209,11 @@ export function routes(deps: FeatureDeps, sources: CustomBaselineSources = defau
     "rebase-apply": ({ tenantId, body, actor }) => ({ baseline: plainOf(applyRebase(deps, tenantId, idOf(body, "rebaseId"), optionalText(body, "note", 1000), actor)) }),
     "rebase-discard": ({ tenantId, body, actor }) => ({ rebase: plainOf(discardRebase(deps, tenantId, idOf(body, "rebaseId"), actor)) }),
 
-    deploy: async ({ tenantId, body, plan, targetTenants, actor }) => {
+    deploy: async ({ tenantId, body, targetTenants, actor }) => {
       if (body.policyKeys !== undefined && body.policyKeys !== null && (!Array.isArray(body.policyKeys) || body.policyKeys.length > 200)) throw new FeatureError("Invalid policies")
       const policyKeys = Array.isArray(body.policyKeys) ? body.policyKeys.map((entry) => key(entry, "policy")) : null
       const sourceTenantId = body.sourceTenantId === undefined || body.sourceTenantId === null ? null : text(body, "sourceTenantId", 100)
-      const result = await deployVersion(deps, { tenantId, plan, targetTenants }, { baselineId: idOf(body), sourceTenantId, version: versionOf(body), policyKeys, title: optionalText(body, "title", 200), ticket: optionalText(body, "ticket", 200) }, actor)
+      const result = await deployVersion(deps, { tenantId, targetTenants }, { baselineId: idOf(body), sourceTenantId, version: versionOf(body), policyKeys, title: optionalText(body, "title", 200), ticket: optionalText(body, "ticket", 200) }, actor)
       return { deployment: plainOf(result.deployment), changeSet: result.changeSet }
     },
 

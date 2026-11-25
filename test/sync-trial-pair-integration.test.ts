@@ -2,7 +2,7 @@ import { generateKeyPairSync, sign } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { requireSourceTenant } from "../src/main/features/promotion/targets"
 import { routes } from "../src/main/features/sync"
-import { sameLicense } from "../src/main/license/same-license"
+import { proPair } from "../src/main/license/same-license"
 import { LicenseService } from "../src/main/license/service"
 import { upgradeMessage } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -82,7 +82,7 @@ function setup(tenants: string[]) {
   const deps = fakeDeps({
     plans: Object.fromEntries(tenants.map((tenantId) => [tenantId, "pro"])),
     plan: (tenantId) => license.requireEntitlement(tenantId),
-    sameLicense: (a, b) => sameLicense(license.status([]).tenants, a, b),
+    proPair: (a, b) => proPair(license.status([]).tenants, a, b),
   })
   const sync = routes(deps)
   const post = (body: Record<string, unknown>) => call(sync, "/api/sync", { tenantId: TENANT_A, ...body })
@@ -92,10 +92,9 @@ function setup(tenants: string[]) {
   }
   const promotionSource = async () => requireSourceTenant({
     tenantId: TENANT_A,
-    plan: await deps.plan(TENANT_A),
     deps,
     targetTenants: [TENANT_B],
-  }, TENANT_B, { distinct: true })
+  }, TENANT_B)
   return { license, deps, post, startTrials, promotionSource }
 }
 
@@ -151,7 +150,7 @@ describe("Sync with LicenseService trial activations", () => {
     })
   })
 
-  it("refuses to pair a trial tenant with a key-covered tenant for Sync or promotion", async () => {
+  it("pairs a trial tenant with a key-covered tenant for Sync or promotion", async () => {
     const { license, post, startTrials, promotionSource } = setup([TENANT_A, TENANT_B])
     await startTrials(TENANT_A)
     await license.setKey(KEY, [TENANT_B])
@@ -162,16 +161,13 @@ describe("Sync with LicenseService trial activations", () => {
 
     expect(await post({ action: "targets" })).toEqual({
       status: 200,
-      body: { multiple: false, targets: [{ tenantId: TENANT_B, eligible: false, multiple: false, reason: "msp" }] },
+      body: { multiple: false, targets: [{ tenantId: TENANT_B, eligible: true, multiple: false, reason: null }] },
     })
     expect(await post({ action: "status", targetTenants: named([TENANT_B]) })).toEqual({
-      status: 402,
-      body: { error: upgradeMessage("bulkActions"), upgrade: "bulkActions" },
+      status: 200,
+      body: { targets: [{ targetTenantId: TENANT_B, links: [], error: null }] },
     })
-    await expect(promotionSource()).rejects.toMatchObject({
-      status: 403,
-      message: expect.stringContaining("covered by the same license"),
-    })
+    await expect(promotionSource()).resolves.toBe(TENANT_B)
   })
 
   it("stops pairing a target when its trial token expires", async () => {
@@ -179,7 +175,7 @@ describe("Sync with LicenseService trial activations", () => {
     await startTrials(TENANT_B)
     vi.setSystemTime(START + DAY)
     await startTrials(TENANT_A)
-    expect(deps.sameLicense(TENANT_A, TENANT_B)).toBe(true)
+    expect(deps.proPair(TENANT_A, TENANT_B)).toBe(true)
 
     vi.setSystemTime(START + TRIAL_LENGTH)
     expect(license.status([]).tenants.find((tenant) => tenant.tenantId === TENANT_B)).toMatchObject({
@@ -187,7 +183,7 @@ describe("Sync with LicenseService trial activations", () => {
       entitled: false,
       coverageEnded: true,
     })
-    expect(deps.sameLicense(TENANT_A, TENANT_B)).toBe(false)
+    expect(deps.proPair(TENANT_A, TENANT_B)).toBe(false)
     const response = await post({ action: "targets" })
     expect(response.status).toBe(200)
     expect(response.body.targets).toMatchObject([{ tenantId: TENANT_B, eligible: false, multiple: false }])

@@ -66,7 +66,7 @@ export function PromotionPlanner({ tenant, sources, blocked, onPlanned }: { tena
     }
   }
 
-  if (!sources.length) return <p className="text-sm text-gray-600">Connect the development tenant covered by the same license to promote from it. Two tenants that each run a Pro trial also work.</p>
+  if (!sources.length) return <p className="text-sm text-gray-600">Connect a development tenant with an active Pro or MSP plan, including a Pro trial, to promote from it.</p>
 
   return (
     <div className="space-y-4">
