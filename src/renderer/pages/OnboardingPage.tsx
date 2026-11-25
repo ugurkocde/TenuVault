@@ -2,7 +2,7 @@ import { NoticeCard } from "../components/NoticeCard"
 import { OnboardingHeading, onboardingCard, onboardingLink, onboardingPrimary } from "../components/OnboardingCard"
 import { OnboardingSignIn, type MethodAvailability } from "../components/OnboardingSignIn"
 import { BrowserSignInWait, OtherTenant } from "../components/OnboardingConnection"
-import { type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
+import { GRAPH_CLI_SIGN_IN_REQUIREMENTS, type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
 import { MODULES } from "../../shared/services/modules"
 import { typeForFolder } from "../../shared/intune/registry"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
@@ -919,7 +919,7 @@ export default function OnboardingPage() {
                     <span aria-hidden="true" className="grid size-4 grid-cols-2 gap-0.5"><span className="bg-[#f25022]" /><span className="bg-[#7fba00]" /><span className="bg-[#00a4ef]" /><span className="bg-[#ffb900]" /></span>
                     {publicError ? "Try again" : "Sign in with Microsoft"}
                   </Button>
-                  {method === "graphCli" && <p className="mx-auto max-w-md text-xs text-muted-foreground">If Microsoft asks for new permissions, go back and choose another connection method.</p>}
+                  {method === "graphCli" && <p className="mx-auto max-w-md text-xs text-muted-foreground">{GRAPH_CLI_SIGN_IN_REQUIREMENTS}</p>}
                   {method === "tenuvaultApp" && <div><button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("handoff")}>Send to my admin</button></div>}
                   <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={Boolean(consentBusy)} expectedTenant={retryTenant} />
                   {method === "tenuvaultApp" && <details className="space-y-3" open={publicError ? true : undefined}>

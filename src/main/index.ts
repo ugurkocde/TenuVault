@@ -1,6 +1,6 @@
 import { discoverAzureResources } from "../shared/azure-discovery"
 import { ORGANIZATIONS, resolveOnboardingTenant } from "./auth/onboarding-tenant"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
+import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_SIGN_IN_REQUIREMENTS, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
 import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
 import { ConnectionSwitchError } from "./auth/switch-failure"
@@ -1683,7 +1683,7 @@ async function bootstrap(): Promise<void> {
       if (clientId.toLowerCase() !== GRAPH_CLI_CLIENT_ID) throw new Error("Reload the tenant and try again.")
       if (!await license.connectMethodEnabled("graphCli", true)) throw new Error(`${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}`)
       const response = await dialog.showMessageBox(mainWindow!, {
-        title: "Sign in with Start now", message: GRAPH_CLI_CONSENT_WARNING,
+        title: "Sign in with Start now", message: GRAPH_CLI_SIGN_IN_REQUIREMENTS,
         buttons: ["Cancel", "Continue to Microsoft"], defaultId: 0, cancelId: 0,
       })
       if (response.response !== 1) throw new Error("Sign-in cancelled.")

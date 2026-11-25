@@ -355,12 +355,14 @@ export class AuthManager {
   }
 
   private async acquireGraphCli(tenant: string, staged: PublicClientApplication) {
+    // Even an OpenID-only interactive request can prompt for consent. Require browser SSO
+    // and existing grants, with no interactive fallback if Microsoft cannot issue a code.
     const result = await this.acquireInteractive(GRAPH_CLI_CLIENT_ID, tenant, RESOURCE_SCOPES.graph,
-      "select_account", undefined, true, undefined, staged).catch((error: unknown) => {
+      "none", undefined, true, undefined, staged).catch((error: unknown) => {
       if (error instanceof SignInCancelledError) throw new ConnectionSwitchError("cancelled", GRAPH_CLI_CONSENT_CANCELLED)
       if (error instanceof SignInTimeoutError) throw new ConnectionSwitchError("timeout", `${GRAPH_CLI_CONSENT_CANCELLED} ${FIRST_SIGN_IN_TIMEOUT_MESSAGE}`)
       const refusal = error as SilentRefusal | null
-      throw graphCliSignInFailure(error instanceof Error ? error.message : "", silentRefusalCode(refusal ?? undefined))
+      throw graphCliSignInFailure(error instanceof Error ? error.message : "", silentRefusalCode(refusal ?? undefined) ?? oauthSignInCode(refusal?.errorCode))
     })
     const actualTenant = signedInTenant(tenant, result)
     const account = result.account!

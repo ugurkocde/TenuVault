@@ -3,7 +3,7 @@ import type { PackConsentPlan } from "../../shared/pack-consent"
 import { useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
-import { GRAPH_CLI_CONSENT_WARNING, GRAPH_CLI_UNAVAILABLE, OWN_APP_UPGRADE, ORGANIZATION_RENEWAL_NOTICE, SIGN_IN_METHODS, type TenantConnection } from "../../shared/tenant-connection"
+import { GRAPH_CLI_SIGN_IN_REQUIREMENTS, GRAPH_CLI_UNAVAILABLE, OWN_APP_UPGRADE, ORGANIZATION_RENEWAL_NOTICE, SIGN_IN_METHODS, type TenantConnection } from "../../shared/tenant-connection"
 import { isGuid } from "../../shared/security"
 import { bridge } from "../lib/bridge"
 import { useLicense } from "../lib/license"
@@ -115,9 +115,9 @@ export function TenantConnectionSettings({ tenantId, clientId, initialPack, onCh
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Sign in with Start now</DialogTitle>
-            <DialogDescription>Start now uses the permissions already granted to Microsoft Graph Command Line Tools. It supports read-only backups on this device.</DialogDescription>
+            <DialogDescription>Start now supports read-only backups on this device.</DialogDescription>
           </DialogHeader>
-          <p className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">{GRAPH_CLI_CONSENT_WARNING}</p>
+          <p className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">{GRAPH_CLI_SIGN_IN_REQUIREMENTS}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => {
               if (busy) void bridge.auth.cancelSignIn()

@@ -1,7 +1,7 @@
 import { PackConsentFlow } from "../src/main/auth/pack-consent"
 import { AZURE_STORAGE_PACKS, resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
 import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
-import { LogLevel, type Configuration } from "@azure/msal-node"
+import { LogLevel, ServerError, type Configuration } from "@azure/msal-node"
 import { describe, expect, it, vi } from "vitest"
 
 const msal = vi.hoisted(() => ({
@@ -511,10 +511,25 @@ describe("Start now loopback sign-in", () => {
     })
     expect(msal.client?.auth.clientId).toBe(GRAPH_CLI_CLIENT_ID)
     expect(msal.interactive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      authority: `https://login.microsoftonline.com/${TENANT}`, scopes: ["https://graph.microsoft.com/.default"], prompt: "select_account",
+      authority: `https://login.microsoftonline.com/${TENANT}`, scopes: ["https://graph.microsoft.com/.default"], prompt: "none",
     }))
     expect(auth.accounts()).toEqual([])
     expect(enabled.mock.calls).toEqual([[true], [true]])
+  })
+
+  it.each([
+    ["consent_required", "", "consent_required"],
+    ["interaction_required", "", "interaction_required"],
+    ["interaction_required", "AADSTS65001: no consent", "AADSTS65001"],
+    ["login_required", "", "login_required"],
+  ])("refuses %s without retrying with an interactive prompt", async (oauth, detail, code) => {
+    const auth = manager(undefined, async () => true)
+    msal.interactive.mockReset().mockRejectedValueOnce(new ServerError(oauth, "", detail))
+    await expect(auth.stageGraphCliSignIn(TENANT, cache)).rejects.toMatchObject({
+      code, message: expect.stringContaining(GRAPH_CLI_NEXT_STEP),
+    })
+    expect(msal.interactive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prompt: "none" }))
+    expect(auth.accounts()).toEqual([])
   })
 
   it("uses the signed-in tenant on organizations and refuses it during another tenant's switch", async () => {

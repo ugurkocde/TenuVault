@@ -15,11 +15,11 @@ Start now and the TenuVault app show an availability message when the license se
 
 ## Start now
 
-**Start now** is a read-only option in **How do you want to connect?** when the license service enables it. Read the warning, then select **Sign in with Microsoft**. TenuVault uses the tenant from your sign-in. If Microsoft asks you to approve new permissions, cancel and choose the TenuVault app. It signs in with Microsoft Graph Command Line Tools and uses the Microsoft Graph permissions already available to that sign-in.
+**Start now** is a read-only option in **How do you want to connect?** when the license service enables it. Sign in to Microsoft in your browser with the work account you want to use before selecting **Sign in with Microsoft**. Start now uses that session and the permissions already granted to Microsoft Graph Command Line Tools. If Microsoft requires consent or another sign-in step, choose the TenuVault app or your own app registration.
 
 1. For an eligible tenant, open **Settings > Sign-in and access**, then select **Use Start now**. Switch to backup storage on this device first if you use Azure storage.
-2. Read the warning before continuing to Microsoft. If Microsoft asks you to approve permissions or request administrator approval, cancel and choose another sign-in method.
-3. Sign in with an account in the same tenant. Open **Services and permissions** to see which backup types the granted scopes cover for Entra ID and Intune. If TenuVault cannot read the grant, it shows coverage as unknown. Your Microsoft role and service licenses also affect which reads succeed.
+2. Use a browser session already signed in with an account in the same tenant, then select **Continue to Microsoft**.
+3. Open **Services and permissions** to see which backup types the granted scopes cover for Entra ID and Intune. If TenuVault cannot read the grant, it shows coverage as unknown. Your Microsoft role and service licenses also affect which reads succeed.
 
 The tenant keeps its schedules, settings and backup history when you switch. Start now supports local policy backups. For restore, deployment, Copy to Tenants, remediation, installer capture or Azure storage, select **Upgrade to the TenuVault app** when available, or **Use your own app registration**. See [Start now troubleshooting](/troubleshooting/#start-now-sign-in).
 
@@ -202,7 +202,7 @@ See [Activate and manage your license](/licensing/manage/) for all license messa
 
 TenuVault keeps your sign-in in a token cache encrypted with Windows data protection or the macOS Keychain. Background tasks such as scheduled backups never open a sign-in window. When Microsoft needs you to sign in again, a banner appears with a **Sign in** button, or you use **Settings** > **Sign-in**. See [Settings reference](/settings/#sign-in).
 
-When you sign in again with **Start now**, TenuVault checks availability and shows the consent warning before opening Microsoft. To renew a **TenuVault app** sign-in, open **Settings > Sign-in and access**, choose **Review permission packs**, then select **Sign in**.
+When you sign in again with **Start now**, TenuVault checks availability and uses your existing Microsoft browser session. To renew a **TenuVault app** sign-in, open **Settings > Sign-in and access**, choose **Review permission packs**, then select **Sign in**.
 
 ## Next step
 

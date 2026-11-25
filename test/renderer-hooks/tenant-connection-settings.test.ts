@@ -2,7 +2,7 @@ import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { expect, it, vi } from "vitest"
 import { tenantPermissionPacks } from "../../src/shared/services/permission-packs"
-import { GRAPH_CLI_CONSENT_WARNING } from "../../src/shared/tenant-connection"
+import { GRAPH_CLI_SIGN_IN_REQUIREMENTS } from "../../src/shared/tenant-connection"
 import { TenantConnectionSettings } from "../../src/renderer/components/TenantConnectionSettings"
 
 const tenantId = "aaaaaaaa-1111-1111-1111-111111111111"
@@ -59,7 +59,7 @@ it.each([false, true])("warns before Start now sign-in and offers upgrades after
   try {
     await act(async () => root.render(createElement(TenantConnectionSettings, { tenantId, clientId, onChanged: vi.fn() })))
     await act(async () => button("Use Start now")!.click())
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(GRAPH_CLI_CONSENT_WARNING)
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(GRAPH_CLI_SIGN_IN_REQUIREMENTS)
     expect(auth.switchConnection).not.toHaveBeenCalled()
     await act(async () => button("Continue to Microsoft")!.click())
     expect(auth.switchConnection).toHaveBeenCalledExactlyOnceWith(tenantId, { method: "graphCli" })

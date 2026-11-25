@@ -271,6 +271,10 @@ Backups that only skip types for missing access count as successful and still sh
   only used Start now or the TenuVault app. If you already downgraded, return to 0.6 to
   recover the connection. Removing the tenant in 0.5.x deletes its backup schedule.
 
+- **Start now.** Connecting or signing in again requires an active Microsoft browser session
+  and an existing grant for Microsoft Graph Command Line Tools. If Microsoft requires
+  consent or another sign-in step, choose the TenuVault app or your own app registration.
+
 - **Intune policy sets.** Policy sets stay under Apps. Standard Intune setup already includes the Configuration permission. A signed-in backup with neither Configuration permission marks policy sets **Not read**. A Backup Reader without the Configuration read role fails its credential check. The restore preview blocks policy sets that lack the Configuration write scope and names the missing permission.
 - **Stable Entra coverage.** Back up device registration and enrollment, authentication methods and contexts, terms of use, and optional groups and devices. Eligible group directory restore requires individual review. The expanded Entra catalog is available for lab testing.
 - **Upgrade from 0.5.x.** Intune and Conditional Access retain their saved choices. Entra device and access settings are available through a switch on Check and in Settings. Groups and device inventory are opt-in. Azure Automation runbook 1.6.1 retains its Intune and Conditional Access coverage.

@@ -1463,7 +1463,7 @@ describe("sign-in method wizard", () => {
   it("starts in the signed-in user's tenant by default and shows Microsoft's decline code", async () => {
     state.wizardStage.mockResolvedValue({ error: { code: "AADSTS65004", message: "Microsoft declined consent." } })
     const container = await publicConnect("Start now")
-    expect(container.textContent).toContain("If Microsoft asks for new permissions")
+    expect(container.textContent).toContain("uses an existing Microsoft browser session")
     expect(container.querySelector("input")?.closest("details")?.open).toBe(false)
     await act(async () => button(container, "Sign in with Microsoft")!.click())
     expect(state.wizardStage).toHaveBeenCalledWith("", "graphCli", { intune: { access: "backup" } })
