@@ -106,7 +106,7 @@ module.exports = {
 
   // Releases and the auto-update feed live in this repository's GitHub releases: stable builds
   // write latest.yml, nightly builds (TENUVAULT_RELEASE_CHANNEL=nightly) write nightly.yml.
-  publish: {
+  publish: env.TENUVAULT_INSTALLERS_ONLY === "1" ? null : {
     provider: "github",
     owner: "ugurkocde",
     repo: "TenuVault",

@@ -77,7 +77,7 @@ Large-inventory preparation uses encrypted temporary merge files for sorted obje
 
 The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used for license activation, refresh, release and tenant trials, the trial key service at `https://www.tenuvault.com/api/desktop-trial`, used when you request a trial key by email, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
 
-The 0.6 release disables TenuVault app sign-in. Start now checks availability at `https://www.tenuvault.com/api/desktop-license/health`. This request carries no tenant details or Microsoft tokens. The desktop app can reuse a successful availability result for up to two minutes.
+The TenuVault app is coming in a later release. Start now checks availability at `https://www.tenuvault.com/api/desktop-license/health`. This request carries no tenant details or Microsoft tokens. The desktop app can reuse a successful availability result for up to two minutes.
 
 When you open the pricing page or the checkout (`https://www.tenuvault.com/api/desktop-checkout`) from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
@@ -151,12 +151,12 @@ On Pro and MSP, the [CIS Benchmarks](/baselines/cis-benchmarks/) page downloads 
 
 ## Setup diagnostics
 
-A new install asks once, on the welcome screen, whether it may tell TenuVault which setup steps worked and which Microsoft error codes stopped them. This is how we find out where setups fail, for example on a Conditional Access policy or a blocked Microsoft app, and fix the guidance for setups like yours.
+After the first successful backup in guided setup, a new install asks whether it may tell TenuVault which setup steps worked and which Microsoft error codes stopped them. This is how we find out where setups fail, for example on a Conditional Access policy or a blocked Microsoft app, and fix the guidance for setups like yours.
 
 **When it is asked**
 
 * Only on a new install: the first launch of a version with setup diagnostics, with no saved TenuVault data on the device. Installs that existed before are never asked and send nothing.
-* After the first backup, choose **Share** or **No thanks**. Both options leave the dashboard available.
+* Choose **Share** or **No thanks** below the first-backup result. Both options leave the dashboard available.
 * **No thanks** dismisses the question. You can still turn sharing on or off in **Settings** > **About** > **Share setup diagnostics**.
 
 **Nothing before you agree.** Until you enable sharing, TenuVault stores only whether you answered. It stores no date or ID, keeps no queue of events and sends nothing. The 30 days start when you agree.

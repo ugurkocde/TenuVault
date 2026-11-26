@@ -8,6 +8,7 @@ import { isGraphId, isGuid, normalizeGuid } from "../../shared/security"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { requireRestoreActor, type RestoreAuthorization } from "./restore-actor"
 import { createHash } from "node:crypto"
+import { PlanRequired } from "../../shared/plans"
 import type { KeyValueStore } from "../storage/secure-store"
 import { restoreCapability, type IntuneType, type Item } from "../../shared/intune/registry"
 import { addsOnlyPayload, RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, mergeConsentScopes, restoreOriginBlocker, writableSnapshot, type RestoreActor, type RestoreOrigin, type SafetyReferences } from "../../shared/intune/restore-guards"
@@ -79,7 +80,7 @@ export interface GuardedIO {
   /** Complete descriptor-based lookup. Must reject an incomplete list, never match a guessed name. */
   findCreated: (step: GuardedStep, sent: Item, signal?: AbortSignal) => Promise<Item[]>
   references: (step: GuardedStep, current: Item | null, desired: Item, signal?: AbortSignal) => Promise<SafetyReferences>
-  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun, signal?: AbortSignal, onUnapplied?: (retryAt: number, cause?: RestoreWriteDeferredError["deferralCause"]) => void) => Promise<{ id?: string }>
+  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void | Promise<void>, run?: GuardedRun, signal?: AbortSignal, onUnapplied?: (retryAt: number, cause?: RestoreWriteDeferredError["deferralCause"]) => void) => Promise<{ id?: string }>
 }
 /** The closed directory adapter refuses privileged links and state changes at its final send boundary.
  * Other writers retain the full descriptor protections, including remaining administrators. */
@@ -343,7 +344,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
             entry.state = step.directory ? "deferred" : "captured"; delete entry.reason; defer(retryAt, rejected)
           })
         } catch (error) {
-          if (isRestorePersistenceError(error)) throw error
+          if (isRestorePersistenceError(error) || (error instanceof PlanRequired && ["captured", "deferred"].includes(entry.state))) throw error
           // The final pre-send safety read runs inside the write and can also miss a replicating object.
           if (step.directory && ((error instanceof DirectoryObjectNotFoundError && io.recentlyCreated?.(entry.targetId)) || (error instanceof DirectoryRequiredObjectAbsentError && io.recentlyCreated?.(error.objectId)))) {
             const deferred = new DirectoryReplicationDeferredError()
@@ -389,7 +390,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         saveConfirmed(step)
       } catch (caught) {
         let error = caught
-        if (entry.state === "applied" || isRestorePersistenceError(error)) throw error
+        if (entry.state === "applied" || isRestorePersistenceError(error) || (error instanceof PlanRequired && entry.state !== "uncertain")) throw error
         // A required object our own journal just created may not have replicated to this read. No write was sent.
         if (step.directory && entry.state !== "uncertain" && error instanceof DirectoryRequiredObjectAbsentError && io.recentlyCreated?.(error.objectId)) error = new DirectoryReplicationDeferredError()
         if (entry.state === "uncertain" && error instanceof RestoreWriteDeferredError && error.retryAt !== undefined) {

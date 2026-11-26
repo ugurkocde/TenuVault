@@ -6,6 +6,8 @@ import { AppMetadataRemovalNotice } from "~/components/tenants/app-metadata-remo
 import type { AppMetadataRemoval } from "../../../shared/app-metadata-removal"
 import type { PermissionPack } from "../../../shared/services/permission-packs"
 import { Button } from "~/components/ui/button"
+import { canUse, GatedButton } from "@desktop/components/PlanGate"
+import type { Plan } from "../../../shared/plans"
 import type { BackupTenant } from "./types"
 import type { ReplacedReference } from "../../../shared/intune/restore-references"
 import type { DirectoryOptions } from "../../../main/restore/directory-service"
@@ -53,8 +55,9 @@ function formatDirectoryValue(property: string, value: unknown, eligibility: boo
 
 /** A bounded page of explicit approvals, outside restore all and row selection. */
 /** `active` is false while the panel is mounted on a hidden tab: it lists saved pages only once shown. */
-export function DirectoryRestore({ tenant, backupId = "", path = "", active = true }: { tenant: BackupTenant; backupId?: string; path?: string; active?: boolean }) {
+export function DirectoryRestore({ tenant, backupId = "", path = "", active = true, plan = "pro" }: { tenant: BackupTenant; backupId?: string; path?: string; active?: boolean; plan?: Plan | null }) {
   const savedOnly = !backupId || !path
+  const gated = !savedOnly && !canUse(plan, "directoryRestore")
   const [open, setOpen] = useState(savedOnly), [busy, setBusy] = useState(false)
   const [stage, setStage] = useState("object"), [exactMembers, setExactMembers] = useState(false), [exactOwners, setExactOwners] = useState(false)
   const [review, setReview] = useState<Review | null>(null), [approvals, setApprovals] = useState<Record<string, string[]>>({}), [message, setMessage] = useState("")
@@ -65,10 +68,12 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
   const [resumeId, setResumeId] = useState(""), [inputCanDiscard, setInputCanDiscard] = useState<boolean | null>(null)
   const [activeRestore, setActiveRestore] = useState<string | null>(null)
   const [savedPages, setSavedPages] = useState<Array<{ runId: string; path: string }>>([])
-  const savedOwner = useRef(""), savedPage = useRef("")
+  const savedOwner = useRef(""), savedPage = useRef(""), activeRestoreRef = useRef<string | null>(null), gatedRef = useRef(gated)
   savedPage.current = review?.runId ?? resumeId
-  const generation = useRef(0), refresh = useRef(0), opened = useRef(open && active)
-  opened.current = open && active
+  activeRestoreRef.current = activeRestore
+  gatedRef.current = gated
+  const generation = useRef(0), refresh = useRef(0), opened = useRef(open && active && !gated)
+  opened.current = open && active && !gated
   // Each row lists the owner's saved pages only while its review is open, never on mount.
   const discover = useRef(async (_previousId?: string, _afterAction?: boolean) => {})
   discover.current = async (previousId = "", afterAction = false) => {
@@ -99,15 +104,24 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
     return () => { refresh.current++; generation.current++; unsubscribe?.() }
   }, [tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
   useEffect(() => {
-    if (open && active) void discover.current()
+    if (open && active && !gated) void discover.current()
     else refresh.current++
-  }, [open, active, tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
+  }, [open, active, gated, tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
+  useEffect(() => {
+    if (!gated) return
+    setOpen(false)
+    if (!activeRestoreRef.current) {
+      generation.current++
+      setBusy(false); setActiveRestore(null); activeRestoreRef.current = null
+    }
+    setCanDiscard(null); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage("")
+  }, [gated])
   const invalidate = () => { generation.current++; setCanDiscard(null); setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage("") }
   const send = async (action: "preview" | "restore" | "cancel" | "resume" | "next" | "reconcile" | "discard", discardId?: string) => {
     const run = action === "cancel" ? generation.current : ++generation.current
     const pageId = action === "resume" ? resumeId : action === "cancel" ? activeRestore : action === "discard" ? discardId : action === "reconcile" ? (review?.runId ?? resumeId) : review?.runId
     const affectsReview = action !== "discard" || !review || pageId === review.runId
-    if (action !== "cancel") { setBusy(true); setActiveRestore(action === "restore" ? pageId ?? null : null) }
+    if (action !== "cancel") { const nextActive = action === "restore" ? pageId ?? null : null; setBusy(true); setActiveRestore(nextActive); activeRestoreRef.current = nextActive }
     if (action === "restore") { setRemoval(undefined); setOutcomes([]); setReview(previous => previous && { ...previous, selection: previous.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key), unresolved: true }) }
     setMessage("")
     try {
@@ -126,20 +140,23 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
       else if (pageId === resumeId) setInputCanDiscard(data.canDiscard === true)
       if (data.rows && data.options && affectsReview) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) }
       if (affectsReview) setCanDiscard(data.canDiscard === true)
-      if (action === "restore" || action === "reconcile" || action === "discard") setReview(previous => {
+      if (!gatedRef.current && (action === "restore" || action === "reconcile" || action === "discard")) setReview(previous => {
         if (action === "discard" && previous && previous.runId !== pageId) return previous
         const current: Review | null = data.rows ? data : previous
         if (!current) return null
         const discarded = data.discarded ?? current.discarded ?? false
         return { ...current, discarded, unresolved: discarded ? false : data.unresolved ?? directoryPageUnresolved(false, current.selection ?? (data.outcomes ?? []).map((row: { key: string }) => row.key), data.outcomes ?? []) }
       })
-      if (action === "preview" || action === "resume" || action === "next") { setReview(data); setApprovals(action === "resume" ? Object.fromEntries((data.rows as Review["rows"]).filter(row => data.selection?.includes(row.key)).map(row => [row.key, row.review.approvals])) : {}); setOutcomes(action === "resume" ? data.outcomes ?? [] : []); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
+      if (!gatedRef.current && (action === "preview" || action === "resume" || action === "next")) { setReview(data); setApprovals(action === "resume" ? Object.fromEntries((data.rows as Review["rows"]).filter(row => data.selection?.includes(row.key)).map(row => [row.key, row.review.approvals])) : {}); setOutcomes(action === "resume" ? data.outcomes ?? [] : []); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
       else if (action === "cancel") setMessage(data.cancelled ? "Cancellation requested. In-flight results will be confirmed before continuing." : "No active restore was cancelled.")
       else if (action === "discard") { setSavedPages(previous => previous.filter(page => page.runId !== pageId)); if (pageId === review?.runId) { setCanDiscard(false); setOutcomes([]) } setMessage("Saved restore discarded. This page can never send again.") }
-      else { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []); setMessage(data.status === "nothing-sent" ? "No directory changes were sent for this page. You can discard the saved restore." : data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume throttled steps after the retry time. Confirm uncertain results before continuing. ${(data.warnings ?? []).join(" ")}`) }
+      else {
+        if (!gatedRef.current) { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []) }
+        setMessage(data.status === "nothing-sent" ? "No directory changes were sent for this page. You can discard the saved restore." : data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume throttled steps after the retry time. Confirm uncertain results before continuing. ${(data.warnings ?? []).join(" ")}`)
+      }
     } catch (error) { if (generation.current === run) setMessage(error instanceof Error ? error.message : "Directory restore could not finish.") }
     finally {
-      if (action !== "cancel" && generation.current === run) { setBusy(false); setActiveRestore(null) }
+      if (action !== "cancel" && generation.current === run) { setBusy(false); setActiveRestore(null); activeRestoreRef.current = null }
       // Saved-page actions change which pages remain unfinished.
       if (["restore", "reconcile", "discard", "resume", "preview", "next"].includes(action) && opened.current) void discover.current("", true)
     }
@@ -161,8 +178,16 @@ export function DirectoryRestore({ tenant, backupId = "", path = "", active = tr
   const selected = review?.rows.some(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind)))
   const unresolved = review?.discarded ? false : review?.unresolved ?? directoryPageUnresolved(false, review?.selection ?? outcomes.map(row => row.key), outcomes)
   return <div className="px-4 pb-3 pl-11 text-sm" data-no-select>
-    <Button size="sm" variant="outline" disabled={busy} aria-expanded={open} onClick={() => { setOpen(!open); invalidate() }}>Review directory restore</Button>
-    {open && <div className="mt-2 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-gray-900">
+    <div className="flex flex-wrap items-center gap-2">
+      {gated ? (
+        <GatedButton feature="directoryRestore" plan={plan} size="sm" variant="outline">Review directory restore</GatedButton>
+      ) : (
+        <Button size="sm" variant="outline" disabled={busy} aria-expanded={open} onClick={() => { setOpen(!open); invalidate() }}>Review directory restore</Button>
+      )}
+      {busy && activeRestore && (gated || !open) && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}
+    </div>
+    {(gated || !open) && message && <p role="status" aria-live="polite" className="mt-1">{message}</p>}
+    {!gated && open && <div className="mt-2 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-gray-900">
       {!privileged && <p>Review who receives access. Each change needs its own approval and is never part of restore all. {!applications && <>Recreated objects get a new ID. Restore the object before reviewing relationships.</>}</p>}
       {privileged ? <p>Review the current principal, privilege and scope. For PIM schedules, compare the current and saved dates. {PRIVILEGED_RESTORE_BLOCKER}</p> : applications ? <p>Only nonempty app registration name and description updates run. Everything else is blocked, including creation, enterprise app metadata, recycle recovery, owners, consent, app roles, policy bindings, SAML signing keys, provisioning secrets and all credentials.</p> : <><p>Object updates restore a user's display name or a security group's nonempty description. Clearing descriptions remains blocked after inconsistent live read-back. Other profile and group properties have no admitted restore round trip.</p>
       <p>Exact member removal is blocked for Conditional Access targeted groups because it can affect policy enforcement. Remove those members in Microsoft Entra. Other admitted changes remain available.</p>

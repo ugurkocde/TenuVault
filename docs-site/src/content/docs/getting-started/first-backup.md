@@ -9,7 +9,7 @@ The last setup step takes a first backup, so you know sign-in, permissions and s
 
 Select **Start first backup** on **Where should backups go?**. The backup starts automatically and the progress bar shows what TenuVault is saving. Select **Cancel backup** to stop it.
 
-When **Your first backup is done** appears, you can review the counts and duration, expand **See backup details**, or set up the options below. Select **Go to dashboard** when you are ready to leave setup. The diagnostics question below the card is optional. On the Dashboard, **Turn on daily backups** (or **Set up automatic backups** on Community) opens Schedule, and **View backup** opens the saved backup. The first-backup card stays until you dismiss it or a second backup succeeds.
+When **Your first backup is done** appears, you can review the counts and duration, expand **See backup details**, or set up the options below. On a new installation, TenuVault may ask whether you want to share [setup diagnostics](/security/data-flows/#setup-diagnostics) below the result. Select **Go to dashboard** when you are ready to leave setup. On the Dashboard, **Turn on daily backups** (or **Set up automatic backups** on Community) opens Schedule, and **View backup** opens the saved backup. The first-backup card stays until you dismiss it or a second backup succeeds.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-first-backup.webp" aria-label="Open the first backup screenshot">
@@ -32,6 +32,8 @@ After a successful first backup, the step offers two things:
 * **Save your recovery key**, for backups on this device, if you have not saved it yet. Keep the file somewhere safe, such as your password manager. Without the recovery key, backups on this device cannot be read after a reinstall or on another computer. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key). For a tenant with Azure storage this step is left out, because Azure backups do not need the key.
 
 When a schedule is already on or the key is already saved, the step says so instead.
+
+Starting TenuVault when you sign in to your computer is off by default. To enable it, open **Settings > Background runner**.
 
 ## Run it from Backup & Restore
 

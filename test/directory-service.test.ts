@@ -5,6 +5,7 @@ import { graphWorkloadPolicy, graphUserCreateResponse } from "./fixtures/directo
 import { graphNotFound, unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 import { planGuard } from "../src/main/api/plan-gates"
+import { PlanRequired } from "../src/shared/plans"
 import { DirectoryPendingPublications } from "../src/main/restore/directory-pending-publications"
 import { setDirectoryRestoreService } from "../src/main/restore/directory-dispatch"
 import { POST as restoreDirectory } from "../src/portal/app/api/restore-directory/route"
@@ -2513,6 +2514,62 @@ it.each(["community", "stale entitlement"].flatMap(plan => ["cancel", "discard"]
     expect(localOwner).toHaveBeenCalledTimes(action === "cancel" ? 2 : 1)
     expect(planOf).not.toHaveBeenCalled(); expect(connection).not.toHaveBeenCalled(); expect(graph).not.toHaveBeenCalled(); expect(network).not.toHaveBeenCalled(); expect(env.writes).toEqual([])
   } finally { release?.(); await pending; vi.unstubAllGlobals() }
+})
+
+it("refuses prepare, resume and execute when directoryRestore plan coverage lapses while still allowing saved reconcile, discard and cancel without an entitlement", async () => {
+  const env = world(1), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const lapsed = vi.fn(async () => { throw new PlanRequired("directoryRestore") })
+  const unentitled = vi.fn(async () => { throw new Error("An active license is required.") })
+  const reconcileConnection = vi.fn(env.connection)
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), unentitled, env.connection, env.fetcher, () => [], env.settings, undefined, undefined, undefined, lapsed, reconcileConnection)
+  await expect(service.prepare(tenant, env.request, { ...options, stage: "object" }, env.read)).rejects.toBeInstanceOf(PlanRequired)
+  await expect(service.resume(tenant, { ...env.request, runId: page.runId })).rejects.toBeInstanceOf(PlanRequired)
+  await expect(service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).rejects.toBeInstanceOf(PlanRequired)
+  expect(env.writes).toEqual([])
+  expect(lapsed).toHaveBeenCalledTimes(3)
+  expect(unentitled).not.toHaveBeenCalled()
+  expect(await service.cancel(tenant, page.runId)).toEqual({ cancelled: false })
+  expect(await service.saved(tenant, page.runId, "reconcile")).toMatchObject({ status: "nothing-sent" })
+  expect(reconcileConnection).toHaveBeenCalledOnce()
+  expect(unentitled).not.toHaveBeenCalled()
+  expect(await service.saved(tenant, page.runId, "discard")).toMatchObject({ discarded: true })
+  expect(lapsed).toHaveBeenCalledTimes(3)
+})
+
+it("blocks directory writes when the tenant downgrades during pre-send validation or retry wait, and marks completed page replays", async () => {
+  const env = world(1), page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  let paid = true
+  let mode: "validation" | "retry" | "allow" = "validation"
+  const checkPlan = vi.fn(async () => { if (!paid) throw new PlanRequired("directoryRestore") })
+  const downgradingFetch: typeof fetch = async (input, init) => {
+    const method = (init?.method ?? "GET").toUpperCase()
+    if (mode === "validation" && method === "GET" && String(input).includes("/groups/")) {
+      mode = "retry"
+      paid = false
+    }
+    if (mode === "retry" && method === "POST") {
+      mode = "allow"
+      paid = false
+      return Response.json({ error: { code: "TooManyRequests" } }, { status: 429, headers: { "Retry-After": "0" } })
+    }
+    return env.fetcher(input, init)
+  }
+  const service = new DirectoryRestoreService(env.store, new RecoveryAccounts(env.store), env.connection, env.connection, downgradingFetch, () => [], env.settings, undefined, undefined, undefined, checkPlan)
+  const approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  await expect(service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).rejects.toBeInstanceOf(PlanRequired)
+  expect(env.writes).toEqual([])
+  paid = true
+  await expect(service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)).rejects.toBeInstanceOf(PlanRequired)
+  expect(env.writes).toEqual([])
+  paid = true
+  const first = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)
+  expect(first.status).toBe("complete")
+  expect(first.replayed).toBeUndefined()
+  expect(env.writes).toHaveLength(1)
+  const replay = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, approvals)
+  expect(replay.status).toBe("complete")
+  expect(replay.replayed).toBe(true)
+  expect(env.writes).toHaveLength(1)
 })
 
 it.each(["userId", "tenantId", "clientId"] as const)("checks the cached %s before any next-page publication retry or Graph read", async changed => {

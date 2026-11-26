@@ -25,10 +25,10 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     if (step.properties.some(key => !write.properties.includes(key)) || Object.keys(step.desired).some(key => !write.properties.includes(key))) throw new RestoreSafetyError("The write contains properties outside the verified Graph contract.")
     return { row, write }
   }
-  const request = async (url: string, method = "GET", body?: Item, etag?: string, beforeSend?: () => void): Promise<Item | null> => {
+  const request = async (url: string, method = "GET", body?: Item, etag?: string, beforeSend?: () => void | Promise<void>): Promise<Item | null> => {
     requireRestoreActor(token, actor, authorization)
     const options: RequestInit = { method, headers: { Authorization: `Bearer ${token}`, ...(new URL(url).pathname.endsWith("/branding") ? { "Accept-Language": "0" } : {}), ...(body ? { "Content-Type": "application/json" } : {}), ...(etag ? { "If-Match": etag } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) }
-    beforeSend?.()
+    await beforeSend?.()
     const response = await fetchImpl(url, options)
     if (method === "GET" && response.status === 404) return null
     if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)

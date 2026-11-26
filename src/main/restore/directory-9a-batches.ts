@@ -33,7 +33,7 @@ export interface DirectoryBatchSource {
   page: (cursor: string | null, limit: number) => Promise<{ entries: GuardedRun["entries"]; next: string | null }>
 }
 /** Each batch has its own durable 8a journal partition. Neither previews nor journal saves grow with the directory. */
-export async function executeDirectoryBatches(store: PartitionedRestoreStore, identity: Omit<GuardedRun, "entries" | "mappings">, source: DirectoryBatchSource, io: GuardedIO, signal?: AbortSignal, limit = 20, reconcileOnly = false, retryableLock?: (owner: string) => boolean): Promise<{ status: "complete" | "partial"; batches: number; failed: number }> {
+export async function executeDirectoryBatches(store: PartitionedRestoreStore, identity: Omit<GuardedRun, "entries" | "mappings">, source: DirectoryBatchSource, io: GuardedIO, signal?: AbortSignal, limit = 20, reconcileOnly = false, retryableLock?: (owner: string) => boolean): Promise<{ status: "complete" | "partial"; batches: number; failed: number; replayed?: boolean }> {
   if (store.partitioned !== true) throw new RestoreSafetyError("Directory restores require partitioned durable storage, not the whole app-state store.")
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RestoreSafetyError("The directory batch budget must be 1 to 100 steps.")
   const prefix = directoryPagePrefix(identity.tenant, identity.id)
@@ -43,6 +43,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
   const binding = restoreFingerprint({ ...identity, actor: { ...identity.actor, recoveryAccountIds: [] }, sourceFingerprint: source.fingerprint } as unknown as Item)
   const saved = store.get(prefix + "cursor")
   const state: { binding: string; cursor: string | null; batch: number; done: boolean; failed: number; warning?: boolean } = saved ? JSON.parse(saved) : { binding, cursor: null, batch: 0, done: false, failed: 0 }
+  const replayed = state.done === true
   if (state.binding !== binding) throw new RestoreSafetyError("The directory restore source or identity changed. Resume the original plan.")
   const save = () => store.set(prefix + "cursor", JSON.stringify(state))
   save()
@@ -79,7 +80,7 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
       return retryAt
     }, defer: (step, retryAt, rejected) => objectState.recordThrottle(effective(step), retryAt, rejected),
       write: (step, body, targetId, beforeSend, currentRun, writeSignal, onUnapplied) =>
-        io.write(step, body, targetId, () => { objectState.beforeSend(effective(step)); beforeSend() }, currentRun, writeSignal, onUnapplied),
+        io.write(step, body, targetId, async () => { objectState.beforeSend(effective(step)); await beforeSend() }, currentRun, writeSignal, onUnapplied),
     }
     // A failed throttle journal save can leave only the earlier uncertain marker.
     // Restore the coordinator deadline before confirmation can settle and release it.
@@ -97,5 +98,5 @@ export async function executeDirectoryBatches(store: PartitionedRestoreStore, id
     state.cursor = page.next; state.batch++; state.done = page.next === null; save()
   }
   if (state.done) objectState.release()
-  return { status: state.done && state.failed === 0 && !state.warning ? "complete" : "partial", batches: state.batch, failed: state.failed }
+  return { status: state.done && state.failed === 0 && !state.warning ? "complete" : "partial", batches: state.batch, failed: state.failed, ...(replayed ? { replayed: true } : {}) }
 }

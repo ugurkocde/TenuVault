@@ -153,7 +153,7 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
   if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
   const data = await response.json().catch(() => ({})) as {
     outcome?: { success: boolean; partial?: boolean; approval?: unknown; approvalState?: string; policyId?: string; path: string; error?: string }
-    success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
+    success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean; replayed?: boolean
     details?: { restoredCount: number; partialCount?: number; failedCount: number; approvalCount?: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
   }
   if (directory) {
@@ -190,9 +190,9 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
       })
     } catch { /* Notifications are best effort and never block the audit record. */ }
   }
-  if (onTrialUsage && ok && !partial && !data.partial && data.status !== "PartiallyCompleted" && !(data.details?.failedCount) && !(data.details?.partialCount) && !("approvalAction" in body) && !("targetTenants" in body)) {
+  if (onTrialUsage && ok && !partial && !data.partial && !data.replayed && data.status !== "PartiallyCompleted" && !(data.details?.failedCount) && !(data.details?.partialCount) && !("approvalAction" in body) && !("targetTenants" in body)) {
     try {
-      const feature = requiredFeatures(policyCopy ? "/api/revert-policy" : "/api/restore-backup", { ...body }).find(feature => ["fullRestore", "replaceRestore", "restoreAssignments", "driftRevert"].includes(feature))
+      const feature = requiredFeatures(policyCopy ? "/api/revert-policy" : directory ? "/api/restore-directory" : "/api/restore-backup", { ...body }).find(feature => ["fullRestore", "replaceRestore", "restoreAssignments", "directoryRestore", "driftRevert"].includes(feature))
       if (feature) onTrialUsage(body.tenantId, feature)
     } catch { /* A tally never changes the action's outcome. */ }
   }

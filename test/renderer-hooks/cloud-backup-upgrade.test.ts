@@ -7,7 +7,7 @@ import type { CloudBackupConfig, CloudBackupStatus } from "../../src/shared/clou
 vi.mock("@desktop/lib/bridge", () => ({ bridge: { backups: { scope: async () => ({ scope: { excluded: [] } }) } } }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-it("tells Azure runners on 1.5.0 to update for accurate change reports", async () => {
+it("asks for a coverage update until the Azure runbook reports 1.6.1 or later", async () => {
   const config: CloudBackupConfig = {
     tenantId: "tenant", subscriptionId: "subscription", resourceGroup: "rg", automationAccount: "automation",
     storageAccount: "store", scheduleName: "Daily", frequency: "daily", time: "", weekday: 0, timeZone: "UTC", tenantKey: "tenant", linked: true,
@@ -27,6 +27,10 @@ it("tells Azure runners on 1.5.0 to update for accurate change reports", async (
     expect.soft(node.textContent).toContain("Run the setup script again with the same values")
     expect.soft(node.textContent).toContain("accurate change reports")
     await render("1.6.0")
+    expect.soft(node.textContent).toContain("accurate change reports")
+    await render("1.6.1")
+    expect.soft(node.textContent).not.toContain("accurate change reports")
+    await render("1.7.0")
     expect.soft(node.textContent).not.toContain("accurate change reports")
     await render("1.1.0")
     expect(node.textContent).toContain("recovery key from Key Vault")

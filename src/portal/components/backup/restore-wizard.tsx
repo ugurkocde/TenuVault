@@ -49,6 +49,7 @@ import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
 import { RestoreAccess, RestoreTargetAccess, useRestoreAccess } from "@desktop/components/RestoreAccess"
 import { GatedButton } from "@desktop/components/PlanGate"
+import type { Plan as LicensePlan } from "../../../shared/plans"
 import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
 import { LinkedMessage } from "~/components/linked-message"
 
@@ -75,6 +76,7 @@ interface RestoreWizardProps {
   backups: BackupSummary[]
   /** Preselected backup, for example from "Restore" in the backup history. */
   initialBackupId: string | null
+  plan?: LicensePlan | null
   community: boolean
   canCopyToTenants: boolean
   copyCandidates: CopyTarget[]
@@ -256,9 +258,10 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
  * Restores items from a backup in five steps: choose the backup, the items and how to restore them,
  * review what will happen to each item in the tenant as it is now, then watch the restore run.
  */
-export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates, service = "all", onRunningChange, active = true }: RestoreWizardProps) {
+export function RestoreWizard({ tenant, backups, initialBackupId, plan, community, canCopyToTenants, copyCandidates, service = "all", onRunningChange, active = true }: RestoreWizardProps) {
+  const effectivePlan: LicensePlan | null = plan !== undefined ? plan : community ? "community" : "pro"
   const showPlanError = (error: unknown) => showFeaturePlanError(error, community
-    ? ["fullRestore", "replaceRestore", "restoreAssignments", "bulkActions"]
+    ? ["fullRestore", "replaceRestore", "restoreAssignments", "directoryRestore", "bulkActions"]
     : !canCopyToTenants ? ["bulkActions"] : [])
   // A backup that stopped early still holds complete snapshots of the items it saved.
   const restorable = backups.filter((backup) => statusKind(backup.status) !== "running" && backup.totalPolicies > 0)
@@ -979,7 +982,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                       )}
                                     </span>
                                   </label>
-                                  {!copying && !access.issueFor(item.folder) && DIRECTORY_REVIEW_FOLDERS.includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} />}
+                                  {!copying && !access.issueFor(item.folder) && DIRECTORY_REVIEW_FOLDERS.includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} plan={effectivePlan} />}
                                   {!copying && !backupOnlyRestoreMessage(item.folder) && !access.issueFor(item.folder) && (!DIRECTORY_REVIEW_FOLDERS.includes(item.folder) || item.folder === "AdministrativeUnits") && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}

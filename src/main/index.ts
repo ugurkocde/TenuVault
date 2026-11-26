@@ -518,6 +518,13 @@ async function bootstrap(): Promise<void> {
     const token = await tokenFor(tenant, account.clientId, "https://graph.microsoft.com/.default", true)
     return restoreSignIn(tenant, account, token)
   }
+  // Read-only reconciliation of previously saved directory pages stays available after a plan ends.
+  const directoryReconcileConnection = async (tenant: string) => {
+    const account = accounts.get(tenant)
+    if (!account) throw new Error("Sign in to this tenant before confirming saved directory restores.")
+    const token = await tokenFor(tenant, account.clientId, "https://graph.microsoft.com/.default", true)
+    return restoreSignIn(tenant, account, token)
+  }
   // An in-place update needs the plan feature at execution as well, whatever the request said.
   const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch, async (tenant) => {
     // The same plan resolution as the route gate.
@@ -963,7 +970,10 @@ async function bootstrap(): Promise<void> {
   setDirectoryRestoreService(new DirectoryRestoreService(directoryStore, recoveryAccounts, restoreConnection, tenant => auth.cachedAccountIdentity(tenant), bridgedFetch, tenant => {
     const id = backupReader.status(tenant)?.clientId
     return id ? [id] : []
-  }, moduleSettings, undefined, tenant => connections.get(tenant)?.method, metadataAccess))
+  }, moduleSettings, undefined, tenant => connections.get(tenant)?.method, metadataAccess, async tenant => {
+    const plan = await license.requireEntitlement(tenant).catch(() => null)
+    if (!plan || !allows(plan, "directoryRestore")) throw new PlanRequired("directoryRestore")
+  }, directoryReconcileConnection))
 
   const missingReaderAuditContainers = new Set<string>()
   const readerAuditKey = (tenantId: string, account: string) => `${tenantId.toLowerCase()}:${account}`

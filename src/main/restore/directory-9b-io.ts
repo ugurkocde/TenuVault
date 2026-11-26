@@ -241,7 +241,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
           // Reads stay available so already-sent writes can reconcile after opt-out.
           requireApplicationRestoreAccess(settings())
           if (signal?.aborted) throw new RestoreWriteDeferredError("The application write was cancelled before sending.")
-          beforeSend()
+          await beforeSend()
           dispatched = true
           await request(path, "PATCH", payload, signal)
           return { id: targetId }

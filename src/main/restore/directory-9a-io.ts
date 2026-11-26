@@ -43,7 +43,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   const fetchRequest = rejectProxyAuthResponses(fetchImpl)
   // Preview inventories can retry individual reads. Journalled execution uses raw
   // reads so every throttle reaches its durable entry or restarts the whole writer.
-  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<"user" | "group" | undefined>, beforeSend?: () => void): Promise<Item | null> => {
+  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<"user" | "group" | undefined>, beforeSend?: () => void | Promise<void>): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
       const url = new URL(path.startsWith("https://") ? path : root + path)
       if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,mailNickname,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,assignedLicenses,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
@@ -60,7 +60,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         }
       } else if (signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
       const requestSignal = method === "GET" && signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000)
-      beforeSend?.()
+      await beforeSend?.()
       if (method !== "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
       const send = () => fetchRequest(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(method === "GET" && (url.searchParams.has("$count") || url.pathname.includes("/transitiveMemberOf/")) ? { ConsistencyLevel: "eventual" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal })
       const recycle: ExecutionMetadata["directoryRecycle"] = recycleType && { path: url.pathname, type: recycleType }

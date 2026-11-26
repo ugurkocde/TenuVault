@@ -525,6 +525,7 @@ export default function BackupRestorePage() {
             tenant={tenant}
             backups={backups}
             initialBackupId={restoreFrom}
+            plan={plan}
             community={community}
             canCopyToTenants={canCopyToTenants}
             copyCandidates={copyCandidates}

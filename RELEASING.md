@@ -257,23 +257,23 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
 
-- **Azure backup coverage.** Run the cloud backup setup script again with the existing values to deploy backup runbook 1.6.0. This version verifies policy details and records incomplete reads so change reports can qualify comparisons. The Schedule tab prompts for an update when the last run reports an older version. The setup keeps its existing audit capability threshold of 1.5.0.
+- **Azure backup coverage.** Run the cloud backup setup script again with the existing values to deploy backup runbook 1.6.1. This version verifies policy details and records incomplete reads so change reports can qualify comparisons. The Schedule tab prompts for an update when the last run reports a version earlier than 1.6.1. The audit capability threshold remains 1.5.0.
 
 - Comparisons of pre-0.6 backups continue to show deletions for types with no recorded failure. An older backup with an unassigned read failure adds a warning about those deletions. Backups that record per-type outcomes need a complete read for each compared type.
 
 - **Tenant sign-in.** After a downgrade to 0.5.x, a tenant connected through the new wizard
   uses its own app registration if it has one. Signing in again in 0.5.x may require a fresh
-  sign-in when you return to 0.6. New Start now, TenuVault app and in-app registration
-  setups use the tenant from Microsoft sign-in by default. Use the tenant ID or domain
-  option for a guest tenant. Existing app registrations still require their IDs.
+  sign-in when you return to 0.6. New Start now and in-app registration setups use the tenant
+  from Microsoft sign-in by default. Use the tenant ID or domain option for a guest tenant.
+  Existing app registrations still require their IDs.
 
   Before downgrading to 0.5.x, switch to your own app registration in 0.6 if the tenant has
-  only used Start now or the TenuVault app. If you already downgraded, return to 0.6 to
-  recover the connection. Removing the tenant in 0.5.x deletes its backup schedule.
+  only used Start now. If you already downgraded, return to 0.6 to recover the connection.
+  Removing the tenant in 0.5.x deletes its backup schedule.
 
 - **Start now.** Connecting or signing in again requires an active Microsoft browser session
   and an existing grant for Microsoft Graph Command Line Tools. If Microsoft requires
-  consent or another sign-in step, choose the TenuVault app or your own app registration.
+  consent, choose your own app registration. The TenuVault app is coming in a later release.
 
 - **Intune policy sets.** Policy sets stay under Apps. Standard Intune setup already includes the Configuration permission. A signed-in backup with neither Configuration permission marks policy sets **Not read**. A Backup Reader without the Configuration read role fails its credential check. The restore preview blocks policy sets that lack the Configuration write scope and names the missing permission.
 - **Stable Entra coverage.** Back up device registration and enrollment, authentication methods and contexts, terms of use, and optional groups and devices. Eligible group directory restore requires individual review. The expanded Entra catalog is available for lab testing.
@@ -328,9 +328,10 @@ Put these in the next stable release's notes, then remove them here.
   registration than before. No new destination and no new permission: the firewall allow list
   does not change.
 
-- **Setup diagnostics.** New installs ask once on the welcome screen whether to share setup
-  diagnostics with `POST https://www.tenuvault.com/api/desktop-events` (schema 1); turning it off
-  or the policy sends `POST /api/desktop-events/erase`. The website's ingest and erase endpoints
+- **Setup diagnostics.** After the first successful backup in guided setup, new installs ask
+  whether to share setup diagnostics with `POST https://www.tenuvault.com/api/desktop-events`
+  (schema 1). Turning it off or setting the disable policy sends `POST /api/desktop-events/erase`.
+  The website's ingest and erase endpoints
   and the privacy page's setup diagnostics section must be deployed before a
   build with this feature ships, nightlies included; until then a sharing install retries with
   backoff and drops its queue after 7 days. The event names and props are a contract with that
@@ -510,9 +511,10 @@ Both maintainers have the same rights and follow the same rules; nobody can bypa
 - A stable release promotes the newest nightly's commit, so stable only ships a build nightly
   users already ran. That commit's nightly must also have passed the nightly verification. Any maintainer may start one.
 - Releases only build commits reachable from `main`, and manual runs must be started from `main`.
-- Pull request installers are unsigned and receive no signing credentials. Manual CI builds
-  are also unsigned unless `signed_windows` is explicitly selected. That option uses the
-  release signing credentials and production helper signature guard, verifies both app and
-  helper publishers, and uploads a portable x64 verification ZIP alongside the installers.
-  It does not publish a release. Run it before accepting the signed helper on a test PC:
-  `gh workflow run ci.yml --ref <reviewed-branch> -f signed_windows=true`.
+- Pull request installers are unsigned and receive no signing credentials. For manual CI,
+  select `signed_windows` to verify the signed Windows app and capture helper and upload a
+  portable x64 verification ZIP alongside the installers. Select `signed_macos` to verify
+  Developer ID signatures and notarization and upload both architectures' DMGs and ZIPs.
+  Both options use release signing credentials and deliver the installers through GitHub
+  Actions artifacts. To request both:
+  `gh workflow run ci.yml --ref <reviewed-branch> -f signed_windows=true -f signed_macos=true`.
