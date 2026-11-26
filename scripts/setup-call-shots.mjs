@@ -239,7 +239,7 @@ try {
         await handlers({ diagnostics, trials })
         await evaluate(`Promise.all([window.tenuvault.storage.setItem("tenuvault_tenants", "[]"), window.tenuvault.storage.removeItem("tenuvault.onboarding.draft")])`)
         await setTheme(theme)
-        await evaluate(`location.hash = "#/"; location.reload()`)
+        await evaluate(`localStorage.setItem("tenuvault.splash.seen", "1"); location.hash = "#/"; location.reload()`)
         await sleep(1500)
         await assertText("Welcome to TenuVault", 30000)
         await disableAnimations()

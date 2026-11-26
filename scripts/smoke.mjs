@@ -267,6 +267,9 @@ async function disableAnimations() {
 }
 
 await check("first run shows the welcome screen", async () => {
+  const getStarted = `[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Get started")`
+  assert(await waitForCondition(`Boolean(${getStarted}) || document.body.innerText.includes("Welcome to TenuVault")`, 30000), "first-start screen did not appear")
+  await evaluate(`${getStarted}?.click()`)
   assert(await waitForText("Welcome to TenuVault", 30000), "welcome screen did not appear")
   await disableAnimations()
   assert(!(await evaluate(`document.body.innerText.includes("Backup & Restore")`)), "welcome screen missing, app shown instead")

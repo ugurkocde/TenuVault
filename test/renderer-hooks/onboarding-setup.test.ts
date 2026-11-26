@@ -104,11 +104,13 @@ import { AddTenantModal } from "../../src/renderer/overrides/add-tenant-modal"
 const TENANT = "8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14"
 const CLIENT = "5c3b8e21-7a4f-4d19-9c6e-2f81d0a4b7e3"
 const DRAFT_KEY = "tenuvault.onboarding.draft"
+const SPLASH_KEY = "tenuvault.splash.seen"
 const OUTPUT = `Done. Copy the two lines below and paste them into the Sign in step of Set up TenuVault:\n  Tenant id:                ${TENANT}\n  Application (client) id:  ${CLIENT}`
 
 const roots: Root[] = []
 
 beforeEach(() => {
+  localStorage.clear()
   state.graphCliAvailable.mockResolvedValue(false)
   state.tenuvaultAppAvailable.mockResolvedValue(false)
   state.wizardStage.mockReset()
@@ -143,12 +145,12 @@ async function flush() {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 }
 
-async function render(element: ReactElement, continueDefault = true) {
+async function render(element: ReactElement, continueDefault = true, path = "/portal/onboarding") {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
-  act(() => root.render(createElement(MemoryRouter, { initialEntries: ["/portal/onboarding"] }, element)))
+  act(() => root.render(createElement(MemoryRouter, { initialEntries: [path] }, element)))
   await flush()
   if (continueDefault) {
     if (button(container, "Choose Your own app registration")) await chooseOwnServices(container)
@@ -1010,9 +1012,114 @@ describe("setup diagnostics hooks", () => {
   })
 })
 
+describe("first-start splash", () => {
+  const renderGate = (path?: string) => render(createElement(LicenseGate, { children: "App content" }), false, path)
+
+  beforeEach(() => {
+    state.license = { hasKey: false, tenants: [] }
+  })
+
+  it("waits for Get started, remembers the click, and focuses Welcome after the fade", async () => {
+    // render() flushes with a zero timeout, so fake time also follows the clock.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const container = await renderGate()
+      const getStarted = button(container, "Get started")!
+      expect(container.querySelector("main h1")?.textContent).toBe("Intune backup, restore and disaster recovery")
+      // Focus waits until the button has finished rising into view.
+      expect(document.activeElement).not.toBe(getStarted)
+      act(() => vi.advanceTimersByTime(2300))
+      expect(document.activeElement).toBe(getStarted)
+      expect(localStorage.getItem(SPLASH_KEY)).toBeNull()
+      act(() => vi.advanceTimersByTime(10_000))
+      expect(getStarted.isConnected).toBe(true)
+      act(() => getStarted.click())
+      expect(localStorage.getItem(SPLASH_KEY)).toBe("1")
+      expect(state.store.get(SPLASH_KEY)).toBe("1")
+      act(() => vi.advanceTimersByTime(499))
+      expect(container.textContent).not.toContain("Welcome to TenuVault")
+      act(() => vi.advanceTimersByTime(1))
+      expect(container.querySelector("h1")?.textContent).toBe("Welcome to TenuVault")
+      expect(document.activeElement).toBe(container.querySelector("h1"))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("activates Get started with Enter", async () => {
+    // render() flushes with a zero timeout, so fake time also follows the clock.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const container = await renderGate()
+      act(() => vi.advanceTimersByTime(2300))
+      const getStarted = button(container, "Get started")!
+      expect(document.activeElement).toBe(getStarted)
+      // A focused native button turns Enter into a click.
+      act(() => {
+        getStarted.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+        getStarted.click()
+      })
+      act(() => vi.advanceTimersByTime(500))
+      expect(container.textContent).toContain("Welcome to TenuVault")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("stays skipped when only the app store remembers it, and when storage cannot be read", async () => {
+    state.store.set(SPLASH_KEY, "1")
+    let container = await renderGate()
+    expect(button(container, "Get started")).toBeUndefined()
+    state.store.delete(SPLASH_KEY)
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked") })
+    try {
+      container = await renderGate()
+      expect(button(container, "Get started")).toBeUndefined()
+      expect(container.textContent).toContain("Welcome to TenuVault")
+    } finally {
+      getItem.mockRestore()
+    }
+  })
+
+  it("opens Welcome directly once the splash has been seen", async () => {
+    localStorage.setItem(SPLASH_KEY, "1")
+    const container = await renderGate()
+    expect(container.textContent).toContain("Welcome to TenuVault")
+    expect(button(container, "Get started")).toBeUndefined()
+  })
+
+  it("opens Welcome directly with reduced motion", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(prefers-reduced-motion: reduce)" }))
+    const container = await renderGate()
+    expect(container.textContent).toContain("Welcome to TenuVault")
+    expect(button(container, "Get started")).toBeUndefined()
+    // Skipped for good, so turning motion back on mid-setup does not show it.
+    expect(localStorage.getItem(SPLASH_KEY)).toBe("1")
+  })
+
+  it.each(["tenant", "license key", "organization license", "onboarding draft", "app-backup route"])("opens the app directly with a %s", async (reason) => {
+    if (reason === "tenant") state.tenants = [{ credentials: { tenantId: TENANT } }]
+    if (reason === "license key") state.license = { hasKey: true, tenants: [] }
+    if (reason === "organization license") state.license = { hasKey: false, tenants: [{ activated: true }] }
+    if (reason === "onboarding draft") state.store.set(DRAFT_KEY, JSON.stringify({ step: -1, services: BACKUP_INTUNE_PERMISSIONS }))
+    const container = await renderGate(reason === "app-backup route" ? "/portal/app-backup/sources" : undefined)
+    expect(container.textContent).toBe("App content")
+    // Past its first start: removing the last tenant or key later must not bring the splash back.
+    expect(localStorage.getItem(SPLASH_KEY)).toBe(reason === "app-backup route" ? null : "1")
+  })
+
+  it("waits for tenant loading before deciding whether to show the splash", async () => {
+    state.tenantsLoaded = false
+    const container = await renderGate()
+    expect(container.querySelector(".animate-spin")).not.toBeNull()
+    expect(button(container, "Get started")).toBeUndefined()
+  })
+})
+
 describe("onboarding service choices", () => {
   it("opens the sign-in wizard from Welcome and asks for explicit backup access", async () => {
     state.license = { hasKey: false, tenants: [] }
+    localStorage.setItem(SPLASH_KEY, "1")
     const container = await render(createElement(LicenseGate, { children: createElement(OnboardingPage) }), false)
     expect(container.textContent).toContain("Welcome to TenuVault")
     await act(async () => button(container, "Connect your tenant")!.click())

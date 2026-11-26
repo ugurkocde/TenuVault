@@ -65,7 +65,7 @@ import { SettingsTransfer } from "./settings-transfer/service"
 import { readSettingsFile } from "./settings-transfer/file"
 import { settingsFileName } from "../shared/settings-transfer"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell } from "electron"
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeTheme, net, Notification, powerMonitor, safeStorage, session, shell } from "electron"
 import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
@@ -162,6 +162,7 @@ import { requireServiceAccess } from "./services/access"
 import { ConnectionHealth, selectedTenant } from "./connection-health/service"
 
 const RENDERER_STORAGE_PREFIX = "renderer."
+const APPEARANCE_KEY = "tenuvault-appearance"
 const LOCAL_FOLDER_KEY = "backup.localFolder"
 
 if (__TV_LAB_BUILD__) {
@@ -179,6 +180,7 @@ if (!isPrimaryInstance) app.exit(0)
 process.env.NEXT_PUBLIC_APP_URL = INTERNAL_API_ORIGIN
 
 let mainWindow: BrowserWindow | null = null
+let readWindowAppearance: () => string | null = () => null
 /** Set when the app should really exit instead of hiding in the tray. */
 let quitting = false
 /** Started by the operating system at login: stay in the tray until opened. */
@@ -272,6 +274,8 @@ async function bootstrap(): Promise<void> {
     app.quit()
     return
   }
+  readWindowAppearance = () => appStore.get(RENDERER_STORAGE_PREFIX + APPEARANCE_KEY)
+  nativeTheme.on("updated", () => mainWindow?.setBackgroundColor(windowBackground()))
   // Read before anything writes: only an install without any saved state is asked about setup diagnostics.
   const freshInstall = appStore.keys().length === 0 && !startedOver
 
@@ -2065,7 +2069,10 @@ async function bootstrap(): Promise<void> {
     const previousTenants = name === "tenuvault_tenants" ? connectedTenantIds() : []
     if (name === "tenuvault_tenants") {
       connections.saveProfiles(text)
-    } else appStore.set(RENDERER_STORAGE_PREFIX + name, text)
+    } else {
+      appStore.set(RENDERER_STORAGE_PREFIX + name, text)
+      if (name === APPEARANCE_KEY) mainWindow?.setBackgroundColor(windowBackground())
+    }
     if (name === "tenuvault_tenants") for (const tenant of new Set([...previousTenants, ...connectedTenantIds()])) health.connectionsChanged(tenant)
     if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
   })
@@ -2503,6 +2510,12 @@ async function saveFileWithDialog(file: PreparedFile, title = `Save ${file.label
   return { saved: true, path: result.filePath }
 }
 
+function windowBackground(): string {
+  const appearance = readWindowAppearance()
+  const dark = appearance === "dark" || (appearance !== "light" && nativeTheme.shouldUseDarkColors)
+  return dark ? "#121110" : "#f4f3f1"
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -2511,7 +2524,7 @@ function createWindow(): void {
     minHeight: 700,
     title: "TenuVault",
     show: false,
-    backgroundColor: "#f9fafb",
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,

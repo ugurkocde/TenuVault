@@ -188,7 +188,7 @@ try {
   // Welcome screen of a fresh install, light and dark.
   for (const theme of ["light", "dark"]) {
     await setTheme(theme)
-    await evaluate(`location.reload()`)
+    await evaluate(`localStorage.setItem("tenuvault.splash.seen", "1"); location.reload()`)
     await sleep(1500)
     await assertText("Help us make setup work in your environment", 30000)
     await disableAnimations()

@@ -223,6 +223,13 @@ export async function launch(appPath, profile, shotsDir, { checkVersion = true }
   return { evaluate, waitFor, waitForText, screenshot, click, fill, close, log: () => log, send }
 }
 
+export async function openWelcome(app) {
+  const getStarted = `[...document.querySelectorAll("button")].find(button => button.textContent.trim() === "Get started")`
+  assert(await app.waitFor(`Boolean(${getStarted}) || document.body.innerText.includes("Welcome to TenuVault")`, 60_000), "The first-start screen did not appear.")
+  if (await app.evaluate(`Boolean(${getStarted})`)) await app.click("Get started")
+  assert(await app.waitForText("Welcome to TenuVault"), "The welcome screen did not appear.")
+}
+
 /** Runs the named checks in order, prints ok or FAIL for each and returns the failures. */
 export function checker() {
   const failures = []

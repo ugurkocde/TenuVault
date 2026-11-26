@@ -1,4 +1,5 @@
 import { ArrowRight, DatabaseBackup, GitCompare, RotateCcw } from "lucide-react"
+import { useEffect, useRef } from "react"
 import { Button } from "~/components/ui/button"
 import { onboardingCard, onboardingPrimary } from "./OnboardingCard"
 import { BrandMark } from "./BrandMark"
@@ -19,14 +20,19 @@ const POINTS = [
  * lock: the plan is shown after the sign-in, when the tenant is known. Without a key the first
  * tenant runs on Community, and a license shared by the tenant's organization is picked up then.
  */
-export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
+export function ActivationScreen({ onSignIn, focusHeading }: { onSignIn: () => void; focusHeading?: boolean }) {
+  const heading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    if (focusHeading) heading.current?.focus({ preventScroll: true })
+  }, [focusHeading])
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-3">
       <div className={`${onboardingCard} max-w-[640px] space-y-6 text-center`}>
         <div className="flex flex-col items-center gap-4">
           <BrandMark className="size-12" />
           <div>
-            <h1 className="text-3xl font-medium tracking-tight text-gray-900">Welcome to TenuVault</h1>
+            <h1 ref={heading} tabIndex={focusHeading ? -1 : undefined} className="text-3xl font-medium tracking-tight text-gray-900 outline-none">Welcome to TenuVault</h1>
           </div>
         </div>
 

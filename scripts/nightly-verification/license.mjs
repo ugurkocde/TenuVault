@@ -22,7 +22,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { assert, checker, launch } from "./app.mjs"
+import { assert, checker, launch, openWelcome } from "./app.mjs"
 import { releaseLeftover as settleLeftover } from "./leftover.mjs"
 
 /** The verification tenant, not the canary tenant of scripts/license-canary.ts (c0a1...3f40). */
@@ -93,7 +93,7 @@ async function main() {
   try {
     const started = await check("the installed app opens its welcome screen", async () => {
       app = await launch(appPath, profile, shotsDir)
-      assert(await app.waitForText("Welcome to TenuVault", 60_000), "The welcome screen did not appear.")
+      await openWelcome(app)
       const info = await app.evaluate("window.tenuvault.app.info()")
       return `version ${info?.version ?? "unknown"}`
     })
