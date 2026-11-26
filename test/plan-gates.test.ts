@@ -379,18 +379,36 @@ it.each(["save", "delete"])("blocks Community Azure metadata %s before its handl
   expect(write).toHaveBeenCalledTimes(2)
 })
 
-it("allows every directory action on Community without any plan lookup", async () => {
+it("gates directory restore to Pro and MSP while allowing saved-page cancel, reconcile and discard on Community and uncovered tenants without a plan lookup", async () => {
   const body = { tenantId: TENANT, mode: "replace", restoreType: "full" }
   const planOf = vi.fn(async () => "community" as const), guard = planGuard(planOf)
-  for (const action of ["preview", "restore", "resume", "reconcile", "cancel", "discard", "unknown", undefined]) {
+  const uncovered = vi.fn(async () => null), uncoveredGuard = planGuard(uncovered)
+  for (const action of ["cancel", "discard", "reconcile"]) {
     for (const suffix of ["", "/"]) {
       expect(requiredFeatures("/api/restore-directory", { ...body, action })).toEqual([])
       expect(await guard(new Request(`http://tenuvault.internal/api/restore-directory${suffix}`, { method: "POST", body: JSON.stringify({ ...body, action }) }))).toBeNull()
+      expect(await uncoveredGuard(new Request(`http://tenuvault.internal/api/restore-directory${suffix}`, { method: "POST", body: JSON.stringify({ ...body, action }) }))).toBeNull()
     }
   }
   expect(planOf).not.toHaveBeenCalled()
+  expect(uncovered).not.toHaveBeenCalled()
+  for (const action of ["preview", "restore", "resume", "unknown", undefined]) {
+    for (const suffix of ["", "/"]) {
+      expect(requiredFeatures("/api/restore-directory", { ...body, action })).toEqual(["directoryRestore"])
+      for (const blockedGuard of [guard, uncoveredGuard]) {
+        const refused = await blockedGuard(new Request(`http://tenuvault.internal/api/restore-directory${suffix}`, { method: "POST", body: JSON.stringify({ ...body, action }) }))
+        expect(refused?.status).toBe(402)
+        expect(await refused?.json()).toMatchObject({ upgrade: "directoryRestore", error: upgradeMessage("directoryRestore") })
+      }
+      for (const paid of ["pro", "msp"] as const) {
+        expect(await planGuard(async () => paid)(new Request(`http://tenuvault.internal/api/restore-directory${suffix}`, { method: "POST", body: JSON.stringify({ ...body, action }) }))).toBeNull()
+      }
+    }
+  }
+  expect(planOf).toHaveBeenCalledTimes(10)
+  expect(uncovered).toHaveBeenCalledTimes(10)
   for (const action of ["cancel", "discard"]) {
     expect((await guard(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST", body: JSON.stringify({ ...body, action }) })))?.status).toBe(402)
   }
-  expect(planOf).toHaveBeenCalledTimes(2)
+  expect(planOf).toHaveBeenCalledTimes(12)
 })

@@ -36,6 +36,7 @@ Restore supported configuration from a saved tenant backup. The available action
 | Restore several items at once | No | Yes | Yes |
 | **Replace in place** | No | Yes | Yes |
 | **Restore assignments** | No | Yes | Yes |
+| **Directory restore** (Entra ID groups) | No | Yes | Yes |
 | **Copy to other tenants instead** | No | No | Yes |
 
 Features your plan does not include show a plan badge in the wizard. If you send a request your plan does not cover, TenuVault answers with a message such as "Restoring several items at once: included in TenuVault Pro and MSP. Upgrade on the License page."

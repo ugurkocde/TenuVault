@@ -15,6 +15,7 @@ export type Feature =
   | "fullRestore"
   | "replaceRestore"
   | "restoreAssignments"
+  | "directoryRestore"
   | "driftRevert"
   | "auditLog"
   | "baselineAllPlatforms"
@@ -44,6 +45,7 @@ export const FEATURE_PLAN: Record<Feature, Exclude<Plan, "community">> = {
   fullRestore: "pro",
   replaceRestore: "pro",
   restoreAssignments: "pro",
+  directoryRestore: "pro",
   driftRevert: "pro",
   auditLog: "pro",
   baselineAllPlatforms: "pro",
@@ -73,6 +75,7 @@ const FEATURE_NAMES: Record<Feature, string> = {
   fullRestore: "Restoring several items at once",
   replaceRestore: "Replacing items in place",
   restoreAssignments: "Restoring assignments",
+  directoryRestore: "Directory restore",
   driftRevert: "One click revert of drifted policies",
   auditLog: "The audit log",
   baselineAllPlatforms: "CIS Benchmarks assessments, remediation and reports",

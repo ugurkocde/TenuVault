@@ -61,7 +61,7 @@ export class DirectoryRestoreService {
   private readonly unpublishedCleanup = new Set<() => void>()
   private readonly running = new Map<string, AbortController>()
   private readonly store: PartitionedRestoreStore
-  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now(), private readonly signInMethod?: (tenant: string) => SignInMethod | undefined, private readonly appMetadataAccess?: AppMetadataAccess) {
+  constructor(store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly localOwner: (tenant: string) => Promise<Pick<RestoreConnection, "tenantId" | "userId" | "clientId">>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">, private readonly now: () => number = () => Date.now(), private readonly signInMethod?: (tenant: string) => SignInMethod | undefined, private readonly appMetadataAccess?: AppMetadataAccess, private readonly requirePlan?: (tenant: string) => Promise<void>, private readonly reconcileConnection?: (tenant: string) => Promise<RestoreConnection>) {
     this.store = { partitioned: store.partitioned, get: name => restorePersistence(() => store.get(name)), set: (name, value) => restorePersistence(() => store.set(name, value)), delete: name => restorePersistence(() => store.delete(name)) }
   }
   private async actorContext(tenant: string, onThrottled?: (retryAt: number) => void, validatedConnection?: RestoreConnection, readByAppId = false) {
@@ -167,18 +167,18 @@ export class DirectoryRestoreService {
   }
 
   async verifySavedOwner(tenant: string, id: string) { await this.verifyLocalOwner(this.load(tenant, id)) }
-  private async ownerConnection(page: DirectoryPage) {
-    const connection = await this.connection(page.run.tenant)
+  private async ownerConnection(page: DirectoryPage, reconcile = false) {
+    const connection = await (reconcile && this.reconcileConnection ? this.reconcileConnection : this.connection)(page.run.tenant)
     requireRestoreActor(connection.token, connection, connection.authorization)
     this.verifyOwner(page, connection)
     return connection
   }
-  private async pageConnection(page: DirectoryPage) {
+  private async pageConnection(page: DirectoryPage, reconcile = false) {
     // Online actions retain the tenant-wide publication gate as well as this page's recovery requirement.
     directoryObjectState(this.store, page.run.tenant, page.run.id, this.now).recoverRetryDeadlines()
     this.pending.forTenant(page.run.tenant).flush()
     this.pending.forTenant(page.run.tenant).flush(page.run.id)
-    const connection = await this.ownerConnection(page)
+    const connection = await this.ownerConnection(page, reconcile)
     captureDirectoryExecutionActor(connection)
     return connection
   }
@@ -214,6 +214,7 @@ export class DirectoryRestoreService {
   }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
     if (options.previousRunId !== undefined) await this.verifySavedOwner(tenant, options.previousRunId)
+    await this.requirePlan?.(tenant)
     this.cleanupUnpublished()
     directoryObjectState(this.store, tenant, "", this.now).recoverRetryDeadlines()
     this.pending.forTenant(tenant).flush(options.previousRunId)
@@ -524,6 +525,7 @@ export class DirectoryRestoreService {
     }
     const page = this.load(tenant, request.runId!)
     await this.verifyLocalOwner(page)
+    await this.requirePlan?.(tenant)
     const folder = page.run.source?.path.split("/")[1] ?? ""
     if (deferredPrivilegedRestore(folder) || !includesEntraFolder(folder)) fail(DEFERRED_RESTORE_MESSAGE)
     const connection = await this.pageConnection(page)
@@ -564,6 +566,7 @@ export class DirectoryRestoreService {
     }
     const page = this.load(tenant, request.runId!)
     await this.verifyLocalOwner(page)
+    await this.requirePlan?.(tenant)
     if (request.origin !== "restore" || page.run.origin !== request.origin || page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
     if (PRIVILEGED_REVIEW_FOLDERS.includes(folder)) fail(PRIVILEGED_RESTORE_BLOCKER)
     const consent = privilegedRestoreEnabled ? privilegedRestoreConsent(this.signInMethod?.(tenant), folder) : null
@@ -598,7 +601,8 @@ export class DirectoryRestoreService {
     const context = await this.context(tenant, retryAt => this.recordPageThrottle(page, retryAt), connection, page.run.id), actor = context.actor
     const rawIO = privilegedRestoreEnabled && DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO! : context.io
     const principalValidation = page.inventory ? new DirectoryPrincipalMappings(this.store, tenant, page.inventory.id) : undefined
-    const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, () => {
+    const io = { ...rawIO, write: ((step, body, targetId, beforeSend, run, signal, onUnapplied) => rawIO.write(step, body, targetId, async () => {
+      await this.requirePlan?.(tenant)
       this.requireAccess(tenant, step.folder)
       if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
       if (page.inventory) {
@@ -606,7 +610,7 @@ export class DirectoryRestoreService {
         principalValidation!.validate(page.inventory.principalMappings!, step)
       }
       this.pending.forTenant(tenant).beforeSend()
-      beforeSend()
+      await beforeSend()
     }, run, signal, onUnapplied)) as typeof rawIO.write }
     if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
     for (const entry of entries) for (const kind of page.rows.find(row => row.key === entry.step.key)!.review.approvals) approveDirectory(entry.step, page.run, kind)
@@ -657,7 +661,7 @@ export class DirectoryRestoreService {
     for (const entry of page.run.entries) if (page.selection?.includes(entry.step.key) && !outcomes.has(entry.step.key)) outcomes.set(entry.step.key, { key: entry.step.key, state: "pending", reason: undefined, targetId: undefined, retryAt: undefined })
     return [...outcomes.values()]
   }
-  private results(page: DirectoryPage, result: { status: "complete" | "partial" | "nothing-sent"; batches: number; failed: number }, runs = this.history(page)) {
+  private results(page: DirectoryPage, result: { status: "complete" | "partial" | "nothing-sent"; batches: number; failed: number; replayed?: boolean }, runs = this.history(page)) {
     const outcomes = this.outcomes(page, runs)
     return { ...result, ...this.pageState(page, runs.flatMap(({ run }) => run.entries)), failed: outcomes.filter(entry => ["blocked", "failed", "failed-before-send"].includes(entry.state)).length, canDiscard: this.canDiscard(page, runs),
       outcomes,
@@ -690,7 +694,7 @@ export class DirectoryRestoreService {
       if (PRIVILEGED_REVIEW_FOLDERS.includes(folder)) {
         return { ...this.view(page), ...this.results(page, { status: "nothing-sent", batches: 0, failed: 0 }, []) }
       }
-      const connection = await this.pageConnection(page)
+      const connection = await this.pageConnection(page, true)
       if (action === "reconcile") {
         const runs = this.history(page)
         const target = (entry: GuardedRun["entries"][number]) => (entry.targetId ?? entry.step.targetId ?? directoryMappedId(this.store, tenant, entry.step.folder, entry.step.sourceId) ?? entry.step.sourceId).toLowerCase()

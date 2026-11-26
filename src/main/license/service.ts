@@ -528,7 +528,7 @@ export class LicenseService {
       if (!this.trialsEnabled || this.state?.key || FEATURE_PLAN[feature] !== "pro" || this.state?.activations[tenant]?.source !== "trial" || !this.valid(tenant) || !this.tenantPresent(tenant)) return
       const record = this.trialRecords[tenant]
       if (!record) return
-      const fields: Partial<Record<Feature, keyof TrialTally>> = { dailySchedule: "dailyBackups", azureStorage: "azureBackups", fullRestore: "fullRestores", replaceRestore: "fullRestores", restoreAssignments: "fullRestores", driftRevert: "driftReverts" }
+      const fields: Partial<Record<Feature, keyof TrialTally>> = { dailySchedule: "dailyBackups", azureStorage: "azureBackups", fullRestore: "fullRestores", replaceRestore: "fullRestores", restoreAssignments: "fullRestores", directoryRestore: "fullRestores", driftRevert: "driftReverts" }
       const field = fields[feature]
       if (!field) return
       record.tally ??= {}

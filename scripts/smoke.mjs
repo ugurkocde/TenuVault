@@ -2121,6 +2121,8 @@ await check("paid roadmap screens explain their plan and the server refuses Comm
   assert(result === 402, `Community reached a paid roadmap action: ${result}`)
   const audit = await evaluate(`fetch("/api/audit/logs", { method: "POST", body: JSON.stringify({ tenantId: "${tenant}" }) }).then(r => r.status)`)
   assert(audit === 402, `Community reached the audit log: ${audit}`)
+  const directory = await evaluate(`fetch("/api/restore-directory", { method: "POST", body: JSON.stringify({ tenantId: "${tenant}", action: "preview" }) }).then(r => r.status)`)
+  assert(directory === 402, `Community reached directory restore: ${directory}`)
 })
 
 await check("tenant changes wait for the disclaimer, once per tenant", async () => {

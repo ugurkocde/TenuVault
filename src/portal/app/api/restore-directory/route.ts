@@ -1,5 +1,6 @@
 import { backupOnlyRestoreMessage } from "../../../../shared/intune/restore-availability"
 import { APPLICATION_REVIEW_FOLDERS, DIRECTORY_REVIEW_FOLDERS, PRIVILEGED_REVIEW_FOLDERS } from "../../../../shared/intune/directory-review-folders"
+import { PlanRequired } from "../../../../shared/plans"
 import { NextResponse, type NextRequest } from "next/server"
 import { backupStoragePath } from "../../../../shared/backup-storage"
 import { typeForFolder, restoreCapability } from "../../../../shared/intune/registry"
@@ -60,5 +61,9 @@ export async function POST(request: NextRequest) {
     }
     if (action === "preview" && typeof body.previousRunId === "string") await directoryRestoreVerifyOwner(tenantId, body.previousRunId)
     return await perform()
-  } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "This directory restore could not finish." }, { status: 409 }) }
+  } catch (error) {
+    // A plan that lapsed after the preview is refused at execution with the same prompt as the route gate.
+    if (error instanceof PlanRequired) return NextResponse.json({ error: error.message, upgrade: error.feature }, { status: 402 })
+    return NextResponse.json({ error: error instanceof Error ? error.message : "This directory restore could not finish." }, { status: 409 })
+  }
 }

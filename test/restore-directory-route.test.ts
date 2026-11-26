@@ -4,6 +4,7 @@ const execute = vi.hoisted(() => vi.fn(async () => ({ runId: "run", rows: [] }))
 vi.mock("../src/main/restore/directory-dispatch", () => ({ directoryRestoreRequest: execute }))
 import { POST } from "../src/portal/app/api/restore-directory/route"
 import { requiredFeatures } from "../src/main/api/plan-gates"
+import { PlanRequired, upgradeMessage } from "../src/shared/plans"
 import { tenantWriteTargets } from "../src/shared/tenant-writes"
 const tenant = "00000000-0000-4000-8000-000000000001", path = "backup/Groups/00000000-0000-4000-8000-000000000010.json"
 const base = { tenantId: tenant, appId: "app", clientSecret: "placeholder", storageAccountName: "store", backupId: "backup", path, action: "preview", stage: "object", mode: "replace" }
@@ -31,9 +32,15 @@ it("refuses another tenant, malformed stage, bulk paths and unrelated types", as
   expect((await POST(request({ ...base, path: [path] }))).status).toBe(400)
   expect((await POST(request({ ...base, path: "backup/Organization/o.json" }))).status).toBe(422)
 })
-it("leaves directory restore ungated and requires first-write acknowledgement only for execution", () => {
-  expect(requiredFeatures("/api/restore-directory", base)).toEqual([])
+it("gates directory restore to Pro and MSP while keeping saved-page actions ungated and first-write acknowledgement only for execution", async () => {
+  for (const action of ["preview", "restore", "resume"]) expect(requiredFeatures("/api/restore-directory", { ...base, action })).toEqual(["directoryRestore"])
+  for (const action of ["cancel", "discard", "reconcile"]) expect(requiredFeatures("/api/restore-directory", { ...base, action })).toEqual([])
   expect(tenantWriteTargets("/api/restore-directory", base)).toEqual([])
   expect(tenantWriteTargets("/api/restore-directory", { ...base, action: "restore" })).toEqual([tenant])
   expect(tenantWriteTargets("/api/restore-directory", { ...base, action: "cancel" })).toEqual([])
+  world()
+  execute.mockRejectedValueOnce(new PlanRequired("directoryRestore"))
+  const response = await POST(request(base))
+  expect(response.status).toBe(402)
+  expect(await response.json()).toEqual({ error: upgradeMessage("directoryRestore"), upgrade: "directoryRestore" })
 })

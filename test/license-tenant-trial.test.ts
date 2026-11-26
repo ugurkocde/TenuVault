@@ -670,10 +670,10 @@ it("tallies Pro actions only during an enabled tenant trial, then deletes them",
   const beforeRequests = requests
   const network = vi.fn(() => { throw new Error("Network forbidden") })
   vi.stubGlobal("fetch", network)
-  for (const feature of ["dailySchedule", "azureStorage", "fullRestore", "replaceRestore", "restoreAssignments", "driftRevert"] as const) license.recordTrialUsage(tenant, feature)
+  for (const feature of ["dailySchedule", "azureStorage", "fullRestore", "replaceRestore", "restoreAssignments", "directoryRestore", "driftRevert"] as const) license.recordTrialUsage(tenant, feature)
   license.recordTrialUsage(tenant, "bulkActions")
   license.recordTrialUsage(tenant, "notifications")
-  expect(license.trialUsageTally(tenant)).toEqual({ dailyBackups: 1, azureBackups: 1, fullRestores: 3, driftReverts: 1 })
+  expect(license.trialUsageTally(tenant)).toEqual({ dailyBackups: 1, azureBackups: 1, fullRestores: 4, driftReverts: 1 })
   expect(service().status([tenant]).tenants[0]?.trial).toBe(true)
   expect(network).not.toHaveBeenCalled()
   expect(requests).toBe(beforeRequests)

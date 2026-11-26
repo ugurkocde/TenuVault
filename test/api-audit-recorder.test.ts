@@ -202,6 +202,8 @@ it.each([
   ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}], assignments: true }, true, "restoreAssignments"],
   ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}] }, true, null],
   ["/api/restore-backup", { restoreType: "full" }, false, null],
+  ["/api/restore-directory", { action: "restore" }, true, "directoryRestore"],
+  ["/api/restore-directory", { action: "reconcile" }, true, null],
   ["/api/revert-policy", { action: "revert" }, true, "driftRevert"],
   ["/api/revert-policy", { action: "revert" }, false, null],
   ["/api/revert-policy", { action: "restore" }, true, null],
@@ -216,7 +218,7 @@ it.each([
     await new Promise<void>(resolve => setTimeout(resolve, 0))
     expect(tally.mock.calls).toEqual(feature ? [[TENANT, feature]] : [])
     expect(network).not.toHaveBeenCalled()
-    expect(dispatch).not.toHaveBeenCalled()
+    expect(dispatch).toHaveBeenCalledTimes(path === "/api/restore-directory" ? 1 : 0)
   } finally { vi.unstubAllGlobals() }
 })
 
@@ -227,6 +229,18 @@ it("does not tally a partially completed restore", async () => {
   await new Promise<void>(resolve => setTimeout(resolve, 0))
   expect(tally).not.toHaveBeenCalled()
   expect(dispatch).not.toHaveBeenCalled()
+})
+
+it("tallies a completed directory restore once and ignores replayed completions", async () => {
+  const tally = vi.fn()
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  const recorder = createAuditRecorder(dispatch, () => null, undefined, tally)
+  const request = () => new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" })
+  const body = JSON.stringify({ ...credentials, action: "restore" })
+  recorder(request(), body, Response.json({ success: true, status: "complete", details: { restoredCount: 1, failedCount: 0, partialCount: 0, results: [] } }))
+  recorder(request(), body, Response.json({ success: true, status: "complete", replayed: true, details: { restoredCount: 1, failedCount: 0, partialCount: 0, results: [] } }))
+  await new Promise<void>(resolve => setTimeout(resolve, 0))
+  expect(tally.mock.calls).toEqual([[TENANT, "directoryRestore"]])
 })
 
 it.each([["replace", false], ["replace", true], ["copy", false], ["copy", true]] as const)("does not tally completed approval items in %s mode (assignments %s)", async (mode, assignments) => {
