@@ -80,16 +80,17 @@ it("opens Entra ID from the sidebar when Conditional Access is the only Entra ID
   expect(container.querySelector('section[aria-label="Entra ID"]')?.textContent).toContain("Conditional Access")
 })
 
-it("keeps an off service visible with a muted badge and opens the Settings card", async () => {
+it("keeps an off service visible with a muted badge and opens the tenant's Services card", async () => {
   mocks.status.mockResolvedValue(status("tenant-1", ["entra"]))
   const router = await render("/portal/backup?service=entra")
   const link = links()[0]!
   expect(link.textContent).toBe("Entra IDOff")
   expect(link.querySelector(".bg-secondary")?.textContent).toBe("Off")
   expect(active()).toBeUndefined()
-  expect(link.getAttribute("href")).toBe("/portal/settings?section=services")
+  expect(link.getAttribute("href")).toBe("/portal/settings?section=services&tenant=tenant-1#service-entra")
   await act(async () => link.click())
-  expect(router.state.location.search).toBe("?section=services")
+  expect(router.state.location.search).toBe("?section=services&tenant=tenant-1")
+  expect(router.state.location.hash).toBe("#service-entra")
   expect(container.textContent).toContain("Services and permissions")
 })
 
@@ -128,7 +129,7 @@ it.each([true, false])("opens backup contents while pending, then follows an exp
   expect(router.state.location.search).toBe("?service=entra")
   await act(async () => finish(status("tenant-1", enabled ? [] : ["entra"])))
   expect(links()[0]!.textContent).toBe(enabled ? "Entra ID" : "Entra IDOff")
-  expect(links()[0]!.getAttribute("href")).toBe(enabled ? "/portal/backup?service=entra" : "/portal/settings?section=services")
+  expect(links()[0]!.getAttribute("href")).toBe(enabled ? "/portal/backup?service=entra" : "/portal/settings?section=services&tenant=tenant-1#service-entra")
   expect(active()).toBe(enabled ? "Entra ID" : undefined)
 })
 
@@ -144,7 +145,8 @@ it.each([true, false])("keeps failed status distinct from Off, then recovers to 
   await act(async () => mocks.changed!("tenant-1"))
   await act(async () => links()[0]!.click())
   expect(router.state.location.pathname).toBe(enabled ? "/portal/backup" : "/portal/settings")
-  expect(router.state.location.search).toBe(enabled ? "?service=entra" : "?section=services")
+  expect(router.state.location.search).toBe(enabled ? "?service=entra" : "?section=services&tenant=tenant-1")
+  expect(router.state.location.hash).toBe(enabled ? "" : "#service-entra")
   expect(links()[0]!.textContent).toBe(enabled ? "Entra ID" : "Entra IDOff")
 })
 

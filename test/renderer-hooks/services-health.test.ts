@@ -1,6 +1,6 @@
 import { act, createElement, type ReactElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { MemoryRouter } from "react-router-dom"
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { ServicesSettings } from "../../src/renderer/components/ServicesSettings"
@@ -8,8 +8,11 @@ import { ServiceBackupNotice } from "../../src/renderer/components/ServiceBackup
 import { healthDate, HEALTH_CAUSE_TEXT, READER_HEALTH_TEXT, SIGN_IN_HEALTH_TEXT, permissionRemediation } from "../../src/renderer/lib/connection-health-view"
 import { healthFixture, healthScene, restoreGapFixture, HEALTH_TENANT, HEALTH_CLIENT } from "../fixtures/services-health"
 
-const mocks = vi.hoisted(() => ({ check: vi.fn(), report: vi.fn(), acknowledge: vi.fn(), setEnabled: vi.fn(), setArea: vi.fn(), setAccess: vi.fn(), changed: null as null | ((tenantId: string) => void), tenants: [] as unknown[] }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => mocks.tenants }))
+const mocks = vi.hoisted(() => ({ check: vi.fn(), report: vi.fn(), acknowledge: vi.fn(), setEnabled: vi.fn(), setArea: vi.fn(), setAccess: vi.fn(), changed: null as null | ((tenantId: string) => void), tenants: [] as unknown[], selectedTenant: undefined as unknown }))
+vi.mock("~/contexts/TenantContext", () => ({
+  useTenants: () => mocks.tenants,
+  useSelectedTenant: () => ({ selectedTenant: mocks.selectedTenant ?? mocks.tenants[0] }),
+}))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { onAccountsChanged: (listener: (tenantId: string) => void) => { mocks.changed = listener; return () => { mocks.changed = null } } }, health: { check: mocks.check, report: mocks.report, acknowledge: mocks.acknowledge, onChanged: () => () => {} }, services: { setEnabled: mocks.setEnabled, setArea: mocks.setArea, setAccess: mocks.setAccess } } }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let root: Root
@@ -19,6 +22,7 @@ const tenant = (id: string, name: string) => ({ id, name, credentials: { tenantI
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.tenants = [tenant(HEALTH_TENANT, "Contoso")]
+  mocks.selectedTenant = undefined
   mocks.check.mockResolvedValue(healthFixture())
   mocks.report.mockResolvedValue(healthFixture())
   mocks.acknowledge.mockResolvedValue(healthFixture())
@@ -368,4 +372,35 @@ it("shows Start now as read-only and omits permission grant instructions", async
   expect(container.textContent).not.toContain("Add the missing permissions")
   expect(container.textContent).not.toContain("Feature permissions")
   expect(container.querySelector('select[aria-label="Intune access to request"]')).toBeNull()
+})
+
+it("defaults Services and permissions to the selected sidebar tenant when no query tenant is passed", async () => {
+  const second = "22222222-2222-2222-2222-222222222222"
+  mocks.tenants = [tenant(HEALTH_TENANT, "Contoso"), tenant(second, "Fabrikam")]
+  mocks.selectedTenant = mocks.tenants[1]
+  mocks.check.mockResolvedValue({ ...healthFixture(), tenantId: second })
+  await render()
+  expect(mocks.check).toHaveBeenCalledWith(second)
+  expect(container.textContent).toContain("Fabrikam")
+  expect(container.querySelector<HTMLSelectElement>("select")?.value).toBe(second)
+})
+
+it("reapplies an explicit tenant query when reopening the same service link after a dropdown override", async () => {
+  const second = "22222222-2222-2222-2222-222222222222"
+  mocks.tenants = [tenant(HEALTH_TENANT, "Contoso"), tenant(second, "Fabrikam")]
+  mocks.selectedTenant = mocks.tenants[0]
+  mocks.check.mockImplementation(async (tenantId: string) => ({ ...healthFixture(), tenantId }))
+  const link = `/portal/settings?section=services&tenant=${HEALTH_TENANT}#service-entra`
+  const router = createMemoryRouter([{ path: "/portal/settings", element: createElement(ServicesSettings) }], { initialEntries: [link] })
+  await act(async () => { root.render(createElement(QueryClientProvider, { client }, createElement(RouterProvider, { router }))) })
+  const select = () => container.querySelector<HTMLSelectElement>("select")!
+  expect(select().value).toBe(HEALTH_TENANT)
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select(), second)
+    select().dispatchEvent(new Event("change", { bubbles: true }))
+  })
+  expect(select().value).toBe(second)
+  await act(async () => { await router.navigate(link) })
+  expect(select().value).toBe(HEALTH_TENANT)
+  expect(mocks.check).toHaveBeenLastCalledWith(HEALTH_TENANT)
 })

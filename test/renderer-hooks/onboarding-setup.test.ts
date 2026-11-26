@@ -1467,11 +1467,18 @@ describe("sign-in method wizard", () => {
     const container = await publicConnect("Start now")
     await act(async () => button(container, "Sign in with Microsoft")!.click())
     expect(container.textContent).toContain("Sign in to Microsoft in your browser first, then try again.")
+    expect(container.textContent).toContain("Microsoft Intune admin center")
     expect(container.textContent).not.toContain("Start now is not available")
     await act(async () => button(container, "Open Microsoft sign-in")!.click())
     expect(state.openExternal).toHaveBeenCalledExactlyOnceWith("https://intune.microsoft.com")
     expect(state.wizardStage).toHaveBeenCalledTimes(1)
-    await act(async () => button(container, "Try again")!.click())
+    expect(container.textContent).toContain("Finish signing in to the Microsoft Intune admin center in your browser, then return here and select Try again.")
+    const tryAgain = button(container, "Try again")!
+    const reopen = button(container, "Open Microsoft sign-in again")!
+    expect(reopen).toBeDefined()
+    expect(tryAgain.className).toContain("rounded-full")
+    expect(reopen.className).not.toContain("rounded-full")
+    await act(async () => tryAgain.click())
     expect(state.wizardStage).toHaveBeenCalledTimes(2)
   })
 

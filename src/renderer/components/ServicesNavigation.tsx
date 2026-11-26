@@ -44,7 +44,7 @@ export function ServicesNavigation({ linkClass }: { linkClass: (active: boolean)
         const needsAccess = enabled === true && status?.needsAccess?.includes(service.id)
         const active = !needsAccess && enabled === true && pathname === "/portal/backup" && filter === service.id
         const Icon = ICONS[service.id]
-        return <Link key={service.id} to={needsAccess ? `${settingsHref("services")}&tenant=${encodeURIComponent(tenantId!)}#service-${service.id}` : off ? settingsHref("services") : `/portal/backup?service=${service.id}`} aria-current={active ? "page" : undefined} data-nav-row="" title={off || needsAccess ? `Open ${service.label} in Services and permissions` : `View ${service.label} backup contents`} className={cn(linkClass(active), "gap-2")}>
+        return <Link key={service.id} to={needsAccess || off ? `${settingsHref("services")}&tenant=${encodeURIComponent(tenantId!)}#service-${service.id}` : `/portal/backup?service=${service.id}`} aria-current={active ? "page" : undefined} data-nav-row="" title={off || needsAccess ? `Open ${service.label} in Services and permissions` : `View ${service.label} backup contents`} className={cn(linkClass(active), "gap-2")}>
           <Icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
           <span className="shrink-0 whitespace-nowrap">{service.label}</span>
           {(off || needsAccess) && <span className="ml-auto inline-flex shrink-0 items-center rounded-full bg-secondary px-1.5 py-0.5 text-[11px] font-medium leading-4 text-gray-700">{needsAccess ? "Needs access" : "Off"}</span>}

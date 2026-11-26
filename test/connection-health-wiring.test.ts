@@ -106,9 +106,9 @@ describe("connection health wiring", () => {
     expect(main).toContain('mainWindow?.webContents.send("health:changed", tenantId)')
   })
 
-  it("saves the access level and the opt-in areas through the tenant's settings, and answers with its health", () => {
-    expect(main).toMatch(/handleTrusted\("services:setAccess"[\s\S]{0,200}moduleSettings\.setAccess\(tenant, id, access\)\n\s+return health\.report\(tenant\)/)
-    expect(main).toMatch(/handleTrusted\("services:setArea"[\s\S]{0,220}moduleSettings\.setArea\(tenant, id, area, enabled\)\n\s+return health\.report\(tenant\)/)
+  it("saves the access level and the opt-in areas through the tenant's settings, notifies health listeners, and answers with its health", () => {
+    expect(main).toMatch(/handleTrusted\("services:setAccess"[\s\S]{0,200}moduleSettings\.setAccess\(tenant, id, access\)\n\s+mainWindow\?\.webContents\.send\("health:changed", tenant\)\n\s+return health\.report\(tenant\)/)
+    expect(main).toMatch(/handleTrusted\("services:setArea"[\s\S]{0,220}moduleSettings\.setArea\(tenant, id, area, enabled\)\n\s+mainWindow\?\.webContents\.send\("health:changed", tenant\)\n\s+return health\.report\(tenant\)/)
   })
 
   it("asks Microsoft on Check again, and answers a page that opens from a recent check", () => {

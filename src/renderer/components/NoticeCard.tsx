@@ -32,13 +32,13 @@ export function NoticeCard({ summary, details, action, children, tone = "neutral
     try { if (localStorage.getItem(key) === "1") return null } catch { /* The notice still works without storage. */ }
   }
   return (
-    <div data-no-select data-notice-tone={tone} className={cn("min-w-0 rounded-xl border px-3 py-2 text-left text-sm", style, className)}>
-      <div className="flex flex-wrap items-start gap-x-3 gap-y-1">
-        <p role={role} className="flex min-w-0 flex-[1_1_10rem] items-start gap-2 font-medium">
+    <div data-no-select data-notice-tone={tone} className={cn("min-w-0 rounded-xl border px-4 py-3 text-left text-sm", style, className)}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <p role={role} className="flex min-w-0 flex-[1_1_12rem] items-start gap-2 font-medium leading-snug">
           <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <span className="min-w-0 break-words">{summary}</span>
         </p>
-        {(details || action || key) && <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
+        {(details || action || key) && <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {details && <button type="button" aria-expanded={open} aria-controls={id} aria-label={`Details: ${summary}`} className="inline-flex items-center gap-1 rounded-sm text-xs font-medium hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={() => setOpen(!open)}>
             Details <ChevronDown className={cn("size-3.5", open && "rotate-180")} aria-hidden="true" />
           </button>}

@@ -13,8 +13,10 @@ import { MODULE_BY_ID, MODULES, type ModuleId, type ServiceModule } from "../../
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const state = vi.hoisted(() => ({ check: vi.fn(), report: vi.fn(), setEnabled: vi.fn() }))
 
+const mockTenant = { id: 1, name: "Contoso", credentials: { tenantId: "11111111-1111-1111-1111-111111111111", appId: "22222222-2222-2222-2222-222222222222" } }
 vi.mock("../../src/portal/contexts/TenantContext", () => ({
-  useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "11111111-1111-1111-1111-111111111111", appId: "22222222-2222-2222-2222-222222222222" } }],
+  useTenants: () => [mockTenant],
+  useSelectedTenant: () => ({ selectedTenant: mockTenant }),
 }))
 vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => true, confirmDialog: null }) }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))

@@ -15,7 +15,7 @@ import { Link, useLocation, useSearchParams } from "react-router-dom"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { useConfirm } from "~/components/ConfirmDialog"
-import { useTenants } from "~/contexts/TenantContext"
+import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import type { ServicesStatus } from "../../shared/ipc"
 import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
 import { PERSONAL_DATA } from "../../shared/services/onboarding"
@@ -308,12 +308,16 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
 
 export function ServicesSettings({ active = true }: { active?: boolean }) {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
+  const { selectedTenant } = useSelectedTenant()
+  const activeTenantId = selectedTenant?.credentials?.tenantId ?? ""
+  const { key: locationKey } = useLocation()
   const [params] = useSearchParams()
   const requestedTenant = params.get("tenant")
-  const [selected, setSelected] = useState(requestedTenant ?? tenants[0]?.credentials?.tenantId ?? "")
-  useEffect(() => { if (requestedTenant) setSelected(requestedTenant) }, [requestedTenant])
+  const [selected, setSelected] = useState(requestedTenant ?? (activeTenantId || tenants[0]?.credentials?.tenantId || ""))
+  useEffect(() => { if (requestedTenant) setSelected(requestedTenant) }, [requestedTenant, locationKey])
+  useEffect(() => { if (!requestedTenant && activeTenantId) setSelected(activeTenantId) }, [activeTenantId, requestedTenant, locationKey])
   const id = useId()
-  const current = tenants.find(tenant => tenant.credentials?.tenantId === selected) ?? tenants[0]
+  const current = tenants.find(tenant => tenant.credentials?.tenantId?.toLowerCase() === selected.toLowerCase()) ?? tenants[0]
   return <Card id="services">
     <CardHeader><CardTitle>Services and permissions</CardTitle><CardDescription>Choose what each tenant backs up. Permissions come from a token check; a backup verifies what can actually be read. Health checks never open a sign-in window or block a backup.</CardDescription></CardHeader>
     <CardContent className="space-y-4">

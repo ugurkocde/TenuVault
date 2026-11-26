@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
 import { GRAPH_CLI_BROWSER_SIGN_IN_MESSAGE } from "../../shared/tenant-connection"
@@ -11,17 +12,34 @@ export function StartNowRecovery({ onRetry, className, buttonClassName, centered
   centered?: boolean
   tenantName?: string
 }) {
+  const [opened, setOpened] = useState(false)
+  const openSignIn = () => {
+    void bridge.app.openExternal("https://intune.microsoft.com")
+      .then(() => setOpened(true))
+      .catch(() => toast("Could not open Microsoft sign-in.", "error"))
+  }
+  const openLabel = opened ? "Open Microsoft sign-in again" : "Open Microsoft sign-in"
   return (
     <div className={cn("space-y-2", className)}>
       <p role="status" className="text-sm text-muted-foreground">
         {tenantName && <span className="font-medium">{tenantName}: </span>}
-        {GRAPH_CLI_BROWSER_SIGN_IN_MESSAGE}
+        {GRAPH_CLI_BROWSER_SIGN_IN_MESSAGE}{" "}
+        {opened
+          ? "Finish signing in to the Microsoft Intune admin center in your browser, then return here and select Try again."
+          : "This opens the Microsoft Intune admin center in your browser and does not redirect back to TenuVault."}
       </p>
       <div className={cn("flex flex-wrap items-center gap-3", centered && "flex-col")}>
-        <Button className={buttonClassName} onClick={() => {
-          void bridge.app.openExternal("https://intune.microsoft.com").catch(() => toast("Could not open Microsoft sign-in.", "error"))
-        }}>Open Microsoft sign-in</Button>
-        <button type="button" className="text-sm text-muted-foreground underline-offset-4 hover:underline" onClick={onRetry}>Try again</button>
+        {opened ? (
+          <>
+            <Button className={buttonClassName} onClick={onRetry}>Try again</Button>
+            <button type="button" className="text-sm text-muted-foreground underline-offset-4 hover:underline" onClick={openSignIn}>{openLabel}</button>
+          </>
+        ) : (
+          <>
+            <Button className={buttonClassName} onClick={openSignIn}>{openLabel}</Button>
+            <button type="button" className="text-sm text-muted-foreground underline-offset-4 hover:underline" onClick={onRetry}>Try again</button>
+          </>
+        )}
       </div>
     </div>
   )

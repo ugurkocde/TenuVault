@@ -1639,6 +1639,7 @@ async function bootstrap(): Promise<void> {
     const account = onboardingAccount(tenantId, clientId)
     if (tenantProfile(account.tenantId)) throw new Error("This tenant is already connected to TenuVault.")
     saveOnboardingServices(moduleSettings, account.tenantId, choice)
+    mainWindow?.webContents.send("health:changed", account.tenantId)
   })
   handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
   // Try again on the setup sign-in: stops only a sign-in that still waits for the browser.
@@ -1781,7 +1782,7 @@ async function bootstrap(): Promise<void> {
     enroll: ({ method, staged }, profile, choice) => {
       const tenant = staged.account.tenantId
       connections.enroll(tenant, { method }, profile, staged, moduleSettings.choiceEntries(tenant, choice))
-      try { appStore.delete(WIZARD_LICENSE_KEY); notifyAccountChange(tenant); pushLicense() } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
+      try { appStore.delete(WIZARD_LICENSE_KEY); notifyAccountChange(tenant); mainWindow?.webContents.send("health:changed", tenant); pushLicense() } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
       void health.check(tenant, "signIn").catch(() => undefined)
     },
   })
@@ -1809,7 +1810,7 @@ async function bootstrap(): Promise<void> {
       if (typeof profile !== "string" || profile.length > 64_000) throw new ConnectionSwitchError("invalid_request", "Choose valid backup storage.")
       const choice = wizardChoice(value)
       connections.enroll(signedIn.tenantId, { method: "ownApp", clientId }, profile, { account: signedIn, accessToken: "" }, moduleSettings.choiceEntries(signedIn.tenantId, choice))
-      try { notifyAccountChange(signedIn.tenantId) } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
+      try { notifyAccountChange(signedIn.tenantId); mainWindow?.webContents.send("health:changed", signedIn.tenantId) } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
       return { result: true }
     } catch (error) { return wizardFailure(error) }
   })
@@ -2169,11 +2170,13 @@ async function bootstrap(): Promise<void> {
   handleTrusted("services:setAccess", (_event, tenantId: unknown, id: unknown, access: unknown) => {
     const tenant = connectedTenant(tenantId)
     moduleSettings.setAccess(tenant, id, access)
+    mainWindow?.webContents.send("health:changed", tenant)
     return health.report(tenant)
   })
   handleTrusted("services:setArea", (_event, tenantId: unknown, id: unknown, area: unknown, enabled: unknown) => {
     const tenant = connectedTenant(tenantId)
     moduleSettings.setArea(tenant, id, area, enabled)
+    mainWindow?.webContents.send("health:changed", tenant)
     return health.report(tenant)
   })
   handleTrusted("health:report", (_event, tenantId: unknown) => health.report(connectedTenant(tenantId)))

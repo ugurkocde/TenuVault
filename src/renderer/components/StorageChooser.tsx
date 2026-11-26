@@ -234,10 +234,12 @@ export function StorageChooser({ tenantId, clientId, wizardId, localOnly, onboar
           onboarding ? "Keep backups on this computer." : "Backups are encrypted with AES-256-GCM and the key is protected by your Windows or macOS account. Nothing leaves this computer.",
         )}
         {kind === "local" && settings && (
-          <div className={cn("space-y-1 text-xs text-gray-600", onboarding ? "px-4 pb-4" : "ml-14 rounded-2xl bg-gray-50 px-4 py-3")}>
-            <div className="flex items-center gap-2">
-              <Lock className="h-3.5 w-3.5" />
-              Folder: <span className="font-mono text-gray-800">{settings.localFolder}</span>
+          <div className={cn("space-y-1 text-xs text-gray-600", onboarding ? (affected ? "px-4 pb-3" : "px-4 pb-4") : "ml-14 rounded-2xl bg-gray-50 px-4 py-3")}>
+            <div className="flex items-start gap-2">
+              <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 break-all">
+                Folder: <span className="font-mono text-gray-800">{settings.localFolder}</span>
+              </span>
             </div>
             {!onboarding && <p>Change the folder or save the recovery key in Settings. Without the recovery key, backups can only be read on this device.</p>}
             {inventory.checking && !affected && (
@@ -246,7 +248,7 @@ export function StorageChooser({ tenantId, clientId, wizardId, localOnly, onboar
           </div>
         )}
         {kind === "local" && affected && (
-          <div className="ml-14">
+          <div className={onboarding ? "px-4 pb-4" : "ml-14"}>
             <UnreadableBackupsNotice settings={settings} affected={affected} checking={inventory.checking} onChange={setSettings} />
           </div>
         )}
@@ -260,9 +262,13 @@ export function StorageChooser({ tenantId, clientId, wizardId, localOnly, onboar
           onboarding ? "Keep backups in your own Azure subscription." : "Backups go to your own subscription. Azure encrypts the data at rest, and access follows your Azure role assignments: every admin with access to the account sees the same backups. You need the Storage Blob Data Contributor role on it.",
           community && !savedAzure,
         )}
-        {kind === "azure" && savedSelected && <p className="ml-14 text-sm text-gray-600">Using saved Azure storage: {savedAzure?.storageAccountName}. Existing backups can be listed and restored. {community && "New backups are paused until Pro is active."}</p>}
-        {kind === "azure" && !savedSelected && savedAzure && <Button variant="outline" onClick={() => setSelected(savedAzure.storageAccountName)}>Use saved Azure storage</Button>}
-        {kind === "azure" && savedSelected && !community && <Button variant="outline" onClick={() => setSelected("")}>Choose another Azure account</Button>}
+        {kind === "azure" && savedAzure && (
+          <div className={cn("space-y-2", onboarding ? "px-4 pb-4" : "ml-14")}>
+            {savedSelected && <p className="text-sm text-gray-600">Using saved Azure storage: {savedAzure.storageAccountName}. Existing backups can be listed and restored. {community && "New backups are paused until Pro is active."}</p>}
+            {!savedSelected && <Button variant="outline" onClick={() => setSelected(savedAzure.storageAccountName)}>Use saved Azure storage</Button>}
+            {savedSelected && !community && <Button variant="outline" onClick={() => setSelected("")}>Choose another Azure account</Button>}
+          </div>
+        )}
         {!onboarding && community && <UpgradeNote feature="azureStorage" />}
         {kind === "azure" && !community && !savedSelected && (
           <div className={cn("space-y-3", onboarding ? "px-4 pb-4" : "ml-14")}>
