@@ -13,6 +13,7 @@ export interface VerificationProgress {
 
 export interface RetentionProgress {
   cursor?: string
+  latest?: string
   latestAttempts?: number
   reviews: Record<string, VerificationProgress>
 }

@@ -4,7 +4,7 @@ import type { RetentionLimits } from "../src/main/backup/retention-budget"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { NextRequest } from "next/server"
-import { BackupEngine } from "../src/main/backup/engine"
+import { BackupEngine, JOB_DEADLINE_MS } from "../src/main/backup/engine"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { sealLegacyAzure } from "./legacy-seal"
@@ -482,6 +482,71 @@ describe("retention verification", () => {
     expect(job.log.join("\n")).toContain("repeatedly deferred")
     expect(saved.has(expired + "metadata.json")).toBe(true)
     expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+  })
+
+  it.each([false, true])("resumes verification of a newest backup over the byte budget across runs, bound to the recovery keyring (changed: %s)", async changeKey => {
+    const big = "x".repeat(70_000)
+    const { engine, saved, calls, seed, folder, keyring } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: (url) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const firstJob = await complete(engine)
+    const firstPolicy = `${firstJob.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(firstJob.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+    if (changeKey) keyring.splice(0, 1, Buffer.alloc(32, 9))
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(changeKey)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(changeKey ? 2 : 1)
+  })
+
+  it("resumes newest backup verification after a job deadline and re-verifies if a verified file changes", async () => {
+    const big = "y".repeat(20_000)
+    let hitDeadline = true
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 200_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (hitDeadline && req.method === "GET" && url.pathname.endsWith("/Policy%201.json")) {
+          hitDeadline = false
+          vi.advanceTimersByTime(JOB_DEADLINE_MS)
+          return new Promise(() => {})
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const firstJob = await complete(engine)
+    const firstPolicy = `${firstJob.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(firstJob.log.join("\n")).toContain("Retention was interrupted")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+    // Tampering with the already-verified file changes its ETag and must invalidate the saved receipt.
+    const original = saved.get(firstPolicy)!
+    seed(firstPolicy, { id: "p0", description: "tampered" })
+    await vi.advanceTimersByTimeAsync(1_000)
+    const tamperedJob = await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(2)
+    expect(tamperedJob.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("hash does not match") }))
+    // Restoring the original bytes makes the receipt match again on the next run.
+    saved.set(firstPolicy, original)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(2)
   })
 })
 

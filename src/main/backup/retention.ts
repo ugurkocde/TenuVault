@@ -43,14 +43,16 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
 
   const key = `${tenant}/${run.account}`
   const state = readRetentionProgress(run.progress.get(key))
-  const older = all.filter(backup => backup.prefix < `${current}/`)
+  const latestPrefix = `${current}/`
+  const older = all.filter(backup => backup.prefix < latestPrefix)
   const previous = state.cursor ? older.findIndex(backup => backup.prefix < state.cursor!) : 0
   const start = Math.max(0, previous)
   const candidates = older.slice(start, start + limits.candidates)
+  const existing = new Set([latestPrefix, ...older.map(backup => backup.prefix)])
   const save = () => {
-    const existing = new Set(older.map(backup => backup.prefix))
     for (const prefix of Object.keys(state.reviews)) if (!existing.has(prefix)) delete state.reviews[prefix]
-    if (!state.cursor && !state.latestAttempts && !Object.keys(state.reviews).length) run.progress.delete(key)
+    if (state.latest && !existing.has(state.latest)) delete state.latest
+    if (!state.cursor && !state.latest && !state.latestAttempts && !Object.keys(state.reviews).length) run.progress.delete(key)
     else run.progress.set(key, JSON.stringify(state))
   }
   const advance = (prefix: string | undefined) => {
@@ -59,8 +61,16 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   }
 
   if (!candidates.length || !older.some(backup => backup.time < cutoff)) return all.length !== listed.length
-  const latestPrefix = `${current}/`
   const owner = BACKUP_OWNER_FILE
+  const resumedLatest = state.latest && state.latest !== latestPrefix
+    ? older.find(backup => backup.prefix === state.latest && backup.time >= cutoff)
+    : undefined
+  const anchorPrefix = resumedLatest && Object.keys(state.reviews[resumedLatest.prefix]?.files ?? {}).length > 0
+    ? resumedLatest.prefix
+    : latestPrefix
+  if (state.latest && state.latest !== anchorPrefix) delete state.latest
+  const latestProgress = state.reviews[anchorPrefix] ??= { files: {}, attempts: 0 }
+  const beforeLatestFiles = Object.keys(latestProgress.files).length
   let coverage: Set<string>
   try {
     const currentTime = Date.parse(parseBackupName(current)?.timestamp ?? "")
@@ -69,14 +79,39 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     if (JSON.stringify(manifest.value) !== JSON.stringify(written)) throw new Error("the newest backup's stored manifest differs from what was written")
     const claim = await storage.readForRetention(latestPrefix + owner)
     checkOwner(claim, written, tenant, latestPrefix)
-    const roots = new Map([["metadata.json", manifest], [owner, claim]])
-    coverage = (await verifyBackup(storage, latestPrefix, written, roots, await storage.list(latestPrefix), keyFingerprint)).covers
+    if (anchorPrefix === latestPrefix) {
+      const roots = new Map([["metadata.json", manifest], [owner, claim]])
+      coverage = (await verifyBackup(storage, latestPrefix, written, roots, await storage.list(latestPrefix), keyFingerprint, latestProgress)).covers
+    } else {
+      const anchorManifest = await storage.readForRetention(anchorPrefix + "metadata.json")
+      const anchorMetadata = anchorManifest.value as Record<string, unknown>
+      if (typeof anchorMetadata.TenantId !== "string" || anchorMetadata.TenantId.toLowerCase() !== tenant) {
+        throw new Error(`${anchorPrefix}metadata.json does not match the backup's ownership.`)
+      }
+      const anchorClaim = await storage.readForRetention(anchorPrefix + owner)
+      checkOwner(anchorClaim, anchorMetadata, tenant, anchorPrefix)
+      const anchorRoots = new Map([["metadata.json", anchorManifest], [owner, anchorClaim]])
+      coverage = (await verifyBackup(storage, anchorPrefix, anchorMetadata, anchorRoots, await storage.list(anchorPrefix), keyFingerprint, latestProgress)).covers
+    }
     delete state.latestAttempts
+    if (state.latest !== anchorPrefix) delete state.reviews[anchorPrefix]
   } catch (error) {
+    const madeLatestProgress = Object.keys(latestProgress.files).length > beforeLatestFiles
     if (error instanceof RetentionBudgetError) {
       state.latestAttempts = (state.latestAttempts ?? 0) + 1
+      if (Object.keys(latestProgress.files).length > 0) state.latest = anchorPrefix
+      else delete state.reviews[anchorPrefix]
       save()
       if (state.latestAttempts >= 3) notice("Retention repeatedly reached its budget while verifying the newest backup. Review storage size and the backup log.", "warning")
+    } else if (madeLatestProgress) {
+      state.latest = anchorPrefix
+      save()
+    } else if (!Object.keys(latestProgress.files).length) {
+      delete state.reviews[anchorPrefix]
+      if (anchorPrefix !== latestPrefix && state.latest === anchorPrefix) {
+        delete state.latest
+        save()
+      }
     }
     throw error
   }
@@ -93,6 +128,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   try {
     for (const backup of candidates) {
       const { prefix } = backup
+      if (prefix === anchorPrefix) continue
       visiting = prefix
       const roots = new Map<string, RetentionBlob>()
       const { manifest, owner: ownership } = await resolveBackupOwnership(async name => {
@@ -150,9 +186,16 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         throw error
       }
     }
-    advance(candidates.at(-1)?.prefix)
+    const last = candidates.at(-1)?.prefix
+    const hasMore = Boolean(last && older.some(backup => backup.prefix < last))
+    if (!hasMore && state.latest === anchorPrefix) {
+      delete state.latest
+      delete state.reviews[anchorPrefix]
+    }
+    advance(last)
   } catch (error) {
     if (!(error instanceof RetentionBudgetError)) {
+      if (madeProgress) save()
       if (error instanceof InventoryDamagedError) throw error
       throw new Error(`${visiting ?? "A backup"} could not be verified. ${error instanceof Error ? error.message : String(error)}`, { cause: error })
     }
