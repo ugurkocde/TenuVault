@@ -496,6 +496,37 @@ describe("surfaceTokenErrors", () => {
 })
 
 describe("retention", () => {
+  it("keeps older backups when a local encrypted policy disagrees with its manifest", async () => {
+    const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-retention-")), [randomBytes(32)])
+    const account = localStorageAccountName(TENANT)
+    const container = "intune-backups"
+    const old = "backup-2026-08-01-020000"
+    const current = "backup-2026-09-24-120000"
+    await store.createContainer(account, container)
+    await store.put(account, container, `${old}/metadata.json`, Buffer.from("{}"), "application/json")
+    await store.put(account, container, `${old}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
+    const graph = fakeGraph()
+    let replaced = false
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (!localAccountFromUrl(url)) return graph(url)
+      const response = await handleLocalBlobRequest(store, request)
+      if (request.method === "PUT" && url.pathname.endsWith(`${current}/metadata.json`) && response.ok) {
+        const manifest = JSON.parse((await store.get(account, container, `${current}/metadata.json`)).data.toString())
+        const [key, entry] = Object.entries<{ file: string }>(manifest.Items)[0]!
+        await store.put(account, container, `${current}/${key.split("/")[0]}/${entry.file}`, Buffer.from('{"id":"different"}'), "application/json")
+        replaced = true
+      }
+      return response
+    }
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(replaced).toBe(true)
+    expect(job.log.join("\n")).toContain("does not match its manifest")
+    expect(await store.list(account, container, `${old}/`)).toHaveLength(2)
+  })
+
   it("deletes backups older than the retention period after a backup, keeping newer ones", async () => {
     const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-retention-")), [randomBytes(32)])
     const account = localStorageAccountName(TENANT)

@@ -13,6 +13,9 @@ export interface VerifiedHalf {
   counts: Map<string, number>
 }
 
+/** Conflicting manifest evidence invalidates the entire retention plan. */
+export class RetentionManifestMismatch extends Error {}
+
 /** The listing supplies deletion identities, never the expected inventory. */
 export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile): Promise<VerifiedHalf> {
   listing ??= await storage.listFolder(prefix)
@@ -27,8 +30,13 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
     blobs.set(path, lastRead.etag)
     return lastRead.value
   }
+  const mismatch = (name: string): never => {
+    throw new RetentionManifestMismatch(`${prefix}${name} could not be verified for retention because it does not match its manifest.`)
+  }
   const authenticate = (name: string, hash?: string) => {
-    if (!lastRead?.authenticated && (hash === undefined || hash !== lastRead?.sha256)) reject(name)
+    if (hash !== undefined) {
+      if (hash !== lastRead?.sha256) mismatch(name)
+    } else if (!lastRead?.authenticated) reject(name)
   }
   if (manifest ? JSON.stringify(await read("metadata.json")) !== JSON.stringify(manifest) : remaining.has(prefix + "metadata.json")) reject("metadata.json")
   if (expectedOwner?.kind === "found" && JSON.stringify(await read(BACKUP_OWNER_FILE)) !== JSON.stringify(expectedOwner.value)) reject(BACKUP_OWNER_FILE)
@@ -42,9 +50,9 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
     if (!/^[A-Za-z0-9]+$/.test(folder) || !key.slice(slash + 1) || typeof entry?.file !== "string"
       || !/^[^/\\]+\.json$/.test(entry.file) || !isSafeArchivePath(name)) reject("metadata.json")
     const value = await read(name) as Item
-    if (Array.isArray(value)) reject(name)
-    if (entry.sha256 !== undefined) authenticate(name, entry.sha256)
-    else if (!lastRead?.authenticated && (value.id !== key.slice(slash + 1) || !entry.hash || snapshotHash(value) !== entry.hash)) reject(name)
+    if (Array.isArray(value) || value.id !== key.slice(slash + 1)) mismatch(name)
+    if (entry.hash !== undefined && snapshotHash(value) !== entry.hash) mismatch(name)
+    if (entry.sha256 !== undefined || entry.hash === undefined) authenticate(name, entry.sha256)
     counts.set(folder, (counts.get(folder) ?? 0) + 1)
   }
   if (manifest) {

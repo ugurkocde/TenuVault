@@ -17,7 +17,7 @@ import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } f
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { RetentionBudget, RetentionBudgetError, RETENTION_LIMITS, type RetentionLimits } from "./retention-budget"
-import { verifyHalf, type VerifiedHalf } from "./retention-verification"
+import { RetentionManifestMismatch, verifyHalf, type VerifiedHalf } from "./retention-verification"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
 import { GRAPH, BlobClaimError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, providerErrorCode, providerStatus, withAbort, withRequestTimeout } from "./request"
@@ -1470,7 +1470,7 @@ export class BackupEngine {
       try { return await verifyHalf(storage, prefix, manifest, listing, expectedOwner) }
       catch (error) {
         signal.throwIfAborted()
-        if (error instanceof RetentionBudgetError || error instanceof RequestTimeoutError || error instanceof InventoryDamagedError) throw error
+        if (error instanceof RetentionManifestMismatch || error instanceof RetentionBudgetError || error instanceof RequestTimeoutError || error instanceof InventoryDamagedError) throw error
         unverified++
         this.write(job, `Kept backup ${prefix} because a file could not be verified: ${error instanceof Error ? error.message : String(error)}`, "warning")
         return null

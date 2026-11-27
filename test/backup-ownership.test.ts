@@ -1,3 +1,4 @@
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { createHash } from "node:crypto"
 import type { RetentionLimits } from "../src/main/backup/retention-budget"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -342,6 +343,25 @@ describe("backup folder ownership", () => {
 })
 
 describe("verified retention coverage", () => {
+  it.each(["identity", "legacy snapshot hash", "byte hash"])("rejects a sealed policy that disagrees with its manifest %s", async mismatch => {
+    const { engine, saved, calls, seed, folder } = setup()
+    const older = "backup-2026-08-01-020000/"
+    const newer = "backup-2026-09-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    const actual = mismatch === "identity" ? { id: "other" } : { id: "old", description: "actual" }
+    seed(`${newer}DeviceConfigurations/Old.json`, actual, true)
+    seed(`${newer}metadata.json`, { ...completeManifest, Items: { "DeviceConfigurations/old": {
+      file: "Old.json",
+      hash: snapshotHash(mismatch === "legacy snapshot hash" ? oldPolicy : actual),
+      ...(mismatch === "byte hash" ? { sha256: sha256(oldPolicy) } : {}),
+    } } }, true)
+    const job = await complete(engine)
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+    expect(job.log.join("\n")).toContain("does not match its manifest")
+  })
+
   it.each(["missing", "damaged", "unauthenticated", "hash mismatch", "valid"])("checks every referenced policy before replacing the older copy: %s", async condition => {
     const { engine, saved, calls, seed, folder } = setup()
     const older = "backup-2026-08-01-020000/"
