@@ -244,20 +244,25 @@ export async function importLargeArchive(store: LocalBlobStore, archive: Reviewe
     await store.createContainer(account, container)
     if ((await store.list(account, container, prefix)).length || (container !== BACKUP_CONTAINER && (await store.list(account, container, backupBlobName(prefix))).length)) throw new Error("This backup already exists on this device")
   }
-  const claimed: string[] = []
+  const written = new Map<string, { container: string; etag: string }>()
+  const put = async (id: string, name: string, value: unknown) => {
+    const container = backupContainer(id)
+    const previous = written.get(name)
+    const blob = await store.put(account, container, name, Buffer.from(JSON.stringify(value)), "application/json", !previous, undefined, previous?.etag)
+    written.set(name, { container, etag: blob.etag! })
+  }
   const pending = new Set<Promise<void>>()
   let failure: unknown
   try {
     for (const id of ids) {
-      await store.put(account, backupContainer(id), `${id}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ Source: "TenuVault Desktop", TenantId: archive.tenantId, RunId: randomUUID() })), "application/json", true)
-      claimed.push(id)
+      await put(id, `${id}/.tenuvault-owner.json`, { Source: "TenuVault Desktop", TenantId: archive.tenantId, RunId: randomUUID() })
     }
     const manifests = new Map<string, any>()
     const checked = await visitArchive(archive.path, async (name, value) => {
       const id = name.split("/")[0]!
       if (!ids.includes(id)) throw new Error("The archive changed since review")
       if (name === `${id}/metadata.json`) { manifests.set(id, value); return }
-      const task = store.put(account, backupContainer(id), backupBlobName(name), Buffer.from(JSON.stringify(value)), "application/json", true).then(() => undefined, error => { failure ??= error }).finally(() => pending.delete(task))
+      const task = put(id, backupBlobName(name), value).catch(error => { failure ??= error }).finally(() => pending.delete(task))
       pending.add(task)
       if (pending.size >= 16) await Promise.race(pending)
       if (failure) throw failure
@@ -267,19 +272,18 @@ export async function importLargeArchive(store: LocalBlobStore, archive: Reviewe
     if (checked.digest !== archive.digest || checked.tenantId !== archive.tenantId || checked.backupId !== archive.backupId || checked.companionId !== archive.companionId) throw new Error("The archive changed since review")
     for (const id of ids) {
       const metadata = manifests.get(id)
-      await store.put(account, backupContainer(id), `${id}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ Source: "TenuVault Desktop", TenantId: archive.tenantId, RunId: metadata.RunId ?? randomUUID(), ...(metadata.CompanionBackup ? { CompanionBackup: metadata.CompanionBackup } : {}), ...(backupContainer(id) !== BACKUP_CONTAINER ? { LargeInventory: { version: 1 } } : {}) })), "application/json")
+      await put(id, `${id}/.tenuvault-owner.json`, { Source: "TenuVault Desktop", TenantId: archive.tenantId, RunId: metadata.RunId ?? randomUUID(), ...(metadata.CompanionBackup ? { CompanionBackup: metadata.CompanionBackup } : {}), ...(backupContainer(id) !== BACKUP_CONTAINER ? { LargeInventory: { version: 1 } } : {}) })
     }
     for (const id of ids) {
       const metadata = manifests.get(id)
-      await store.put(account, backupContainer(id), `${id}/metadata.json`, Buffer.from(JSON.stringify({ ...metadata, SourceTenantId: archive.tenantId, Import: { sha256: archive.digest, provenance: "User-reviewed tar; source identity is not cryptographically verified" } })), "application/json", true)
+      await put(id, `${id}/metadata.json`, { ...metadata, SourceTenantId: archive.tenantId, Import: { sha256: archive.digest, provenance: "User-reviewed tar; source identity is not cryptographically verified" } })
     }
   } catch (error) {
     await Promise.all(pending)
-    // Retire both completion markers before rolling back any payload.
-    for (const id of claimed) await store.delete(account, backupContainer(id), `${id}/metadata.json`, { despiteDamage: true }).catch(() => undefined)
-    for (const id of claimed) {
-      const container = backupContainer(id), prefix = `${id}/`
-      for (const blob of [...await store.list(account, container, prefix), ...(container === BACKUP_CONTAINER ? [] : await store.list(account, container, backupBlobName(prefix)))]) await store.delete(account, container, blob.name, { despiteDamage: true }).catch(() => undefined)
+    // Manifests were published last, so retiring our writes in reverse order takes them out
+    // first. A replacement or a file published by another writer stays where it is.
+    for (const [name, { container, etag }] of [...written].reverse()) {
+      await store.delete(account, container, name, { despiteDamage: true, ifMatch: etag }).catch(() => undefined)
     }
     throw error
   }

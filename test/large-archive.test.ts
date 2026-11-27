@@ -1,13 +1,13 @@
 import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { createHash } from "node:crypto"
-import { afterEach, expect, it } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { Readable } from "node:stream"
 import { exportLargeArchive, importLargeArchive, reviewLargeArchive, saveLargeDownload } from "../src/main/backup/large-archive"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
-import { LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { BlobAlreadyExistsError, LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
 const tenant = "11111111-1111-1111-1111-111111111111", backup = "backup-large-2026-11-16-120000"
@@ -90,6 +90,28 @@ it("rolls back a changed reviewed source and never publishes its metadata", asyn
   await expect(importLargeArchive(store, reviewed)).rejects.toThrow("changed since review")
   expect(await store.list(`tvlocal-${tenant}`, LARGE_BACKUP_CONTAINER)).toEqual([])
 })
+it("keeps a late collision and another writer's replacement during rollback", async () => {
+  const f = await synthetic(1)
+  const root = join(f.root, "encrypted")
+  const store = new LocalBlobStore(root, [Buffer.alloc(32, 3)])
+  const writer = new LocalBlobStore(root, [Buffer.alloc(32, 3)])
+  const account = `tvlocal-${tenant}`
+  const marker = `${backup}/.tenuvault-owner.json`
+  const policy = backupBlobName(`${backup}/DeviceConfigurations/object-00000000.json`)
+  const foreign = Buffer.from('{"writer":"another import"}')
+  const put = store.put.bind(store)
+  vi.spyOn(store, "put").mockImplementation(async (...args) => {
+    if (args[2] === policy) {
+      await writer.put(account, LARGE_BACKUP_CONTAINER, marker, foreign, "application/json")
+      await writer.put(account, LARGE_BACKUP_CONTAINER, policy, foreign, "application/json", true)
+    }
+    return put(...args)
+  })
+  await expect(importLargeArchive(store, await reviewLargeArchive(f.path))).rejects.toThrow(BlobAlreadyExistsError)
+  for (const name of [marker, policy]) expect((await writer.get(account, LARGE_BACKUP_CONTAINER, name)).data).toEqual(foreign)
+  expect((await writer.list(account, LARGE_BACKUP_CONTAINER)).map(blob => blob.name).sort()).toEqual([marker, policy].sort())
+})
+
 it("removes a failed streaming download and preserves the destination", async () => {
   const f = await synthetic()
   const original = await readFile(f.path)
