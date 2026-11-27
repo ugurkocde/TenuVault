@@ -2,7 +2,7 @@ import { authenticatedBackupRead } from "./authenticated-read"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobLeaseUnsupportedError, BlobProtectedError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobLeaseUnsupportedError, BlobProtectedError, BlobQuarantinedError, BlobReplacementChangedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type ExpectedReplacement, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -256,9 +256,29 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       return authenticatedBackupRead(new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers }))
     }
     if (method === "DELETE") {
+      let expectedReplacements: ExpectedReplacement[] | undefined
+      if (request.headers.get("x-tenuvault-expected-replacements") === "1") {
+        try {
+          const parsed = JSON.parse(await request.text()) as unknown
+          if (Array.isArray(parsed) && parsed.every(entry =>
+            entry && typeof entry === "object" && !Array.isArray(entry)
+            && typeof (entry as { prefix?: unknown }).prefix === "string"
+            && (entry as { prefix: string }).prefix.length > 0
+            && (entry as { blobs?: unknown }).blobs && typeof (entry as { blobs: unknown }).blobs === "object"
+            && !Array.isArray((entry as { blobs: unknown }).blobs)
+            && Object.values((entry as { blobs: Record<string, unknown> }).blobs).every(tag => typeof tag === "string" && tag.length > 0))) {
+            expectedReplacements = parsed as ExpectedReplacement[]
+          } else {
+            return error(400, "InvalidHeaderValue", "Invalid expected replacements payload.", { "x-tenuvault-delete-unchanged": "1" })
+          }
+        } catch {
+          return error(400, "InvalidHeaderValue", "Invalid expected replacements payload.", { "x-tenuvault-delete-unchanged": "1" })
+        }
+      }
       await store.delete(account, container, blobName, {
         ifMatch: request.headers.get("if-match") ?? undefined,
         retentionLockId: request.headers.get("x-tenuvault-retention-lock-id") ?? undefined,
+        expectedReplacements,
       })
       return new Response(null, { status: 202 })
     }
@@ -268,6 +288,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       ? { "x-tenuvault-delete-unchanged": "1" }
       : undefined
     if (caught instanceof BlobProtectedError) return error(409, "BackupProtectedByRetention", caught.message, unchanged)
+    if (caught instanceof BlobReplacementChangedError) return error(409, "ReplacementChanged", caught.message, unchanged)
     if (caught instanceof BlobLeaseConflictError) {
       if (method === "DELETE") return error(412, "RetentionLockLost", caught.message, unchanged)
       const headers: Record<string, string> = {}

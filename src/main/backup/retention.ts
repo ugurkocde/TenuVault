@@ -5,7 +5,7 @@ import { resolveBackupOwnership } from "../../shared/backup-ownership"
 import { FetchApplicationError, FetchPreconditionError } from "../api/network-error"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { releaseLocalRetentionGuard } from "../storage/local-blob-store"
-import { BlobLeaseError, wasDeleteConfirmedUnchanged, type BlobWriter, type RetentionBlob } from "./blob-writer"
+import { BlobLeaseError, ReplacementChangedError, wasDeleteConfirmedUnchanged, type BlobWriter, type ExpectedReplacement, type RetentionBlob } from "./blob-writer"
 import { createRetentionLeaseManager, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
 import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "./retention-budget"
 import { DAY_MS, HOUR_MS, RetentionClockError } from "./retention-clock"
@@ -98,7 +98,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   const key = `${tenant}/${run.account}`
   const rawProgress = run.progress.get(key)
   const state = readRetentionProgress(rawProgress)
-  if (rawProgress && !state.cursor && !state.latest && !state.latestAttempts && !state.leaseFailures && !Object.keys(state.reviews).length && !state.deletes) {
+  if (rawProgress && !state.cursor && !state.latest && !state.newest && !state.latestAttempts && !state.leaseFailures && !Object.keys(state.reviews).length && !state.deletes) {
     run.progress.delete(key)
   }
   const latestPrefix = `${current}/`
@@ -110,11 +110,12 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   const save = () => {
     for (const prefix of Object.keys(state.reviews)) if (!existing.has(prefix)) delete state.reviews[prefix]
     if (state.latest && !existing.has(state.latest)) delete state.latest
+    if (state.newest && !existing.has(state.newest)) delete state.newest
     if (state.deletes) {
       for (const prefix of Object.keys(state.deletes)) if (!existing.has(prefix)) delete state.deletes[prefix]
       if (!Object.keys(state.deletes).length) delete state.deletes
     }
-    if (!state.cursor && !state.latest && !state.latestAttempts && !state.leaseFailures && !Object.keys(state.reviews).length && !state.deletes) run.progress.delete(key)
+    if (!state.cursor && !state.latest && !state.newest && !state.latestAttempts && !state.leaseFailures && !Object.keys(state.reviews).length && !state.deletes) run.progress.delete(key)
     else run.progress.set(key, JSON.stringify(state))
   }
   const advance = (prefix: string | undefined) => {
@@ -146,6 +147,10 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     return warned
   }
   const owner = BACKUP_OWNER_FILE
+  if (state.newest && state.newest !== latestPrefix) {
+    if (state.newest !== state.latest) delete state.reviews[state.newest]
+    delete state.newest
+  }
   const resumedLatest = state.latest && state.latest !== latestPrefix
     ? older.find(backup => backup.prefix === state.latest && backup.time >= cutoff)
     : undefined
@@ -192,10 +197,12 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         unreadableAnchor = { prefix: anchorPrefix, error }
         delete state.latest
         delete state.latestAttempts
-        save()
         anchorPrefix = latestPrefix
-        latestProgress = state.reviews[latestPrefix] = { files: {}, attempts: 0 }
-        beforeLatestFiles = 0
+        const preservedNewest = state.newest === latestPrefix ? state.reviews[latestPrefix] : undefined
+        delete state.newest
+        latestProgress = preservedNewest ?? (state.reviews[latestPrefix] = { files: {}, attempts: 0 })
+        beforeLatestFiles = Object.keys(latestProgress.files).length
+        save()
         anchorVerified = await verifyAnchor()
       } else {
         throw error
@@ -207,15 +214,24 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       // any DELETE. A mismatch (or a budget stop) throws here, before the plan phase,
       // so nothing is deleted; receipts for both backups are kept for the next run.
       const newestProgress = state.reviews[latestPrefix] ??= { files: {}, attempts: 0 }
+      const persistNewest = () => {
+        if (Object.keys(newestProgress.files).length > 0) state.newest = latestPrefix
+        else {
+          delete state.reviews[latestPrefix]
+          if (state.newest === latestPrefix) delete state.newest
+        }
+      }
       try {
         const roots = new Map([["metadata.json", manifest], [owner, claim]])
         await verifyBackup(storage, latestPrefix, written, roots, await storage.list(latestPrefix), keyFingerprint, newestProgress)
-        if (!Object.keys(newestProgress.files).length) delete state.reviews[latestPrefix]
+        persistNewest()
       } catch (error) {
-        if (!Object.keys(newestProgress.files).length) delete state.reviews[latestPrefix]
+        persistNewest()
         save()
         throw error
       }
+    } else if (state.newest === latestPrefix) {
+      delete state.newest
     }
     delete state.latestAttempts
     if (Object.keys(latestProgress.files).length > 0) {
@@ -856,6 +872,12 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       }
       save()
       let deleted = 0
+      const expectedReplacements: ExpectedReplacement[] | undefined = local
+        ? replacements.map(replacementPrefix => ({
+            prefix: replacementPrefix,
+            blobs: Object.fromEntries(replacementIdentities.get(replacementPrefix) ?? []),
+          }))
+        : undefined
       try {
         for (const name of order) {
           const etag = identities.get(name)
@@ -876,7 +898,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
                 break
               }
             }
-            await storage.delete(name, etag, localLockId)
+            await storage.delete(name, etag, localLockId, expectedReplacements)
             deleted++
             delete remaining[name]
             if (!Object.keys(remaining).length && state.deletes) {
@@ -894,11 +916,18 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         removed++
         advance(prefix)
       } catch (error) {
-        if (!deleted && !resumed && (wasDeleteConfirmedUnchanged(error) || error instanceof BlobLeaseError) && state.deletes) {
+        if (!deleted && !resumed && (wasDeleteConfirmedUnchanged(error) || error instanceof BlobLeaseError || error instanceof ReplacementChangedError) && state.deletes) {
           delete state.deletes[prefix]
           if (!Object.keys(state.deletes).length) delete state.deletes
         }
         save()
+        if (error instanceof ReplacementChangedError) {
+          warning = true
+          notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${error.message.replace(/\.$/, "")}.`, "warning")
+          completedPlan = false
+          stopCleanup = true
+          break
+        }
         if (error instanceof BlobLeaseError) {
           warning = true
           const detail = local
@@ -954,9 +983,15 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   }
   if (completedPlan && hasPendingCursor) {
     const hasMore = Boolean(pendingCursor && older.some(backup => backup.prefix < pendingCursor!))
-    if (windowCompleted && !hasMore && state.latest === anchorPrefix && !state.deletes) {
-      delete state.latest
-      delete state.reviews[anchorPrefix]
+    if (windowCompleted && !hasMore && !state.deletes) {
+      if (state.latest === anchorPrefix) {
+        delete state.latest
+        delete state.reviews[anchorPrefix]
+      }
+      if (state.newest) {
+        delete state.reviews[state.newest]
+        delete state.newest
+      }
     }
     advance(pendingCursor)
   }

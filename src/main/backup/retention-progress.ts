@@ -31,6 +31,7 @@ export interface LeaseFailureProgress {
 export interface RetentionProgress {
   cursor?: string
   latest?: string
+  newest?: string
   latestAttempts?: number
   leaseFailures?: LeaseFailureProgress
   reviews: Record<string, VerificationProgress>
@@ -84,6 +85,7 @@ function isProgress(state: unknown): state is RetentionProgress {
   if (!isRecord(state)) return false
   if (state.cursor !== undefined && typeof state.cursor !== "string") return false
   if (state.latest !== undefined && typeof state.latest !== "string") return false
+  if (state.newest !== undefined && typeof state.newest !== "string") return false
   if (state.latestAttempts !== undefined && !isNonNegativeInt(state.latestAttempts)) return false
   if (state.leaseFailures !== undefined) {
     if (!isRecord(state.leaseFailures) || typeof state.leaseFailures.key !== "string" || !state.leaseFailures.key
