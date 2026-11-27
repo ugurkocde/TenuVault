@@ -125,8 +125,9 @@ it("preserves long Unicode policy file names in POSIX path records", async () =>
   const name = "設定".repeat(60) + ".json", snapshot = { id: "configuration", displayName: "設定" }
   const metadata = { ...f.metadata, Items: { "CompliancePolicies/configuration": { file: name, hash: snapshotHash(snapshot) } }, ItemCounts: { ...f.metadata.ItemCounts, CompliancePolicies: 1, TotalPolicies: 2 } }
   const read = async (path: string) => path.startsWith("CompliancePolicies/") ? snapshot : f.read(path)
-  await saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(tenant, backup, metadata, read))) as ReadableStream<Uint8Array>, f.path)
-  expect((await reviewLargeArchive(f.path)).count).toBe(2)
+  const path = join(f.root, "derived.tar")
+  await saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(tenant, backup, metadata, read))) as ReadableStream<Uint8Array>, path)
+  expect((await reviewLargeArchive(path)).count).toBe(2)
 })
 
 async function relationshipArchive(count: number, members: number) {
@@ -147,8 +148,9 @@ async function relationshipArchive(count: number, members: number) {
     }
     return snapshot(Number(name.match(/object-(\d+)/)![1]))
   }
-  await saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(tenant, backup, f.metadata, read))) as ReadableStream<Uint8Array>, f.path)
-  return { ...f, read, reference, snapshot }
+  const path = join(f.root, "derived.tar")
+  await saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(tenant, backup, f.metadata, read))) as ReadableStream<Uint8Array>, path)
+  return { ...f, path, read, reference, snapshot }
 }
 
 it("round trips three objects with 500000 members each beyond the parent file allowance", async () => {

@@ -29,6 +29,7 @@ export interface AppSourceHost {
   pickFolder: (current: string) => Promise<string | null>
   confirmNewStore: (tenant: string) => Promise<boolean>
   pickExport: (fileName: string) => Promise<string | null>
+  saveExport?: (destination: string, write: (path: string) => Promise<void>, signal: AbortSignal) => Promise<void>
   openFolder: (folder: string) => Promise<void>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenant: string) => Promise<void>
@@ -199,7 +200,9 @@ export class AppSourceService {
       signal.throwIfAborted()
       if (!destination) return false
       this.tenant(tenant)
-      await store.export(tenant, item.id, destination, signal)
+      const write = (path: string) => store.export(tenant, item.id, path, signal)
+      if (this.host.saveExport) await this.host.saveExport(destination, write, signal)
+      else await write(destination)
       return true
     })
   }

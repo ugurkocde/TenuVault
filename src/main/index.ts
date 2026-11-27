@@ -54,7 +54,7 @@ import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from 
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
 import { requestTrialKey } from "./license/trial"
 import { assertArchiveFileSize, importConfirmedArchive, reviewArchive } from "./backup/archive"
-import { readFile, stat } from "node:fs/promises"
+import { readFile, stat, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
@@ -96,6 +96,7 @@ import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { folderToOpen, localInventoryProblem } from "./backup/local-inventory"
+import { labDownloadDestination, labDownloadStream, stageLabDownload, type SaveDownload } from "./backup/lab-download"
 import { copyLabBackups, guardLabBackupWrites, isStableBackupFolder, LAB_FOLDER_ERROR } from "./backup/lab-folder"
 import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
@@ -179,6 +180,7 @@ if (!isPrimaryInstance) app.exit(0)
 // Route code that calls its own API (audit logging) builds URLs from this origin.
 process.env.NEXT_PUBLIC_APP_URL = INTERNAL_API_ORIGIN
 
+let saveLabDownload: SaveDownload | undefined
 let mainWindow: BrowserWindow | null = null
 /** Set when the app should really exit instead of hiding in the tray. */
 let quitting = false
@@ -454,6 +456,26 @@ async function bootstrap(): Promise<void> {
   const stableFolder = join(app.getPath("documents"), "TenuVault Backups")
   const labFolder = __TV_LAB_BUILD__ ? join(app.getPath("documents"), "TenuVault Lab Backups") : ""
   const guardBackupWrites = __TV_LAB_BUILD__ ? guardLabBackupWrites(stableFolder) : undefined
+  if (guardBackupWrites) {
+    saveLabDownload = (destination, content, signal) => labDownloadDestination(destination, guardBackupWrites)(content, signal)
+    session.defaultSession.on("will-download", (event, item, contents) => {
+      if (!mainWindow || contents !== mainWindow.webContents) { event.preventDefault(); return }
+      const suggestedName = basename(item.getFilename())
+      const done = new Promise<string>(resolve => item.once("done", (_event, state) => resolve(state)))
+      const report = (error: unknown) => dialog.showErrorBox("Download could not be saved", error instanceof Error ? error.message : String(error))
+      try {
+        void stageLabDownload(async path => {
+          item.setSavePath(path)
+          if (await done !== "completed" || !mainWindow) return
+          const choice = await dialog.showSaveDialog(mainWindow, { title: "Save download", defaultPath: join(app.getPath("documents"), suggestedName) })
+          if (!choice.canceled && choice.filePath) await saveLabDownload!(choice.filePath, labDownloadStream(path))
+        }).catch(report)
+      } catch (error) {
+        event.preventDefault()
+        report(error)
+      }
+    })
+  }
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? (__TV_LAB_BUILD__ ? labFolder : stableFolder)
   const labReadOnly = (folder: string) => __TV_LAB_BUILD__ && isStableBackupFolder(folder, stableFolder)
   const labCopyKeyId = (key: Buffer) => createHash("sha256").update(key).digest("hex")
@@ -878,7 +900,7 @@ async function bootstrap(): Promise<void> {
   const host: ApiHost = new ApiHost({
     bindConnections: tenants => capabilities.bindConnections(tenants),
     beforeRoute: captureDownloadAudit,
-    saveDownload: response => saveArchiveResponse(response, name => dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })),
+    saveDownload: response => saveArchiveResponse(response, name => dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] }), saveLabDownload),
     routes: {
       ...routes,
       "/api/list-backups": { POST: request => listBackups(request, (tenant, account, runId) => {
@@ -1502,9 +1524,8 @@ async function bootstrap(): Promise<void> {
       filters: [{ name: "Certificate", extensions: ["cer"] }],
     })
     if (result.canceled || !result.filePath) return { saved: false }
-    const { writeFile } = await import("node:fs/promises")
     // Only the public certificate: the private key never leaves the encrypted store.
-    await writeFile(result.filePath, reader.certificatePem, "utf8")
+    await writeSelectedFile(result.filePath, reader.certificatePem)
     backupReader.recordExport(tenant, basename(result.filePath))
     return { saved: true, fileName: basename(result.filePath) }
   })
@@ -1516,8 +1537,7 @@ async function bootstrap(): Promise<void> {
       filters: [{ name: "PowerShell script", extensions: ["ps1"] }],
     })
     if (result.canceled || !result.filePath) return { saved: false }
-    const { writeFile } = await import("node:fs/promises")
-    await writeFile(result.filePath, readerSetupScript, "utf8")
+    await writeSelectedFile(result.filePath, readerSetupScript)
     return { saved: true }
   })
   handleTrusted("backupReader:remove", (_event, tenantId: unknown) => {
@@ -1965,8 +1985,7 @@ async function bootstrap(): Promise<void> {
       filters: [{ name: "PowerShell script", extensions: ["ps1"] }],
     })
     if (result.canceled || !result.filePath) return { saved: false }
-    const { writeFile } = await import("node:fs/promises")
-    await writeFile(result.filePath, desktopSetupScript, "utf8")
+    await writeSelectedFile(result.filePath, desktopSetupScript)
     diagnostics.record({ name: "script_saved" })
     return { saved: true, folder: dirname(result.filePath), fileName: basename(result.filePath) }
   })
@@ -2290,8 +2309,8 @@ async function bootstrap(): Promise<void> {
       filters: [{ name: "Text", extensions: ["txt"] }],
     })
     if (result.canceled || !result.filePath) return { saved: false }
-    const { chmod, writeFile } = await import("node:fs/promises")
-    await writeFile(
+    const { chmod } = await import("node:fs/promises")
+    await writeSelectedFile(
       result.filePath,
       [
         "TenuVault backup recovery key",
@@ -2307,7 +2326,7 @@ async function bootstrap(): Promise<void> {
     )
     // The mode only applies to a new file; an overwritten file keeps its old permissions.
     // Windows has no owner-only mode bits, the profile folder's ACL protects the file there.
-    if (process.platform !== "win32") await chmod(result.filePath, 0o600)
+    if (!saveLabDownload && process.platform !== "win32") await chmod(result.filePath, 0o600)
     appStore.set("backup.recovery-exported", backupKeys.fingerprint())
     return { saved: true, path: result.filePath }
   })
@@ -2388,7 +2407,7 @@ async function bootstrap(): Promise<void> {
     downloadScript: script => downloadAppScript(script, async fileName => {
       const result = await dialog.showSaveDialog(mainWindow!, { title: "Download app script", defaultPath: fileName, filters: [{ name: "PowerShell script", extensions: ["ps1"] }] })
       return result.canceled ? null : result.filePath ?? null
-    }),
+    }, saveLabDownload),
     assignments: (tenant, appId) => checkAppAssignments(tenant, appId,
       async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken,
       { fetch: bridgedFetch, device: () => readAssignmentDevice(tenant, () => readAppBackupAccount(tenant,
@@ -2411,6 +2430,13 @@ async function bootstrap(): Promise<void> {
       const result = await dialog.showSaveDialog(mainWindow!, { title: "Export installer, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Installer payload", extensions: [fileName.endsWith(".zip") ? "zip" : "intunewin"] }] })
       return result.canceled ? null : result.filePath ?? null
     },
+    saveExport: guardBackupWrites && (async (destination, write, signal) => {
+      const publish = labDownloadDestination(destination, guardBackupWrites)
+      await stageLabDownload(async path => {
+        await write(path)
+        await publish(labDownloadStream(path), signal)
+      })
+    }),
     openFolder: async folder => {
       if (await shell.openPath(folder)) throw new Error("The local backup folder could not be opened. Check that it is still connected.")
     },
@@ -2567,9 +2593,13 @@ async function saveFileWithDialog(file: PreparedFile, title = `Save ${file.label
     filters: [{ name: file.label, extensions: [file.extension] }],
   })
   if (result.canceled || !result.filePath) return { saved: false }
-  const { writeFile } = await import("node:fs/promises")
-  await writeFile(result.filePath, file.content)
+  await writeSelectedFile(result.filePath, file.content)
   return { saved: true, path: result.filePath }
+}
+
+async function writeSelectedFile(path: string, content: string | Uint8Array, options?: { mode: number }): Promise<void> {
+  if (saveLabDownload) await saveLabDownload(path, content)
+  else await writeFile(path, content, options)
 }
 
 function createWindow(): void {

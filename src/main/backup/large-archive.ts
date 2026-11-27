@@ -2,7 +2,8 @@ import { completeHalf, largeRunProblems, matchingCompanions } from "../../shared
 import { BACKUP_CONTAINER, DOWNLOAD_CANCELLED_HEADER } from "../../shared/constants"
 import { backupBlobName, backupContainer } from "../../shared/backup-storage"
 import { createHash, randomUUID } from "node:crypto"
-import { open, rename, rm } from "node:fs/promises"
+import { link, open, rm } from "node:fs/promises"
+import type { SaveDownload } from "./lab-download"
 import type { FileHandle } from "node:fs/promises"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -122,7 +123,7 @@ export async function* exportMixedArchive(tenantId: string, ordinaryId: string, 
  * marker, even when the archive already failed while the dialog was open, so it is never reported as a
  * failed download.
  */
-export async function saveArchiveResponse(response: Response, choose: (name: string) => Promise<{ canceled: boolean; filePath?: string }>): Promise<Response> {
+export async function saveArchiveResponse(response: Response, choose: (name: string) => Promise<{ canceled: boolean; filePath?: string }>, save?: SaveDownload): Promise<Response> {
   const name = /filename="([A-Za-z0-9-]+\.tar)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ?? "backup.tar"
   const chosen = await choose(name)
   if (chosen.canceled || !chosen.filePath) {
@@ -130,7 +131,13 @@ export async function saveArchiveResponse(response: Response, choose: (name: str
     return Response.json({ saved: false }, { headers: { [DOWNLOAD_CANCELLED_HEADER]: "1" } })
   }
   if (!response.body) throw new Error("The archive download has no content")
-  await saveLargeDownload(response.body, chosen.filePath)
+  try {
+    if (save) await save(chosen.filePath, response.body)
+    else await saveLargeDownload(response.body, chosen.filePath)
+  } catch (error) {
+    await response.body.cancel().catch(() => undefined)
+    throw error
+  }
   return Response.json({ saved: true })
 }
 
@@ -139,7 +146,7 @@ export async function saveLargeDownload(body: ReadableStream<Uint8Array>, destin
   const temporary = `${destination}.${randomUUID()}.partial`
   try {
     await pipeline(Readable.fromWeb(body as never), createWriteStream(temporary, { flags: "wx", mode: 0o600 }))
-    await rename(temporary, destination)
+    await link(temporary, destination)
   } finally { await rm(temporary, { force: true }) }
 }
 
