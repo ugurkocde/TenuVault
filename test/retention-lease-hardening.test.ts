@@ -1211,6 +1211,20 @@ describe("Round 10 findings: checkpointed fresh verification for deletion journa
     // checkpoints payload 1 in journal.fresh (separate from state.reviews), keeps expired
     // files until fresh verification finishes, and completes cleanup on the following run.
     let sawPartialFreshCheckpoint = false
+    let sawDoneFreshWithClearedFiles = false
+    const origSet = progress.set.bind(progress)
+    progress.set = (key, value) => {
+      origSet(key, value)
+      if (key !== progressKey) return
+      const savedFresh = readRetentionProgress(value).deletes?.[expired]?.fresh
+      if (!savedFresh) return
+      for (const entry of Object.values(savedFresh)) {
+        if (entry.done) {
+          expect(entry.files).toEqual({})
+          sawDoneFreshWithClearedFiles = true
+        }
+      }
+    }
     for (let run = 0; run < 8; run++) {
       if (run > 0) vi.setSystemTime(new Date(NOW.getTime() + run * 60_000))
       await runJob(ctx.createEngine())
@@ -1230,6 +1244,7 @@ describe("Round 10 findings: checkpointed fresh verification for deletion journa
     }
 
     expect(sawPartialFreshCheckpoint).toBe(true)
+    expect(sawDoneFreshWithClearedFiles).toBe(true)
     expect(ctx.saved.has(`${expired}DeviceConfigurations/Old.json`)).toBe(false)
     expect(ctx.saved.has(`${expired}metadata.json`)).toBe(false)
     expect(ctx.saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(false)

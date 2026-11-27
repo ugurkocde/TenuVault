@@ -357,6 +357,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       try {
         const verified = await verifyBackup(storage, replacementPrefix, manifestMetadata, freshRoots, listing, keyFingerprint, freshProgress)
         freshEntry.done = true
+        freshEntry.files = {}
         freshEntry.covers = [...verified.covers]
         journal.fresh ??= {}
         journal.fresh[replacementPrefix] = freshEntry

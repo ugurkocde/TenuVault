@@ -71,12 +71,29 @@ function isReview(value: unknown): value is VerificationProgress {
   return true
 }
 
+export const MAX_FRESH_REPLACEMENTS = 128
+export const MAX_FRESH_PREFIX_LENGTH = 256
+export const MAX_FRESH_BINDING_LENGTH = 128
+export const MAX_FRESH_FILES = 10_000
+export const MAX_FRESH_FILE_NAME_LENGTH = 1_024
+export const MAX_FRESH_RECEIPT_LENGTH = 256
+export const MAX_FRESH_COVERS = 128
+export const MAX_FRESH_COVER_LENGTH = 128
+
 function isFreshVerification(value: unknown): value is FreshVerificationProgress {
   if (!isRecord(value)) return false
-  if (typeof value.binding !== "string" || !value.binding) return false
-  if (!isStringRecord(value.files)) return false
+  if (typeof value.binding !== "string" || !value.binding || value.binding.length > MAX_FRESH_BINDING_LENGTH) return false
+  if (!isRecord(value.files)) return false
+  const fileEntries = Object.entries(value.files)
+  if (fileEntries.length > MAX_FRESH_FILES) return false
+  if (!fileEntries.every(([name, receipt]) =>
+    name.length > 0 && name.length <= MAX_FRESH_FILE_NAME_LENGTH
+    && typeof receipt === "string" && receipt.length > 0 && receipt.length <= MAX_FRESH_RECEIPT_LENGTH)) return false
   if (value.done !== undefined && typeof value.done !== "boolean") return false
-  if (value.covers !== undefined && (!Array.isArray(value.covers) || !value.covers.every(entry => typeof entry === "string" && entry.length > 0))) return false
+  if (value.covers !== undefined) {
+    if (!Array.isArray(value.covers) || value.covers.length > MAX_FRESH_COVERS) return false
+    if (!value.covers.every(entry => typeof entry === "string" && entry.length > 0 && entry.length <= MAX_FRESH_COVER_LENGTH)) return false
+  }
   return true
 }
 
@@ -96,8 +113,12 @@ function isDeletionJournal(key: string, value: unknown): value is DeletionJourna
     if (value.noTypes && value.absent.some(name => name !== key + "metadata.json" && name !== key + BACKUP_OWNER_FILE)) return false
   }
   if (value.fresh !== undefined) {
-    if (!isRecord(value.fresh) || !Object.entries(value.fresh).every(([repPrefix, entry]) =>
-      repPrefix.endsWith("/") && isFreshVerification(entry))) return false
+    if (!isRecord(value.fresh)) return false
+    const freshEntries = Object.entries(value.fresh)
+    if (freshEntries.length > MAX_FRESH_REPLACEMENTS) return false
+    if (!freshEntries.every(([repPrefix, entry]) =>
+      repPrefix.length > 0 && repPrefix.length <= MAX_FRESH_PREFIX_LENGTH
+      && repPrefix.endsWith("/") && isFreshVerification(entry))) return false
   }
   return true
 }

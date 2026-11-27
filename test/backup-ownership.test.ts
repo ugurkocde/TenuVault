@@ -1,7 +1,18 @@
 import { createHash } from "node:crypto"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import type { RetentionLimits } from "../src/main/backup/retention-budget"
-import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
+import {
+  MAX_FRESH_BINDING_LENGTH,
+  MAX_FRESH_COVER_LENGTH,
+  MAX_FRESH_COVERS,
+  MAX_FRESH_FILE_NAME_LENGTH,
+  MAX_FRESH_FILES,
+  MAX_FRESH_PREFIX_LENGTH,
+  MAX_FRESH_RECEIPT_LENGTH,
+  MAX_FRESH_REPLACEMENTS,
+  readRetentionProgress,
+  type RetentionProgressStore,
+} from "../src/main/backup/retention-progress"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { NextRequest } from "next/server"
@@ -1895,11 +1906,59 @@ describe("retention progress and manifest validation", () => {
       latestAttempts: 1,
       reviews: { [expired]: { attempts: 1, files: { "DeviceConfigurations/Old.json": "abc" }, failures: 2, reason: "missing" } },
       deletes: {
-        [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+        [expired]: {
+          prefix: expired,
+          remaining: { [expired + "metadata.json"]: '"etag"' },
+          types: ["DeviceConfigurations"],
+          noTypes: false,
+          untagged: false,
+          fresh: {
+            "backup-2026-10-12-120000/": {
+              binding: "a".repeat(64),
+              files: { "DeviceConfigurations/Policy.json": "b".repeat(64) },
+              done: false,
+              covers: ["DeviceConfigurations"],
+            },
+          },
+        },
         "backup-2026-07-01-020000/": { prefix: "backup-2026-07-01-020000/", remaining: { "backup-2026-07-01-020000/metadata.json": '"etag"' }, types: [], noTypes: true, untagged: false },
       },
     }
     expect(readRetentionProgress(JSON.stringify(valid))).toEqual(valid)
+
+    const withFresh = (fresh: Record<string, unknown>) => JSON.stringify({
+      reviews: {},
+      deletes: {
+        [expired]: {
+          prefix: expired,
+          remaining: { [expired + "metadata.json"]: '"etag"' },
+          types: ["DeviceConfigurations"],
+          noTypes: false,
+          untagged: false,
+          fresh,
+        },
+      },
+    })
+    const tooManyReplacements = Object.fromEntries(
+      Array.from({ length: MAX_FRESH_REPLACEMENTS + 1 }, (_, i) => [`backup-${i}/`, { binding: "ok", files: {} }]),
+    )
+    const tooManyFiles = Object.fromEntries(
+      Array.from({ length: MAX_FRESH_FILES + 1 }, (_, i) => [`DeviceConfigurations/p${i}.json`, "r"]),
+    )
+    const oversizedFreshCases = [
+      withFresh(tooManyReplacements),
+      withFresh({ [`${"p".repeat(MAX_FRESH_PREFIX_LENGTH)}/`]: { binding: "ok", files: {} } }),
+      withFresh({ "backup-1/": { binding: "b".repeat(MAX_FRESH_BINDING_LENGTH + 1), files: {} } }),
+      withFresh({ "backup-1/": { binding: "ok", files: tooManyFiles } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { [`${"f".repeat(MAX_FRESH_FILE_NAME_LENGTH + 1)}`]: "r" } } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { "DeviceConfigurations/a.json": "r".repeat(MAX_FRESH_RECEIPT_LENGTH + 1) } } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { "DeviceConfigurations/a.json": "" } } }),
+      withFresh({ "backup-1/": { binding: "ok", files: {}, covers: Array.from({ length: MAX_FRESH_COVERS + 1 }, (_, i) => `T${i}`) } }),
+      withFresh({ "backup-1/": { binding: "ok", files: {}, covers: ["c".repeat(MAX_FRESH_COVER_LENGTH + 1)] } }),
+    ]
+    for (const raw of oversizedFreshCases) {
+      expect(readRetentionProgress(raw)).toEqual({ reviews: {} })
+    }
 
     const { engine, saved, seed, folder, progressData } = setup()
     progressData.set(`${TENANT}/contoso`, JSON.stringify({ reviews: { [expired]: {} } }))
