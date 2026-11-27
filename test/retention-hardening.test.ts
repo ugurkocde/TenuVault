@@ -5,7 +5,16 @@ import { join, resolve } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
 import { BlobWriter } from "../src/main/backup/blob-writer"
-import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
+import {
+  MAX_FRESH_BINDING_LENGTH,
+  MAX_FRESH_FILE_NAME_LENGTH,
+  MAX_FRESH_FILES,
+  MAX_FRESH_PREFIX_LENGTH,
+  MAX_FRESH_RECEIPT_LENGTH,
+  MAX_FRESH_REPLACEMENTS,
+  readRetentionProgress,
+  type RetentionProgressStore,
+} from "../src/main/backup/retention-progress"
 import { verifyHalf } from "../src/main/backup/retention-verification"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
@@ -206,6 +215,50 @@ describe("retention progress validation", () => {
     ["empty etag in deletion journal", { reviews: {}, deletions: { "backup-2026-01-01-000000/": { prefixes: ["backup-2026-01-01-000000/"], remnant: false, folders: [], remaining: { a: "" }, deleted: [] } } }],
   ])("discards persisted progress with invalid shape: %s", (_label, bad) => {
     expect(readRetentionProgress(JSON.stringify(bad))).toEqual({ reviews: {} })
+  })
+
+  it("discards oversized fresh verification state while accepting valid fresh entries within caps", () => {
+    const expired = "backup-2026-08-01-020000/"
+    const withFresh = (fresh: Record<string, unknown>) => ({
+      reviews: {},
+      deletions: {
+        [expired]: {
+          prefixes: [expired],
+          remnant: false,
+          folders: ["DeviceConfigurations"],
+          remaining: { [`${expired}metadata.json`]: '"etag-1"' },
+          deleted: [],
+          fresh,
+        },
+      },
+    })
+    const valid = withFresh({
+      "backup-2026-10-12-120000/": {
+        binding: "a".repeat(64),
+        files: { "DeviceConfigurations/Policy.json": "b".repeat(64) },
+        done: false,
+      },
+    })
+    expect(readRetentionProgress(JSON.stringify(valid))).toEqual(valid)
+
+    const tooManyReplacements = Object.fromEntries(
+      Array.from({ length: MAX_FRESH_REPLACEMENTS + 1 }, (_, i) => [`backup-${i}/`, { binding: "ok", files: {} }]),
+    )
+    const tooManyFiles = Object.fromEntries(
+      Array.from({ length: MAX_FRESH_FILES + 1 }, (_, i) => [`DeviceConfigurations/p${i}.json`, "r"]),
+    )
+    const oversized = [
+      withFresh(tooManyReplacements),
+      withFresh({ [`${"p".repeat(MAX_FRESH_PREFIX_LENGTH)}/`]: { binding: "ok", files: {} } }),
+      withFresh({ "backup-1/": { binding: "b".repeat(MAX_FRESH_BINDING_LENGTH + 1), files: {} } }),
+      withFresh({ "backup-1/": { binding: "ok", files: tooManyFiles } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { [`${"f".repeat(MAX_FRESH_FILE_NAME_LENGTH + 1)}`]: "r" } } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { "DeviceConfigurations/a.json": "r".repeat(MAX_FRESH_RECEIPT_LENGTH + 1) } } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { "DeviceConfigurations/a.json": "" } } }),
+    ]
+    for (const bad of oversized) {
+      expect(readRetentionProgress(JSON.stringify(bad))).toEqual({ reviews: {} })
+    }
   })
 
   it("uses path.basename for quarantine assertions in local-put-replacement.test.ts", () => {

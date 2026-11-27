@@ -1510,7 +1510,14 @@ export class LocalBlobStore {
    * Acquires an owner-and-process cross-process retention lock file scoped to one container directory.
    * Never expires while its holding process is alive; no time-based expiry or renewal.
    */
-  async acquireRetentionLock(account: string, container: string, proposedId?: string, protectedPrefixes?: string[], signal?: AbortSignal): Promise<string> {
+  async acquireRetentionLock(
+    account: string,
+    container: string,
+    proposedId?: string,
+    protectedPrefixes?: string[],
+    signal?: AbortSignal,
+    onTempFileCleanup?: (cleanup: () => Promise<void>) => Promise<void>,
+  ): Promise<string> {
     signal?.throwIfAborted()
     const dir = this.dir(account, container)
     await mkdir(dir, { recursive: true, mode: 0o700 })
@@ -1591,7 +1598,9 @@ export class LocalBlobStore {
         lockPath,
       })
     } finally {
-      await rm(tmpPath, { force: true }).catch(() => undefined)
+      const cleanup = () => rm(tmpPath, { force: true }).then(() => undefined, () => undefined)
+      if (onTempFileCleanup) await onTempFileCleanup(cleanup)
+      else await cleanup()
     }
   }
 
@@ -2155,7 +2164,12 @@ export class LocalBlobStore {
     throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
   }
 
-  private async restoreQuarantinedFile(held: string, live: string, dir: string): Promise<string | undefined> {
+  private async restoreQuarantinedFile(
+    held: string,
+    live: string,
+    dir: string,
+    removeLiveIfHeldMissing = false,
+  ): Promise<string | undefined> {
     const heldInfo = await lstat(held, { bigint: true })
     if (this.hardLinks) {
       let linked = false
@@ -2175,7 +2189,39 @@ export class LocalBlobStore {
         this.hardLinks = false
       }
     }
-    const data = await readFile(held)
+    // Bind the bytes read from held to an open handle's identity before creating live.
+    let data: Buffer
+    let readHeldInfo: BigIntStats
+    let heldHandle: Awaited<ReturnType<typeof open>> | undefined
+    try {
+      heldHandle = await open(held, "r")
+      const beforeRead = await heldHandle.stat({ bigint: true })
+      if (!beforeRead.isFile() || beforeRead.ino === 0n
+        || beforeRead.dev !== heldInfo.dev || beforeRead.ino !== heldInfo.ino
+        || beforeRead.size !== heldInfo.size || beforeRead.mtimeNs !== heldInfo.mtimeNs) {
+        const liveNow = await lstat(live, { bigint: true }).catch(() => null)
+        throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), true)
+      }
+      data = await heldHandle.readFile()
+      readHeldInfo = await heldHandle.stat({ bigint: true })
+      if (!readHeldInfo.isFile() || readHeldInfo.ino === 0n
+        || readHeldInfo.dev !== beforeRead.dev || readHeldInfo.ino !== beforeRead.ino
+        || readHeldInfo.size !== beforeRead.size || readHeldInfo.mtimeNs !== beforeRead.mtimeNs
+        || data.length !== Number(readHeldInfo.size)) {
+        const liveNow = await lstat(live, { bigint: true }).catch(() => null)
+        throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), true)
+      }
+    } finally {
+      await heldHandle?.close().catch(() => undefined)
+    }
+    // Re-check right before creating live that held still exists and matches the read handle.
+    const heldBeforeCreate = await lstat(held, { bigint: true })
+    if (!heldBeforeCreate.isFile() || heldBeforeCreate.ino === 0n
+      || heldBeforeCreate.dev !== readHeldInfo.dev || heldBeforeCreate.ino !== readHeldInfo.ino
+      || heldBeforeCreate.size !== readHeldInfo.size || heldBeforeCreate.mtimeNs !== readHeldInfo.mtimeNs) {
+      const liveNow = await lstat(live, { bigint: true }).catch(() => null)
+      throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), true)
+    }
     let handle: Awaited<ReturnType<typeof open>>
     try {
       handle = await open(live, "wx+", 0o600)
@@ -2278,8 +2324,91 @@ export class LocalBlobStore {
     }
     await handle.close()
     if (process.platform !== "win32") await syncDirectory(dir)
+    if (removeLiveIfHeldMissing) {
+      let heldGone = false
+      let heldChanged = false
+      try {
+        const heldBeforeRemove = await lstat(held, { bigint: true })
+        if (!heldBeforeRemove.isFile() || heldBeforeRemove.ino === 0n
+          || heldBeforeRemove.dev !== readHeldInfo.dev || heldBeforeRemove.ino !== readHeldInfo.ino
+          || heldBeforeRemove.size !== readHeldInfo.size || heldBeforeRemove.mtimeNs !== readHeldInfo.mtimeNs) {
+          heldChanged = true
+        }
+      } catch (error) {
+        if (isMissing(error)) heldGone = true
+        else throw error
+      }
+      if (!heldGone && !heldChanged) {
+        try {
+          await rm(held)
+        } catch (error) {
+          if (isMissing(error)) heldGone = true
+          else throw error
+        }
+      }
+      if (heldGone || heldChanged) {
+        await this.cleanupCreatedLiveAfterHeldGone(held, live, dir, writtenInfo, heldChanged)
+        if (heldChanged) throw new QuarantineRestoreInterruptedError(held, live, false, true)
+        return undefined
+      }
+      return await boundRestoredEtag(live, writtenInfo)
+    }
     await removeHeldAfterRestore(held, live)
     return await boundRestoredEtag(live, writtenInfo)
+  }
+
+  /**
+   * Removes a `live` file created during copy restore when `held` disappeared or changed before
+   * removal. Renames `live` aside, verifies its identity matches `writtenInfo` before unlinking,
+   * and moves an unmatched file back into `live` if free or keeps it aside and reports a conflict.
+   */
+  private async cleanupCreatedLiveAfterHeldGone(
+    held: string,
+    live: string,
+    dir: string,
+    writtenInfo: BigIntStats,
+    heldExists: boolean,
+  ): Promise<void> {
+    if (!writtenInfo.isFile() || writtenInfo.ino === 0n) {
+      const liveNow = await lstat(live, { bigint: true }).catch(() => null)
+      throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), heldExists)
+    }
+    const liveBeforeAside = await lstat(live, { bigint: true }).catch(error => isMissing(error) ? null : undefined)
+    if (liveBeforeAside === null) return
+    if (!liveBeforeAside || !liveBeforeAside.isFile() || liveBeforeAside.ino === 0n
+      || liveBeforeAside.dev !== writtenInfo.dev || liveBeforeAside.ino !== writtenInfo.ino
+      || fileStamp(liveBeforeAside) !== fileStamp(writtenInfo)) {
+      throw new QuarantineRestoreInterruptedError(held, live, true, heldExists)
+    }
+    const aside = `${live}.${randomBytes(8).toString("hex")}.partial`
+    try {
+      await rename(live, aside)
+    } catch (error) {
+      if (isMissing(error)) return
+      const liveNow = await lstat(live, { bigint: true }).catch(() => null)
+      throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), heldExists)
+    }
+    let sameCreated = false
+    try {
+      const asideInfo = await lstat(aside, { bigint: true })
+      sameCreated = asideInfo.isFile() && asideInfo.ino !== 0n
+        && asideInfo.dev === writtenInfo.dev
+        && asideInfo.ino === writtenInfo.ino
+        && asideInfo.size === writtenInfo.size
+        && asideInfo.mtimeNs === writtenInfo.mtimeNs
+    } catch {
+      sameCreated = false
+    }
+    if (sameCreated) {
+      await rm(aside)
+      if (process.platform !== "win32") await syncDirectory(dir)
+      return
+    }
+    const movedBack = await this.moveAsideBackIfFree(aside, live, dir)
+    if (movedBack) {
+      throw new QuarantineRestoreInterruptedError(held, live, true, heldExists)
+    }
+    throw new QuarantineRestoreConflictError(held, live, false, undefined, undefined, aside)
   }
 
   /**
@@ -2396,7 +2525,7 @@ export class LocalBlobStore {
                 conflictReason = conflictReasonText(livePath, path, false, asidePath)
                 conflict = { held: path, live: livePath, liveFile: file, blobName, liveIsHeldPrefix: false, aside: asidePath }
               } else {
-                await this.restoreQuarantinedFile(path, join(dir, file), dir)
+                await this.restoreQuarantinedFile(path, join(dir, file), dir, true)
                 await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
                 await rmdir(join(dir, folder)).catch(() => undefined)
                 continue

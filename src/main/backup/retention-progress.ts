@@ -77,10 +77,22 @@ function isVerificationProgress(value: unknown): value is VerificationProgress {
   return true
 }
 
+export const MAX_FRESH_REPLACEMENTS = 128
+export const MAX_FRESH_PREFIX_LENGTH = 256
+export const MAX_FRESH_BINDING_LENGTH = 128
+export const MAX_FRESH_FILES = 10_000
+export const MAX_FRESH_FILE_NAME_LENGTH = 1_024
+export const MAX_FRESH_RECEIPT_LENGTH = 256
+
 function isFreshVerificationProgress(value: unknown): value is FreshVerificationProgress {
   if (!isPlainRecord(value)) return false
-  if (typeof value.binding !== "string" || !value.binding) return false
-  if (!isPlainRecord(value.files) || !Object.values(value.files).every(receipt => typeof receipt === "string")) return false
+  if (typeof value.binding !== "string" || !value.binding || value.binding.length > MAX_FRESH_BINDING_LENGTH) return false
+  if (!isPlainRecord(value.files)) return false
+  const fileEntries = Object.entries(value.files)
+  if (fileEntries.length > MAX_FRESH_FILES) return false
+  if (!fileEntries.every(([name, receipt]) =>
+    name.length > 0 && name.length <= MAX_FRESH_FILE_NAME_LENGTH
+    && typeof receipt === "string" && receipt.length > 0 && receipt.length <= MAX_FRESH_RECEIPT_LENGTH)) return false
   if (value.done !== undefined && typeof value.done !== "boolean") return false
   return true
 }
@@ -98,8 +110,12 @@ function isDeletionJournalEntry(value: unknown): value is DeletionJournalEntry {
   if (!Array.isArray(value.deleted) || !value.deleted.every(name => typeof name === "string")) return false
   if (value.absent !== undefined && (!Array.isArray(value.absent) || !value.absent.every(name => typeof name === "string"))) return false
   if (value.fresh !== undefined) {
-    if (!isPlainRecord(value.fresh) || !Object.entries(value.fresh).every(([repPrefix, entry]) =>
-      repPrefix.endsWith("/") && isFreshVerificationProgress(entry))) return false
+    if (!isPlainRecord(value.fresh)) return false
+    const freshEntries = Object.entries(value.fresh)
+    if (freshEntries.length > MAX_FRESH_REPLACEMENTS) return false
+    if (!freshEntries.every(([repPrefix, entry]) =>
+      repPrefix.length > 0 && repPrefix.length <= MAX_FRESH_PREFIX_LENGTH
+      && repPrefix.endsWith("/") && isFreshVerificationProgress(entry))) return false
   }
   return true
 }
