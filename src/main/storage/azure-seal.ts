@@ -1,4 +1,4 @@
-import { meterLegacyBackupResponse } from '../backup/retention-budget'
+import { isHeaderOnlyBackupRead, meterLegacyBackupResponse } from '../backup/retention-budget'
 import { authenticatedBackupRead } from './authenticated-read'
 import { createDecipheriv, createHash, hkdfSync } from 'node:crypto'
 import { FetchApplicationError, FetchPreconditionError, LegacySealedError, OversizedSealedError } from '../api/network-error'
@@ -126,7 +126,7 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
     try { url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url) }
     catch { return fetchImpl(input, init) }
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
-    if (!isBackupBlobRead(url, method)) return fetchImpl(input, init)
+    if (!isBackupBlobRead(url, method) || isHeaderOnlyBackupRead()) return fetchImpl(input, init)
     const response = meterLegacyBackupResponse(await fetchImpl(input, init))
     if (!response.ok || !response.body) return response
     // Only the first bytes are read to tell the formats apart, so a plain blob streams through to the

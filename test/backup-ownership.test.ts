@@ -1248,11 +1248,11 @@ describe("retention verification", () => {
       }
     }
 
-    // Anchor has 12 files (10 policies + metadata + owner). Under 31 requests, old reserveDeletes(3 + 1) would enter
-    // cleanup and crash mid-guard with RetentionBudgetError; per-file reservation defers cleanly before cleanup.
+    // Anchor has 12 files (10 policies + metadata + owner). Under 68 requests (which only covers 1 + size,
+    // not HEAD + GET fallback + lease acquire), per-file reservation defers cleanly before cleanup.
     const tight = setup({
       count: 10,
-      limits: { candidates: 32, requests: 31, bytes: 200_000 },
+      limits: { candidates: 32, requests: 68, bytes: 200_000 },
       override: url => listWithoutEtags(url),
     })
     savedRef = tight.saved
@@ -1273,11 +1273,11 @@ describe("retention verification", () => {
     expect(tight.calls.filter(call => call.request.method === "DELETE")).toEqual([])
     expect(tightJob.log.join("\n")).toContain(`Kept backup ${newerExpired} because retention reached its storage budget`)
 
-    // With budget for candidate 1 plus its per-file replacement guard (68 requests), candidate 2 stops before stealing
-    // candidate 1's guard budget, and candidate 1's guard + deletes finish cleanly.
+    // With budget for candidate 1 plus its full replacement guard (leases + list + HEAD + GET fallback = 140 requests),
+    // candidate 2 stops before stealing candidate 1's guard budget, and candidate 1's guard + deletes finish cleanly.
     const sufficient = setup({
       count: 10,
-      limits: { candidates: 32, requests: 68, bytes: 200_000 },
+      limits: { candidates: 32, requests: 140, bytes: 200_000 },
       override: url => listWithoutEtags(url),
     })
     savedRef = sufficient.saved
@@ -1295,6 +1295,286 @@ describe("retention verification", () => {
     await complete(sufficient.engine)
     expect(sufficient.saved.has(newerExpired + "metadata.json")).toBe(false)
     expect(sufficient.calls.filter(call => call.request.method === "HEAD")).toHaveLength(12)
+  })
+
+  it.each([405, 501])("reads only the ETag header and cancels the body without reading it when HEAD returns %s", async headStatus => {
+    const big = "h".repeat(60_000)
+    let savedRef = new Map<string, Buffer>()
+    let fallbackPulls = 0
+    let fallbackCancelled = 0
+    let fallbackGets = 0
+    let seenPolicyGet = false
+    const etagOf = (name: string) => `"${createHash("sha256").update(savedRef.get(name)!).digest("hex")}"`
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 1,
+      limits: { candidates: 32, requests: 100, bytes: 100_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (url.searchParams.get("comp") === "list" && !url.searchParams.has("delimiter")) {
+          const names = [...savedRef.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+          return new Response(`<Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs>`)
+        }
+        if (req.method === "HEAD") return new Response(null, { status: headStatus })
+        const name = decodeURIComponent(url.pathname.slice("/intune-backups/".length))
+        if (req.method === "GET" && name.endsWith("/DeviceConfigurations/Policy 0.json")) {
+          if (!seenPolicyGet) {
+            seenPolicyGet = true
+            return undefined
+          }
+          fallbackGets++
+          const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+              fallbackPulls++
+              controller.enqueue(new Uint8Array(savedRef.get(name)!))
+              controller.close()
+            },
+            cancel() { fallbackCancelled++ },
+          }, { highWaterMark: 0 })
+          return new Response(body, { status: 200, headers: { etag: etagOf(name), "content-length": String(savedRef.get(name)!.byteLength) } })
+        }
+        return undefined
+      },
+    })
+    savedRef = saved
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.filter(call => call.request.method === "HEAD")).toHaveLength(1)
+    expect(fallbackGets).toBe(1)
+    expect(fallbackPulls).toBe(0)
+    expect(fallbackCancelled).toBe(1)
+  })
+
+  it("caches headEtagUnsupported when HEAD succeeds without an ETag and reserves HEAD plus GET fallback attempts", async () => {
+    let savedRef = new Map<string, Buffer>()
+    let headAttempts = 0
+    const listWithoutEtags = (url: URL) => {
+      if (url.searchParams.get("comp") === "list" && !url.searchParams.has("delimiter")) {
+        const names = [...savedRef.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+        return new Response(`<Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs>`)
+      }
+    }
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 3,
+      limits: { candidates: 32, requests: 200, bytes: 200_000 },
+      override: (url, req) => {
+        if (req.method === "HEAD") {
+          headAttempts++
+          return new Response(null, { status: 200 })
+        }
+        return listWithoutEtags(url)
+      },
+    })
+    savedRef = saved
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    // HEAD omitted ETag on the first replacement file, so subsequent files go directly to GET.
+    expect(headAttempts).toBe(1)
+    expect(calls.filter(call => call.request.method === "HEAD")).toHaveLength(1)
+  })
+
+  it("handles missing journaled remaining files on Azure by recording them and freshly re-verifying replacement coverage (crash and external deletion)", async () => {
+    const key = `${TENANT}/contoso`
+    const etagOf = (saved: Map<string, Buffer>, name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+    const itemA = { id: "a" }
+    const itemB = { id: "b" }
+    const twoItems = {
+      "DeviceConfigurations/a": { file: "A.json", hash: snapshotHash(itemA), sha256: createHash("sha256").update(JSON.stringify(itemA)).digest("hex") },
+      "DeviceConfigurations/b": { file: "B.json", hash: snapshotHash(itemB), sha256: createHash("sha256").update(JSON.stringify(itemB)).digest("hex") },
+    }
+    const twoManifest = { TenantId: TENANT, Status: "Success", Items: twoItems, Scope: { Included: ["DeviceConfigurations"] } }
+
+    // (a) Crash after our DELETE of A.json before journal update, with a healthy replacement:
+    // logs absent file, re-verifies replacement fresh (even when anchor used receipts), and cleans up remaining files.
+    {
+      const { engine, saved, calls, seed, progressData } = setup({ count: 1 })
+      seed(expired + "DeviceConfigurations/B.json", itemB)
+      seed(expired + BACKUP_OWNER_FILE, owner)
+      seed(expired + "metadata.json", twoManifest)
+      const remaining = {
+        [expired + "DeviceConfigurations/A.json"]: '"etag-a"',
+        [expired + "DeviceConfigurations/B.json"]: etagOf(saved, expired + "DeviceConfigurations/B.json"),
+        [expired + "metadata.json"]: etagOf(saved, expired + "metadata.json"),
+        [expired + BACKUP_OWNER_FILE]: etagOf(saved, expired + BACKUP_OWNER_FILE),
+      }
+      progressData.set(key, JSON.stringify({
+        reviews: {},
+        deletes: { [expired]: { prefix: expired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+      const job = await complete(engine)
+      const replacementPolicy = `${job.backupFolder}/DeviceConfigurations/Policy 0.json`
+      expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
+      expect(job.log.join("\n")).toContain("DeviceConfigurations/A.json")
+      expect(job.log.join("\n")).toContain("already absent")
+      // Replacement policy was read twice: once during anchor verification and once fresh for missing journal file.
+      expect(calls.filter(call => call.request.method === "GET" && call.name === replacementPolicy)).toHaveLength(2)
+    }
+
+    // (b) External deletion of A.json when replacement becomes corrupted before resume (or type uncovered):
+    // fresh re-verification fails, so journal (with absent recorded) and remaining files are kept with a warning.
+    {
+      let corruptReplacement = false
+      let newestPrefix = ""
+      const { engine, saved, calls, seed, progressData } = setup({
+        count: 1,
+        override: (url, req) => {
+          if (req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+            const match = /\/(backup-[^/]+\/)metadata\.json$/.exec(url.pathname)
+            if (match) newestPrefix = match[1]!
+          }
+          // After anchor verification passes, tamper with the replacement policy before journal resume lists expired.
+          if (!corruptReplacement && newestPrefix && req.method === "GET" && url.searchParams.get("comp") === "list" && url.searchParams.get("prefix") === expired) {
+            corruptReplacement = true
+            saved.set(`${newestPrefix}DeviceConfigurations/Policy 0.json`, Buffer.from(JSON.stringify({ id: "p0", tampered: true })))
+          }
+          return undefined
+        },
+      })
+      seed(expired + "DeviceConfigurations/B.json", itemB)
+      seed(expired + BACKUP_OWNER_FILE, owner)
+      seed(expired + "metadata.json", twoManifest)
+      const remaining = {
+        [expired + "DeviceConfigurations/A.json"]: '"etag-a"',
+        [expired + "DeviceConfigurations/B.json"]: etagOf(saved, expired + "DeviceConfigurations/B.json"),
+        [expired + "metadata.json"]: etagOf(saved, expired + "metadata.json"),
+        [expired + BACKUP_OWNER_FILE]: etagOf(saved, expired + BACKUP_OWNER_FILE),
+      }
+      progressData.set(key, JSON.stringify({
+        reviews: {},
+        deletes: { [expired]: { prefix: expired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+      const job = await complete(engine)
+      expect(corruptReplacement).toBe(true)
+      expect(saved.has(expired + "DeviceConfigurations/B.json")).toBe(true)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(job.log.join("\n")).toContain("DeviceConfigurations/A.json")
+      expect(job.log.join("\n")).toContain("replacement coverage could not be freshly verified")
+      const persistedJournal = readRetentionProgress(progressData.get(key)).deletes?.[expired]
+      expect(persistedJournal?.absent).toEqual([expired + "DeviceConfigurations/A.json"])
+    }
+  })
+
+  it("protects Azure replacement blobs with finite 60s leases during candidate deletes, blocks concurrent replacement writes, renews long leases, and always releases leases", async () => {
+    const activeLeases = new Map<string, string>()
+    const acquiredDurations: number[] = []
+    const renewed: string[] = []
+    const released: string[] = []
+    let rivalWriteStatus = 0
+    let rivalTried = false
+    let newestPrefix = ""
+    let slowDelete = false
+
+    const leaseHandler = (url: URL, req: Request): Response | Promise<Response> | undefined => {
+      const name = decodeURIComponent(url.pathname.slice("/intune-backups/".length))
+      if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+        const action = req.headers.get("x-ms-lease-action")
+        if (action === "acquire") {
+          return req.text().then(body => {
+            expect(body).toBe("")
+            const duration = Number(req.headers.get("x-ms-lease-duration"))
+            acquiredDurations.push(duration)
+            if (activeLeases.has(name)) return new Response(null, { status: 409, headers: { "x-ms-error-code": "LeaseAlreadyPresent" } })
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${activeLeases.size + 1}`
+            activeLeases.set(name, id)
+            return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+          })
+        }
+        const id = req.headers.get("x-ms-lease-id") ?? ""
+        if (activeLeases.get(name) !== id) return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+        if (action === "renew") {
+          renewed.push(name)
+          return new Response(null, { status: 200, headers: { "x-ms-lease-id": id } })
+        }
+        if (action === "release") {
+          activeLeases.delete(name)
+          released.push(name)
+          return new Response(null, { status: 200 })
+        }
+      }
+      if ((req.method === "PUT" || req.method === "DELETE") && !url.search && activeLeases.has(name)) {
+        if (req.headers.get("x-ms-lease-id") !== activeLeases.get(name)) {
+          return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMissing" } })
+        }
+      }
+      if (req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+        const match = /\/(backup-[^/]+\/)metadata\.json$/.exec(url.pathname)
+        if (match) newestPrefix = match[1]!
+      }
+      if (!rivalTried && req.method === "DELETE" && name.startsWith(expired)) {
+        rivalTried = true
+        const target = `${newestPrefix}DeviceConfigurations/Policy 0.json`
+        const res = leaseHandler(new URL(`${base}${target}`), new Request(`${base}${target}`, { method: "PUT", body: '{"tampered":true}' }))
+        rivalWriteStatus = res instanceof Response ? res.status : 200
+        if (slowDelete) {
+          return new Promise<Response>(resolve => setTimeout(() => {
+            first.saved.delete(name)
+            resolve(new Response(null, { status: 202 }))
+          }, 35_000))
+        }
+      }
+      return undefined
+    }
+
+    // 1. Concurrent writer is blocked by the 60s lease, deletes complete, and all leases are released.
+    const first = setup({ count: 1, override: leaseHandler })
+    first.folder(expired)
+    first.seed(expired + "metadata.json", manifest)
+    slowDelete = true
+    const jobPromise = complete(first.engine)
+    await vi.advanceTimersByTimeAsync(40_000)
+    await jobPromise
+    expect(rivalTried).toBe(true)
+    expect(rivalWriteStatus).toBe(412)
+    expect(acquiredDurations.length).toBe(3)
+    expect(acquiredDurations.every(d => d === 60)).toBe(true)
+    expect(renewed.length).toBeGreaterThanOrEqual(3)
+    expect(released.length).toBe(3)
+    expect(activeLeases.size).toBe(0)
+    expect(first.saved.has(expired + "metadata.json")).toBe(false)
+
+    // 2. Lease acquisition failure (409 conflict on 2nd blob, and 403 missing permission):
+    // skips deletes, keeps candidate, warns, and releases any leases already acquired.
+    for (const status of [409, 403]) {
+      activeLeases.clear()
+      released.length = 0
+      let acquires = 0
+      const failed = setup({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice("/intune-backups/".length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              acquires++
+              if (acquires === 2) return new Response(null, { status, headers: { "x-ms-error-code": status === 409 ? "LeaseAlreadyPresent" : "AuthorizationPermissionMismatch" } })
+              const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${acquires}`
+              activeLeases.set(name, id)
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+            }
+            if (action === "release") {
+              activeLeases.delete(name)
+              released.push(name)
+              return new Response(null, { status: 200 })
+            }
+          }
+          return undefined
+        },
+      })
+      failed.folder(expired)
+      failed.seed(expired + "metadata.json", manifest)
+      const job = await complete(failed.engine)
+      expect(failed.saved.has(expired + "metadata.json")).toBe(true)
+      expect(failed.calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(job.log.join("\n")).toContain("could not be leased")
+      expect(released).toHaveLength(1)
+      expect(activeLeases.size).toBe(0)
+    }
   })
 })
 
@@ -1459,10 +1739,11 @@ describe("retention progress and manifest validation", () => {
     second.seed(appsHolder + BACKUP_OWNER_FILE, owner)
     second.seed(appsHolder + "metadata.json", {
       TenantId: TENANT, Status: "Success", Failures: 0,
-      Scope: { Included: ["Apps"] }, Items: {}, ItemCounts: { Apps: 1, TotalPolicies: 1 },
+      Scope: { Included: ["Apps"] }, Items: {}, ItemCounts: { Apps: 1, TotalPolicies: 0 },
     })
-    await complete(second.engine)
+    const secondJob = await complete(second.engine)
     expect(second.saved.has(appsExpired + "metadata.json")).toBe(true)
+    expect(secondJob.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("recorded item count") }))
 
     // Valid empty backup with TotalPolicies: 0 and inventory-only backup (AutopilotDevices excluded from TotalPolicies) still pass and grant coverage.
     const third = setup()

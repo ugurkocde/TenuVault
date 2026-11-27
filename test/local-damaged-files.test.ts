@@ -424,6 +424,180 @@ describe("damaged local backup files", () => {
     expect(deletes).toEqual([])
     expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
   })
+
+  it("handles missing journaled remaining files on local storage by recording them and freshly re-verifying replacement coverage (crash and external deletion)", async () => {
+    const key = `${TENANT}/${account}`
+    const etagOf = (blob: { etag?: string; lastModified: Date }) => blob.etag ?? `"0x${blob.lastModified.getTime().toString(16).toUpperCase()}"`
+    const graph = () => Response.json({ value: [] })
+
+    // (a) Crash after local manifest DELETE before journal update: logs absent file, freshly re-verifies replacement, and finishes deleting remaining files.
+    {
+      const { store } = await setup()
+      await backup(store, OLD)
+      const blobs = await store.list(account, CONTAINER, `${OLD}/`)
+      const remaining = Object.fromEntries(blobs.map(blob => [blob.name, etagOf(blob)]))
+      // Simulate crash after metadata.json was deleted but before journal was updated.
+      await store.delete(account, CONTAINER, `${OLD}/metadata.json`)
+      const progressData = new Map<string, string>([
+        [key, JSON.stringify({
+          reviews: {},
+          deletes: {
+            [`${OLD}/`]: { prefix: `${OLD}/`, remaining, types: ["CompliancePolicies"], noTypes: false, untagged: false },
+          },
+        })],
+      ])
+      const retentionProgress: RetentionProgressStore = {
+        get: k => progressData.get(k) ?? null,
+        set: (k, value) => { progressData.set(k, value) },
+        delete: k => { progressData.delete(k) },
+      }
+      const replacementReads: string[] = []
+      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        if (localAccountFromUrl(url)) {
+          if (request.method === "GET" && !url.search) replacementReads.push(decodeURIComponent(url.pathname))
+          return handleLocalBlobRequest(store, request)
+        }
+        return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
+      }) as typeof fetch
+      const engine = new BackupEngine({
+        fetch: fetchImpl,
+        getToken: async () => "token",
+        retentionDays: () => 30,
+        retentionProgress,
+        now: () => new Date("2026-09-24T12:00:00Z"),
+      })
+      const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
+      expect(job.status).toBe("Completed")
+      expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
+      expect(job.log.join("\n")).toContain("metadata.json")
+      expect(job.log.join("\n")).toContain("already absent")
+      // Replacement manifest was read at least twice (anchor verify + fresh re-verification).
+      expect(replacementReads.filter(p => p.endsWith(`/${job.backupFolder}/metadata.json`)).length).toBeGreaterThanOrEqual(2)
+    }
+
+    // (b) External deletion of a journaled remaining file (on a resumed manifestless local backup) when replacement
+    // coverage is missing: keeps journal with absent recorded, keeps all remaining files, and warns.
+    {
+      const { store } = await setup()
+      await backup(store, OLD)
+      // Simulate local backup after manifest was deleted and recorded in journal; then a.json is deleted externally.
+      await store.delete(account, CONTAINER, `${OLD}/metadata.json`)
+      const blobsAfterManifest = await store.list(account, CONTAINER, `${OLD}/`)
+      const remaining = Object.fromEntries(blobsAfterManifest.map(blob => [blob.name, etagOf(blob)]))
+      await store.delete(account, CONTAINER, `${OLD}/CompliancePolicies/a.json`)
+      const progressData = new Map<string, string>([
+        [key, JSON.stringify({
+          reviews: {},
+          deletes: {
+            [`${OLD}/`]: { prefix: `${OLD}/`, remaining, types: ["CompliancePolicies"], noTypes: false, untagged: false },
+          },
+        })],
+      ])
+      const retentionProgress: RetentionProgressStore = {
+        get: k => progressData.get(k) ?? null,
+        set: (k, value) => { progressData.set(k, value) },
+        delete: k => { progressData.delete(k) },
+      }
+      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+        return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
+      }) as typeof fetch
+      const engine = new BackupEngine({
+        fetch: fetchImpl,
+        getToken: async () => "token",
+        retentionDays: () => 30,
+        retentionProgress,
+        now: () => new Date("2026-09-24T12:00:00Z"),
+      })
+      // Current backup excludes CompliancePolicies, so OLD is not covered.
+      const job = await engine.waitForJob(engine.get(engine.start({
+        tenantId: TENANT,
+        clientId: CLIENT,
+        storageAccountName: account,
+        scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) },
+      }).id)!)
+      expect(job.status).toBe("Completed")
+      const stillThere = (await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)
+      expect(stillThere).toContain(`${OLD}/CompliancePolicies/b.json`)
+      expect(stillThere).toContain(`${OLD}/${BACKUP_OWNER_FILE}`)
+      expect(job.log.join("\n")).toContain("CompliancePolicies/a.json")
+      expect(readRetentionProgress(progressData.get(key)).deletes?.[`${OLD}/`]?.absent).toEqual([`${OLD}/CompliancePolicies/a.json`])
+    }
+  })
+
+  it("re-checks local replacement identities immediately before each individual DELETE and holds a cross-process retention lock file", async () => {
+    // 1. Replacement changes AFTER initial candidate check and AFTER first DELETE (metadata.json), before second DELETE:
+    // per-delete check stops immediately so remaining payload and owner marker are kept.
+    {
+      const { store } = await setup()
+      await backup(store, OLD)
+      let mutated = false
+      const deletes: string[] = []
+      const graph = () => Response.json({ value: [] })
+      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        if (localAccountFromUrl(url)) {
+          if (request.method === "DELETE") {
+            const path = decodeURIComponent(url.pathname)
+            deletes.push(path)
+            const res = await handleLocalBlobRequest(store, request)
+            if (!mutated && path.endsWith(`/${OLD}/metadata.json`)) {
+              mutated = true
+              await store.put(account, CONTAINER, `backup-2026-09-24-120000/metadata.json`, Buffer.from('{"Status":"Success","Tampered":true}'), "application/json")
+            }
+            return res
+          }
+          return handleLocalBlobRequest(store, request)
+        }
+        return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
+      }) as typeof fetch
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
+      const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
+      expect(job.status).toBe("Completed")
+      expect(mutated).toBe(true)
+      expect(deletes).toEqual([`/${CONTAINER}/${OLD}/metadata.json`])
+      expect(job.log.join("\n")).toContain("changed before deletion")
+      const remaining = (await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)
+      expect(remaining).toContain(`${OLD}/CompliancePolicies/a.json`)
+      expect(remaining).toContain(`${OLD}/CompliancePolicies/b.json`)
+    }
+
+    // 2. Cross-process retention lock file in backup root blocks a second instance, and is released on completion.
+    {
+      const { root, store } = await setup()
+      const otherInstance = new LocalBlobStore(root, [Buffer.alloc(32, 3)])
+      await backup(store, OLD)
+      const lockId = await otherInstance.acquireRetentionLock(60_000)
+      const graph = () => Response.json({ value: [] })
+      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+        return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
+      }) as typeof fetch
+      let clock = new Date("2026-09-24T12:00:00Z")
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => clock })
+      const blocked = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
+      expect(blocked.status).toBe("Completed")
+      expect(blocked.log.join("\n")).toContain("local retention lock could not be acquired")
+      expect((await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)).toContain(`${OLD}/metadata.json`)
+
+      // Once released by the other instance, retention acquires and releases the lock and deletes OLD.
+      await otherInstance.releaseRetentionLock(lockId)
+      clock = new Date("2026-09-24T12:00:05Z")
+      const unblocked = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
+      expect(unblocked.status).toBe("Completed")
+      expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
+      // Lock file must be cleaned up after retention finishes so another instance can acquire it immediately.
+      const reacquired = await otherInstance.acquireRetentionLock(60_000)
+      await otherInstance.releaseRetentionLock(reacquired)
+    }
+  })
 })
 
 describe("backup history with damaged local files", () => {

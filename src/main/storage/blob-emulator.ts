@@ -2,7 +2,7 @@ import { authenticatedBackupRead } from "./authenticated-read"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -74,10 +74,10 @@ export function isLocalAccount(storageAccountName: string | undefined): boolean 
 const xml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
-function error(status: number, code: string, message: string): Response {
+function error(status: number, code: string, message: string, extraHeaders?: Record<string, string>): Response {
   return new Response(
     `<?xml version="1.0" encoding="utf-8"?><Error><Code>${code}</Code><Message>${xml(message)}</Message></Error>`,
-    { status, headers: { "content-type": "application/xml", "x-ms-error-code": code } },
+    { status, headers: { "content-type": "application/xml", "x-ms-error-code": code, ...extraHeaders } },
   )
 }
 
@@ -172,6 +172,29 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
 
     // Container level.
     if (!blobName && query.get("restype") === "container") {
+      if (method === "PUT" && query.get("comp") === "lease") {
+        if (!(await store.containerExists(account, container))) {
+          return error(404, "ContainerNotFound", "The specified container does not exist.")
+        }
+        const action = (request.headers.get("x-ms-lease-action") ?? "").toLowerCase()
+        const durationSec = Number(request.headers.get("x-ms-lease-duration") ?? "60")
+        const durationMs = Number.isFinite(durationSec) && durationSec > 0 ? durationSec * 1000 : 60_000
+        if (action === "acquire") {
+          const leaseId = await store.acquireRetentionLock(durationMs, request.headers.get("x-ms-proposed-lease-id") ?? undefined)
+          return new Response(null, { status: 201, headers: { "x-ms-lease-id": leaseId } })
+        }
+        const leaseId = request.headers.get("x-ms-lease-id") ?? ""
+        if (!leaseId) return error(400, "MissingRequiredHeader", "x-ms-lease-id is required.")
+        if (action === "renew") {
+          await store.renewRetentionLock(leaseId, durationMs)
+          return new Response(null, { status: 200, headers: { "x-ms-lease-id": leaseId } })
+        }
+        if (action === "release") {
+          await store.releaseRetentionLock(leaseId)
+          return new Response(null, { status: 200 })
+        }
+        return error(400, "InvalidHeaderValue", `Unsupported lease action: ${action}`)
+      }
       if (method === "PUT") {
         return (await store.createContainer(account, container))
           ? new Response(null, { status: 201 })
@@ -228,19 +251,23 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     }
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)
   } catch (caught) {
-    if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.")
+    const unchanged = method === "DELETE" && !(caught instanceof BlobQuarantinedError) && !(caught instanceof BlobDeleteInterruptedError)
+      ? { "x-tenuvault-delete-unchanged": "1" }
+      : undefined
+    if (caught instanceof BlobLeaseConflictError) return error(409, "LeaseAlreadyPresent", caught.message)
+    if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.", unchanged)
     if (caught instanceof BlobQuarantinedError) return error(412, "BlobQuarantined", caught.message)
-    if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.")
+    if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.", unchanged)
     // Damaged files: retrying cannot help, so this is not a 5xx that clients retry. BackupUnavailable
     // is about one backup; InventoryIncomplete covers the rest, such as a blob that may be in a file
     // that could not be traced, or a delete refused while damage is present.
-    if (caught instanceof IncompleteInventoryError) return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message)
+    if (caught instanceof IncompleteInventoryError) return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message, unchanged)
     if (caught instanceof BlobNotFoundError) {
       return (await store.containerExists(account, container))
-        ? error(404, "BlobNotFound", "The specified blob does not exist.")
-        : error(404, "ContainerNotFound", "The specified container does not exist.")
+        ? error(404, "BlobNotFound", "The specified blob does not exist.", unchanged)
+        : error(404, "ContainerNotFound", "The specified container does not exist.", unchanged)
     }
     console.error("[backups] Local storage request failed:", caught)
-    return error(500, "InternalError", caught instanceof Error ? caught.message : String(caught))
+    return error(500, "InternalError", caught instanceof Error ? caught.message : String(caught), unchanged)
   }
 }

@@ -20,6 +20,7 @@ export interface DeletionJournalEntry {
   types: string[]
   noTypes: boolean
   untagged: boolean
+  absent?: string[]
 }
 
 export interface RetentionProgress {
@@ -66,6 +67,10 @@ function isDeletionJournal(key: string, value: unknown): value is DeletionJourna
   if (value.types.length === 0 ? !value.noTypes : value.noTypes) return false
   if (value.noTypes && remaining.some(([name]) => name !== key + "metadata.json" && name !== key + BACKUP_OWNER_FILE)) return false
   if (typeof value.untagged !== "boolean") return false
+  if (value.absent !== undefined) {
+    if (!Array.isArray(value.absent) || !value.absent.every(name => typeof name === "string" && name.startsWith(key) && name.length > key.length)) return false
+    if (value.noTypes && value.absent.some(name => name !== key + "metadata.json" && name !== key + BACKUP_OWNER_FILE)) return false
+  }
   return true
 }
 

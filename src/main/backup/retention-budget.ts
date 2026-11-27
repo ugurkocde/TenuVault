@@ -11,6 +11,16 @@ export class RetentionBudgetError extends FetchApplicationError {
 }
 
 const active = new AsyncLocalStorage<{ budget: RetentionBudget; metered: boolean }>()
+const headerOnlyReads = new AsyncLocalStorage<boolean>()
+
+/** Marks a backup GET as header-only so compatibility readers and byte metering skip reading the body. */
+export function withHeaderOnlyBackupRead<T>(run: () => Promise<T>): Promise<T> {
+  return headerOnlyReads.run(true, run)
+}
+
+export function isHeaderOnlyBackupRead(): boolean {
+  return headerOnlyReads.getStore() === true
+}
 
 /** Charge sealed wire bytes before the compatibility reader buffers or decrypts them. */
 export function meterLegacyBackupResponse(response: Response): Response {
@@ -56,8 +66,10 @@ export class RetentionBudget {
   }
 
   async fetch(send: () => Promise<Response>): Promise<Response> {
+    const headersOnly = isHeaderOnlyBackupRead()
     const context = { budget: this, metered: false }
     const response = await active.run(context, send)
+    if (headersOnly && (response.ok || response.status === 404)) return response
     return context.metered ? response : this.meter(response)
   }
 

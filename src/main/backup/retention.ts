@@ -4,14 +4,16 @@ import { typeForFolder } from "../../shared/intune/registry"
 import { resolveBackupOwnership } from "../../shared/backup-ownership"
 import { FetchApplicationError, FetchPreconditionError } from "../api/network-error"
 import { isLocalAccount } from "../storage/blob-emulator"
-import type { BlobWriter, RetentionBlob } from "./blob-writer"
+import { BlobLeaseError, wasDeleteConfirmedUnchanged, type BlobWriter, type RetentionBlob } from "./blob-writer"
 import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "./retention-budget"
 import { DAY_MS, HOUR_MS, RetentionClockError } from "./retention-clock"
 import { readRetentionProgress, type DeletionJournalEntry, type RetentionProgressStore } from "./retention-progress"
 import { RetentionVerificationError, checkOwner, manifestTypes, matchesJournalTypes, verifyBackup } from "./retention-verification"
-import { DeleteConditionError, InventoryDamagedError, ProtectedBlobError } from "./request"
+import { DeleteConditionError, InventoryDamagedError, ProtectedBlobError, StorageError } from "./request"
 
 const UNREADABLE_ATTEMPTS = 3
+const LEASE_DURATION_SECONDS = 60
+const LEASE_RENEW_MS = 30_000
 
 function isCandidateUnreadable(error: unknown): boolean {
   if (error instanceof RetentionVerificationError) return true
@@ -221,8 +223,51 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   if (unreadableAnchor) discardJournal(unreadableAnchor.prefix, `Discarded an invalid deletion journal for unreadable backup ${unreadableAnchor.prefix}.`)
 
   const replacementIdentities = new Map<string, Map<string, string>>([[anchorPrefix, anchorVerified.identities]])
-  const guardRequests = (prefixes: string[]) =>
-    prefixes.reduce((sum, replacementPrefix) => sum + 1 + (replacementIdentities.get(replacementPrefix)?.size ?? 0), 0)
+  const guardRequests = (prefixes: string[], deleteCount: number) => {
+    if (local) {
+      // Reserve container lock + initial guard (listing + HEAD/GET fallback) + per-delete listings.
+      return 1
+        + prefixes.reduce((sum, replacementPrefix) => sum + 1 + 2 * (replacementIdentities.get(replacementPrefix)?.size ?? 0), 0)
+        + Math.max(0, deleteCount - 1) * prefixes.length
+    }
+    // Reserve listing + HEAD + fallback GET + lease acquire per replacement identity.
+    return prefixes.reduce((sum, replacementPrefix) => sum + 1 + 3 * (replacementIdentities.get(replacementPrefix)?.size ?? 0), 0)
+  }
+  const verifyReplacementFresh = async (replacementPrefix: string, allowUntagged: boolean): Promise<{ identities: Map<string, string>; covers: Set<string> } | null> => {
+    try {
+      const freshRoots = new Map<string, RetentionBlob>()
+      if (replacementPrefix === latestPrefix) {
+        const manifest = await storage.readForRetention(latestPrefix + "metadata.json")
+        if (JSON.stringify(manifest.value) !== JSON.stringify(written)) return null
+        const claim = await storage.readForRetention(latestPrefix + owner)
+        checkOwner(claim, written, tenant, latestPrefix)
+        freshRoots.set("metadata.json", manifest)
+        freshRoots.set(owner, claim)
+        const verified = await verifyBackup(storage, latestPrefix, written, freshRoots, await storage.list(latestPrefix), keyFingerprint)
+        return { identities: verified.identities, covers: verified.covers }
+      }
+      const { manifest, owner: ownership } = await resolveBackupOwnership(async name => {
+        const file = await storage.readForRetention(replacementPrefix + name, true)
+        if (!file) return { kind: "missing" }
+        freshRoots.set(name, file)
+        return { kind: "found", value: file.value }
+      }, tenant)
+      if (manifest.kind !== "found" || ownership.kind === "unreadable" || ownership.kind === "other") return null
+      if (ownership.kind === "untagged" && !allowUntagged) return null
+      const listing = await storage.list(replacementPrefix)
+      if (listing.blobs.includes(replacementPrefix + owner)) {
+        const claim = freshRoots.get(owner) ?? await storage.readForRetention(replacementPrefix + owner)
+        checkOwner(claim, manifest.metadata, tenant, replacementPrefix)
+        freshRoots.set(owner, claim)
+      }
+      const verified = await verifyBackup(storage, replacementPrefix, manifest.metadata, freshRoots, listing, keyFingerprint)
+      return { identities: verified.identities, covers: verified.covers }
+    } catch (error) {
+      if (error instanceof RetentionBudgetError || error instanceof InventoryDamagedError) throw error
+      if (isCandidateUnreadable(error) || error instanceof StorageError) return null
+      throw error
+    }
+  }
   const ownedProviders = new Map<string, string>()
   const untaggedProviders = new Map<string, string>()
   for (const folder of anchorVerified.covers) ownedProviders.set(folder, anchorPrefix)
@@ -309,6 +354,9 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           && journal.types.every(entry => Boolean(typeForFolder(entry)))
           && remainingEntries.every(([name, etag]) =>
             name.startsWith(prefix) && name.length > prefix.length && etag.length > 0 && etag !== "*"
+            && matchesJournalTypes(prefix, name, journalTypes))
+          && (journal.absent ?? []).every(name =>
+            name.startsWith(prefix) && name.length > prefix.length
             && matchesJournalTypes(prefix, name, journalTypes))
         if (!journalValid) {
           discardJournal(prefix, `Kept backup ${prefix} because its deletion journal failed validation and was discarded.`)
@@ -454,13 +502,60 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           lastCompleted = prefix
           continue
         }
+        const missing = Object.keys(journal.remaining).filter(name => !listedSet.has(name))
+        const missingRel = missing.map(name => name.slice(prefix.length))
+        if (missing.length > 0) {
+          journal.absent = [...new Set([...(journal.absent ?? []), ...missing])]
+          save()
+          warning = true
+          notice(`Journaled files in backup ${prefix} were already absent (${missingRel.join(", ")}). Re-verifying replacement coverage before continuing.`, "warning")
+        }
         const replacements = time < cutoff ? providersFor(journalTypes, shared, journal.noTypes) : null
         if (!replacements) {
           if (time < cutoff) kept++
           warning = true
-          notice(`Kept the remaining files in backup ${prefix} because replacement coverage is no longer verified.`, "warning")
+          notice(
+            missing.length > 0
+              ? `Kept the remaining files in backup ${prefix} because replacement coverage is not verified after missing files (${missingRel.join(", ")}).`
+              : `Kept the remaining files in backup ${prefix} because replacement coverage is no longer verified.`,
+            "warning",
+          )
           lastCompleted = prefix
           continue
+        }
+        let ownedReplacements = providersFor(journalTypes, true, journal.noTypes)
+        if (missing.length > 0) {
+          const freshCovered = new Set<string>()
+          const freshOwnedCovered = new Set<string>()
+          let allFreshOk = true
+          const toVerify = [...new Set([...replacements, ...(ownedReplacements ?? [])])]
+          for (const replacementPrefix of toVerify) {
+            const allowUntagged = !shared && !(ownedReplacements?.includes(replacementPrefix))
+            const fresh = await verifyReplacementFresh(replacementPrefix, allowUntagged)
+            if (!fresh) {
+              if (replacements.includes(replacementPrefix)) allFreshOk = false
+              if (ownedReplacements?.includes(replacementPrefix)) ownedReplacements = null
+              continue
+            }
+            replacementIdentities.set(replacementPrefix, fresh.identities)
+            if (replacements.includes(replacementPrefix)) {
+              for (const folder of fresh.covers) freshCovered.add(folder)
+            }
+            if (ownedReplacements?.includes(replacementPrefix)) {
+              for (const folder of fresh.covers) freshOwnedCovered.add(folder)
+            }
+          }
+          if (ownedReplacements && !journal.noTypes && ![...journalTypes].every(folder => freshOwnedCovered.has(folder))) {
+            ownedReplacements = null
+          }
+          const coveredFresh = allFreshOk && (journal.noTypes ? replacements.length > 0 : [...journalTypes].every(folder => freshCovered.has(folder)))
+          if (!coveredFresh) {
+            if (time < cutoff) kept++
+            warning = true
+            notice(`Kept the remaining files in backup ${prefix} because replacement coverage could not be freshly verified after missing files (${missingRel.join(", ")}).`, "warning")
+            lastCompleted = prefix
+            continue
+          }
         }
         if (manifest && listedSet.has(prefix + owner)) {
           try {
@@ -502,8 +597,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           lastCompleted = prefix
           continue
         }
-        const ownedReplacements = providersFor(journalTypes, true, journal.noTypes)
-        budget.reserveDeletes(identities.size + Math.max(guardRequests(replacements), ownedReplacements ? guardRequests(ownedReplacements) : 0))
+        budget.reserveDeletes(identities.size + Math.max(guardRequests(replacements, identities.size), ownedReplacements ? guardRequests(ownedReplacements, identities.size) : 0))
         plan.push({ prefix, identities, types: journalTypes, noTypes: journal.noTypes, untagged: journal.untagged, replacements, ownedReplacements, resumed: true })
         lastCompleted = prefix
         continue
@@ -528,7 +622,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         const replacements = time < cutoff ? providersFor(verified.types, shared, noTypes) : null
         if (replacements) {
           const ownedReplacements = providersFor(verified.types, true, noTypes)
-          budget.reserveDeletes(verified.identities.size + Math.max(guardRequests(replacements), ownedReplacements ? guardRequests(ownedReplacements) : 0))
+          budget.reserveDeletes(verified.identities.size + Math.max(guardRequests(replacements, verified.identities.size), ownedReplacements ? guardRequests(ownedReplacements, verified.identities.size) : 0))
           plan.push({ prefix, identities: verified.identities, types: verified.types, noTypes, untagged, replacements, ownedReplacements, resumed: false })
         } else {
           if (time < cutoff) kept++
@@ -599,69 +693,211 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
 
   if (plan.length > 0 && (madeProgress || unreadableThisRun.size > 0 || budgetHit)) save()
 
+  const checkReplacementsIntact = async (replacements: string[]): Promise<string | null> => {
+    return budget.withCleanup(async () => {
+      for (const replacementPrefix of replacements) {
+        const expected = replacementIdentities.get(replacementPrefix)
+        if (!expected || !(await verifyReplacementUnchanged(storage, replacementPrefix, expected))) {
+          return replacementPrefix
+        }
+      }
+      return null
+    })
+  }
+
+  const startRenewal = (renew: () => Promise<void>) => {
+    let renewedAt = Date.now()
+    let renewError: unknown
+    let activeRenew: Promise<void> | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let stopped = false
+    const runRenew = async () => {
+      await renew()
+      renewedAt = Date.now()
+    }
+    const schedule = () => {
+      if (stopped) return
+      timer = setTimeout(() => {
+        if (stopped || activeRenew || renewError) return
+        const pending = runRenew()
+        activeRenew = pending
+        void pending.then(
+          () => { if (activeRenew === pending) activeRenew = undefined; schedule() },
+          error => { renewError = error; if (activeRenew === pending) activeRenew = undefined },
+        )
+      }, LEASE_RENEW_MS)
+      timer.unref?.()
+    }
+    schedule()
+    return {
+      async ensureFresh() {
+        if (renewError) throw renewError
+        if (activeRenew) await activeRenew
+        if (renewError) throw renewError
+        if (Date.now() - renewedAt >= LEASE_RENEW_MS) {
+          const pending = runRenew()
+          activeRenew = pending
+          try { await pending }
+          catch (error) { renewError = error; throw error }
+          finally { if (activeRenew === pending) activeRenew = undefined }
+        }
+      },
+      async stop() {
+        stopped = true
+        if (timer) clearTimeout(timer)
+        if (activeRenew) await activeRenew.catch(() => undefined)
+      },
+    }
+  }
+
   let removed = 0
   let completedPlan = true
   for (const { prefix, identities, types, noTypes, untagged, replacements, resumed } of plan) {
     if (prefix === latestPrefix || prefix === anchorPrefix) continue
     run.beforeDelete()
-    const intact = await budget.withCleanup(async () => {
-      for (const replacementPrefix of replacements) {
-        const expected = replacementIdentities.get(replacementPrefix)
-        if (!expected || !(await verifyReplacementUnchanged(storage, replacementPrefix, expected))) {
+    const leases: Array<{ name: string; leaseId: string }> = []
+    let localLockId: string | undefined
+    let stopCleanup = false
+    try {
+      if (local) {
+        try {
+          localLockId = await budget.withCleanup(() => storage.acquireContainerLease(LEASE_DURATION_SECONDS))
+        } catch (error) {
+          if (!(error instanceof BlobLeaseError)) throw error
           warning = true
-          notice(`Kept remaining backups because replacement backup ${replacementPrefix} changed before deletion.`, "warning")
-          return false
+          const reason = error.message
+          notice(`Kept backup ${prefix} because the local retention lock could not be acquired: ${reason.replace(/\.$/, "")}.`, "warning")
+          completedPlan = false
+          continue
+        }
+      } else {
+        const replacementBlobs = [...new Set(replacements.flatMap(replacementPrefix => [...(replacementIdentities.get(replacementPrefix)?.keys() ?? [])]))].sort()
+        if (replacements.some(replacementPrefix => !replacementIdentities.has(replacementPrefix))) {
+          warning = true
+          notice(`Kept remaining backups because replacement backup identities were unavailable before deletion.`, "warning")
+          completedPlan = false
+          break
+        }
+        try {
+          await budget.withCleanup(async () => {
+            for (const name of replacementBlobs) {
+              const leaseId = await storage.acquireLease(name, LEASE_DURATION_SECONDS)
+              leases.push({ name, leaseId })
+            }
+          })
+        } catch (error) {
+          if (!(error instanceof BlobLeaseError)) throw error
+          warning = true
+          const reason = error.message
+          notice(`Kept backup ${prefix} because replacement backups could not be leased before deletion: ${reason.replace(/\.$/, "")}.`, "warning")
+          completedPlan = false
+          continue
         }
       }
-      return true
-    })
-    if (!intact) {
-      completedPlan = false
-      break
-    }
-    const manifest = prefix + "metadata.json"
-    const marker = prefix + owner
-    const payloads = [...identities.keys()].filter(name => name !== manifest && name !== marker)
-    // Local inventory flags a missing manifest entry as damage. Azure keeps the manifest
-    // until all conditional payload deletes succeed, and both keep ownership until the end.
-    const order = (local ? [manifest, ...payloads, marker] : [...payloads, manifest, marker]).filter(name => identities.has(name))
-    const remaining = Object.fromEntries(order.map(name => [name, identities.get(name)!]))
-    state.deletes ??= {}
-    state.deletes[prefix] = { prefix, remaining, types: [...types], noTypes, untagged }
-    save()
-    let deleted = 0
-    try {
-      for (const name of order) {
-        const etag = identities.get(name)
-        if (etag) {
-          await storage.delete(name, etag)
-          deleted++
-          delete remaining[name]
-          if (!Object.keys(remaining).length && state.deletes) {
+      const renewal = startRenewal(async () => {
+        if (local && localLockId) {
+          await storage.renewContainerLease(localLockId, LEASE_DURATION_SECONDS)
+        } else {
+          for (const { name, leaseId } of leases) await storage.renewLease(name, leaseId)
+        }
+      })
+      try {
+        // Under the Azure blob leases (or local retention lock), verify every replacement is still intact.
+        const changedReplacement = await checkReplacementsIntact(replacements)
+        if (changedReplacement) {
+          warning = true
+          notice(`Kept remaining backups because replacement backup ${changedReplacement} changed before deletion.`, "warning")
+          completedPlan = false
+          stopCleanup = true
+          continue
+        }
+        const manifest = prefix + "metadata.json"
+        const marker = prefix + owner
+        const payloads = [...identities.keys()].filter(name => name !== manifest && name !== marker)
+        // Local inventory flags a missing manifest entry as damage. Azure keeps the manifest
+        // until all conditional payload deletes succeed, and both keep ownership until the end.
+        const order = (local ? [manifest, ...payloads, marker] : [...payloads, manifest, marker]).filter(name => identities.has(name))
+        const remaining = Object.fromEntries(order.map(name => [name, identities.get(name)!]))
+        const priorAbsent = state.deletes?.[prefix]?.absent
+        state.deletes ??= {}
+        state.deletes[prefix] = {
+          prefix,
+          remaining,
+          types: [...types],
+          noTypes,
+          untagged,
+          ...(priorAbsent?.length ? { absent: priorAbsent } : {}),
+        }
+        save()
+        let deleted = 0
+        try {
+          for (const name of order) {
+            const etag = identities.get(name)
+            if (etag) {
+              await renewal.ensureFresh()
+              if (local) {
+                const changedBeforeDelete = await checkReplacementsIntact(replacements)
+                if (changedBeforeDelete) {
+                  if (!deleted && !resumed && state.deletes) {
+                    delete state.deletes[prefix]
+                    if (!Object.keys(state.deletes).length) delete state.deletes
+                  }
+                  save()
+                  warning = true
+                  notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because replacement backup ${changedBeforeDelete} changed before deletion.`, "warning")
+                  completedPlan = false
+                  stopCleanup = true
+                  break
+                }
+              }
+              await storage.delete(name, etag)
+              deleted++
+              delete remaining[name]
+              if (!Object.keys(remaining).length && state.deletes) {
+                delete state.deletes[prefix]
+                if (!Object.keys(state.deletes).length) delete state.deletes
+              }
+              save()
+            }
+          }
+          if (stopCleanup) continue
+          if (state.deletes) {
+            delete state.deletes[prefix]
+            if (!Object.keys(state.deletes).length) delete state.deletes
+          }
+          removed++
+          advance(prefix)
+        } catch (error) {
+          if (!deleted && !resumed && wasDeleteConfirmedUnchanged(error) && state.deletes) {
             delete state.deletes[prefix]
             if (!Object.keys(state.deletes).length) delete state.deletes
           }
           save()
+          if (error instanceof BlobLeaseError) {
+            warning = true
+            notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
+            completedPlan = false
+            stopCleanup = true
+            continue
+          }
+          if (!(error instanceof DeleteConditionError) && !(error instanceof ProtectedBlobError)) throw error
+          warning = true
+          const reason = error instanceof ProtectedBlobError ? "storage immutability or a legal hold refused deletion" : error.message
+          notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${reason.replace(/\.$/, "")}.`, "warning")
+          advance(prefix)
         }
+      } finally {
+        await renewal.stop()
       }
-      if (state.deletes) {
-        delete state.deletes[prefix]
-        if (!Object.keys(state.deletes).length) delete state.deletes
+    } finally {
+      if (localLockId) {
+        await storage.releaseContainerLease(localLockId).catch(() => undefined)
       }
-      removed++
-      advance(prefix)
-    } catch (error) {
-      if (!deleted && !resumed && state.deletes) {
-        delete state.deletes[prefix]
-        if (!Object.keys(state.deletes).length) delete state.deletes
+      for (const { name, leaseId } of leases) {
+        await storage.releaseLease(name, leaseId).catch(() => undefined)
       }
-      save()
-      if (!(error instanceof DeleteConditionError) && !(error instanceof ProtectedBlobError)) throw error
-      warning = true
-      const reason = error instanceof ProtectedBlobError ? "storage immutability or a legal hold refused deletion" : error.message
-      notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${reason.replace(/\.$/, "")}.`, "warning")
-      advance(prefix)
     }
+    if (stopCleanup) break
   }
   if (completedPlan && hasPendingCursor) {
     const hasMore = Boolean(pendingCursor && older.some(backup => backup.prefix < pendingCursor!))
