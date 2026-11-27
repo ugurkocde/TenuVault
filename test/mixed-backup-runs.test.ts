@@ -7,6 +7,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
 import { NextRequest } from "../src/main/api/next-server-shim"
+import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azure-seal"
 import { BACKUP_CONTAINER } from "../src/shared/constants"
 import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -227,6 +228,35 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(metadata.CompanionBackup).toBeUndefined()
     expect(await imported.list(local, LARGE_BACKUP_CONTAINER)).toEqual([])
   })
+  it.each(["legacy remnant", "mixed remnant", "ordinary backup", "large backup"])("preserves unreadable payloads during Azure retention: %s", async kind => {
+    if (!azure) return
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const id = kind === "large backup" ? large : ordinary
+    const manifest = !kind.endsWith("remnant")
+    const filename = id === large ? "AuthorizationPolicy/one.json" : "DeviceCategories/one.json"
+    await f.seed(id, id === large)
+    if (!manifest) await f.store.delete(local, BACKUP_CONTAINER, `${id}/metadata.json`)
+    await f.write(id, ".tenuvault-owner.json", {
+      Source: "TenuVault Desktop", TenantId: TENANT, RunId: "historical",
+      ...(kind === "mixed remnant" ? { CompanionBackup: large } : {}),
+    })
+    const payload = backupBlobName(`${id}/${filename}`)
+    const sealed = await readFile(new URL("./fixtures/backup-upgrade/legacy-azure.bin", import.meta.url))
+    const fetcher: typeof fetch = async (input, init) => {
+      if (init?.method === "GET" && new URL(String(input)).pathname.endsWith(`/${payload}`)) {
+        return new Response(new Uint8Array(sealed), { headers: { etag: '"sealed"' } })
+      }
+      return f.fetcher(input, init)
+    }
+    const token = jwt({ scp: "Policy.Read.All" })
+    registerStorageToken(token, TENANT)
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: legacyAzureReader(fetcher, () => []), getToken: async () => token, services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    expect(f.requests.filter(request => request.startsWith("DELETE") && request.includes(id))).toEqual([])
+    expect(await f.store.get(local, backupContainer(id), payload)).toBeDefined()
+    expect(job.log.join(" ")).toContain(kind === "legacy remnant" ? "unverified halves" : "could not be verified")
+  })
   it.each(["expired", "in grace", "unowned", "foreign claim", "off", "interrupted", "cancelled", "mismatched", "half-deleted pair", "forged run claim", "forged folder claim"])("cleans or reports owned remnants in both containers: %s", async state => {
     undo = registerTestTypes([largeType])
     const f = await setup()
@@ -241,7 +271,10 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
       if (!["interrupted", "cancelled", "mismatched", "half-deleted pair", "forged run claim", "forged folder claim"].includes(state)) await f.store.delete(local, backupContainer(id), `${id}/metadata.json`)
       await f.write(id, ".tenuvault-owner.json", { ...(state === "unowned" ? {} : { Source: "TenuVault Desktop" }), TenantId: state === "foreign claim" ? CLIENT : TENANT, RunId: ["interrupted", "cancelled", "mismatched", "half-deleted pair", "forged folder claim"].includes(state) ? metadata.RunId : id, ...(state === "forged folder claim" ? { BackupFolder: "backup-2000-01-01-000000" } : {}), ...(id.includes("large") ? { LargeInventory: { version: 1 }, CompanionBackup: halves[0] } : { CompanionBackup: halves[1] }) })
     }
-    if (state === "half-deleted pair") for (const blob of await f.store.list(local, BACKUP_CONTAINER, `${halves[0]}/`)) await f.store.delete(local, BACKUP_CONTAINER, blob.name)
+    if (state === "half-deleted pair") {
+      await f.store.delete(local, BACKUP_CONTAINER, `${halves[0]}/metadata.json`)
+      for (const blob of await f.store.list(local, BACKUP_CONTAINER, `${halves[0]}/`)) await f.store.delete(local, BACKUP_CONTAINER, blob.name)
+    }
     const rows = await (await history(f.request({ summary: true }))).json()
     if (!["foreign claim", "interrupted"].includes(state)) expect(rows.warnings.join(" ")).toMatch(/Backup remnants: .*at least .*recovery days/)
     if (state === "in grace") expect(rows.warnings.join(" ")).toContain("2 owned")
@@ -670,7 +703,10 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     const f = await pair()
     if (state === "unreadable") f.refuse(403, "metadata.json")
     if (state === "mismatched") await f.write(large, "metadata.json", { ...f.second, RunId: "wrong-run" })
-    if (state === "orphan") for (const blob of await f.store.list(local, BACKUP_CONTAINER, `${ordinary}/`)) await f.store.delete(local, BACKUP_CONTAINER, blob.name)
+    if (state === "orphan") {
+      await f.store.delete(local, BACKUP_CONTAINER, `${ordinary}/metadata.json`)
+      for (const blob of await f.store.list(local, BACKUP_CONTAINER, `${ordinary}/`)) await f.store.delete(local, BACKUP_CONTAINER, blob.name)
+    }
     const engine = new BackupEngine({ fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
     const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
     expect(job.status, job.exception).toBe("Completed")

@@ -2,7 +2,7 @@ import { backupBlobName, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../..
 import { indexPath, largeIndexes } from "../../shared/large-backup"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
-import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { link, lstat, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
@@ -567,7 +567,7 @@ export class LocalBlobStore {
    * of deletes. despiteDamage is for removing files the caller has just written itself, such as
    * an archive import that is rolled back.
    */
-  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean } = {}): Promise<void> {
+  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean; ifMatch?: string } = {}): Promise<void> {
     const dir = this.dir(account, container)
     // Every file is checked again at most every few seconds, so a file damaged in place is found
     // within a run of deletes without checking every file before each one.
@@ -579,8 +579,18 @@ export class LocalBlobStore {
     }
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
+    if (!options.despiteDamage) {
+      // Retention verifies the full candidate over the storage bridge and binds each delete to that
+      // read. Direct deletes must also authenticate every body in the candidate before removing one.
+      const folder = backupFolderOf(name)
+      const candidate = !options.ifMatch && folder ? [...entries.keys()].filter(blob => backupFolderOf(blob) === folder) : [name]
+      for (const blob of candidate) await this.get(account, container, blob)
+    }
     await this.write(dir, async () => {
-      await rm(join(dir, entry.file), { force: true })
+      const path = join(dir, entry.file)
+      const info = await lstat(path, { bigint: true })
+      if (!info.isFile() || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
+      await rm(path, { force: true })
       this.changed(dir)
       this.updateEntry(dir, entries, name)
     })
@@ -1053,5 +1063,5 @@ function safeSegment(value: string): string {
 
 /** BigInt stats keep the full inode and nanosecond times, so a replaced file never shares a stamp with the old one. */
 function fileStamp(info: BigIntStats): string {
-  return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 }

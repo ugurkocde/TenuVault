@@ -8,7 +8,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { IncompleteInventoryError, LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
-import { LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
+import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -60,6 +60,22 @@ function damage(dir: string, file: string, header = false): Buffer {
 const text = async (store: LocalBlobStore, name: string) => (await store.get(account, CONTAINER, name)).data.toString()
 
 describe("damaged local backup files", () => {
+  it.each([CONTAINER, LARGE_BACKUP_CONTAINER])("authenticates the payload body before deleting any record in %s", async container => {
+    const { store, root, key } = await setup()
+    const folder = container === CONTAINER ? OLD : OLD.replace("backup-", "backup-large-")
+    const policy = backupBlobName(`${folder}/CompliancePolicies/a.json`)
+    const dir = join(root, account, container)
+    await store.createContainer(account, container)
+    await store.put(account, container, policy, Buffer.from('{"id":"a"}'), "application/json")
+    const file = readdirSync(dir).find(name => name.endsWith(".tvb"))!
+    await store.put(account, container, `${folder}/metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+    damage(dir, file)
+    const fresh = new LocalBlobStore(root, [key])
+    expect(await fresh.list(account, container)).toHaveLength(2)
+    await expect(fresh.delete(account, container, `${folder}/metadata.json`)).rejects.toThrow(IncompleteInventoryError)
+    expect(readdirSync(dir).filter(name => name.endsWith(".tvb"))).toHaveLength(2)
+  })
+
   it("keeps the healthy backups usable when a file of another backup is damaged", async () => {
     const { store, dir, root, key } = await setup()
     await backup(store, OLD)

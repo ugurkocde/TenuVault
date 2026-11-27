@@ -227,7 +227,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       return new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers })
     }
     if (method === "DELETE") {
-      await store.delete(account, container, blobName)
+      await store.delete(account, container, blobName, { ifMatch: request.headers.get("if-match") ?? undefined })
       return new Response(null, { status: 202 })
     }
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)

@@ -1,6 +1,7 @@
 import { createDecipheriv, createHash, hkdfSync } from 'node:crypto'
 import { FetchApplicationError, FetchPreconditionError, LegacySealedError, OversizedSealedError } from '../api/network-error'
-import { MAX_BACKUP_ARCHIVE_BYTES } from '../../shared/constants'
+import { LARGE_BACKUP_CONTAINER } from '../../shared/backup-storage'
+import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from '../../shared/constants'
 
 /**
  * Reads backups in Azure storage. New Azure backups are plain JSON: Azure encrypts them at rest and
@@ -44,7 +45,7 @@ export function openLegacySealed(raw: Buffer, masters: Buffer[], tenant: string,
 /** A blob read in the backup container: a GET without a query (listings and versions pass through). */
 function isBackupBlobRead(url: URL, method: string): boolean {
   return method === 'GET' && !url.search && /^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname)
-    && url.pathname.startsWith('/intune-backups/')
+    && [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].some(container => url.pathname.startsWith(`/${container}/`))
 }
 
 /** Reads at least `size` bytes from the start of a stream, or all of it when it is shorter. */

@@ -127,9 +127,23 @@ export class BlobWriter {
     })
   }
 
-  async delete(name: string): Promise<void> {
+  /** Read the complete body through the local or legacy Azure decryption boundary before deletion. */
+  async verifyForDeletion(name: string): Promise<string> {
+    return this.request(backupStoragePath(name), { method: "GET" }, async (response) => {
+      if (!response.ok) throw await storageFailure(response, this.account)
+      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      const etag = response.headers.get("etag")
+      if (body.kind !== "json" || !body.value || typeof body.value !== "object" || !etag || etag === "*") {
+        throw new FetchApplicationError(new Error(`${name} could not be verified for deletion.`))
+      }
+      return etag
+    })
+  }
+
+  async delete(name: string, etag: string): Promise<void> {
     await this.request(backupStoragePath(name), {
       method: "DELETE",
+      headers: { "if-match": etag },
     }, async (response) => {
       if (!response.ok && response.status !== 404) {
         const code = response.headers.get("x-ms-error-code") ?? ""
