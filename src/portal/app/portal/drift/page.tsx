@@ -1,5 +1,7 @@
 "use client"
 
+import { useReadOnlyRegistration } from "../../../../renderer/lib/registration-access"
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../../shared/app-registration"
 import { useState, useEffect, useMemo, useRef } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { useTenants, useSelectedTenant } from "~/contexts/TenantContext"
@@ -118,6 +120,7 @@ function EmptyState({ icon, title, children }: { icon: React.ReactNode; title: s
 export default function DriftDetectionPage() {
   const tenants = useTenants()
   const { selectedTenant, setSelectedTenantId } = useSelectedTenant()
+  const readOnly = useReadOnlyRegistration(selectedTenant)
   const plan = useTenantPlan(selectedTenant?.credentials?.tenantId)
   const tenantId = selectedTenant?.credentials?.tenantId?.toLowerCase()
   const storageAccountName = selectedTenant?.resources?.storageAccountName
@@ -329,6 +332,7 @@ export default function DriftDetectionPage() {
   }
 
   const executeRevert = async () => {
+    if (readOnly) return
     if (!confirmDialog || !selectedTenant?.credentials || !selectedTenant?.resources?.storageAccountName) return
 
     const drift = drifts.find(d => d.id === confirmDialog.driftId)
@@ -826,7 +830,7 @@ export default function DriftDetectionPage() {
                     const open = selectedDrift === drift.id
                     const settings = changedSettings(drift, result.settingNames)
                     // Actions Intune cannot run (such as recreating an app whose installer a backup cannot hold) are greyed out with their reason, as in the restore wizard.
-                    const blockers = driftActionBlockers(drift)
+                    const blockers = readOnly ? { revert: READ_ONLY_REGISTRATION_MESSAGE, copy: READ_ONLY_REGISTRATION_MESSAGE } : driftActionBlockers(drift)
                     const revertLabel = drift.changeType === "deleted" ? "Recreate" : "Revert"
                     const blockerNote = blockers.revert && blockers.copy
                       ? blockers.revert === blockers.copy ? blockers.revert : `${revertLabel} is not available: ${blockers.revert} Restore as copy is not available: ${blockers.copy}`

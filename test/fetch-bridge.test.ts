@@ -1,3 +1,4 @@
+import { BACKUP_ONLY_GRAPH_PERMISSIONS, READ_ONLY_REGISTRATION_MESSAGE } from "../src/shared/app-registration"
 import { describe, expect, it, vi } from "vitest"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName } from "../src/shared/constants"
@@ -175,5 +176,50 @@ describe("createBridgedFetch token URLs", () => {
     expect(realFetch).not.toHaveBeenCalled()
     // A plain tenant ID still works.
     expect((await routeTokenRequest(bridged, DELEGATED_CLIENT_SECRET)).ok).toBe(true)
+  })
+})
+
+
+describe("read-only Graph writes", () => {
+  const token = (claims: object) => `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`
+  const scopes = BACKUP_ONLY_GRAPH_PERMISSIONS.join(" ")
+  const graph = "https://graph.microsoft.com/beta/"
+  function fixture(accessToken = token({ scp: scopes })) {
+    const realFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    const fetch = createBridgedFetch({ dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: realFetch })
+    return { fetch, realFetch, headers: { Authorization: `Bearer ${accessToken}` } }
+  }
+
+  it.each(["POST", "PUT", "PATCH", "DELETE"])("returns the read-only reason without sending a %s", async method => {
+    const { fetch, realFetch, headers } = fixture()
+    const response = await fetch(new Request(graph + "deviceManagement/configurationPolicies", { method, headers }))
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ error: { message: READ_ONLY_REGISTRATION_MESSAGE } })
+    expect(realFetch).not.toHaveBeenCalled()
+  })
+
+  it("lets Graph reads, GET-only batches and backup storage writes through", async () => {
+    const { fetch, realFetch, headers } = fixture()
+    const batch = await fetch(graph + "$batch", { method: "POST", headers, body: JSON.stringify({ requests: [{ id: "1", method: "GET", url: "/deviceManagement/configurationSettings/1" }] }) })
+    const mixed = await fetch(graph + "$batch", { method: "POST", headers, body: JSON.stringify({ requests: [{ id: "1", method: "GET" }, { id: "2", method: "PATCH" }] }) })
+    const read = await fetch(graph + "deviceManagement/configurationPolicies", { headers })
+    const backup = await fetch("https://contoso.blob.core.windows.net/intune-backups/backup.json", { method: "PUT", headers })
+    expect([batch.status, mixed.status, read.status, backup.status]).toEqual([204, 409, 204, 204])
+    expect(realFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(["beta", "v1.0"])("lets a read-only registration with Mail.Send send mail through %s", async version => {
+    const { fetch, realFetch, headers } = fixture(token({ scp: scopes + " Mail.Send" }))
+    const url = `https://graph.microsoft.com/${version}/me/sendMail`
+    expect((await fetch(url, { method: "POST", headers })).status).toBe(204)
+    expect(realFetch).toHaveBeenCalledExactlyOnceWith(url, { method: "POST", headers })
+    expect((await fetch(url, { method: "PATCH", headers })).status).toBe(409)
+    expect((await fetch(url + "/other", { method: "POST", headers })).status).toBe(409)
+  })
+
+  it.each([{ scp: scopes + " DeviceManagementConfiguration.ReadWrite.All" }, { roles: BACKUP_ONLY_GRAPH_PERMISSIONS }, { scp: "Application.ReadWrite.All DelegatedPermissionGrant.ReadWrite.All" }])("lets full, app-only and setup sign-ins through", async claims => {
+    const { fetch, realFetch, headers } = fixture(token(claims))
+    await fetch(graph + "applications", { method: "POST", headers })
+    expect(realFetch).toHaveBeenCalledOnce()
   })
 })

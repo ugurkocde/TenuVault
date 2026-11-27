@@ -12,7 +12,8 @@ import type { SignedInAccount } from "../../shared/ipc"
 import {
   APP_REGISTRATION_GUIDE_URL,
   CONSENT_ROLES_TEXT,
-  DESKTOP_APP_PERMISSIONS,
+  desktopAppPermissions,
+  type RegistrationMode,
   MANUAL_APP_REGISTRATION_URL,
   parseSetupOutput,
   SETUP_SCRIPT_FILE_NAME,
@@ -79,7 +80,7 @@ function CommandLine({ command, label, copied, onCopy }: { command: string; labe
 }
 
 /** The permissions the setup script grants, so the admin who consents sees them first. */
-export function PermissionList() {
+export function PermissionList({ mode }: { mode?: RegistrationMode } = {}) {
   return (
     <details className="group rounded-2xl bg-card px-4 py-3">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-medium text-gray-900">
@@ -92,7 +93,7 @@ export function PermissionList() {
           who signs in, so it is limited by their own Intune role, MFA and Conditional Access.
         </p>
         <ul className="space-y-2">
-          {DESKTOP_APP_PERMISSIONS.map((entry) => (
+          {desktopAppPermissions(mode).map((entry) => (
             <li key={entry.api}>
               <span className="font-medium text-gray-900">{entry.api}:</span> <span className="font-mono text-xs">{entry.permissions.join(", ")}</span>
               <span className="block text-xs text-gray-600">{entry.purpose}</span>

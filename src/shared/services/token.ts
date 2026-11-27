@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../app-registration"
+import { READER_REQUIRED_ROLES } from "./backup-permissions"
 import type { GrantedPermissions } from "./modules"
 
 /**
@@ -22,7 +24,35 @@ export function grantedPermissions(token: string | undefined): GrantedPermission
   }
   if (!claims || typeof claims !== "object") return undefined
   const { scp, roles } = claims as { scp?: unknown; roles?: unknown }
-  if (typeof scp === "string") return { kind: "delegated", permissions: new Set(scp.split(" ").filter(Boolean)) }
+  if (typeof scp === "string") return { kind: "delegated", permissions: new Set(scp.split(/\s+/).filter(Boolean)) }
   if (Array.isArray(roles)) return { kind: "application", permissions: new Set(roles.filter((role): role is string => typeof role === "string")) }
   return undefined
+}
+
+
+export function isTenantWriteScope(scope: string): boolean {
+  return /^(DeviceManagement[^.]*|Policy)\.ReadWrite\./i.test(scope)
+}
+
+/** Classify delegated .default tokens. A token requested for specific scopes can omit consented writes. */
+export function isReadOnlyRegistration(granted: GrantedPermissions | undefined): boolean {
+  if (granted?.kind !== "delegated") return false
+  const scopes = granted.permissions
+  return READER_REQUIRED_ROLES.some(scope => scopes.has(scope))
+    && ![...scopes].some(isTenantWriteScope)
+}
+
+export class ReadOnlyRegistrationError extends Error {
+  readonly status = 409
+
+  constructor() {
+    super(READ_ONLY_REGISTRATION_MESSAGE)
+  }
+}
+
+/** Fail before preparing a write when the workflow already has the Graph token. */
+export function requireWritableRegistration(token: string): void {
+  if (isReadOnlyRegistration(grantedPermissions(token))) {
+    throw new ReadOnlyRegistrationError()
+  }
 }

@@ -1,3 +1,4 @@
+import { requireWritableRegistration } from "../../shared/services/token"
 import { AsyncLocalStorage } from "node:async_hooks"
 import type { GraphCall } from "../../portal/lib/policies/graph-restore"
 import { graphCaller } from "../../portal/lib/policies/graph-restore"
@@ -116,6 +117,7 @@ export function featureAccess(options: FeatureAccessOptions): Pick<FeatureDeps, 
       }
       const clientId = options.signedInClient(tenantId)
       const token = await options.tokenFor(tenantId, clientId, GRAPH_SCOPE)
+      if (journal) requireWritableRegistration(token.accessToken)
       return graphCaller(token.accessToken, options.fetch, {
         tenant: journal ? tenantId.toLowerCase() : undefined,
         refreshToken: async () => (await options.tokenFor(tenantId, clientId, GRAPH_SCOPE, true)).accessToken,

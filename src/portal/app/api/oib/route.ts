@@ -2,6 +2,7 @@ import { FrameworkError } from "../../../../main/frameworks/service"
 import { handleOib } from "../../../../main/oib/service"
 import { record } from "../../../../shared/frameworks/policies"
 import { TenantWriteConflict } from "../../../../main/features/write-lock"
+import { ReadOnlyRegistrationError } from "../../../../shared/services/token"
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -12,6 +13,6 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json(await handleOib(body))
   } catch (error) {
     const code = error instanceof FrameworkError ? error.code : undefined
-    return Response.json({ error: error instanceof Error ? error.message : "OpenIntuneBaseline request failed.", ...(code ? { code } : {}) }, { status: error instanceof FrameworkError || error instanceof TenantWriteConflict ? error.status : 400 })
+    return Response.json({ error: error instanceof Error ? error.message : "OpenIntuneBaseline request failed.", ...(code ? { code } : {}) }, { status: error instanceof FrameworkError || error instanceof TenantWriteConflict || error instanceof ReadOnlyRegistrationError ? error.status : 400 })
   }
 }

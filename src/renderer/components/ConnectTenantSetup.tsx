@@ -4,7 +4,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
-import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION_URL, setupHandoffText, suggestsCreatingByHand } from "../../shared/app-registration"
+import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION_URL, READ_ONLY_REGISTRATION_URL, setupHandoffText, type RegistrationMode, suggestsCreatingByHand } from "../../shared/app-registration"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
@@ -37,6 +37,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   /** The app registration exists; the caller signs the admin in to it. */
   onRegistered: (result: RegistrationResult) => void
 }) {
+  const [mode, setMode] = useState<RegistrationMode>("full")
   const [tenant, setTenant] = useState("")
   const [running, setRunning] = useState(false)
   const [phase, setPhase] = useState<SetupProgress["phase"]>("signingIn")
@@ -78,7 +79,9 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     setCompleting(false)
     let restartNow = false
     try {
-      onRegistered(await bridge.setup.createRegistration(tenant.trim() ? { tenant: tenant.trim() } : undefined))
+      const tenantHint = tenant.trim()
+      const options = mode === "backup-only" ? { tenant: tenantHint || undefined, mode } : tenantHint ? { tenant: tenantHint } : undefined
+      onRegistered(await bridge.setup.createRegistration(options))
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught)
       restartNow = message === CANCELLED && restart.current
@@ -129,7 +132,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     setAttemptFailed(false)
     recordSetup({ name: "setup_route", props: { route: "handoff" } })
     try {
-      await navigator.clipboard.writeText(setupHandoffText())
+      await navigator.clipboard.writeText(setupHandoffText(mode))
       setCopied(true)
     } catch (caught) {
       // The copy can fail after a setup attempt that started meanwhile has failed.
@@ -147,7 +150,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const current = PHASES.indexOf(phase)
   // The setup and the setup script sign in through the same Microsoft app. Where the tenant blocks
   // it, creating the app registration in the Entra admin center is the route that still works.
-  const openManualGuide = () => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)
+  const openManualGuide = () => void bridge.app.openExternal(mode === "backup-only" ? READ_ONLY_REGISTRATION_URL : MANUAL_APP_REGISTRATION_URL)
   const manual = () => {
     recordSetup({ name: "setup_route", props: { route: "manual" } })
     onManual()
@@ -244,6 +247,18 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                 sign in to TenuVault directly. Leave &quot;Consent on behalf of your organization&quot; unticked; the setup does not need it.
               </span>
             </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="registration-mode">App registration access</Label>
+              <select id="registration-mode" value={mode} onChange={event => setMode(event.target.value as RegistrationMode)}
+                className="flex h-10 w-full rounded-xl border border-input bg-card px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                aria-describedby="registration-mode-help">
+                <option value="full">Backup and restore</option>
+                <option value="backup-only">Backup only (read-only)</option>
+              </select>
+              <p id="registration-mode-help" className="text-xs text-gray-600">
+                {mode === "backup-only" ? "Back up, compare and export your Intune settings without granting write access." : "Back up your settings and make changes in Intune when you restore or deploy."}
+              </p>
+            </div>
             <Button type="button" size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700 sm:w-auto" onClick={() => void start()}>
               <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
               {error ? "Try again" : "Set up with Microsoft sign-in"}
@@ -270,7 +285,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
           <div className="mt-3 space-y-4">
             <ol className="list-decimal space-y-1.5 pl-5">
               <li>Your browser opens and you sign in with Microsoft. Microsoft asks you to approve Microsoft Graph Command Line Tools with two permissions: Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All.</li>
-              <li>TenuVault creates the app registration &quot;TenuVault Desktop&quot; in your tenant. If the tenant already has one from an earlier setup, it uses that one and changes nothing in it.</li>
+              <li>TenuVault creates an app registration in your tenant. If the tenant already has a suitable registration from an earlier setup, it uses that one.</li>
               <li>It grants the app registration it created tenant-wide admin consent for the delegated permissions listed below, and nothing else.</li>
               <li>When Microsoft accepts sign-ins to the app registration, your browser opens once more and signs you in to TenuVault through it.</li>
             </ol>
@@ -280,7 +295,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               setup does not need it. To remove it, open Entra admin center &gt; Enterprise applications &gt; Microsoft Graph Command
               Line Tools &gt; Permissions.
             </p>
-            <div className="rounded-2xl bg-gray-50"><PermissionList /></div>
+            <div className="rounded-2xl bg-gray-50"><PermissionList mode={mode} /></div>
             <div className="space-y-1.5">
               <Label htmlFor="setup-tenant">Tenant ID or domain (optional)</Label>
               <Input
@@ -328,8 +343,8 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
             {copied ? "Copied" : "Someone else is the admin? Copy instructions"}
           </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={toggleScript} aria-expanded={script}>
-            Use the setup script instead
+          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={mode === "backup-only" ? openManualGuide : toggleScript} aria-expanded={mode === "full" ? script : undefined}>
+            {mode === "backup-only" ? "Create it by hand" : "Use the setup script instead"}
           </Button>
           <Button type="button" variant="ghost" size="sm" disabled={running} onClick={manual}>
             I already have an app registration
@@ -342,7 +357,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
           </p>
         )}
       </div>
-      {script && (
+      {script && mode === "full" && (
         <div className="space-y-4 @3xl:col-span-2">
           <SetupScriptCard />
           <div className="flex justify-end">

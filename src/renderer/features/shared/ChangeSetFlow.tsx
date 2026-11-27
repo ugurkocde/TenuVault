@@ -1,3 +1,5 @@
+import { useRegistrationAccess } from "../../lib/registration-access"
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
 import { TENANT_ADMIN, inTenant } from "../../../shared/intune/admin-links"
 import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState, type ReactNode } from "react"
@@ -45,6 +47,7 @@ const inputClass = "h-9 w-full rounded-full border border-gray-200 bg-white px-3
  * change set whose stored choice is to apply without a backup.
  */
 export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollbackHint, embedded = false, intro, settingNames, sourceLabel, onApplied, decisionFields = true, backupSkipped = false }: { changeSet: ChangeSet; actions: ChangeSetActions | null; tenantName: string; onChanged: () => void; rollbackHint?: string; embedded?: boolean; intro?: ReactNode; settingNames?: SettingNames; sourceLabel?: string; onApplied?: () => void; decisionFields?: boolean; backupSkipped?: boolean }) {
+  const readOnly = useRegistrationAccess(changeSet.tenantId)
   const [preview, setPreview] = useState<ChangeSetPreview | null>(null)
   const [rollback, setRollback] = useState<RollbackPreview | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -196,11 +199,11 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
 
       {(canApply || canRetry) && (
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" variant={canApply ? "default" : "outline"} disabled={!!busy} onClick={() => { if (!preview) void loadPreview(); setConfirm(canApply ? "apply" : "retry") }}>
+          <Button type="button" variant={canApply ? "default" : "outline"} disabled={!!busy || readOnly} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} onClick={() => { if (!preview) void loadPreview(); setConfirm(canApply ? "apply" : "retry") }}>
             <CheckCircle2 className="h-4 w-4" />
             {canApply ? "Apply to tenant" : "Reconcile and retry"}
           </Button>
-          <p className="max-w-xl text-xs text-gray-500">{canApply ? "The target is read again first; any change since approval stops the apply and needs a fresh review." : "Verified operations are never written again. Uncertain ones are reconciled from live state before any write."}</p>
+          <p className="max-w-xl text-xs text-gray-500">{readOnly ? READ_ONLY_REGISTRATION_MESSAGE : canApply ? "The target is read again first; any change since approval stops the apply and needs a fresh review." : "Verified operations are never written again. Uncertain ones are reconciled from live state before any write."}</p>
         </div>
       )}
 
@@ -253,7 +256,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
       )}
 
       <ConfirmWriteDialog
-        open={confirm !== null && !!preview}
+        open={!readOnly && confirm !== null && !!preview}
         onOpenChange={(next) => { if (!next) setConfirm(null) }}
         title={confirm === "retry" ? "Reconcile and retry this change set" : "Apply this change set"}
         tenantName={tenantName}

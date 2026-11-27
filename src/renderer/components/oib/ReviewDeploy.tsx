@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
+import { useReadOnlyTenants, useRegistrationAccess } from "../../lib/registration-access"
 import { useQueries } from "@tanstack/react-query"
 import { groupAccessMissing } from "../GroupAccess"
 import { servicesStatusOptions } from "../../features/notifications/optional-permissions"
@@ -102,7 +104,9 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   notes?: ReactNode
 }) {
   const { tenant, can } = useOibTenant()
+  const readOnly = useRegistrationAccess(tenant?.tenantId)
   const tenants = useTenants()
+  const readOnlyTenants = useReadOnlyTenants()
   const job = useOibJob<DeployOutcome[]>(tenant?.tenantId, { kind, flow })
   const blocking = useBlockingJob(tenant?.tenantId, kind)
   const [phase, setPhase] = useState<"review" | "confirm">("review")
@@ -127,12 +131,12 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const storage = !!tenant?.storageAccountName
   const bulk = can("bulkActions")
   // Updates point at policies of this tenant, so only new policies can go to other tenants.
-  const others = kind === "fix" || updates.length ? [] : tenants.filter(t => t.credentials?.tenantId && t.credentials.appId && t.credentials.tenantId !== tenant?.tenantId)
+  const others = kind === "fix" || updates.length || readOnly ? [] : tenants.filter(t => t.credentials?.tenantId && t.credentials.appId && t.credentials.tenantId !== tenant?.tenantId && !readOnlyTenants.has(t.credentials.tenantId.toLowerCase()))
   const extras: OibTenant[] = bulk ? others.filter(t => alsoDeploy.includes(t.credentials!.tenantId)).map(t => ({ tenantId: t.credentials!.tenantId, appId: t.credentials!.appId, name: t.name, storageAccountName: t.resources?.storageAccountName })) : []
   const targets = assignmentTargets(batches.flatMap(b => b.items.filter(i => i.mode === "create").map(i => ({ platform: b.platform, folder: i.folder, scope: i.scope }))))
   const extraAssignment = (tenantId: string) => extraAssignments[tenantId] ?? newAssignment()
   const updateExtra = (tenantId: string) => (change: (data: AssignmentData) => AssignmentData) => setExtraAssignments(current => ({ ...current, [tenantId]: change(current[tenantId] ?? newAssignment()) }))
-  const assigning = kind === "deploy" && creates.length > 0
+  const assigning = !readOnly && kind === "deploy" && creates.length > 0
   const permissionStatuses = useQueries({ queries: [tenant, ...extras].map(target => servicesStatusOptions(assigning ? target : null)) })
   if (!tenant) return null
   const accessMissing = (data: AssignmentData, index: number) => groupAccessMissing(data.readable, permissionStatuses[index]?.data?.optional?.find(entry => entry.id === "groupRead")?.granted)
@@ -154,6 +158,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
   const updateNames = updates.map(u => u.targetName && u.targetName !== u.name ? `${u.targetName}, replaced with ${u.name ?? u.source}` : u.name ?? u.source)
 
   function deploy() {
+    if (readOnly || !assignmentsReady) return
     setError("")
     const targets = [tenant!, ...extras]
     try {
@@ -237,8 +242,8 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
       {updates.length > 0 && <div className="mt-5"><Toggle checked={acknowledged} onChange={setAcknowledged} label={`I understand ${updates.length === 1 ? "1 existing policy is" : `${updates.length} existing policies are`} replaced with the OIB version`}>
         Settings added or changed in Intune since the policy was deployed are replaced.
       </Toggle></div>}
-      <ActionBar summary={blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
-        <button type="button" className={primary} disabled={!!blocking || !assignmentsReady || (updates.length > 0 && !acknowledged)} onClick={deploy}>
+      <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : blocking ? `${blocking.label} is still running. Wait for it to finish first.` : undefined} error={error} back={{ label: "Back to the review", onClick: () => setPhase("review") }}>
+        <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !!blocking || !assignmentsReady || (updates.length > 0 && !acknowledged)} onClick={deploy}>
           {kind === "fix" ? <RotateCcw className="h-4 w-4" aria-hidden="true" /> : <Rocket className="h-4 w-4" aria-hidden="true" />}
           {mode === "new" ? `Back up and ${kind === "fix" ? "reset" : "deploy"}` : kind === "fix" ? "Reset the policy" : "Deploy"}{extras.length ? ` to ${extras.length + 1} tenants` : ""}
         </button>
@@ -263,7 +268,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
         <p className="mb-4 mt-1 text-xs leading-5 text-gray-500">OpenIntuneBaseline marks each policy as a device or user policy. Device groups go to device policies, user groups to user policies. Without groups the new policies stay unassigned, and nothing reaches devices until a policy is assigned. Start with a pilot group.</p>
         <AssignmentEditor state={{ tenant, data: assignment, update: setAssignment }} targets={targets} accessMissing={primaryMissing} accessContext="You can still deploy: the new policies are created unassigned." />
       </section>}
-      {kind === "deploy" && !updates.length && <div className={cn("rounded-2xl border border-gray-200 p-4", !bulk && "opacity-60")}>
+      {!readOnly && kind === "deploy" && !updates.length && <div className={cn("rounded-2xl border border-gray-200 p-4", !bulk && "opacity-60")}>
         <p className="flex items-center gap-2 text-sm font-medium text-gray-800">Also deploy to{!bulk && <PlanBadge feature="bulkActions" />}</p>
         <p className="mt-1 text-xs leading-5 text-gray-500">Create the same policies in other connected tenants after {tenant.name}, one tenant at a time. Groups exist per tenant: choose them for each tenant below, or leave its policies unassigned.{mode !== "none" && " Each tenant backs up its affected policy types first."}</p>
         {bulk && (others.length
@@ -283,9 +288,9 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
         })}
       </div>}
     </div>
-    <ActionBar summary={[creates.length && plural(creates.length, "new policy", "new policies"), updates.length && plural(updates.length, "update in place", "updates in place")].filter(Boolean).join(", ")} status={backup.loading ? "Checking the latest backup" : null} error={error}
+    <ActionBar summary={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : [creates.length && plural(creates.length, "new policy", "new policies"), updates.length && plural(updates.length, "update in place", "updates in place")].filter(Boolean).join(", ")} status={backup.loading ? "Checking the latest backup" : null} error={error}
       back={onBack ? { label: backLabel, onClick: () => { setRetry(null); onBack() } } : undefined}>
-      <button type="button" className={primary} disabled={!items.length || !assignmentsReady || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>
+      <button type="button" className={primary} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={readOnly || !items.length || !assignmentsReady || backup.loading} onClick={() => { setAcknowledged(false); setPhase("confirm") }}>Continue</button>
     </ActionBar>
   </div>
 }

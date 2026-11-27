@@ -1,4 +1,6 @@
 import { GROUP_READ_PERMISSION } from "./group-access"
+import { DEVICE_INVENTORY_ROLE, READER_REQUIRED_ROLES } from "./services/backup-permissions"
+import { MODULE_BY_ID } from "./services/modules"
 
 // The app registration TenuVault Desktop signs in with, as the setup script creates it
 // (resources/New-TenuVaultDesktopApp.ps1). Shown in the guided setup before anyone consents.
@@ -79,6 +81,26 @@ export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; per
   },
 ]
 
+export type RegistrationMode = "full" | "backup-only"
+export const READ_ONLY_REGISTRATION_NAME = "TenuVault Desktop (Backup only)"
+export const READ_ONLY_REGISTRATION_MESSAGE = "This app registration is read-only"
+export const READ_ONLY_REGISTRATION_URL = `${APP_REGISTRATION_GUIDE_URL}#backup-only-read-only-registration`
+
+export const BACKUP_ONLY_GRAPH_PERMISSIONS = [
+  "User.Read",
+  "Organization.Read.All",
+  ...READER_REQUIRED_ROLES,
+  DEVICE_INVENTORY_ROLE,
+  MODULE_BY_ID.get("conditionalAccess")!.readerRole!,
+] as const
+
+export function desktopAppPermissions(mode: RegistrationMode = "full"): typeof DESKTOP_APP_PERMISSIONS {
+  if (mode === "full") return DESKTOP_APP_PERMISSIONS
+  return DESKTOP_APP_PERMISSIONS.map(resource => resource.appId === DESKTOP_APP_PERMISSIONS[0]!.appId
+    ? { ...resource, permissions: BACKUP_ONLY_GRAPH_PERMISSIONS, purpose: "Reads Intune configuration and Entra Conditional Access policies for backups." }
+    : resource)
+}
+
 const GUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 
 /**
@@ -96,34 +118,42 @@ export function parseSetupOutput(text: string): { tenantId?: string; clientId?: 
 }
 
 /** Plain text instructions for the Entra administrator who creates the app registration. */
-export function setupHandoffText(): string {
-  const permissions = DESKTOP_APP_PERMISSIONS.map((entry) => `  ${entry.api}: ${entry.permissions.join(", ")}`).join("\n")
+export function setupHandoffText(mode: RegistrationMode = "full"): string {
+  const permissions = desktopAppPermissions(mode).map((entry) => `  ${entry.api}: ${entry.permissions.join(", ")}`).join("\n")
   return [
     "Could you create the app registration TenuVault Desktop signs in with? It takes a few minutes.",
     "",
-    "TenuVault Desktop backs up and restores our Intune configuration from an admin's computer. It signs in",
+    `TenuVault Desktop ${mode === "backup-only" ? "backs up" : "backs up and restores"} our Intune configuration from an admin's computer. It signs in`,
     "as the admin through a public client app registration in our own tenant: no secret, no certificate and",
     "delegated permissions only, so every call is limited by the admin's own roles, MFA and Conditional Access.",
     "",
     `Who can run it: ${CONSENT_ROLES.join(", ")}.`,
     "",
-    `1. Download the setup script: ${SETUP_SCRIPT_DOWNLOAD_URL}`,
-    "2. Run it in PowerShell (PowerShell 7 on macOS). It installs nothing:",
-    `   ./${SETUP_SCRIPT_FILE_NAME}`,
-    "   To limit sign-in to a group of admins, add: -AllowedGroupId <group object id>",
-    "3. Sign in with your admin account in the browser window it opens. Microsoft may first ask you to consent to",
-    "   Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.",
-    "4. Send me the two lines it prints at the end: the Tenant id and the Application (client) id.",
-    "   The script also copies them to your clipboard.",
-    "",
-    "If our tenant blocks Microsoft Graph Command Line Tools for your account (for example AADSTS7000112,",
-    "AADSTS50105 or a Conditional Access policy that blocks the app), the script cannot sign in. Create the app registration by hand",
-    `in the Entra admin center instead and send me the same two IDs: ${MANUAL_APP_REGISTRATION_URL}`,
-    "",
+    ...(mode === "backup-only" ? [
+      "Choose Backup only (read-only) in TenuVault setup, or create the registration in the Entra admin center.",
+      `Instructions: ${READ_ONLY_REGISTRATION_URL}`,
+      "Send me the Tenant id and Application (client) id once you have granted admin consent.",
+    ] : [
+      `1. Download the setup script: ${SETUP_SCRIPT_DOWNLOAD_URL}`,
+      "2. Run it in PowerShell (PowerShell 7 on macOS). It installs nothing:",
+      `   ./${SETUP_SCRIPT_FILE_NAME}`,
+      "   To limit sign-in to a group of admins, add: -AllowedGroupId <group object id>",
+      "3. Sign in with your admin account in the browser window it opens. Microsoft may first ask you to consent to",
+      "   Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.",
+      "4. Send me the two lines it prints at the end: the Tenant id and the Application (client) id.",
+      "   The script also copies them to your clipboard.",
+      "",
+      "If our tenant blocks Microsoft Graph Command Line Tools for your account (for example AADSTS7000112,",
+      "AADSTS50105 or a Conditional Access policy that blocks the app), the script cannot sign in. Create the app registration by hand",
+      `in the Entra admin center instead and send me the same two IDs: ${MANUAL_APP_REGISTRATION_URL}`,
+      "",
+    ]),
     "It grants tenant-wide admin consent for these delegated permissions:",
     permissions,
     "",
-    `Guide, including how to create it by hand in the Entra admin center: ${APP_REGISTRATION_GUIDE_URL}`,
+    mode === "backup-only"
+      ? `Guide: ${READ_ONLY_REGISTRATION_URL}`
+      : `Guide, including how to create it by hand in the Entra admin center: ${APP_REGISTRATION_GUIDE_URL}`,
   ].join("\n")
 }
 

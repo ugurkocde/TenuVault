@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../shared/app-registration"
+import { useReadOnlyTenants } from "../lib/registration-access"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Loader2, Undo2, XCircle } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -76,6 +78,7 @@ export default function SyncPage() {
 function SyncWorkspace({ selected }: { selected: Tenant }) {
   const queryClient = useQueryClient()
   const tenants = useTenants().filter((tenant) => tenant.credentials?.tenantId)
+  const readOnlyTenants = useReadOnlyTenants()
   const tenantOf = (tenantId: string) => tenants.find((tenant) => tenant.credentials!.tenantId.toLowerCase() === tenantId.toLowerCase())
   const [step, setStep] = useState(1)
   const [sourceId, setSourceId] = useState(selected.credentials!.tenantId.toLowerCase())
@@ -98,6 +101,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const shownRun = useRef(runId)
   shownRun.current = runId
   const source = tenantOf(sourceId) ?? selected
+  const writeBlocked = (target: SyncTarget) => readOnlyTenants.has(target.targetTenantId.toLowerCase())
   const pending = (id: string | null) => !!id && [...active].some((key) => key.startsWith(`${id}:`))
 
   // Policies and their sync status are read again when the window regains focus and after every
@@ -171,7 +175,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   }
 
   const toggleTarget = (option: SyncTargetOption) => {
-    if (!option.eligible) return
+    if (readOnlyTenants.has(option.tenantId) || !option.eligible) return
     const multiple = options.data?.multiple === true
     const all = options.data?.targets ?? []
     setTargets((current) => {
@@ -317,7 +321,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   }
 
   const approveAndSync = () => {
-    if (!runId) return
+    if (!runId || runTargets.some(writeBlocked)) return
     const forRun = runId
     const left: Record<string, string> = {}
     const ready = runTargets.filter((target) => {
@@ -338,6 +342,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   }
 
   const retry = (target: SyncTarget) => {
+    if (writeBlocked(target)) return
     const changeSet = target.changeSet
     if (!changeSet || !runId) return
     // The route applies the choice the target was approved with; the page's draft never decides it.
@@ -406,14 +411,15 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
         <ChooseTargets
           sourceName={source.name}
           options={options.data?.targets ?? []}
+          readOnlyTenants={readOnlyTenants}
           loading={options.isLoading}
           error={options.error ? message(options.error, "The tenants could not be checked.") : null}
           tenantOf={tenantOf}
           linked={statusByPolicy.linked}
-          selected={targets}
+          selected={targets.filter(id => !readOnlyTenants.has(id))}
           onToggle={toggleTarget}
           onBack={() => setStep(1)}
-          onNext={() => { setAck(false); void review(false) }}
+          onNext={() => { if (targets.some(id => readOnlyTenants.has(id))) return; setAck(false); void review(false) }}
           planning={planning}
         />
       )}
@@ -436,6 +442,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
             if (checked && run.data?.run.options.acknowledgeRedacted !== true) void review(true)
           }}
           onBack={() => { abandonPlan(); setStep(2) }}
+          blockedReason={runTargets.some(writeBlocked) ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
           onApprove={approveAndSync}
           busy={pending(runId)}
         />
@@ -455,6 +462,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
               notes={notes}
               platforms={platforms}
               onRetry={retry}
+              writeBlocked={writeBlocked}
               retrying={shownActive.size > 0}
               tenantOf={tenantOf}
               onChanged={() => { void run.refetch(); void runs.refetch(); refreshStatus() }}

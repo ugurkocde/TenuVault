@@ -291,12 +291,13 @@ export function ServicesSettings() {
   }
 
   const status = currentStatus.data ?? statuses.get(current.tenantId)
+  const statusKey = servicesStatusKey(current.tenantId, current.clientId)
   const run = async (action: () => Promise<ServicesStatus>) => {
     setBusy(true)
     try {
       const next = await action()
       setStatuses((previous) => new Map(previous).set(next.tenantId, next))
-      queryClient.setQueryData(servicesStatusKey(next.tenantId, current.clientId), next)
+      queryClient.setQueryData(statusKey, next)
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
@@ -304,25 +305,24 @@ export function ServicesSettings() {
     }
   }
 
-  // A failed re-check leaves the module list as it was but marks the optional permissions
-  // unknown, so an old Granted or Not granted is never shown or announced as current.
-  const recheck = async (tenantId: string, clientId: string) => {
+  // A failed re-check leaves the module list as it was and clears the cached permission indicators.
+  const recheck = async () => {
+    const { tenantId, clientId } = current
     setCheckingTenant(tenantId)
     try {
       await run(async () => {
+        await queryClient.cancelQueries({ queryKey: statusKey, exact: true })
         try {
-          await queryClient.cancelQueries({ queryKey: servicesStatusKey(tenantId, clientId), exact: true })
           return await bridge.services.status(tenantId, clientId, true)
         } catch (error) {
           setStatuses((previous) => {
             const before = previous.get(tenantId)
-            if (!before || before === "loading" || !before.optional) return previous
-            return new Map(previous).set(tenantId, { ...before, optional: before.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) })
+            if (!before || before === "loading") return previous
+            return new Map(previous).set(tenantId, { ...before, readOnlyRegistration: undefined, optional: before.optional?.map((entry) => ({ ...entry, granted: null, missing: [] })) })
           })
-          // The Notifications section reads its own cached copy; mark that unknown too.
-          queryClient.setQueryData<ServicesStatus>(servicesStatusKey(tenantId, clientId), (cached) => {
-            if (!cached?.optional) return cached
-            return { ...cached, optional: cached.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) }
+          queryClient.setQueryData<ServicesStatus>(statusKey, (cached) => {
+            if (!cached) return cached
+            return { ...cached, readOnlyRegistration: undefined, optional: cached.optional?.map((entry) => ({ ...entry, granted: null, missing: [] })) }
           })
           throw error
         }
@@ -345,7 +345,7 @@ export function ServicesSettings() {
         {rows.length > 1 ? <Overview tenants={rows} statuses={statuses} selected={current.tenantId} onSelect={setSelected} /> : null}
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm font-medium text-gray-900">{current.name}</p>
-          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => { void recheck(current.tenantId, current.clientId) }}>
+          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => { void recheck() }}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Check again
           </Button>
@@ -400,7 +400,7 @@ function OptionalPermissions({ entries, clientId, checking }: { entries: Optiona
             <span className="font-mono text-xs text-gray-600">{entry.permissions.join(", ")}</span>
             <span className="text-xs text-gray-500">{entry.granted === true ? "Granted" : entry.granted === false ? `Not granted: ${entry.missing.join(", ")}` : "Could not be checked"}</span>
             {entry.id === "groupRecipients" && <span className="text-xs text-gray-500">Also needs Group read.</span>}
-            {entry.id === "groupRead" && <span className="basis-full text-xs text-gray-500">Included in new app registrations. For an older registration, add the delegated GroupMember.Read.All permission in Entra and grant admin consent, then select Check again.</span>}
+            {entry.id === "groupRead" && <span className="basis-full text-xs text-gray-500">Included in new full app registrations. To enable group reads, add the delegated GroupMember.Read.All permission in Entra and grant admin consent, then select Check again.</span>}
             {entry.granted === false && (
               <span className="ml-auto flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 {entry.setupSwitch && <span>New app registration: <span className="font-mono">{entry.setupSwitch}</span></span>}

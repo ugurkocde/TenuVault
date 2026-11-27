@@ -1,5 +1,7 @@
 "use client"
 
+import { useReadOnlyRegistration, useReadOnlyTenants } from "../../../../renderer/lib/registration-access"
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../../shared/app-registration"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { AlertCircle, AlertTriangle, Calendar, CheckCircle, Download, GitBranch, Loader2, Play, RefreshCw, Upload } from "lucide-react"
@@ -62,7 +64,6 @@ function ChangesText({ backup, first }: { backup: BackupSummary; first: boolean 
 export default function BackupRestorePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const requested = searchParams.get("tab")
-  const activeTab: Tab = requested === "restore" || requested === "schedule" ? requested : "backup"
   const setActiveTab = (tab: Tab) => setSearchParams({ tab })
 
   const tenants = useTenants()
@@ -81,6 +82,7 @@ export default function BackupRestorePage() {
     next.delete("tenant")
     setSearchParams(next, { replace: true })
   }, [requestedTenant, tenants, selectedTenantId, setSelectedTenantId, searchParams, setSearchParams])
+  const readOnly = useReadOnlyRegistration(selectedTenant)
   const plan = useTenantPlan(selectedTenant?.credentials?.tenantId)
   const community = plan === "community"
   // Copying to other tenants is an MSP action; the main process also checks every target.
@@ -117,9 +119,12 @@ export default function BackupRestorePage() {
         : null,
     [selectedTenant?.name, selectedTenant?.credentials, selectedTenant?.resources?.storageAccountName],
   )
+  const readOnlyTargets = useReadOnlyTenants()
   const copyCandidates = tenants
-    .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId)
+    .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId && !readOnlyTargets.has(entry.credentials.tenantId.toLowerCase()))
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
+  const restoreBlocked = readOnly && !(canCopyToTenants && copyCandidates.length > 0)
+  const activeTab: Tab = requested === "schedule" || requested === "restore" && !restoreBlocked ? requested : "backup"
   const trends = useMemo(() => backupTypeTrends(backups), [backups])
   const selected = backups.find((backup) => backup.id === selectedId) ?? null
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
@@ -271,12 +276,14 @@ export default function BackupRestorePage() {
         ].map((tab) => (
           <button
             key={tab.id}
+            disabled={restoreBlocked && tab.id === "restore"}
+            title={restoreBlocked && tab.id === "restore" ? READ_ONLY_REGISTRATION_MESSAGE : undefined}
             onClick={() => {
               if (tab.id === "restore") setRestoreFrom(null)
               setActiveTab(tab.id)
             }}
             className={cn(
-              "flex h-10 items-center gap-2 rounded-full px-5 text-sm font-medium transition-colors",
+              "flex h-10 items-center gap-2 rounded-full px-5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
               activeTab === tab.id ? "bg-primary text-primary-foreground" : "text-gray-500 hover:bg-gray-100 hover:text-gray-900",
             )}
           >
@@ -426,6 +433,7 @@ export default function BackupRestorePage() {
               onDownload={() => void download(selected)}
               onExportDevices={() => void exportDevices(selected)}
               onRestore={() => restore(selected)}
+              restoreBlocked={restoreBlocked}
             />
           )}
         </div>
@@ -440,6 +448,7 @@ export default function BackupRestorePage() {
           community={community}
           canCopyToTenants={canCopyToTenants}
           copyCandidates={copyCandidates}
+          currentTenantReadOnly={readOnly}
         />
       )}
 
@@ -537,11 +546,12 @@ interface BackupDetailsProps {
   onDownload: () => void
   onExportDevices: () => void
   onRestore: () => void
+  restoreBlocked: boolean
   ref: React.Ref<HTMLDivElement>
 }
 
 /** Everything known about one backup, from its metadata and file listing. */
-function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
+function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, restoreBlocked, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
   // Damaged or unreadable files of this backup on this device: nothing can be read from it.
   const unavailable = backup.status === "unavailable"
@@ -572,7 +582,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
             {downloading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
             Download
           </Button>
-          <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} disabled={kind === "running" || backup.totalPolicies === 0 || unavailable}>
+          <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} title={restoreBlocked ? READ_ONLY_REGISTRATION_MESSAGE : undefined} disabled={restoreBlocked || kind === "running" || backup.totalPolicies === 0 || unavailable}>
             <RefreshCw className="mr-1 h-4 w-4" />
             Restore from this backup
           </Button>

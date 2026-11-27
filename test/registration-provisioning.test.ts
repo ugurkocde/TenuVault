@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 import { provisionRegistration } from "../src/main/auth/registration-provisioning"
-import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS } from "../src/shared/app-registration"
+import { BACKUP_ONLY_GRAPH_PERMISSIONS, CONSENT_ROLES, DESKTOP_APP_PERMISSIONS, desktopAppPermissions, READ_ONLY_REGISTRATION_NAME, type RegistrationMode } from "../src/shared/app-registration"
 
+const OPTIONAL_MAIL_SCOPE = "Mail.Send"
 const own = { displayName: "TenuVault Desktop", id: "app", appId: "client", notes: "Used by the TenuVault desktop app", signInAudience: "AzureADMyOrg", publicClient: { redirectUris: ["http://localhost"] }, createdDateTime: "2026-01-01" }
-function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL, init: RequestInit, count: number) => Response | undefined; unknown?: number; missingResource?: boolean; appPrincipal?: object; probe?: () => Response } = {}) {
+function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL, init: RequestInit, count: number) => Response | undefined; unknown?: number; missingResource?: boolean; appPrincipal?: object; probe?: () => Response; mode?: RegistrationMode } = {}) {
   // What the sign-in service was asked. Checked after the run: the probe swallows its own errors.
   const probes: { clientId: string | null; authorization: unknown }[] = []
   const calls: { url: URL; method: string; body?: Record<string, unknown> }[] = []
@@ -22,14 +23,14 @@ function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL
       return probes.length <= (options.unknown ?? 0) ? Response.json({ error: "unauthorized_client", error_codes: [700016] }, { status: 400 }) : Response.json({ device_code: "unused" })
     }
     expect(url.origin).toBe("https://graph.microsoft.com")
-    // The stable endpoint only: the beta one names fields differently and was never run for real.
     expect(url.pathname).toMatch(/^\/v1\.0\//)
     if (url.pathname === "/v1.0/applications") return method === "GET" ? Response.json({ value: options.apps ?? [] }) : Response.json(own)
     if (url.pathname === "/v1.0/servicePrincipals") {
       const filter = url.searchParams.get("$filter") ?? ""
-      const resource = DESKTOP_APP_PERMISSIONS.find(r => filter.includes(r.appId) || body?.appId === r.appId)
+      const resource = desktopAppPermissions(options.mode).find(r => filter.includes(r.appId) || body?.appId === r.appId)
       if (resource) {
-        const principal = { id: resource.api, oauth2PermissionScopes: resource.permissions.map((value, i) => ({ id: `${resource.api}-${i}`, value })) }
+        const scopes = resource.api === "Microsoft Graph" ? [...resource.permissions, OPTIONAL_MAIL_SCOPE, INTUNE, "Policy.ReadWrite.ConditionalAccess"] : resource.permissions
+        const principal = { id: resource.api, oauth2PermissionScopes: scopes.map((value, i) => ({ id: `${resource.api}-${i}`, value })) }
         return Response.json(method === "GET" ? { value: options.missingResource ? [] : [principal] } : principal)
       }
       return Response.json(method === "GET" ? { value: options.appPrincipal ? [options.appPrincipal] : [] } : { id: "app-sp" })
@@ -39,7 +40,7 @@ function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL
     if (method === "POST") return Response.json({ id: "grant" })
     throw new Error(`Unhandled ${url}`)
   }) as unknown as typeof fetch
-  const run = (signal?: AbortSignal) => provisionRegistration({ fetch: request, token: "ephemeral", tenantId: "tenant", username: "admin", progress, sleep, signal })
+  const run = (signal?: AbortSignal) => provisionRegistration({ fetch: request, token: "ephemeral", tenantId: "tenant", username: "admin", progress, sleep, signal, mode: options.mode })
   return { run, calls, sleep, progress, probes }
 }
 // Tenant-wide admin consent on Microsoft Graph that covers Intune: what marks a registration as one
@@ -56,6 +57,60 @@ describe("registration provisioning", () => {
     expect(app.body).toEqual({ displayName: "TenuVault Desktop", signInAudience: "AzureADMyOrg", notes: "Used by the TenuVault desktop app. Delegated permissions only, no credentials.", publicClient: { redirectUris: ["http://localhost"] }, requiredResourceAccess: DESKTOP_APP_PERMISSIONS.map(r => ({ resourceAppId: r.appId, resourceAccess: r.permissions.map((_, i) => ({ id: `${r.api}-${i}`, type: "Scope" })) })) })
     expect(f.calls.find(c => c.body?.appId === "client")?.body?.tags).toEqual(["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"])
     expect(f.calls.filter(c => c.url.pathname === "/v1.0/oauth2PermissionGrants" && c.method === "POST").map(c => c.body)).toEqual(DESKTOP_APP_PERMISSIONS.map(r => ({ clientId: "app-sp", consentType: "AllPrincipals", resourceId: r.api, scope: r.permissions.join(" ") })))
+  })
+  it("creates a separate delegated registration with backup scopes when the existing one can write", async () => {
+    const f = fixture({
+      ...trusted, apps: [{ ...own, appId: "existing" }], mode: "backup-only",
+      fail: (url, init) => init.method === "GET" && url.searchParams.get("$filter") === "appId eq 'client'" ? Response.json({ value: [] })
+        : init.method === "GET" && url.searchParams.get("$filter") === "clientId eq 'app-sp'" ? Response.json({ value: [] }) : undefined,
+      appPrincipal: { id: "existing-sp" },
+    })
+    expect(await f.run()).toMatchObject({ reused: false, ready: true })
+    const app = f.calls.find(c => c.url.pathname === "/v1.0/applications" && c.method === "POST")!
+    const graph = f.calls.find(c => c.method === "POST" && c.body?.resourceId === "Microsoft Graph")
+    expect(app.body?.displayName).toBe(READ_ONLY_REGISTRATION_NAME)
+    expect(graph?.body?.scope).toBe(BACKUP_ONLY_GRAPH_PERMISSIONS.join(" "))
+    expect(graph?.body?.scope).not.toMatch(/ReadWrite/)
+  })
+  it.each(["", OPTIONAL_MAIL_SCOPE])("reuses an approved backup-only registration without changing it (optional scope: %s)", async (optionalScope) => {
+    const scopes = optionalScope ? [...BACKUP_ONLY_GRAPH_PERMISSIONS, optionalScope] : BACKUP_ONLY_GRAPH_PERMISSIONS
+    const app = { ...own, displayName: READ_ONLY_REGISTRATION_NAME, requiredResourceAccess: [{
+      resourceAppId: DESKTOP_APP_PERMISSIONS[0]!.appId,
+      resourceAccess: scopes.map((_, index) => ({ type: "Scope", id: `Microsoft Graph-${index}` })),
+    }] }
+    const f = fixture({
+      ...trusted, apps: [app], mode: "backup-only",
+      grants: desktopAppPermissions("backup-only").map(resource => ({ ...consent((resource.api === "Microsoft Graph" ? scopes : resource.permissions).join(" ")), resourceId: resource.api })),
+    })
+    expect(await f.run()).toMatchObject({ reused: true, missingConsent: [] })
+    expect(f.calls.filter(c => c.url.origin === "https://graph.microsoft.com").every(c => c.method === "GET")).toBe(true)
+  })
+  it.each([
+    { type: "Role", index: 0, personalScope: OPTIONAL_MAIL_SCOPE },
+    { type: "Scope", index: 1, personalScope: OPTIONAL_MAIL_SCOPE },
+    { type: "Scope", index: 2, personalScope: OPTIONAL_MAIL_SCOPE },
+    { type: "Scope", index: 0, personalScope: INTUNE },
+    { type: "Scope", index: 0, personalScope: "Policy.ReadWrite.ConditionalAccess" },
+  ])("does not reuse a backup-only registration with unsafe manifest access or personal consent ($type, $index, $personalScope)", async ({ type, index, personalScope }) => {
+    const app = { ...own, displayName: READ_ONLY_REGISTRATION_NAME, requiredResourceAccess: [{
+      resourceAppId: DESKTOP_APP_PERMISSIONS[0]!.appId,
+      resourceAccess: [
+        ...BACKUP_ONLY_GRAPH_PERMISSIONS.map((_, index) => ({ type: "Scope", id: `Microsoft Graph-${index}` })),
+        { type, id: `Microsoft Graph-${BACKUP_ONLY_GRAPH_PERMISSIONS.length + index}` },
+      ],
+    }] }
+    const f = fixture({
+      ...trusted, apps: [app], mode: "backup-only",
+      grants: [
+        consent(BACKUP_ONLY_GRAPH_PERMISSIONS.join(" ")),
+        { ...consent(personalScope, "personal"), consentType: "Principal" },
+      ],
+    })
+    expect(await f.run()).toMatchObject({ reused: false })
+  })
+  it("keeps the existing full setup from reusing a backup-only registration", async () => {
+    const f = fixture({ ...trusted, apps: [{ ...own, displayName: READ_ONLY_REGISTRATION_NAME }], grants: [consent(BACKUP_ONLY_GRAPH_PERMISSIONS.join(" "))] })
+    expect(await f.run()).toMatchObject({ reused: false })
   })
   it("uses the oldest approved registration as it is, writes nothing, and reports what its consent lacks", async () => {
     const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [{ ...own, createdDateTime: "2025-01-01", appId: "older" }, own], grants: [consent(`Extra.Scope User.Read ${INTUNE}`), { id: "personal", resourceId: "Azure Storage", consentType: "Principal", scope: "user_impersonation" }] })

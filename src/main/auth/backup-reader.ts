@@ -5,6 +5,7 @@ import type { SecureStore } from "../storage/secure-store"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid } from "../../shared/security"
 import { MODULE_BY_ID } from "../../shared/services/modules"
+import { READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE } from "../../shared/services/backup-permissions"
 import { certificateIdentity, createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
 import { fetchNetworkClient } from "./network-client"
 
@@ -16,17 +17,7 @@ import { fetchNetworkClient } from "./network-client"
  * manual backup, restore and other change uses the admin's own sign-in.
  */
 
-/** The Microsoft Graph application permissions a Backup Reader must have. */
-export const READER_REQUIRED_ROLES = [
-  "DeviceManagementApps.Read.All",
-  "DeviceManagementConfiguration.Read.All",
-  "DeviceManagementRBAC.Read.All",
-  "DeviceManagementScripts.Read.All",
-  "DeviceManagementServiceConfig.Read.All",
-] as const
-
-/** Optional: also exposes the managed device inventory, so it is opt-in for the two types that need it. */
-export const DEVICE_INVENTORY_ROLE = "DeviceManagementManagedDevices.Read.All"
+export { READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE } from "../../shared/services/backup-permissions"
 
 /** Types Microsoft Graph only returns with DEVICE_INVENTORY_ROLE. */
 export const DEVICE_INVENTORY_TYPES = ["DeviceCategories", "DeviceCleanupRules"]

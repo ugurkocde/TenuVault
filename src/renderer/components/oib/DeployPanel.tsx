@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../../shared/app-registration"
+import { useRegistrationAccess } from "../../lib/registration-access"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useParams } from "react-router-dom"
 import { Undo2 } from "lucide-react"
@@ -31,6 +33,7 @@ export function DeployPanel({ batches, onDeployed }: { batches: DeployBatch[]; o
  * The list refreshes when a job of the tenant finishes; `onChanged` runs after an undo.
  */
 export function RunsList({ tenant, empty, flow, onChanged }: { tenant: OibTenant; empty?: string; flow?: OibFlow; onChanged?: () => void }) {
+  const readOnly = useRegistrationAccess(tenant.tenantId)
   const [runs, setRuns] = useState<OibRun[]>([])
   const [confirming, setConfirming] = useState<string | null>(null)
   const [error, setError] = useState("")
@@ -95,12 +98,12 @@ export function RunsList({ tenant, empty, flow, onChanged }: { tenant: OibTenant
       return <li key={run.runId} className="py-3 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span>{run.kind === "fix" ? "Drift reset · " : run.kind === "assign" ? "Assignments · " : ""}{run.reference}<span className="ml-2 text-xs text-gray-500">{new Date(run.createdAt).toLocaleString()} · {runSummary(run)}</span></span>
-          <button type="button" className={button} disabled={!!running || confirming === run.runId} title={running ? `${running.label} is still running` : undefined} aria-expanded={confirming === run.runId} onClick={() => setConfirming(run.runId)}><Undo2 className="h-4 w-4" aria-hidden="true" />Undo</button>
+          <button type="button" className={button} disabled={readOnly || !!running || confirming === run.runId} title={readOnly ? READ_ONLY_REGISTRATION_MESSAGE : running ? `${running.label} is still running` : undefined} aria-expanded={confirming === run.runId} onClick={() => setConfirming(run.runId)}><Undo2 className="h-4 w-4" aria-hidden="true" />Undo</button>
         </div>
         {confirming === run.runId && <div role="group" aria-label="Confirm undo" className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl bg-amber-50 p-4 text-amber-950">
           <p className="min-w-0 flex-1">Undo this run in <strong className="font-medium">{tenant.name}</strong>: it {parts || "changes nothing"}. Nothing else is changed.</p>
           <button type="button" className={button} onClick={() => setConfirming(null)}>Cancel</button>
-          <button type="button" className={primary} disabled={!!running} onClick={() => start(run)}><Undo2 className="h-4 w-4" aria-hidden="true" />Undo the run</button>
+          <button type="button" className={primary} disabled={readOnly || !!running} onClick={() => start(run)}><Undo2 className="h-4 w-4" aria-hidden="true" />Undo the run</button>
         </div>}
       </li>
     })}</ul>

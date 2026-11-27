@@ -13,6 +13,7 @@ import { POST as restorePrevious } from '../src/portal/app/api/revert-policy/rou
 import { NextRequest } from '../src/main/api/next-server-shim'
 import { LegacySealedError } from '../src/main/api/network-error'
 import { LEGACY_SEALED_MESSAGE } from '../src/shared/legacy-sealed'
+import { BACKUP_ONLY_GRAPH_PERMISSIONS, READ_ONLY_REGISTRATION_MESSAGE } from '../src/shared/app-registration'
 
 const backupId = 'backup-2026-09-25-120000'
 const path = `${backupId}/DeviceConfigurations/Example.json`
@@ -151,13 +152,21 @@ describe('Restore results', () => {
  })
 
 describe('Copy to other tenants', () => {
-  it('writes each target with its own sign-in, under the original name, without assignments or scope tags', async () => {
+  it.each([false, true])('copies from a read-only source only when all destinations are writable (read-only destination: %s)', async readOnlyTarget => {
     const audits = auditUnavailable()
     const targets = ['33333333-3333-3333-3333-333333333333', '44444444-4444-4444-4444-444444444444']
+    const token = (tenant: string, readOnly = false) => {
+      const scopes = [...BACKUP_ONLY_GRAPH_PERMISSIONS, ...(!readOnly ? ['DeviceManagementConfiguration.ReadWrite.All'] : [])]
+      return `e30.${Buffer.from(JSON.stringify({ tid: tenant, scp: scopes.join(' ') })).toString('base64url')}.sig`
+    }
+    const targetTokens = targets.map((tenant, index) => token(tenant, readOnlyTarget && index === 1))
     const created: Array<{ token: string; body: any }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
-      if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: `token-${url.pathname.split('/')[1]}` })
+      if (url.hostname === 'login.microsoftonline.com') {
+        const tenant = url.pathname.split('/')[1]!
+        return Response.json({ access_token: targetTokens[targets.indexOf(tenant)] ?? token(tenant, true) })
+      }
       if (url.hostname.endsWith('.blob.core.windows.net')) {
         if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success', TenantId: 'tenant' })
         return Response.json({ id: 'p1', displayName: 'Firewall', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], roleScopeTagIds: ['7'], assignments: [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] })
@@ -172,9 +181,16 @@ describe('Copy to other tenants', () => {
     }))
     const response = await POST(request({ ...body, restoreType: 'selective', selectedPolicies: [{ path }], mode: 'copy', targetTenants: targets.map(tenantId => ({ tenantId, appId: tenantId })) }))
     const data = await response.json()
+    if (readOnlyTarget) {
+      expect(response.status).toBe(409)
+      expect(data.error).toBe(READ_ONLY_REGISTRATION_MESSAGE)
+      expect(created).toHaveLength(0)
+      return
+    }
+    expect(response.status).toBe(200)
     expect(data.message).toMatch(/^Copied 2 items to 2 tenants/)
     expect(data.details.results.map((r: any) => r.targetTenantId)).toEqual(targets)
-    expect(created.map(c => c.token)).toEqual(targets.map(t => `Bearer token-${t}`))
+    expect(created.map(c => c.token)).toEqual(targetTokens.map(t => `Bearer ${t}`))
     expect(audits().map(event => event.user.tenantId)).toEqual(targets)
     expect(audits().map(event => event.job?.operationId)).toEqual([data.jobId, data.jobId])
     expect(audits()[0]?.job?.items?.[0]?.targetId).toBe(auditId('new-1'))

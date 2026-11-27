@@ -58,7 +58,7 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 | --- | --- |
 | `User.Read` | Signs you in and reads your own basic profile. |
 | `Organization.Read.All` | Reads your organization's name and verified domains for the tenant overview. |
-| `GroupMember.Read.All` | Searches groups by name, reads group properties and membership counts, and checks whether referenced or selected groups exist. Used by OpenIntuneBaseline, promotion group mappings, Conflicts and hygiene, App Backup and notification group recipients. Included in new app registrations. |
+| `GroupMember.Read.All` | Searches groups by name, reads group properties and membership counts, and checks whether referenced or selected groups exist. Used by OpenIntuneBaseline, promotion group mappings, Conflicts and hygiene, App Backup and notification group recipients. Included in full setup. |
 | `Policy.Read.All` | Backs up Entra Conditional Access policies, named locations and authentication strengths, when the Conditional Access service is turned on for the tenant. Read only. See [Conditional Access backups](/backups/conditional-access/). |
 | `DeviceManagementConfiguration.ReadWrite.All` | Backs up and restores device configuration profiles, Settings Catalog and endpoint security policies, administrative templates, compliance policies, security baselines, Windows update profiles, assignment filters, policy sets, compliance notification templates and related configuration. Also used by the OpenIntuneBaseline section to read, create and update the OIB policies you choose, and by Framework coverage to read and create Settings Catalog policies. |
 | `DeviceManagementApps.ReadWrite.All` | Backs up and restores apps, app categories, app configuration policies and app protection policies. |
@@ -107,7 +107,7 @@ The app registration only defines what TenuVault may request. What each admin ca
 
 ## Group read (GroupMember.Read.All)
 
-New TenuVault app registrations include the delegated `GroupMember.Read.All` permission. It reads group names, basic properties and membership counts. The broader `Group.Read.All` also grants access to group content that TenuVault does not need for these checks.
+Full TenuVault app registration setup includes the delegated `GroupMember.Read.All` permission. It reads group names, basic properties and membership counts. The broader `Group.Read.All` also grants access to group content that TenuVault does not need for these checks. With backup-only setup, grant group read separately if you need a feature below.
 
 * [OpenIntuneBaseline assignments](/baselines/quick-start/#find-groups) uses it to search for groups, show names and member counts, and check every selected group before writing an assignment.
 * [Dev to Prod](/changes/#dev-to-prod) uses it to find and verify destination groups when assignments are included in a promotion.

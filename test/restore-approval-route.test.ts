@@ -27,9 +27,9 @@ async function seed() {
   const graph: GraphCall = async method => method === "GET" ? { status: 200, body: { status: "approved" } } : { status: 412, body: {} as never, approval: { kind: "pending", code } }
   await new Restorer(graph, { mode: "copy", assignments: false, approvalContext: { tenantId, requesterId } }).restore("backup/DeviceCategories/test.json", { displayName: "Example" })
 }
-function network(readStatus = 200) {
+function network(readStatus = 200, scp = "DeviceManagementConfiguration.ReadWrite.All") {
   const fetcher = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => String(input).includes("login.microsoftonline.com")
-    ? Response.json({ access_token: `header.${Buffer.from(JSON.stringify({ oid: requesterId, tid: tenantId, scp: "DeviceManagementConfiguration.ReadWrite.All" })).toString("base64url")}.signature` })
+    ? Response.json({ access_token: `header.${Buffer.from(JSON.stringify({ oid: requesterId, tid: tenantId, scp })).toString("base64url")}.signature` })
     : String(input).endsWith("cancelMyRequest") ? new Response(null, { status: 204 }) : Response.json(readStatus === 200 ? { value: [] } : { error: { message: "Denied" } }, { status: readStatus }))
   vi.stubGlobal("fetch", fetcher)
   return fetcher
@@ -47,8 +47,10 @@ it("withdraws with id and dismisses only terminal records", async () => {
   const write = fetcher.mock.calls.find(call => String(call[0]).endsWith("cancelMyRequest"))!
   expect(JSON.parse(String((write[1] as RequestInit | undefined)?.body))).toEqual({ id: code })
   expect(restoreApprovals(tenantId)[0]!.status).toBe("cancelled")
+  const readOnly = network(200, "DeviceManagementConfiguration.Read.All")
   expect((await POST(request({ approvalAction: "dismiss", approvalId: code }))).status).toBe(200)
   expect(restoreApprovals(tenantId)).toEqual([])
+  expect(readOnly.mock.calls.some(([url]) => String(url).includes("graph.microsoft.com"))).toBe(false)
 })
 it("does not send stored bodies to the renderer", async () => {
   await seed()

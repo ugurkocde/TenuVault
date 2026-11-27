@@ -1,3 +1,4 @@
+import { requireWritableRegistration } from "../../shared/services/token"
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
 import { beginRestoreAudit, recordRestorePreparationFailure } from "../../portal/lib/audit/restore"
@@ -50,6 +51,7 @@ export async function restoreAppWithAudit(store: AppSourceStore, source: Capture
     if (authenticated) return getGraphToken()
     // Use the existing first Graph read for sign-in, after local restore validation.
     const graphToken = await getGraphToken()
+    requireWritableRegistration(graphToken)
     authenticated = true
     audit = beginRestoreAudit({ ...preparation, operationId: observed?.operationId ?? operationId, graphToken, items: [original] })
     audit?.started(0)

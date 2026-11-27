@@ -1,3 +1,5 @@
+import { READ_ONLY_REGISTRATION_MESSAGE } from "../../shared/app-registration"
+import { useSelectedRegistrationAccess } from "../lib/registration-access"
 import { Package } from "lucide-react"
 import { trialEndWhen, organizationLicenseRefusal } from "../../shared/trial-notices"
 import { Button } from "~/components/ui/button"
@@ -469,6 +471,7 @@ export function DesktopLayout() {
   const { pathname } = location
   const appBackupPage = isAppBackupPath(pathname)
   const tenants = useTenants()
+  const readOnly = useSelectedRegistrationAccess()
   useScoreInvalidation()
   // MSPs with several tenants get the all-tenants overview at the top.
   const groups: NavGroup[] = tenants.length > 1
@@ -653,6 +656,11 @@ export function DesktopLayout() {
         {!appBackupPage && !focus && <LicenseBanner />}
         {!focus && <SignInBanner hidden={appBackupPage} />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
+        {readOnly && pathname !== "/portal/onboarding" && (
+          <p role="status" className="mx-6 mt-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-950 lg:mx-8">
+            <strong>{READ_ONLY_REGISTRATION_MESSAGE}.</strong> You can back up, compare and export. Changes to Intune and Entra are disabled.
+          </p>
+        )}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
         <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">
           <ErrorBoundary key={desktopRouteBoundaryKey(pathname)}>
