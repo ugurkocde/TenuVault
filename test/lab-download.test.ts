@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, expect, it } from "vitest"
@@ -51,4 +51,14 @@ it("publishes the exact selected bytes and preserves an existing download", asyn
   await choose()("original")
   await expect(choose()("replacement")).rejects.toMatchObject({ code: "EEXIST" })
   expect(await readFile(path, "utf8")).toBe("original")
+})
+
+it("removes a failed stage without publishing a partial download", async () => {
+  const path = join(lab, "archive.zip")
+  const save = labDownloadDestination(path, guardLabBackupWrites(stable))
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) { controller.error(new Error("download interrupted")) },
+  })
+  await expect(save(source)).rejects.toThrow("download interrupted")
+  expect(await readdir(lab)).toEqual([])
 })

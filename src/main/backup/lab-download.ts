@@ -26,13 +26,18 @@ export function labDownloadDestination(destination: string, guard: (path: string
     } finally { process.chdir(previous) }
   }
   return async (content: Parameters<SaveDownload>[1], signal?: AbortSignal) => {
-    const stage = within(() => mkdtempSync(".tenuvault-download-"))
-    const temporary = join(stage, "partial")
-    const fd = within(() => openSync(temporary, "wx", 0o600))
+    const { stage, temporary, fd } = within(() => {
+      const stage = mkdtempSync(".tenuvault-download-")
+      const temporary = join(stage, "partial")
+      try { return { stage, temporary, fd: openSync(temporary, "wx", 0o600) } }
+      catch (error) { rmdirSync(stage); throw error }
+    })
     const opened = fstatSync(fd, { bigint: true })
+    let output: ReturnType<typeof createWriteStream> | undefined
     try {
-      await pipeline(typeof content === "string" || content instanceof Uint8Array ? Readable.from([content]) : Readable.fromWeb(content as never),
-        createWriteStream(temporary, { fd, autoClose: false }), { signal })
+      const source = typeof content === "string" || content instanceof Uint8Array ? Readable.from([content]) : Readable.fromWeb(content as never)
+      output = createWriteStream(temporary, { fd, autoClose: false })
+      await pipeline(source, output, { signal })
       signal?.throwIfAborted()
       within(() => {
         const staged = lstatSync(temporary, { bigint: true, throwIfNoEntry: true })
@@ -40,7 +45,7 @@ export function labDownloadDestination(destination: string, guard: (path: string
         linkSync(temporary, name)
       })
     } finally {
-      closeSync(fd)
+      if (!output?.closed) closeSync(fd)
       // If a path has been replaced, leave the partial file with its original directory.
       try { within(() => {
         const staged = lstatSync(temporary, { bigint: true })
@@ -53,8 +58,10 @@ export function labDownloadDestination(destination: string, guard: (path: string
   }
 }
 
-export function stageLabDownload<T>(action: (path: string) => Promise<T>): Promise<T> {
-  const staging = mkdtempSync(join(tmpdir(), "tenuvault-download-"))
+export function stageLabDownload<T>(guard: (path: string) => void, action: (path: string) => Promise<T>): Promise<T> {
+  const root = realpathSync.native(tmpdir())
+  guard(root)
+  const staging = mkdtempSync(join(root, "tenuvault-download-"))
   return action(join(staging, "download")).finally(() => rm(staging, { recursive: true, force: true }))
 }
 

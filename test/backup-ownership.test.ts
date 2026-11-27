@@ -383,6 +383,23 @@ describe("verified retention coverage", () => {
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
   })
 
+  it("keeps an oversized candidate and resumes with smaller older backups", async () => {
+    const { engine, saved, seed, folder } = setup({ limits: { candidates: 8, requests: 100, bytes: 32_000 } })
+    const older = "backup-2026-08-01-020000/", oversized = "backup-2026-09-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    const bigPolicy = { ...oldPolicy, settings: "a".repeat(64_000) }
+    seed(`${oversized}DeviceConfigurations/Old.json`, bigPolicy)
+    seed(`${oversized}metadata.json`, { ...completeManifest, Items: { "DeviceConfigurations/old": { file: "Old.json", sha256: sha256(bigPolicy) } } })
+    const first = await complete(engine)
+    expect(first.log.join("\n")).toContain(`Kept backup ${oversized} because retention reached its storage budget`)
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    await complete(engine)
+    expect(saved.has(`${oversized}metadata.json`)).toBe(true)
+    expect(saved.has(`${older}metadata.json`)).toBe(false)
+  })
+
   it.each(["candidate", "request"])("continues with the next candidate after a %s limit", async limit => {
     const { engine, saved, calls, seed, folder } = setup({ limits: { candidates: limit === "candidate" ? 1 : 8, requests: limit === "request" ? 25 : 100, bytes: 100_000 } })
     const older = "backup-2026-08-01-020000/", newer = "backup-2026-09-01-020000/"

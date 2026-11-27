@@ -464,7 +464,7 @@ async function bootstrap(): Promise<void> {
       const done = new Promise<string>(resolve => item.once("done", (_event, state) => resolve(state)))
       const report = (error: unknown) => dialog.showErrorBox("Download could not be saved", error instanceof Error ? error.message : String(error))
       try {
-        void stageLabDownload(async path => {
+        void stageLabDownload(guardBackupWrites, async path => {
           item.setSavePath(path)
           if (await done !== "completed" || !mainWindow) return
           const choice = await dialog.showSaveDialog(mainWindow, { title: "Save download", defaultPath: join(app.getPath("documents"), suggestedName) })
@@ -2432,7 +2432,7 @@ async function bootstrap(): Promise<void> {
     },
     saveExport: guardBackupWrites && (async (destination, write, signal) => {
       const publish = labDownloadDestination(destination, guardBackupWrites)
-      await stageLabDownload(async path => {
+      await stageLabDownload(guardBackupWrites, async path => {
         await write(path)
         await publish(labDownloadStream(path), signal)
       })
