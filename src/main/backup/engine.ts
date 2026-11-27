@@ -3,7 +3,7 @@ import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP } from "../../shared/tenant-co
 import { graphCliScopes } from "../auth/connection-coverage"
 import { isBackupName, parseBackupName } from "../../shared/intune/backup-names"
 import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, matchingCompanions } from "../../shared/backup-companion"
-import { isLargeBackup, LARGE_BACKUP_CONTAINER, untrustedTimeFolder, untrustedTimeMarker } from "../../shared/backup-storage"
+import { backupContainer, isLargeBackup, LARGE_BACKUP_CONTAINER, untrustedTimeFolder, untrustedTimeMarker } from "../../shared/backup-storage"
 import { captureLarge } from "./large"
 import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, largeIndexes, type LargeIndexes } from "../../shared/large-backup"
 import { isSafeArchivePath } from "../../shared/security"
@@ -53,6 +53,14 @@ const ORIGIN_TIME_MISMATCH = "Microsoft Graph and Azure Storage reported differe
 const DAY_MS = 86400_000
 
 class ReplacementChangedError extends Error {}
+
+function sameIdentities(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false
+  for (const [name, etag] of a) {
+    if (b.get(name) !== etag) return false
+  }
+  return true
+}
 
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
@@ -1897,6 +1905,7 @@ export class BackupEngine {
     let unowned = 0
     let protectedKept = 0
     let unverified = unreadable.size
+    let replacementChangedDuringRun: string | undefined
     const plan: Array<{
       halves: VerifiedHalf[]
       prefixes: string[]
@@ -2248,7 +2257,12 @@ export class BackupEngine {
             if (replacement.prefix === latestCompanionPrefix && writtenCompanion && JSON.stringify(resolved.manifest.metadata) !== JSON.stringify(writtenCompanion)) continue
             // Full fresh verification without receipts (progress = undefined).
             const verifiedFresh = await verifyHalf(metered(), replacement.prefix, resolved.manifest.metadata, undefined, freshClaim, undefined, keyFingerprint)
-            replacement.blobs = verifiedFresh.blobs
+            if (!sameIdentities(replacement.blobs, verifiedFresh.blobs)) {
+              replacementChangedDuringRun = replacement.prefix
+              plan.length = 0
+              this.write(job, `Kept remaining backups because replacement backup ${replacement.prefix} changed during retention.`, "warning")
+              return
+            }
             if (replacement.prefix === anchorPrefix) freshAnchorOk = true
             for (const folder of completeFolders(resolved.manifest.metadata)) freshCovered.add(folder)
           } catch (error) {
@@ -2306,6 +2320,7 @@ export class BackupEngine {
       keptForReview(unreadableAnchor.prefix, unreadableAnchor.error)
     }
     for (const [index, backup] of backups.entries()) {
+      if (replacementChangedDuringRun) break
       if (unreadable.has(index) || backup.prefix === anchorPrefix) continue
       if (unreadableAnchor && backup.prefix === unreadableAnchor.prefix) {
         keptForReview(backup.prefix, unreadableAnchor.error)
@@ -2429,8 +2444,9 @@ export class BackupEngine {
         keptForReview(backup.prefix, error)
       }
     }
-    if (state.deletions) {
+    if (state.deletions && !replacementChangedDuringRun) {
       for (const [primaryPrefix, journal] of Object.entries(state.deletions)) {
+        if (replacementChangedDuringRun) break
         if (ordered.some(backup => backup.prefix === primaryPrefix)) continue
         const parsed = parseBackupName(primaryPrefix.slice(0, -1))
         const time = parsed ? Date.parse(parsed.timestamp) : NaN
@@ -2469,8 +2485,8 @@ export class BackupEngine {
     // Another half may still detect a manifest mismatch and veto this run's removals.
     saveProgress()
     pending.push(async beforeDelete => {
-      let warnings = 0
-      let completedPlan = true
+      let warnings = replacementChangedDuringRun ? 1 : 0
+      let completedPlan = !replacementChangedDuringRun
       let leaseAcquiredThisRun = false
       let leaseFailureKeyThisRun: string | undefined
       let hadLeaseAcquireFailure = false
@@ -2479,19 +2495,20 @@ export class BackupEngine {
       for (const unit of plan) {
         beforeDelete()
         const primaryPrefix = unit.prefixes[0]!
-        const leaseManager = createRetentionLeaseManager()
+        const leaseManager = localStorage ? undefined : createRetentionLeaseManager()
+        const localLocks = new Map<string, string>()
         let stopCleanup = false
         try {
           if (localStorage) {
+            const lockContainers = [...new Set([lockContainer, ...unit.prefixes.map(prefix => backupContainer(prefix))])].sort()
+            const replacementPrefixes = unit.replacements.map(rep => rep.prefix)
             try {
-              const startedAt = Date.now()
-              const localLockId = await metered().acquireContainerLease(lockContainer, LEASE_DURATION_SECONDS)
-              leaseManager.track({
-                leaseId: localLockId,
-                expiresAt: startedAt + LEASE_DURATION_MS,
-                renew: leaseSignal => storage.renewContainerLease(localLockId, lockContainer, LEASE_DURATION_SECONDS, leaseSignal),
-                release: leaseSignal => storage.releaseContainerLease(localLockId, lockContainer, leaseSignal),
-              })
+              // Acquiring the local lock also registers the in-process write guard on `replacementPrefixes`
+              // before the final identity check below; release happens in `finally`.
+              for (const [index, container] of lockContainers.entries()) {
+                const lockId = await metered().acquireContainerLease(container, index === 0 ? replacementPrefixes : undefined)
+                localLocks.set(container, lockId)
+              }
               leaseAcquiredThisRun = true
             } catch (error) {
               if (!(error instanceof BlobLeaseError)) throw error
@@ -2500,7 +2517,7 @@ export class BackupEngine {
               warnings++
               this.write(job, `Kept backup ${primaryPrefix} because the local retention lock could not be acquired: ${error.message.replace(/\.$/, "")}.`, "warning")
               completedPlan = false
-              continue
+              break
             }
           } else {
             const replacementBlobs = [...new Set(unit.replacements.flatMap(rep => [...rep.blobs.keys()]))].sort()
@@ -2509,7 +2526,7 @@ export class BackupEngine {
               for (const name of replacementBlobs) {
                 const startedAt = Date.now()
                 const leaseId = await leaseWriter.acquireLease(name, LEASE_DURATION_SECONDS)
-                leaseManager.track({
+                leaseManager!.track({
                   leaseId,
                   expiresAt: startedAt + LEASE_DURATION_MS,
                   renew: leaseSignal => storage.renewLease(name, leaseId, leaseSignal),
@@ -2527,17 +2544,28 @@ export class BackupEngine {
               continue
             }
           }
+          if (leaseManager) {
+            try {
+              await leaseManager.ensureFresh()
+            } catch (error) {
+              if (!(error instanceof BlobLeaseError)) throw error
+              warnings++
+              this.write(job, `Kept ${unit.prefixes.join(", ")} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
+              completedPlan = false
+              stopCleanup = true
+              break
+            }
+          }
           try {
-            await leaseManager.ensureFresh()
+            await verifyReplacements(unit.replacements)
           } catch (error) {
-            if (!(error instanceof BlobLeaseError)) throw error
+            if (!(error instanceof ReplacementChangedError)) throw error
             warnings++
-            this.write(job, `Kept ${unit.prefixes.join(", ")} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
+            this.write(job, `Kept remaining backups: ${error.message}.`, "warning")
             completedPlan = false
             stopCleanup = true
-            continue
+            break
           }
-          await verifyReplacements(unit.replacements)
           const verified = new Map(unit.halves.flatMap(half => [...half.blobs]))
           const size = (name: string) => unit.halves.reduce((sum, half) => sum + (half.listing.sizes.get(name) ?? 0), 0)
           const manifests = new Set(unit.prefixes.map(prefix => `${prefix}metadata.json`))
@@ -2561,9 +2589,9 @@ export class BackupEngine {
           let deleted = 0
           let remaining = names.reduce((sum, name) => sum + size(name), 0)
           const remove = async (name: string) => {
-            await leaseManager.ensureFresh()
+            if (leaseManager) await leaseManager.ensureFresh()
             if (localStorage) await verifyReplacements(unit.replacements)
-            await unit.writer.delete(name, verified.get(name)!)
+            await unit.writer.delete(name, verified.get(name)!, localLocks.get(backupContainer(name)))
             deleted++
             delete journal.remaining[name]
             journal.deleted.push(name)
@@ -2601,14 +2629,17 @@ export class BackupEngine {
               this.write(job, `Kept ${deleted || unit.resumed ? "the remaining files in " : ""}${unit.prefixes.join(", ")}: ${error.message}.`, "warning")
               completedPlan = false
               stopCleanup = true
-              continue
+              break
             }
             if (error instanceof BlobLeaseError) {
               warnings++
-              this.write(job, `Kept ${deleted || unit.resumed ? "the remaining files in " : ""}${unit.prefixes.join(", ")} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
+              const detail = localStorage
+                ? `the local retention lock was lost: ${error.message.replace(/\.$/, "")}`
+                : `replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}`
+              this.write(job, `Kept ${deleted || unit.resumed ? "the remaining files in " : ""}${unit.prefixes.join(", ")} because ${detail}.`, "warning")
               completedPlan = false
               stopCleanup = true
-              continue
+              break
             }
             if (!(error instanceof ProtectedBlobError) && !(error instanceof DeleteConditionError)) throw error
             if (error instanceof DeleteConditionError) {
@@ -2619,7 +2650,14 @@ export class BackupEngine {
             else if (error instanceof ProtectedBlobError) protectedKept++
           }
         } finally {
-          await leaseManager.cleanup()
+          for (const [container, lockId] of localLocks) {
+            const releaseWarning = await storage.releaseContainerLease(lockId, container).catch(() => undefined)
+            if (releaseWarning) {
+              warnings++
+              this.write(job, releaseWarning, "warning")
+            }
+          }
+          if (leaseManager) await leaseManager.cleanup()
         }
         if (stopCleanup) break
       }

@@ -9,7 +9,7 @@ import { readRetentionProgress, type RetentionProgressStore } from "../src/main/
 import { verifyHalf } from "../src/main/backup/retention-verification"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { BlobProtectedError, LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { backupBlobName, backupContainer, backupStoragePath, untrustedTimeMarker } from "../src/shared/backup-storage"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -1725,12 +1725,12 @@ describe("deletion journal tampering and binding guards", () => {
     }
   })
 
-  it("holds a cross-process retention lock file on local storage and re-checks replacement identities before each individual DELETE", async () => {
+  it("holds a cross-process retention lock file on local storage and blocks in-process writes to replacement prefixes", async () => {
     const account = localStorageAccountName(TENANT)
     const older = "backup-2026-08-01-020000/"
 
-    // 1. Replacement mutates AFTER candidate's first DELETE (metadata.json), before second DELETE (Old.json):
-    // per-delete check catches it immediately and keeps Old.json and owner marker.
+    // 1. In-process write attempt to the replacement AFTER the final check and BEFORE the first DELETE
+    // is refused by LocalBlobStore's in-process write guard; protection is released in finally.
     {
       const root = mkdtempSync(join(tmpdir(), "tv-ret-perdel-local-")); tempRoots.push(root)
       const store = new LocalBlobStore(root, [randomBytes(32)])
@@ -1738,7 +1738,10 @@ describe("deletion journal tampering and binding guards", () => {
       await store.put(account, BACKUP_CONTAINER, `${older}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
       await store.put(account, BACKUP_CONTAINER, `${older}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
       await store.put(account, BACKUP_CONTAINER, `${older}metadata.json`, Buffer.from(JSON.stringify(COMPLETE_MANIFEST)), "application/json")
-      let mutated = false
+      let attemptedBeforeFirstDelete = false
+      let blockedError: unknown
+      let attemptedDuringDelete = false
+      let blockedDuringDeleteError: unknown
       let currentFolder = ""
       const deletes: string[] = []
       const fetchImpl: typeof fetch = async (input, init) => {
@@ -1753,10 +1756,22 @@ describe("deletion journal tampering and binding guards", () => {
         if (req.method === "DELETE") {
           const path = decodeURIComponent(url.pathname)
           deletes.push(path)
+          if (!attemptedBeforeFirstDelete && path.endsWith(`${older}metadata.json`)) {
+            attemptedBeforeFirstDelete = true
+            try {
+              await store.put(account, BACKUP_CONTAINER, `${currentFolder}/DeviceConfigurations/Policy 0.json`, Buffer.from(JSON.stringify({ id: "p0", modified: true })), "application/json")
+            } catch (error) {
+              blockedError = error
+            }
+          }
           const res = await handleLocalBlobRequest(store, req)
-          if (!mutated && path.endsWith(`${older}metadata.json`)) {
-            mutated = true
-            await store.put(account, BACKUP_CONTAINER, `${currentFolder}/DeviceConfigurations/Policy 0.json`, Buffer.from(JSON.stringify({ id: "p0", modified: true })), "application/json")
+          if (!attemptedDuringDelete && path.endsWith(`${older}metadata.json`)) {
+            attemptedDuringDelete = true
+            try {
+              await store.delete(account, BACKUP_CONTAINER, `${currentFolder}/metadata.json`)
+            } catch (error) {
+              blockedDuringDeleteError = error
+            }
           }
           return res
         }
@@ -1766,15 +1781,20 @@ describe("deletion journal tampering and binding guards", () => {
       const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE })
       currentFolder = job.backupFolder!
       await engine.waitForJob(job)
-      expect(mutated).toBe(true)
-      expect(deletes).toEqual([`/${BACKUP_CONTAINER}/${older}metadata.json`])
-      expect(job.log.join("\n")).toContain("changed before cleanup completed")
-      const remaining = (await store.list(account, BACKUP_CONTAINER, older)).map(b => b.name)
-      expect(remaining).toContain(`${older}DeviceConfigurations/Old.json`)
-      expect(remaining).toContain(`${older}${BACKUP_OWNER_FILE}`)
+      expect(attemptedBeforeFirstDelete).toBe(true)
+      expect(blockedError).toBeInstanceOf(BlobProtectedError)
+      expect(attemptedDuringDelete).toBe(true)
+      expect(blockedDuringDeleteError).toBeInstanceOf(BlobProtectedError)
+      expect(deletes.length).toBe(3)
+      // Replacement remained intact and older was safely deleted.
+      const replacementPolicy = JSON.parse((await store.get(account, BACKUP_CONTAINER, `${currentFolder}/DeviceConfigurations/Policy 0.json`)).data.toString())
+      expect(replacementPolicy.modified).toBeUndefined()
+      expect(await store.list(account, BACKUP_CONTAINER, older)).toEqual([])
+      // After cleanup completes, the in-process guard is released.
+      await expect(store.put(account, BACKUP_CONTAINER, `${currentFolder}/post-cleanup.json`, Buffer.from("{}"), "application/json")).resolves.toBeDefined()
     }
 
-    // 2. Cross-process retention lock file in backup root prevents concurrent retention, and releases on finish.
+    // 2. Cross-process retention lock file in container dir prevents concurrent retention, and releases on finish.
     {
       const root = mkdtempSync(join(tmpdir(), "tv-ret-lock-local-")); tempRoots.push(root)
       const keys = [randomBytes(32)]
@@ -1784,7 +1804,7 @@ describe("deletion journal tampering and binding guards", () => {
       await store.put(account, BACKUP_CONTAINER, `${older}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
       await store.put(account, BACKUP_CONTAINER, `${older}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
       await store.put(account, BACKUP_CONTAINER, `${older}metadata.json`, Buffer.from(JSON.stringify(COMPLETE_MANIFEST)), "application/json")
-      const lockId = await other.acquireRetentionLock(account, BACKUP_CONTAINER, 60_000)
+      const lockId = await other.acquireRetentionLock(account, BACKUP_CONTAINER)
       let clock = NOW
       const fetchImpl: typeof fetch = async (input, init) => {
         const req = new Request(input, init)
@@ -1805,7 +1825,7 @@ describe("deletion journal tampering and binding guards", () => {
       const unblocked = await eng2.waitForJob(eng2.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE }))
       expect(unblocked.status).toBe("Completed")
       expect(await store.list(account, BACKUP_CONTAINER, older)).toEqual([])
-      const reacquired = await other.acquireRetentionLock(account, BACKUP_CONTAINER, 60_000)
+      const reacquired = await other.acquireRetentionLock(account, BACKUP_CONTAINER)
       await other.releaseRetentionLock(account, BACKUP_CONTAINER, reacquired)
     }
   })

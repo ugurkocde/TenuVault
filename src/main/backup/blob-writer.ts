@@ -223,19 +223,17 @@ export class BlobWriter {
     await this.releaseLeaseAt(`${backupStoragePath(name)}?comp=lease`, leaseId, signal)
   }
 
-  /** Acquires a finite container lease (used for the local cross-process retention lock file). */
-  async acquireContainerLease(container = BACKUP_CONTAINER, durationSeconds = 60): Promise<string> {
-    return this.acquireLeaseAt(`${container}?restype=container&comp=lease`, durationSeconds)
+  /** Acquires the local cross-process retention lock file and registers protected replacement prefixes in-process. */
+  async acquireContainerLease(container = BACKUP_CONTAINER, protectedPrefixes?: string[]): Promise<string> {
+    const headers = protectedPrefixes?.length
+      ? { "x-tenuvault-protected-prefixes": JSON.stringify(protectedPrefixes) }
+      : undefined
+    return this.acquireLeaseAt(`${container}?restype=container&comp=lease`, undefined, headers)
   }
 
-  /** Renews a container lease outside the retention request budget. */
-  async renewContainerLease(leaseId: string, container = BACKUP_CONTAINER, durationSeconds = 60, signal?: AbortSignal): Promise<void> {
-    await this.withoutBudget().renewLeaseAt(`${container}?restype=container&comp=lease`, leaseId, durationSeconds, signal)
-  }
-
-  /** Best-effort release of a container lease. */
-  async releaseContainerLease(leaseId: string, container = BACKUP_CONTAINER, signal?: AbortSignal): Promise<void> {
-    await this.releaseLeaseAt(`${container}?restype=container&comp=lease`, leaseId, signal)
+  /** Best-effort release of a container lock; returns any lock-mismatch warning reported by local storage. */
+  async releaseContainerLease(leaseId: string, container = BACKUP_CONTAINER, signal?: AbortSignal): Promise<string | undefined> {
+    return this.releaseLeaseAt(`${container}?restype=container&comp=lease`, leaseId, signal)
   }
 
   private async leaseResponseCode(response: Response): Promise<string | undefined> {
@@ -245,15 +243,16 @@ export class BlobWriter {
     return /<Code>([^<]+)<\/Code>/.exec(text)?.[1]
   }
 
-  private async acquireLeaseAt(path: string, durationSeconds: number): Promise<string> {
+  private async acquireLeaseAt(path: string, durationSeconds?: number, extraHeaders?: Record<string, string>): Promise<string> {
     const proposedId = randomUUID()
     try {
       return await this.request(path, {
         method: "PUT",
         headers: {
           "x-ms-lease-action": "acquire",
-          "x-ms-lease-duration": String(durationSeconds),
+          ...(durationSeconds !== undefined ? { "x-ms-lease-duration": String(durationSeconds) } : {}),
           "x-ms-proposed-lease-id": proposedId,
+          ...extraHeaders,
         },
       }, async (response, _signal, ambiguous) => {
         if (response.ok) {
@@ -298,8 +297,8 @@ export class BlobWriter {
     }
   }
 
-  private async releaseLeaseAt(path: string, leaseId: string, signal?: AbortSignal): Promise<void> {
-    if (signal?.aborted) return
+  private async releaseLeaseAt(path: string, leaseId: string, signal?: AbortSignal): Promise<string | undefined> {
+    if (signal?.aborted) return undefined
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new RequestTimeoutError("Lease release timed out.")), LEASE_RELEASE_TIMEOUT_MS)
     timer.unref?.()
@@ -322,24 +321,33 @@ export class BlobWriter {
       })
       void pendingFetch.catch(() => undefined)
       const response = await withAbort(() => pendingFetch, effective)
+      const warning = response.headers.get("x-tenuvault-lock-warning") ?? undefined
       void response.body?.cancel().catch(() => undefined)
+      return warning
     } finally {
       clearTimeout(timer)
     }
   }
 
-  async delete(name: string, etag?: string): Promise<void> {
+  async delete(name: string, etag?: string, retentionLockId?: string): Promise<void> {
     let dispatched = false
     let confirmedUnchanged = false
     try {
+      const headers: Record<string, string> = {}
+      if (etag) headers["if-match"] = etag
+      if (retentionLockId) headers["x-tenuvault-retention-lock-id"] = retentionLockId
       await this.request(backupStoragePath(name), {
         method: "DELETE",
-        ...(etag ? { headers: { "if-match": etag } } : {}),
+        ...(Object.keys(headers).length ? { headers } : {}),
       }, async (response, _signal, ambiguous) => {
         if (!response.ok && response.status !== 404) {
           const code = response.headers.get("x-ms-error-code") ?? ""
           const local = isLocalAccount(this.account)
           const unchangedHeader = response.headers.get("x-tenuvault-delete-unchanged") === "1"
+          if (code === "RetentionLockLost") {
+            if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
+            throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code)
+          }
           if (isImmutabilityRefusal(response.status, code)) {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
             throw new ProtectedBlobError(code)
@@ -351,6 +359,10 @@ export class BlobWriter {
           }
           const text = await response.clone().text()
           const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
+          if (bodyCode === "RetentionLockLost") {
+            if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
+            throw new BlobLeaseError(await storageFailure(response, this.account), response.status, bodyCode)
+          }
           if (isImmutabilityRefusal(response.status, bodyCode)) {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
             throw new ProtectedBlobError(bodyCode)

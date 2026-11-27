@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
@@ -11,6 +12,7 @@ import { BlobLeaseConflictError, BlobLeaseUnsupportedError, LocalBlobStore } fro
 import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -133,13 +135,14 @@ function setupAzure(options: {
     writeBlob(keyOf(logical), body)
   }
   const has = (logical: string) => saved.has(keyOf(logical))
+  const etag = (logical: string) => etagOf(keyOf(logical))
   const seedExpired = (prefix: string, twoItems = false) => {
     seed(`${prefix}DeviceConfigurations/Old.json`, OLD_ITEM)
     if (twoItems) seed(`${prefix}DeviceConfigurations/Second.json`, SECOND_ITEM)
     seed(`${prefix}${BACKUP_OWNER_FILE}`, OWNER)
     seed(`${prefix}metadata.json`, twoItems ? TWO_ITEM_MANIFEST : ONE_ITEM_MANIFEST)
   }
-  return { createEngine, engine: createEngine(), saved, calls, seed, has, keyOf, seedExpired, progress }
+  return { createEngine, engine: createEngine(), saved, calls, seed, has, etag, keyOf, seedExpired, progress }
 }
 
 async function runJob(engine: BackupEngine) {
@@ -504,11 +507,13 @@ describe("Item 2: bounded lease cleanup", () => {
   it("aborts in-flight renewals immediately on cleanup and enforces one 30s total deadline", async () => {
     const expired = "backup-2026-08-01-020000/"
     let renewAborted = false
+    let cleanupStartedAt: number | undefined
+    let cleanupFinishedAt: number | undefined
     let releaseCalls = 0
     let deleteCount = 0
 
     const ctx = setupAzure({
-      count: 1,
+      count: 18,
       override: (url, req) => {
         const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
         if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
@@ -521,6 +526,7 @@ describe("Item 2: bounded lease cleanup", () => {
             return new Promise<Response>((_resolve, reject) => {
               req.signal.addEventListener("abort", () => {
                 renewAborted = true
+                cleanupStartedAt ??= Date.now()
                 reject(req.signal.reason ?? new Error("aborted"))
               }, { once: true })
             })
@@ -543,10 +549,12 @@ describe("Item 2: bounded lease cleanup", () => {
     })
 
     ctx.seedExpired(expired)
-    const startMs = Date.now()
     let finished = false
     const job = ctx.engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: "contoso", scope: DEVICE_CONFIG_SCOPE })
-    const done = ctx.engine.waitForJob(job).then(() => { finished = true })
+    const done = ctx.engine.waitForJob(job).then(() => {
+      finished = true
+      cleanupFinishedAt = Date.now()
+    })
     await vi.advanceTimersByTimeAsync(65_000)
     await vi.advanceTimersByTimeAsync(0)
     expect(finished).toBe(true)
@@ -555,10 +563,12 @@ describe("Item 2: bounded lease cleanup", () => {
 
     expect(renewAborted).toBe(true)
     expect(releaseCalls).toBeGreaterThan(0)
-    expect(Date.now() - startMs).toBeLessThanOrEqual(65_000)
+    expect(cleanupStartedAt).toBeDefined()
+    expect(cleanupFinishedAt).toBeDefined()
+    expect(cleanupFinishedAt! - cleanupStartedAt!).toBeLessThanOrEqual(30_000)
   })
 
-  it("releases leases in parallel capped at 8 and skips leases already past expiry", async () => {
+  it("releases leases in parallel capped at 8 and still attempts release for locally expired leases", async () => {
     const expired = "backup-2026-08-01-020000/"
     // Part A: 12 leases released in parallel capped at 8.
     {
@@ -594,9 +604,10 @@ describe("Item 2: bounded lease cleanup", () => {
       expect(maxInFlightReleases).toBe(8)
     }
 
-    // Part B: Leases already past expiry are skipped during release.
+    // Part B: Leases already past local expiry are still released (Azure may still hold them).
     {
-      let releaseCount = 0
+      const releasedIds: string[] = []
+      const acquiredIds: string[] = []
       const ctx = setupAzure({
         count: 1,
         override: (url, req) => {
@@ -604,13 +615,15 @@ describe("Item 2: bounded lease cleanup", () => {
           if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
             const action = req.headers.get("x-ms-lease-action")
             if (action === "acquire") {
-              return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+              const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${acquiredIds.length + 1}`
+              acquiredIds.push(id)
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
             }
             if (action === "renew") {
               return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
             }
             if (action === "release") {
-              releaseCount++
+              releasedIds.push(req.headers.get("x-ms-lease-id") ?? "")
               return new Response(null, { status: 200 })
             }
           }
@@ -626,7 +639,8 @@ describe("Item 2: bounded lease cleanup", () => {
       const done = runJob(ctx.engine)
       await vi.advanceTimersByTimeAsync(70_000)
       await done
-      expect(releaseCount).toBe(0)
+      expect(acquiredIds.length).toBe(3)
+      expect(releasedIds.sort()).toEqual([...acquiredIds].sort())
     }
   })
 })
@@ -773,32 +787,64 @@ describe("Item 3: permanent lease or local lock unavailability warnings", () => 
   })
 })
 
-describe("Item 4: stale lock mtime check and container-scoped locks", () => {
-  it("reclaims a stale lock using whichever of wall clock expiresAt or mtime age is older", async () => {
-    const root = mkdtempSync(join(tmpdir(), "tv-lock-stale-")); tempRoots.push(root)
+describe("Item 4: owner-and-process local retention lock and container scoping", () => {
+  it("never expires by time while holder lives, reclaims only same-host dead or reused PIDs, and skips foreign/unreadable locks with clear warnings", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-lock-owner-")); tempRoots.push(root)
     const account = localStorageAccountName(TENANT)
     const storeA = new LocalBlobStore(root, [MASTER])
     const storeB = new LocalBlobStore(root, [MASTER])
     await storeA.createContainer(account, BACKUP_CONTAINER)
     const lockPath = join(root, account, BACKUP_CONTAINER, ".tenuvault-retention.lock")
 
-    // 1. Holder clock far in the future, but file mtime is older than durationMs -> reclaimed via mtime.
-    const nowMs = Date.now()
-    writeFileSync(lockPath, JSON.stringify({ id: "skewed-ahead", pid: 99999, durationMs: 60_000, expiresAt: nowMs + 3_600_000 }))
-    const staleSec = (nowMs - 65_000) / 1000
-    utimesSync(lockPath, staleSec, staleSec)
-    const reclaimedByMtime = await storeB.acquireRetentionLock(account, BACKUP_CONTAINER, 60_000)
-    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedByMtime)
+    // 1. Acquired lock holds { id, host, pid, processStart, app: "TenuVault" } and never expires by mtime.
+    const liveId = await storeA.acquireRetentionLock(account, BACKUP_CONTAINER)
+    const written = JSON.parse(readFileSync(lockPath, "utf8"))
+    expect(written).toMatchObject({ id: liveId, host: hostname(), pid: process.pid, app: "TenuVault" })
+    expect(written.processStart).toBeDefined()
+    expect(written.expiresAt).toBeUndefined()
+    expect(written.durationMs).toBeUndefined()
+    const hoursAgo = (Date.now() - 10 * 3_600_000) / 1000
+    utimesSync(lockPath, hoursAgo, hoursAgo)
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
+    // Local container lease does not accept renew.
+    const renewResp = await handleLocalBlobRequest(storeA, new Request(`https://${account}.blob.core.windows.net/${BACKUP_CONTAINER}?restype=container&comp=lease`, {
+      method: "PUT",
+      headers: { "x-ms-lease-action": "renew", "x-ms-lease-id": liveId },
+    }))
+    expect(renewResp.status).toBe(400)
+    await storeA.releaseRetentionLock(account, BACKUP_CONTAINER, liveId)
+    expect(existsSync(lockPath)).toBe(false)
 
-    // 2. Fresh lock (both expiresAt and mtime are recent) -> rejected with conflict.
-    await expect(storeA.acquireRetentionLock(account, BACKUP_CONTAINER, 60_000)).rejects.toBeInstanceOf(BlobLeaseConflictError)
-    await storeB.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedByMtime)
+    // 2. Same host + dead PID (real exited child process) -> reclaimed.
+    const exited = spawnSync(process.execPath, ["-e", ""])
+    expect(exited.pid).toBeGreaterThan(0)
+    writeFileSync(lockPath, JSON.stringify({ id: "dead-pid", host: hostname(), pid: exited.pid!, processStart: "old-start", app: "TenuVault" }))
+    const reclaimedDead = await storeB.acquireRetentionLock(account, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedDead)
+    await storeB.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedDead)
 
-    // 3. Holder clock behind (expiresAt in the past), but file mtime is fresh -> reclaimed via expiresAt.
-    writeFileSync(lockPath, JSON.stringify({ id: "skewed-behind", pid: 99999, durationMs: 60_000, expiresAt: nowMs - 5_000 }))
-    const reclaimedByWall = await storeA.acquireRetentionLock(account, BACKUP_CONTAINER, 60_000)
-    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedByWall)
-    await storeA.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedByWall)
+    // 3. Same host + alive PID with different processStart (PID reuse) -> reclaimed.
+    writeFileSync(lockPath, JSON.stringify({ id: "reused-pid", host: hostname(), pid: process.pid, processStart: "different-process-start", app: "TenuVault" }))
+    const reclaimedReuse = await storeA.acquireRetentionLock(account, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedReuse)
+    await storeA.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedReuse)
+
+    // 4. Foreign host lock -> never reclaimed; clear warning names lockPath and instructs admin.
+    writeFileSync(lockPath, JSON.stringify({ id: "remote-lock", host: "other-workstation.local", pid: exited.pid!, processStart: "old-start", app: "TenuVault" }))
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toThrow(lockPath)
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toThrow(/no other computer is running TenuVault/i)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe("remote-lock")
+
+    // 5. Corrupt/unreadable lock -> never reclaimed; clear warning names lockPath and instructs admin.
+    writeFileSync(lockPath, "{not-valid-json")
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toThrow(lockPath)
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toThrow(/no other computer is running TenuVault/i)
+    expect(readFileSync(lockPath, "utf8")).toBe("{not-valid-json")
+
+    // Backups and restores remain unaffected while foreign/corrupt lock is present.
+    await storeA.put(account, BACKUP_CONTAINER, "backup-2026-10-12-120000/metadata.json", Buffer.from('{"ok":true}'), "application/json")
+    const restored = await storeA.get(account, BACKUP_CONTAINER, "backup-2026-10-12-120000/metadata.json")
+    expect(restored.data.toString()).toBe('{"ok":true}')
   })
 
   it("scopes retention locks per container directory rather than the whole root", async () => {
@@ -811,16 +857,288 @@ describe("Item 4: stale lock mtime check and container-scoped locks", () => {
     await storeA.createContainer(accountA, LARGE_BACKUP_CONTAINER)
     await storeB.createContainer(accountB, BACKUP_CONTAINER)
 
-    const lockA = await storeA.acquireRetentionLock(accountA, BACKUP_CONTAINER, 60_000)
+    const lockA = await storeA.acquireRetentionLock(accountA, BACKUP_CONTAINER)
     expect(existsSync(join(root, ".tenuvault-retention.lock"))).toBe(false)
     expect(existsSync(join(root, accountA, BACKUP_CONTAINER, ".tenuvault-retention.lock"))).toBe(true)
 
-    const lockB = await storeB.acquireRetentionLock(accountB, BACKUP_CONTAINER, 60_000)
-    const lockLarge = await storeB.acquireRetentionLock(accountA, LARGE_BACKUP_CONTAINER, 60_000)
-    await expect(storeB.acquireRetentionLock(accountA, BACKUP_CONTAINER, 60_000)).rejects.toBeInstanceOf(BlobLeaseConflictError)
+    const lockB = await storeB.acquireRetentionLock(accountB, BACKUP_CONTAINER)
+    const lockLarge = await storeB.acquireRetentionLock(accountA, LARGE_BACKUP_CONTAINER)
+    await expect(storeB.acquireRetentionLock(accountA, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
 
     await storeA.releaseRetentionLock(accountA, BACKUP_CONTAINER, lockA)
     await storeB.releaseRetentionLock(accountB, BACKUP_CONTAINER, lockB)
     await storeB.releaseRetentionLock(accountA, LARGE_BACKUP_CONTAINER, lockLarge)
+  })
+})
+
+describe("Round 3 findings: version-tied replacement coverage and outer-loop stopCleanup exit", () => {
+  it("4721002106: stops cleanup and keeps planned backups when journal resume observes a newer replacement version", async () => {
+    const replacementP = "backup-2026-10-01-120000/"
+    const candidateX = "backup-2026-08-02-120000/"
+    const candidateY = "backup-2026-08-01-120000/"
+    const complianceItem = { id: "comp-1" }
+    const deviceItem = { id: "dev-1" }
+    const manifestBoth = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Coverage: "Complete",
+      Scope: { Included: ["DeviceConfigurations", "CompliancePolicies"] },
+      Outcomes: [
+        { Folder: "DeviceConfigurations", Outcome: "saved", Saved: 1 },
+        { Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 },
+      ],
+      Items: {
+        "DeviceConfigurations/dev-1": { file: "Dev.json", hash: snapshotHash(deviceItem), sha256: sha256(deviceItem) },
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(complianceItem), sha256: sha256(complianceItem) },
+      },
+      ItemCounts: { DeviceConfigurations: 1, CompliancePolicies: 1, TotalPolicies: 2 },
+    }
+    const manifestCompOnly = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Coverage: "Complete",
+      Scope: { Included: ["CompliancePolicies"] },
+      Outcomes: [
+        { Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 },
+      ],
+      Items: {
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(complianceItem), sha256: sha256(complianceItem) },
+      },
+      ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+    }
+    const manifestY = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["CompliancePolicies"] },
+      Items: {
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(complianceItem), sha256: sha256(complianceItem) },
+      },
+      ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+    }
+
+    // (a) Replacement P changes to a valid CompliancePolicies-only version before Y's journal resume check:
+    // neither X nor Y may be deleted.
+    {
+      const progress = memoryStore()
+      let mutatedP = false
+      const deletes: string[] = []
+      const ctx = setupAzure({
+        count: 0,
+        progress,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+            return new Response(null, { status: 200 })
+          }
+          if (req.method === "GET" && url.searchParams.get("comp") === "list" && url.searchParams.get("prefix") === candidateY && !mutatedP) {
+            mutatedP = true
+            ctx.saved.delete(ctx.keyOf(`${replacementP}DeviceConfigurations/Dev.json`))
+            ctx.seed(`${replacementP}metadata.json`, manifestCompOnly)
+          }
+          if (req.method === "DELETE") deletes.push(name)
+          return undefined
+        },
+      })
+      const reqNoTypes = {
+        tenantId: TENANT,
+        clientId: "client",
+        storageAccountName: "contoso",
+        scope: { excluded: INTUNE_TYPES.map(type => type.folder) },
+      }
+      ctx.seed(`${replacementP}DeviceConfigurations/Dev.json`, deviceItem)
+      ctx.seed(`${replacementP}CompliancePolicies/Comp.json`, complianceItem)
+      ctx.seed(`${replacementP}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${replacementP}metadata.json`, manifestBoth)
+      ctx.seedExpired(candidateX)
+      ctx.seed(`${candidateY}CompliancePolicies/Comp.json`, complianceItem)
+      ctx.seed(`${candidateY}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${candidateY}metadata.json`, manifestY)
+      const compEtag = ctx.etag(`${candidateY}CompliancePolicies/Comp.json`)
+      const ownerEtag = ctx.etag(`${candidateY}${BACKUP_OWNER_FILE}`)
+      const metaEtag = ctx.etag(`${candidateY}metadata.json`)
+      progress.set(`${TENANT}/contoso/false`, JSON.stringify({
+        reviews: {},
+        deletions: {
+          [candidateY]: {
+            prefixes: [candidateY],
+            remnant: false,
+            folders: ["CompliancePolicies"],
+            untagged: false,
+            remaining: {
+              [`${candidateY}CompliancePolicies/Absent.json`]: '"missing-etag"',
+              [`${candidateY}CompliancePolicies/Comp.json`]: compEtag,
+              [`${candidateY}metadata.json`]: metaEtag,
+              [`${candidateY}${BACKUP_OWNER_FILE}`]: ownerEtag,
+            },
+            deleted: [],
+          },
+        },
+      }))
+
+      const job = ctx.engine.start(reqNoTypes)
+      await ctx.engine.waitForJob(job)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(job.status, job.log.join("\n")).toBe("Completed")
+      expect(mutatedP).toBe(true)
+      expect(deletes).toEqual([])
+      expect(ctx.has(`${candidateX}metadata.json`)).toBe(true)
+      expect(ctx.has(`${candidateY}metadata.json`)).toBe(true)
+      expect(job.log.join("\n")).toContain("changed during retention")
+    }
+
+    // (b) When replacement P is unchanged, both X and Y proceed and are deleted.
+    {
+      const freshProgress = memoryStore()
+      const ctx = setupAzure({
+        count: 0,
+        progress: freshProgress,
+        override: (url, req) => {
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+            return new Response(null, { status: 200 })
+          }
+          return undefined
+        },
+      })
+      const reqNoTypes = {
+        tenantId: TENANT,
+        clientId: "client",
+        storageAccountName: "contoso",
+        scope: { excluded: INTUNE_TYPES.map(type => type.folder) },
+      }
+      ctx.seed(`${replacementP}DeviceConfigurations/Dev.json`, deviceItem)
+      ctx.seed(`${replacementP}CompliancePolicies/Comp.json`, complianceItem)
+      ctx.seed(`${replacementP}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${replacementP}metadata.json`, manifestBoth)
+      ctx.seedExpired(candidateX)
+      ctx.seed(`${candidateY}CompliancePolicies/Comp.json`, complianceItem)
+      ctx.seed(`${candidateY}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${candidateY}metadata.json`, manifestY)
+      const compEtag = ctx.etag(`${candidateY}CompliancePolicies/Comp.json`)
+      const ownerEtag = ctx.etag(`${candidateY}${BACKUP_OWNER_FILE}`)
+      const metaEtag = ctx.etag(`${candidateY}metadata.json`)
+      freshProgress.set(`${TENANT}/contoso/false`, JSON.stringify({
+        reviews: {},
+        deletions: {
+          [candidateY]: {
+            prefixes: [candidateY],
+            remnant: false,
+            folders: ["CompliancePolicies"],
+            untagged: false,
+            remaining: {
+              [`${candidateY}CompliancePolicies/Absent.json`]: '"missing-etag"',
+              [`${candidateY}CompliancePolicies/Comp.json`]: compEtag,
+              [`${candidateY}metadata.json`]: metaEtag,
+              [`${candidateY}${BACKUP_OWNER_FILE}`]: ownerEtag,
+            },
+            deleted: [],
+          },
+        },
+      }))
+
+      const job = ctx.engine.start(reqNoTypes)
+      await ctx.engine.waitForJob(job)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(job.status, job.log.join("\n")).toBe("Completed")
+      expect(ctx.has(`${candidateX}metadata.json`)).toBe(false)
+      expect(ctx.has(`${candidateY}metadata.json`)).toBe(false)
+    }
+  })
+
+  it("4721002120: exits the outer plan loop on stopCleanup, while keeping continue for candidate-local lease refusal", async () => {
+    const candidate1 = "backup-2026-08-02-120000/"
+    const candidate2 = "backup-2026-08-01-120000/"
+
+    // (a) Renewal fails during candidate 1 -> stopCleanup exits outer loop so
+    // candidate 2 issues NO DELETEs even though candidate 2's leases would succeed.
+    {
+      const deletes: string[] = []
+      const released: string[] = []
+      let acquireCount = 0
+      let renewFailedOnce = false
+      const ctx = setupAzure({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              const idx = ++acquireCount
+              // Delay second acquire of candidate 1 past 30s so renewal triggers and fails during candidate 1 only.
+              const delay = idx === 2 ? 35_000 : 0
+              const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${idx}`
+              return new Promise<Response>(resolve => setTimeout(() => {
+                resolve(new Response(null, { status: 201, headers: { "x-ms-lease-id": id } }))
+              }, delay))
+            }
+            if (action === "renew") {
+              if (!renewFailedOnce) {
+                renewFailedOnce = true
+                return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+              }
+              return new Response(null, { status: 200 })
+            }
+            if (action === "release") {
+              released.push(name)
+              return new Response(null, { status: 200 })
+            }
+          }
+          if (req.method === "DELETE") deletes.push(name)
+          return undefined
+        },
+      })
+      ctx.seedExpired(candidate1)
+      ctx.seedExpired(candidate2)
+
+      const done = runJob(ctx.engine)
+      await vi.advanceTimersByTimeAsync(90_000)
+      const job = await done
+      expect(renewFailedOnce).toBe(true)
+      expect(deletes).toEqual([])
+      expect(released.length).toBeGreaterThan(0)
+      expect(ctx.has(`${candidate1}metadata.json`)).toBe(true)
+      expect(ctx.has(`${candidate2}metadata.json`)).toBe(true)
+      expect(job.log.join("\n")).toContain("replacement protection could not be renewed")
+    }
+
+    // (b) Candidate-local lease acquisition refusal (409 on candidate 1 only) still allows candidate 2 to proceed.
+    {
+      const deletes: string[] = []
+      let refusedOnce = false
+      const ctx = setupAzure({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              if (!refusedOnce) {
+                refusedOnce = true
+                return new Response(null, { status: 409, headers: { "x-ms-error-code": "LeaseAlreadyPresent" } })
+              }
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+            }
+            return new Response(null, { status: 200 })
+          }
+          if (req.method === "DELETE") deletes.push(name)
+          return undefined
+        },
+      })
+      ctx.seedExpired(candidate1)
+      ctx.seedExpired(candidate2)
+
+      const job = await runJob(ctx.engine)
+      expect(refusedOnce).toBe(true)
+      expect(ctx.has(`${candidate1}metadata.json`)).toBe(true)
+      expect(ctx.has(`${candidate2}metadata.json`)).toBe(false)
+      expect(deletes.some(name => name.startsWith(candidate2))).toBe(true)
+      expect(job.log.join("\n")).toContain("could not be leased before deletion")
+    }
   })
 })

@@ -199,13 +199,12 @@ export function createRetentionLeaseManager(): RetentionLeaseManager {
         }
         if (deadline.signal.aborted) return
 
-        const toRelease = leases.filter(lease => lease.expiresAt > Date.now())
+        const toRelease = [...leases]
         if (toRelease.length === 0) return
         let next = 0
         const worker = async () => {
           while (!deadline.signal.aborted && next < toRelease.length) {
             const lease = toRelease[next++]!
-            if (lease.expiresAt <= Date.now()) continue
             await lease.release(deadline.signal).catch(() => undefined)
           }
         }

@@ -1,9 +1,10 @@
-import { backupBlobName, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../../shared/backup-storage"
+import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../../shared/backup-storage"
 import { indexPath, largeIndexes } from "../../shared/large-backup"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
 import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { hostname } from "node:os"
+import { dirname, join, resolve } from "node:path"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
 import { mapLimit } from "../../shared/map-limit"
@@ -56,7 +57,6 @@ const EXT = ".tvb"
 const RETIRED_PREFIX = ".retired-"
 const RETIRED_STAMP = ".quarantined"
 const RETENTION_LOCK_FILE = ".tenuvault-retention.lock"
-const RETENTION_LOCK_UNREADABLE_GRACE_MS = 5_000
 // Another app instance can be between the rename and delete. Let that operation settle first.
 const RETIRED_GRACE_MS = 60_000
 
@@ -169,6 +169,150 @@ export class BlobQuarantinedError extends BlobConditionNotMetError {}
 export class BlobDeleteInterruptedError extends Error {}
 export class BlobLeaseConflictError extends Error {}
 export class BlobLeaseUnsupportedError extends Error {}
+export class BlobProtectedError extends Error {}
+
+export interface RetentionLockRecord {
+  id: string
+  host: string
+  pid: number
+  processStart: string | number
+  app: "TenuVault"
+}
+
+const FALLBACK_PROCESS_START = Math.round(Date.now() - process.uptime() * 1000)
+let cachedBootId: string | null | undefined
+let cachedCurrentProcessStart: Promise<string | number> | undefined
+
+async function linuxBootId(): Promise<string | null> {
+  if (cachedBootId !== undefined) return cachedBootId
+  try {
+    cachedBootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim() || null
+  } catch {
+    cachedBootId = null
+  }
+  return cachedBootId
+}
+
+/**
+ * Reads a stable process start token for `pid` on this host:
+ * - `"gone"` when the process does not exist or is a zombie,
+ * - a start token when observable (Linux `/proc/<pid>/stat` field 22 + boot id, or fallback for this process),
+ * - `null` when start time cannot be observed for another process on this platform.
+ */
+async function readProcessStart(pid: number): Promise<string | number | "gone" | null> {
+  if (process.platform === "linux") {
+    try {
+      const statText = await readFile(`/proc/${pid}/stat`, "utf8")
+      const closeParen = statText.lastIndexOf(")")
+      if (closeParen < 0) return null
+      const fields = statText.slice(closeParen + 1).trim().split(/\s+/)
+      const state = fields[0]
+      const startTicks = fields[19]
+      if (state === "Z" || state === "X") return "gone"
+      if (startTicks && /^\d+$/.test(startTicks)) {
+        const bootId = await linuxBootId()
+        return bootId ? `linux:${bootId}:${startTicks}` : `linux:${startTicks}`
+      }
+      return null
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === "ENOENT" || code === "ESRCH") return "gone"
+      return pid === process.pid ? FALLBACK_PROCESS_START : null
+    }
+  }
+  return pid === process.pid ? FALLBACK_PROCESS_START : null
+}
+
+function currentProcessStart(): Promise<string | number> {
+  cachedCurrentProcessStart ??= readProcessStart(process.pid).then(start =>
+    start && start !== "gone" ? start : FALLBACK_PROCESS_START,
+  )
+  return cachedCurrentProcessStart
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH"
+  }
+}
+
+function parseRetentionLock(raw: string): RetentionLockRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<RetentionLockRecord> | null
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
+    if (typeof parsed.id !== "string" || !parsed.id) return null
+    if (typeof parsed.host !== "string" || !parsed.host) return null
+    if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0) return null
+    const validStart = (typeof parsed.processStart === "string" && parsed.processStart.length > 0)
+      || (typeof parsed.processStart === "number" && Number.isFinite(parsed.processStart))
+    if (!validStart) return null
+    if (parsed.app !== "TenuVault") return null
+    return {
+      id: parsed.id,
+      host: parsed.host,
+      pid: parsed.pid,
+      processStart: parsed.processStart!,
+      app: "TenuVault",
+    }
+  } catch {
+    return null
+  }
+}
+
+function manualLockWarning(lockPath: string, reason: string): string {
+  return `Retention lock file ${lockPath} (${reason}) was not reclaimed automatically. Delete it only if no other computer is running TenuVault on this backup folder.`
+}
+
+/**
+ * In-process write guard for replacement prefixes during local retention cleanup.
+ * Keyed by resolved container directory path -> Map<normalizedPrefix, refCount>, so every
+ * LocalBlobStore instance in this process observes the same protection.
+ *
+ * Cross-process residual assumption: TenuVault never writes into an existing backup folder
+ * (new backups use create-only new folders), and other TenuVault instances are excluded from
+ * concurrent retention by the per-container retention lock file.
+ */
+const protectedPrefixesByDir = new Map<string, Map<string, number>>()
+const lockProtectedEntries = new Map<string, Array<{ dir: string; prefix: string }>>()
+
+function normalizePrefix(prefix: string): string {
+  return prefix.endsWith("/") ? prefix : `${prefix}/`
+}
+
+function addProtectedPrefix(dir: string, prefix: string): { dir: string; prefix: string } {
+  const key = resolve(dir)
+  const normalized = normalizePrefix(prefix)
+  let prefixes = protectedPrefixesByDir.get(key)
+  if (!prefixes) {
+    prefixes = new Map()
+    protectedPrefixesByDir.set(key, prefixes)
+  }
+  prefixes.set(normalized, (prefixes.get(normalized) ?? 0) + 1)
+  return { dir: key, prefix: normalized }
+}
+
+function removeProtectedPrefix(entry: { dir: string; prefix: string }): void {
+  const prefixes = protectedPrefixesByDir.get(entry.dir)
+  if (!prefixes) return
+  const next = (prefixes.get(entry.prefix) ?? 0) - 1
+  if (next > 0) prefixes.set(entry.prefix, next)
+  else prefixes.delete(entry.prefix)
+  if (prefixes.size === 0) protectedPrefixesByDir.delete(entry.dir)
+}
+
+function assertPrefixNotProtected(dir: string, name: string): void {
+  const prefixes = protectedPrefixesByDir.get(resolve(dir))
+  if (!prefixes || prefixes.size === 0) return
+  const logical = logicalBackupName(name)
+  for (const prefix of prefixes.keys()) {
+    if (name.startsWith(prefix) || logical.startsWith(prefix)) {
+      throw new BlobProtectedError(`Backup ${prefix} is protected by an active retention cleanup and cannot be modified.`)
+    }
+  }
+}
 
 export class IncompleteInventoryError extends Error {
   /** The backup folder that is unavailable, when the error is about one backup. */
@@ -509,6 +653,8 @@ export class LocalBlobStore {
   }
 
   private async putNow(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly: boolean, metadata: Record<string, string> | undefined, ifMatch: string | undefined): Promise<StoredBlob> {
+    const dir = this.dir(account, container)
+    assertPrefixNotProtected(dir, name)
     if (!(await this.containerExists(account, container))) throw new BlobNotFoundError(container)
     const entries = await this.entries(account, container)
     const current = this.keyring[0]!
@@ -518,7 +664,7 @@ export class LocalBlobStore {
       // Compare with the file on disk, which is what a GET returns as the ETag.
       let tag: string | null = null
       if (existing) {
-        try { tag = `"${fileStamp(await stat(join(this.dir(account, container), existing.file), { bigint: true }))}"` } catch { /* Removed since listed. */ }
+        try { tag = `"${fileStamp(await stat(join(dir, existing.file), { bigint: true }))}"` } catch { /* Removed since listed. */ }
       }
       if (!tag || (ifMatch !== "*" && ifMatch !== tag)) throw new BlobConditionNotMetError(name)
     }
@@ -536,8 +682,8 @@ export class LocalBlobStore {
     const length = Buffer.alloc(2)
     length.writeUInt16BE(header.length)
 
-    const dir = this.dir(account, container)
     return this.write(dir, async () => {
+      assertPrefixNotProtected(dir, name)
       const path = join(dir, file)
       const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
       let written: BigIntStats
@@ -550,6 +696,7 @@ export class LocalBlobStore {
         } finally {
           await handle.close()
         }
+        assertPrefixNotProtected(dir, name)
         if (createOnly) await this.publishNew(tmp, path)
         else await rename(tmp, path)
         this.changed(dir)
@@ -589,8 +736,9 @@ export class LocalBlobStore {
    * of deletes. despiteDamage is for removing files the caller has just written itself, such as
    * an archive import that is rolled back.
    */
-  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean; ifMatch?: string } = {}): Promise<void> {
+  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean; ifMatch?: string; retentionLockId?: string } = {}): Promise<void> {
     const dir = this.dir(account, container)
+    assertPrefixNotProtected(dir, name)
     // Every file is checked again at most every few seconds, so a file damaged in place is found
     // within a run of deletes without checking every file before each one.
     const fresh = Date.now() - (this.checkedAt.get(dir) ?? 0) > DELETE_RECHECK_MS
@@ -611,6 +759,10 @@ export class LocalBlobStore {
     let renamed = false
     try {
       await this.write(dir, async () => {
+        assertPrefixNotProtected(dir, name)
+        if (options.retentionLockId !== undefined) {
+          await this.assertRetentionLockHeld(dir, options.retentionLockId)
+        }
         const path = join(dir, entry.file)
         const info = await lstat(path, { bigint: true })
         if (!info.isFile() || info.ino === 0n || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
@@ -620,6 +772,10 @@ export class LocalBlobStore {
         let needsRecovery = false
         try {
           await writeFile(stamp, "", { flag: "wx" })
+          assertPrefixNotProtected(dir, name)
+          if (options.retentionLockId !== undefined) {
+            await this.assertRetentionLockHeld(dir, options.retentionLockId)
+          }
           await rename(path, held)
           renamed = true
           needsRecovery = true
@@ -657,21 +813,82 @@ export class LocalBlobStore {
     }
   }
 
-  /** Acquires a cross-process retention lock file scoped to one container directory. */
-  async acquireRetentionLock(account: string, container: string, durationMs = 60_000, proposedId?: string): Promise<string> {
+  /**
+   * Registers in-process write protection for the given prefixes in a container.
+   * Returns a release function that must be called in a finally block.
+   */
+  protectPrefixes(account: string, container: string, prefixes: string[]): () => void {
+    const dir = this.dir(account, container)
+    const entries = prefixes.map(prefix => addProtectedPrefix(dir, prefix))
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      for (const entry of entries) removeProtectedPrefix(entry)
+    }
+  }
+
+  private registerLockProtectedPrefixes(account: string, container: string, dir: string, id: string, prefixes: string[] | undefined): void {
+    if (!prefixes?.length) return
+    const key = `${resolve(dir)}\0${id}`
+    const entries: Array<{ dir: string; prefix: string }> = []
+    for (const prefix of prefixes) {
+      const targetContainer = (container === BACKUP_CONTAINER || container === LARGE_BACKUP_CONTAINER)
+        ? backupContainer(prefix)
+        : container
+      entries.push(addProtectedPrefix(this.dir(account, targetContainer), prefix))
+    }
+    lockProtectedEntries.set(key, entries)
+  }
+
+  private releaseLockProtectedPrefixes(dir: string, id: string): void {
+    const key = `${resolve(dir)}\0${id}`
+    const entries = lockProtectedEntries.get(key)
+    if (!entries) return
+    lockProtectedEntries.delete(key)
+    for (const entry of entries) removeProtectedPrefix(entry)
+  }
+
+  private async assertRetentionLockHeld(dir: string, id: string): Promise<void> {
+    const lockPath = join(dir, RETENTION_LOCK_FILE)
+    let raw: string
+    try {
+      raw = await readFile(lockPath, "utf8")
+    } catch (error) {
+      throw new BlobLeaseConflictError(`The local retention lock ${lockPath} is no longer held.`, { cause: error })
+    }
+    const lock = parseRetentionLock(raw)
+    if (!lock || lock.id !== id) {
+      throw new BlobLeaseConflictError(`The local retention lock ${lockPath} is no longer held.`)
+    }
+  }
+
+  /**
+   * Acquires an owner-and-process cross-process retention lock file scoped to one container directory.
+   * Never expires while its holding process is alive; no time-based expiry or renewal.
+   */
+  async acquireRetentionLock(account: string, container: string, proposedId?: string, protectedPrefixes?: string[]): Promise<string> {
     const dir = this.dir(account, container)
     await mkdir(dir, { recursive: true, mode: 0o700 })
     const lockPath = join(dir, RETENTION_LOCK_FILE)
     const id = proposedId || randomBytes(16).toString("hex")
+    const record: RetentionLockRecord = {
+      id,
+      host: hostname(),
+      pid: process.pid,
+      processStart: await currentProcessStart(),
+      app: "TenuVault",
+    }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const handle = await open(lockPath, "wx", 0o600)
         try {
-          await handle.writeFile(JSON.stringify({ id, pid: process.pid, durationMs, expiresAt: Date.now() + durationMs }))
+          await handle.writeFile(JSON.stringify(record))
           await handle.sync()
         } finally {
           await handle.close()
         }
+        this.registerLockProtectedPrefixes(account, container, dir, id, protectedPrefixes)
         return id
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code
@@ -681,7 +898,7 @@ export class LocalBlobStore {
           }
           throw error
         }
-        if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath, durationMs))) {
+        if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath))) {
           throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
         }
       }
@@ -689,68 +906,110 @@ export class LocalBlobStore {
     throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
   }
 
-  private async reclaimStaleRetentionLock(lockPath: string, defaultDurationMs = 60_000): Promise<boolean> {
+  private async reclaimStaleRetentionLock(lockPath: string): Promise<boolean> {
+    let raw: string
     try {
       const info = await lstat(lockPath, { bigint: true })
-      if (!info.isFile()) return false
-      const raw = await readFile(lockPath, "utf8")
-      const now = Date.now()
-      let expired = false
-      try {
-        const parsed = JSON.parse(raw) as { expiresAt?: unknown; durationMs?: unknown }
-        const lockDurationMs = typeof parsed?.durationMs === "number" && Number.isFinite(parsed.durationMs) && parsed.durationMs > 0
-          ? parsed.durationMs
-          : defaultDurationMs
-        const wallExpired = typeof parsed?.expiresAt === "number" && Number.isFinite(parsed.expiresAt) && parsed.expiresAt <= now
-        const mtimeExpired = now - Number(info.mtimeMs) >= lockDurationMs
-        expired = wallExpired || mtimeExpired
-      } catch {
-        expired = now - Number(info.mtimeMs) >= RETENTION_LOCK_UNREADABLE_GRACE_MS
+      if (!info.isFile()) {
+        throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock path is not a regular file"))
       }
-      if (!expired) return false
-      const aside = `${lockPath}.${randomBytes(4).toString("hex")}.stale`
+      raw = await readFile(lockPath, "utf8")
+    } catch (error) {
+      if (isMissing(error)) return true
+      if (error instanceof BlobLeaseConflictError) throw error
+      throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be read"), { cause: error })
+    }
+    const lock = parseRetentionLock(raw)
+    if (!lock) {
+      throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be parsed"))
+    }
+    const localHost = hostname()
+    if (lock.host !== localHost) {
+      throw new BlobLeaseConflictError(manualLockWarning(lockPath, `held by another computer (${lock.host})`))
+    }
+    let stale = false
+    if (!isPidAlive(lock.pid)) {
+      stale = true
+    } else {
+      const observedStart = await readProcessStart(lock.pid)
+      if (observedStart === "gone" || (observedStart !== null && observedStart !== lock.processStart)) {
+        stale = true
+      }
+    }
+    if (!stale) {
+      throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
+    }
+    const aside = `${lockPath}.${randomBytes(8).toString("hex")}.stale`
+    try {
       await rename(lockPath, aside)
-      const moved = await lstat(aside, { bigint: true })
-      if (moved.dev !== info.dev || moved.ino !== info.ino || moved.mtimeNs !== info.mtimeNs) {
-        await link(aside, lockPath).catch(() => undefined)
-        await rm(aside, { force: true }).catch(() => undefined)
-        return false
-      }
+    } catch (error) {
+      if (isMissing(error)) return true
+      throw error
+    }
+    const movedRaw = await readFile(aside, "utf8").catch(() => null)
+    const moved = movedRaw === null ? null : parseRetentionLock(movedRaw)
+    if (moved?.id === lock.id) {
       await rm(aside, { force: true })
       return true
-    } catch (error) {
-      return isMissing(error)
     }
+    // The moved file did not match the stale lock we observed. Restore it by hard-link only if
+    // lockPath is still free; otherwise keep the aside file and never unlink an unverified lock.
+    try {
+      await link(aside, lockPath)
+      await rm(aside, { force: true }).catch(() => undefined)
+    } catch {
+      throw new BlobLeaseConflictError(
+        `A live retention lock changed while reclaiming ${lockPath}. The moved lock file was kept at ${aside} and was not deleted; retention stopped for this run.`,
+      )
+    }
+    throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
   }
 
-  async renewRetentionLock(account: string, container: string, id: string, durationMs = 60_000): Promise<void> {
-    const lockPath = join(this.dir(account, container), RETENTION_LOCK_FILE)
-    let handle: Awaited<ReturnType<typeof open>> | undefined
+  async releaseRetentionLock(account: string, container: string, id: string): Promise<{ warning?: string }> {
+    const dir = this.dir(account, container)
+    const lockPath = join(dir, RETENTION_LOCK_FILE)
     try {
-      handle = await open(lockPath, "r+")
-      const raw = await handle.readFile("utf8")
-      const parsed = JSON.parse(raw) as { id?: unknown }
-      if (parsed?.id !== id) throw new BlobLeaseConflictError("The local retention lock is no longer held.")
-      const payload = Buffer.from(JSON.stringify({ id, pid: process.pid, durationMs, expiresAt: Date.now() + durationMs }))
-      await handle.truncate(0)
-      await handle.write(payload, 0, payload.length, 0)
-      await handle.sync()
-    } catch (error) {
-      if (error instanceof BlobLeaseConflictError) throw error
-      throw new BlobLeaseConflictError("The local retention lock is no longer held.", { cause: error })
+      let raw: string
+      try {
+        raw = await readFile(lockPath, "utf8")
+      } catch (error) {
+        if (isMissing(error)) return {}
+        const warning = `Could not read local retention lock ${lockPath} during release; left in place.`
+        console.warn(`[backups] ${warning}`, error)
+        return { warning }
+      }
+      const parsed = parseRetentionLock(raw)
+      if (!parsed || parsed.id !== id) {
+        const warning = `Local retention lock ${lockPath} no longer belongs to this instance; left untouched.`
+        console.warn(`[backups] ${warning}`)
+        return { warning }
+      }
+      const aside = `${lockPath}.${randomBytes(8).toString("hex")}.release`
+      try {
+        await rename(lockPath, aside)
+      } catch (error) {
+        if (isMissing(error)) return {}
+        throw error
+      }
+      const movedRaw = await readFile(aside, "utf8").catch(() => null)
+      const moved = movedRaw === null ? null : parseRetentionLock(movedRaw)
+      if (moved?.id === id) {
+        await rm(aside, { force: true })
+        return {}
+      }
+      try {
+        await link(aside, lockPath)
+        await rm(aside, { force: true }).catch(() => undefined)
+        const warning = `Local retention lock ${lockPath} changed during release and was restored.`
+        console.warn(`[backups] ${warning}`)
+        return { warning }
+      } catch {
+        const warning = `Local retention lock ${lockPath} changed during release; the unverified lock file was kept at ${aside} and was not deleted.`
+        console.warn(`[backups] ${warning}`)
+        return { warning }
+      }
     } finally {
-      await handle?.close()
-    }
-  }
-
-  async releaseRetentionLock(account: string, container: string, id: string): Promise<void> {
-    const lockPath = join(this.dir(account, container), RETENTION_LOCK_FILE)
-    try {
-      const raw = await readFile(lockPath, "utf8")
-      const parsed = JSON.parse(raw) as { id?: unknown }
-      if (parsed?.id === id) await rm(lockPath, { force: true })
-    } catch (error) {
-      if (!isMissing(error)) throw error
+      this.releaseLockProtectedPrefixes(dir, id)
     }
   }
 

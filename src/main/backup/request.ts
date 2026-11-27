@@ -84,11 +84,15 @@ export class InventoryDamagedError extends StorageError {}
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
 export async function storageFailure(response: Response, account: string): Promise<StorageError> {
   const code = response.headers.get("x-ms-error-code")
-  if (isLocalAccount(account) && (code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined")) {
+  if (isLocalAccount(account) && (code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined"
+    || code === "LeaseAlreadyPresent" || code === "LeaseUnavailable" || code === "RetentionLockLost" || code === "BackupProtectedByRetention")) {
     const text = await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
-    const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
-    return code === "BlobQuarantined" ? new StorageError(decoded) : new InventoryDamagedError(decoded)
+    if (message || code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined") {
+      const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
+      return code === "InventoryIncomplete" || code === "BackupUnavailable" ? new InventoryDamagedError(decoded) : new StorageError(decoded)
+    }
+    return storageError(new Response(text, { status: response.status, headers: response.headers }), account)
   }
   return storageError(response, account)
 }
