@@ -79,14 +79,15 @@ export async function importArchive(store: LocalBlobStore, archive: ReviewedArch
   const account = `tvlocal-${archive.tenantId}`, container = 'intune-backups', prefix = `${archive.backupId}/`
   await store.createContainer(account, container)
   if ((await store.list(account, container)).some(blob => blob.name.startsWith(prefix))) throw new Error('This backup already exists on this device')
-  const written: string[] = []
+  const written = new Map<string, string>()
   try {
     // Metadata is the completion marker and must be written last.
     for (const [name, content] of [...archive.files].sort(([a], [b]) => Number(a === 'metadata.json') - Number(b === 'metadata.json'))) {
       const data = name === 'metadata.json' ? Buffer.from(JSON.stringify({ ...JSON.parse(content.toString()), SourceTenantId: archive.tenantId, Import: { sha256: archive.digest, reviewedAt: new Date().toISOString(), provenance: 'User-reviewed ZIP; source identity is not cryptographically verified' } })) : content
-      await store.put(account, container, prefix + name, data, 'application/json', true); written.push(prefix + name)
+      const blob = await store.put(account, container, prefix + name, data, 'application/json', true)
+      written.set(blob.name, blob.etag!)
     }
-  } catch (error) { for (const name of written) await store.delete(account, container, name, { despiteDamage: true }).catch(() => undefined); throw error }
+  } catch (error) { for (const [name, etag] of written) await store.delete(account, container, name, { despiteDamage: true, ifMatch: etag }).catch(() => undefined); throw error }
 }
 /**
  * Imports a reviewed archive once the admin confirms it. The archive's tenant uses a license slot

@@ -1,7 +1,8 @@
+import { authenticatedBackupRead } from "./authenticated-read"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -219,15 +220,16 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
         // Stored metadata comes back the way Azure returns it, with the x-ms-meta- prefix.
         ...Object.fromEntries(Object.entries(blob.metadata ?? {}).map(([key, value]) => [`x-ms-meta-${key}`, value])),
       }
-      return new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers })
+      return authenticatedBackupRead(new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers }))
     }
     if (method === "DELETE") {
-      await store.delete(account, container, blobName)
+      await store.delete(account, container, blobName, { ifMatch: request.headers.get("if-match") ?? undefined })
       return new Response(null, { status: 202 })
     }
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)
   } catch (caught) {
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.")
+    if (caught instanceof BlobQuarantinedError) return error(412, "BlobQuarantined", caught.message)
     if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.")
     // Damaged files: retrying cannot help, so this is not a 5xx that clients retry. BackupUnavailable
     // is about one backup; InventoryIncomplete covers the rest, such as a blob that may be in a file

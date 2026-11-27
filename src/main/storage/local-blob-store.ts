@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
-import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
@@ -51,6 +51,10 @@ const MAGIC_LENGTH = 4
 const IV = 12
 const TAG = 16
 const EXT = ".tvb"
+const RETIRED_PREFIX = ".retired-"
+const RETIRED_STAMP = ".quarantined"
+// Another app instance can be between the rename and delete. Let that operation settle first.
+const RETIRED_GRACE_MS = 60_000
 
 /** Detects encrypted local backup files. Returns null if an incomplete scan cannot rule them out. */
 export async function localBackupsExist(
@@ -66,6 +70,10 @@ export async function localBackupsExist(
       try {
         const files = await readDirectory(folder)
         if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
+        for (const file of files) {
+          if (file.isDirectory() && file.name.startsWith(RETIRED_PREFIX)
+            && (await readDirectory(join(folder, file.name))).some(held => held.name !== RETIRED_STAMP)) return true
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
           incomplete = true
@@ -151,6 +159,7 @@ export class BlobNotFoundError extends Error {}
 export class BlobAlreadyExistsError extends Error {}
 /** An If-Match ETag no longer matches the stored blob. */
 export class BlobConditionNotMetError extends Error {}
+export class BlobQuarantinedError extends BlobConditionNotMetError {}
 
 export class IncompleteInventoryError extends Error {
   /** The backup folder that is unavailable, when the error is about one backup. */
@@ -438,7 +447,22 @@ export class LocalBlobStore {
       entry = entries.get(name)
       if (!entry) throw this.missing(entries, name)
     }
-    const raw = await readFile(join(this.dir(account, container), entry.file))
+    return this.readBody(account, container, entry, entries)
+  }
+
+  private async readBody(account: string, container: string, entry: Entry, entries: Map<string, Entry>): Promise<{ blob: StoredBlob; data: Buffer }> {
+    const { name } = entry
+    const folder = backupFolderOf(name)
+    // Bind the bytes and ETag to the same open file, even when the live path is replaced.
+    const file = await open(join(this.dir(account, container), entry.file), "r")
+    let raw: Buffer
+    try {
+      if (fileStamp(await file.stat({ bigint: true })) !== entry.stamp) throw new BlobConditionNotMetError(name)
+      raw = await file.readFile()
+      if (fileStamp(await file.stat({ bigint: true })) !== entry.stamp) throw new BlobConditionNotMetError(name)
+    } finally {
+      await file.close()
+    }
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
     if (!version) throw new Error("Invalid backup header")
     const headerLength = raw.readUInt16BE(MAGIC_LENGTH)
@@ -453,7 +477,7 @@ export class LocalBlobStore {
       const why = unreadable(error)
       const { reason } = why
       const damage = this.damageOf.get(entries)
-      if (damage && container === BACKUP_CONTAINER && !damage.files.some((file) => file.file === entry!.file)) {
+      if (damage && container === BACKUP_CONTAINER && !damage.files.some((file) => file.file === entry.file)) {
         damage.files.push(damagedFile(entry.file, why, folder))
         if (folder && !damage.unavailable.has(folder)) damage.unavailable.set(folder, `one of its files could not be read: ${reason}.`)
         this.damagedStamps.get(entries)?.set(entry.file, entry.stamp)
@@ -563,7 +587,7 @@ export class LocalBlobStore {
    * of deletes. despiteDamage is for removing files the caller has just written itself, such as
    * an archive import that is rolled back.
    */
-  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean } = {}): Promise<void> {
+  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean; ifMatch?: string } = {}): Promise<void> {
     const dir = this.dir(account, container)
     // Every file is checked again at most every few seconds, so a file damaged in place is found
     // within a run of deletes without checking every file before each one.
@@ -571,14 +595,58 @@ export class LocalBlobStore {
     const entries = fresh ? await this.checkedEntries(account, container) : await this.entries(account, container)
     const damage = this.damageOf.get(entries)
     if (!options.despiteDamage && damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
-      throw new IncompleteInventoryError(damage.files.length, `${describeDamage(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${RECOVERY}`)
+      const held = damage.files.find(file => file.file.startsWith(RETIRED_PREFIX))
+      const recovery = held ? `A file was kept in ${held.file} after interrupted cleanup. Follow the backup storage recovery instructions.` : RECOVERY
+      throw new IncompleteInventoryError(damage.files.length, `${describeDamage(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${recovery}`)
     }
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
+    if (!options.despiteDamage) {
+      // Retention verifies the full candidate over the storage bridge and binds each delete to that
+      // read. Direct deletes must also authenticate every body in the candidate before removing one.
+      const folder = backupFolderOf(name)
+      const candidate = !options.ifMatch && folder ? [...entries.values()].filter(blob => backupFolderOf(blob.name) === folder) : [entry]
+      for (const blob of candidate) await this.readBody(account, container, blob, entries)
+    }
     await this.write(dir, async () => {
-      await rm(join(dir, entry.file), { force: true })
-      this.changed(dir)
-      this.updateEntry(dir, entries, name)
+      const path = join(dir, entry.file)
+      const info = await lstat(path, { bigint: true }).catch(error => {
+        if (isMissing(error)) throw new BlobConditionNotMetError(name)
+        throw error
+      })
+      if (!info.isFile() || info.ino === 0n || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
+      const quarantine = await mkdtemp(join(dir, RETIRED_PREFIX))
+      const held = join(quarantine, entry.file)
+      const stamp = join(quarantine, RETIRED_STAMP)
+      let needsRecovery = false
+      try {
+        await writeFile(stamp, "", { flag: "wx" })
+        await rename(path, held)
+        needsRecovery = true
+        this.changed(dir)
+        const moved = await lstat(held, { bigint: true })
+        // The rename can change ctime. Compare the attributes that survive it.
+        if (!moved.isFile() || moved.ino === 0n || moved.dev !== info.dev || moved.ino !== info.ino
+          || moved.size !== info.size || moved.mtimeNs !== info.mtimeNs) {
+          this.index.delete(dir)
+          try {
+            await link(held, path)
+            await rm(held)
+            needsRecovery = false
+          } catch (error) {
+            throw new BlobQuarantinedError(`A different file was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
+          }
+          throw new BlobConditionNotMetError(name)
+        }
+        await rm(held)
+        needsRecovery = false
+        this.updateEntry(dir, entries, name)
+      } finally {
+        if (!needsRecovery) {
+          await rm(stamp, { force: true }).catch(() => undefined)
+          await rmdir(quarantine).catch(() => undefined)
+        }
+      }
     })
   }
 
@@ -705,13 +773,14 @@ export class LocalBlobStore {
       check.started = true
       try {
         let entries = await this.entries(account, container)
-        const files = new Set(await this.files(dir))
+        const names = await this.names(dir)
+        const files = new Set(names.filter(file => file.endsWith(EXT)))
         // Directory stamps can be coarse on a shared folder, so always reconcile names.
         // Damaged files count too, so a file that is repaired, replaced or removed is read again.
         const damaged = this.damagedStamps.get(entries) ?? new Map<string, string>()
         const known = new Map<string, string>([...damaged, ...[...entries.values()].map((entry): [string, string] => [entry.file, entry.stamp])])
         const sameFiles = files.size === known.size && [...known.keys()].every(file => files.has(file))
-        const unchanged = !this.dirty.has(dir) && sameFiles && (await mapLimit([...known], HEADER_CONCURRENCY, async ([file, stamp]) => {
+        const unchanged = !names.some(file => file.startsWith(RETIRED_PREFIX)) && !this.dirty.has(dir) && sameFiles && (await mapLimit([...known], HEADER_CONCURRENCY, async ([file, stamp]) => {
           try { return fileStamp(await stat(join(dir, file), { bigint: true })) === stamp } catch { return false }
         })).every(Boolean)
         if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
@@ -764,13 +833,69 @@ export class LocalBlobStore {
     this.dirty.add(dir)
   }
 
-  private async files(dir: string): Promise<string[]> {
+  private async names(dir: string): Promise<string[]> {
     try {
-      return (await readdir(dir)).filter((f) => f.endsWith(EXT))
+      return await readdir(dir)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
       throw error
     }
+  }
+
+  private async recoverRetired(dir: string, account: string, container: string, names: string[]): Promise<DamagedFile[]> {
+    const held: Array<{ folder: string; file: string; since: number }> = []
+    const damage: DamagedFile[] = []
+    const report = (file: string, reason: string, backup: string | null = null) => {
+      // Inventory details also travel in HTTP headers. Only expose names the store would create.
+      const safeName = /^\.retired-[a-z0-9]+(?:\/[0-9a-f]{1,64}\.tvb)?$/i.test(file) ? file : RETIRED_PREFIX
+      damage.push({ file: safeName, reason, kind: "damaged", backup })
+    }
+    for (const folder of names.filter(name => name.startsWith(RETIRED_PREFIX))) {
+      try {
+        const path = join(dir, folder)
+        if (!(await lstat(path)).isDirectory()) {
+          report(folder, "the interrupted cleanup folder could not be opened")
+          continue
+        }
+        const files = await readdir(path)
+        // Directory mtime also covers older quarantines and a delayed rename after a stamp write.
+        const stamp = await lstat(join(path, RETIRED_STAMP)).catch(error => {
+          if (!isMissing(error)) throw error
+        })
+        const directoryTime = (await lstat(path)).mtimeMs
+        const since = Math.max(directoryTime, stamp ? (stamp.isFile() ? stamp.mtimeMs : Infinity) : 0)
+        for (const file of files) if (file !== RETIRED_STAMP) held.push({ folder, file, since })
+      } catch (error) {
+        if (!isMissing(error)) report(folder, "the interrupted cleanup folder could not be read")
+      }
+    }
+    const counts = new Map<string, number>()
+    for (const { file } of held) counts.set(file, (counts.get(file) ?? 0) + 1)
+    for (const { folder, file, since } of held) {
+      const path = join(dir, folder, file)
+      let backup: string | null = null
+      try {
+        const info = await lstat(path)
+        if (info.isFile() && /^[a-f0-9]+\.tvb$/i.test(file)) {
+          const entry = await this.readEntry(join(dir, folder), account, container, file)
+          if (entry !== VANISHED && !(entry instanceof Unreadable)) {
+            backup = backupFolderOf(entry.name)
+            if (counts.get(file) === 1 && Date.now() - since > RETIRED_GRACE_MS) {
+              // A link publishes the whole file and never overwrites an occupied live path.
+              await link(path, join(dir, file))
+              await rm(path)
+              await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
+              await rmdir(join(dir, folder)).catch(() => undefined)
+              continue
+            }
+          }
+        }
+      } catch (error) {
+        if (isMissing(error)) continue
+      }
+      report(`${folder}/${file}`, "a file was kept after interrupted cleanup. Close TenuVault and follow the backup storage recovery instructions", backup)
+    }
+    return damage
   }
 
   /**
@@ -824,7 +949,9 @@ export class LocalBlobStore {
 
   private async readIndex(dir: string, account: string, container: string, previous?: Map<string, Entry> | Promise<Map<string, Entry>>): Promise<Map<string, Entry>> {
     const entries = new Map<string, Entry>()
-    const files = await this.files(dir)
+    const names = await this.names(dir)
+    const retired = await this.recoverRetired(dir, account, container, names)
+    const files = (names.some(name => name.startsWith(RETIRED_PREFIX)) ? await this.names(dir) : names).filter(file => file.endsWith(EXT))
     const cached = await Promise.resolve(previous).catch(() => undefined)
     const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
@@ -862,13 +989,16 @@ export class LocalBlobStore {
     }
     // Other containers fail closed, as the backup container did before damage could be traced.
     if (container !== BACKUP_CONTAINER) {
-      const count = unreadableFiles.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
+      const count = retired.length + unreadableFiles.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
       if (count) throw new IncompleteInventoryError(count)
       return entries
     }
 
-    const damage: InventoryDamage = { files: [], unavailable: new Map(), unattributed: 0 }
+    const damage: InventoryDamage = { files: retired, unavailable: new Map(), unattributed: retired.filter(file => file.backup === null).length }
     const unavailable = (folder: string, reason: string) => { if (!damage.unavailable.has(folder)) damage.unavailable.set(folder, reason) }
+    for (const file of retired) {
+      if (file.backup) unavailable(file.backup, file.reason + ".")
+    }
     for (const [name, claimed] of claims) {
       const folder = backupFolderOf(name)
       for (const file of claimed) damage.files.push({ file, reason: DUPLICATE_REASON, kind: "duplicate", backup: folder })
@@ -1035,5 +1165,5 @@ function safeSegment(value: string): string {
 
 /** BigInt stats keep the full inode and nanosecond times, so a replaced file never shares a stamp with the old one. */
 function fileStamp(info: BigIntStats): string {
-  return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 }
