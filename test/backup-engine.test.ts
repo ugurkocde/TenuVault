@@ -1,6 +1,6 @@
 import { AuthError } from "@azure/msal-node"
 import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { DEFAULT_SELECTION, disabledFolders } from "../src/shared/services/modules"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -496,6 +496,61 @@ describe("surfaceTokenErrors", () => {
 })
 
 describe("retention", () => {
+  it.each(["ahead", "behind"])("keeps local history across restarts when the device clock goes %s", async direction => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-clock-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const clock = memoryStore()
+      const baseline = Date.parse("2026-09-24T12:00:00Z")
+      let wall = baseline
+      let uptime = 3600
+      let days = 0
+      const graph = fakeGraph()
+      const createEngine = () => new BackupEngine({
+        fetch: async (input, init) => {
+          const request = new Request(input, init)
+          const url = new URL(request.url)
+          return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+        },
+        getToken: async () => "token", retentionDays: () => days,
+        now: () => new Date(wall), uptime: () => uptime, retentionClock: clock,
+      })
+      const run = (tenantId = TENANT) => {
+        const engine = createEngine()
+        return engine.waitForJob(engine.start({ tenantId, clientId: CLIENT, storageAccountName: localStorageAccountName(tenantId) }))
+      }
+      const account = localStorageAccountName(TENANT), container = "intune-backups"
+      const old = direction === "ahead" ? "backup-2026-09-20-020000" : "backup-2026-08-01-020000"
+      const oldManifest = `${old}/metadata.json`
+      await store.createContainer(account, container)
+      await store.put(account, container, oldManifest, Buffer.from("{}"), "application/json")
+      await store.put(account, container, `${old}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
+      expect((await run(CLIENT)).status).toBe("Completed")
+
+      days = 30
+      const elapsed = direction === "ahead" ? 35 * 86400 : -3600
+      wall = baseline + elapsed * 1000
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const job = await run()
+        expect(job.status).toBe("Completed")
+        expect(job.results?.notices).toContainEqual({ level: "warning", message: expect.stringContaining(
+          direction === "ahead" ? "beyond the elapsed device uptime" : "earlier than the last trusted backup time",
+        ) })
+        expect((await store.get(account, container, oldManifest)).data.toString()).toBe("{}")
+        wall += 1000
+        uptime++
+      }
+      if (direction === "ahead") {
+        uptime += elapsed
+        const job = await run()
+        expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+        expect(await store.list(account, container, `${old}/`)).toEqual([])
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("keeps older backups when a local encrypted policy disagrees with its manifest", async () => {
     const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-retention-")), [randomBytes(32)])
     const account = localStorageAccountName(TENANT)

@@ -9,7 +9,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azure-seal"
 import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { sealLegacyAzure } from "./legacy-seal"
-import { endlessBody } from "./helpers"
+import { endlessBody, memoryStore } from "./helpers"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { reviewArchive } from "../src/main/backup/archive"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
@@ -33,7 +33,7 @@ const sha256 = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const items = { "DeviceConfigurations/old": { file: "Old.json", sha256: sha256(oldPolicy) } }
 const completeManifest = { TenantId: TENANT, Status: "Success", Items: items, Scope: { Included: ["DeviceConfigurations"] } }
 
-function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; progress?: RetentionProgressStore; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; progress?: RetentionProgressStore; clock?: ReturnType<typeof memoryStore>; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
   vi.useFakeTimers()
   vi.setSystemTime(now)
   const saved = new Map<string, Buffer>()
@@ -66,12 +66,13 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
       saved.delete(name)
       return new Response(null, { status: 202 })
     }
-    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: { etag: etag(name) } })
+    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: { etag: etag(name), ...(options.clock ? { "last-modified": new Date().toUTCString() } : {}) } })
   }
   registerStorageToken("token", TENANT)
   const fetch = legacyAzureReader(wireFetch, () => [master])
   const createEngine = () => new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" },
-    retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, retentionProgress: options.progress })
+    retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, retentionProgress: options.progress,
+    retentionClock: options.clock, uptime: () => 3600 })
   const engine = createEngine()
   /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
   function seed(name: string, value: unknown, sealed = false, key = master) {
@@ -428,6 +429,19 @@ describe("verified retention coverage", () => {
     seed("backup-2026-10-12-120001/metadata.json", completeManifest)
     const job = await complete(engine)
     expect(job.log.join("\n")).toContain("clock is earlier than the newest backup")
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+  })
+
+  it("skips Azure retention after a clock jump even when Azure timestamps agree", async () => {
+    const { engine, createEngine, saved, calls, seed, folder } = setup({ clock: memoryStore() })
+    const older = "backup-2026-10-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    await complete(engine)
+    vi.setSystemTime(new Date("2026-11-12T12:00:00Z"))
+    const job = await complete(createEngine())
+    expect(job.log.join("\n")).toContain("beyond the elapsed device uptime")
     expect(saved.has(`${older}metadata.json`)).toBe(true)
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
   })

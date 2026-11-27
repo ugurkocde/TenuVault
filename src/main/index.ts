@@ -688,6 +688,7 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
+    retentionClock: appStore,
     retentionProgress: {
       get: key => appStore.get(`backup.retention.${key}`),
       set: (key, prefix) => appStore.set(`backup.retention.${key}`, prefix),

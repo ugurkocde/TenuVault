@@ -13,6 +13,8 @@ import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
+import { uptime } from "node:os"
+import type { KeyValueStore } from "../storage/secure-store"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
@@ -37,6 +39,9 @@ import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupType
 import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
 
 class RetentionClockError extends Error {}
+
+const RETENTION_CLOCK = "backup.retention-clock"
+const DAY_MS = 86400_000
 
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
@@ -141,6 +146,8 @@ export interface BackupEngineDeps {
   retentionDays?: (tenantId: string) => number
   retentionLimits?: RetentionLimits
   retentionProgress?: RetentionProgressStore
+  retentionClock?: Pick<KeyValueStore, "get" | "set">
+  uptime?: () => number
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -542,6 +549,7 @@ export class BackupEngine {
 
   private async run(job: BackupJob, request: BackupRequest, tokens: RunTokens, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun, releaseTurn: () => void): Promise<void> {
     const started = this.now()
+    const clockWarning = this.checkRetentionClock(started.getTime(), true)
     const startNow = request.clientId.toLowerCase() === GRAPH_CLI_CLIENT_ID
     const readVersion = (type: IntuneType) => startNow ? "beta" as const : graphVersion(type)
     const readGrant = (token: string): ReturnType<typeof grantedPermissions> => {
@@ -1281,12 +1289,17 @@ export class BackupEngine {
       const limits = local ? undefined : this.deps.retentionLimits ?? RETENTION_LIMITS
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
+        const now = this.now().getTime()
+        const warning = clockWarning ?? this.checkRetentionClock(now, true)
+        if (warning) throw new RetentionClockError(warning)
         const pending: Array<() => Promise<number>> = []
-        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, limits, mixed, committedLargeManifest)
+        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, now, limits, mixed, committedLargeManifest)
         let unreadableLarge = 0
         if (mixed && committedLargeManifest) {
-          unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, limits, mixed)
+          unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, now, limits, mixed)
         }
+        const beforeDelete = this.checkRetentionClock(this.now().getTime(), false)
+        if (beforeDelete) throw new RetentionClockError(beforeDelete)
         let deletionWarnings = 0
         for (const apply of pending) deletionWarnings += await apply()
         if (unreadableOlder || unreadableLarge || deletionWarnings) retentionWarnings++
@@ -1378,11 +1391,10 @@ export class BackupEngine {
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<number>>, signal: AbortSignal, limits?: RetentionLimits, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<number>>, signal: AbortSignal, now: number, limits?: RetentionLimits, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
-    const now = this.now().getTime()
-    const cutoff = now - days * 86400_000
+    const cutoff = now - days * DAY_MS
     const metered = () => limits ? storage.withBudget(new RetentionBudget(limits)) : storage
     const discovery = metered()
     // Large discovery lists only root records, not the flat inventory of policy and relationship blobs.
@@ -1649,7 +1661,7 @@ export class BackupEngine {
       }
     }
 
-    if (limits && newestLastModified > 0 && now - newestLastModified > 86400_000) {
+    if (limits && newestLastModified > 0 && now - newestLastModified > DAY_MS) {
       throw new RetentionClockError("Retention was skipped because this device's clock is more than one day ahead of the latest Azure storage timestamp. Check the device clock before the next backup.")
     }
 
@@ -1715,6 +1727,34 @@ export class BackupEngine {
   private write(job: BackupJob, line: string, level?: BackupNotice["level"]): void {
     job.log.push(`[${this.now().toTimeString().slice(0, 8)}] ${line}`)
     if (level) job.results?.notices.push({ level, message: line })
+  }
+
+  private checkRetentionClock(wall: number, record: boolean): string | undefined {
+    const store = this.deps.retentionClock
+    if (!store) return
+    try {
+      const up = (this.deps.uptime ?? uptime)() * 1000
+      if (!Number.isFinite(wall) || !Number.isFinite(up) || up < 0) throw new Error("Invalid clock reading")
+      const saved = store.get(RETENTION_CLOCK)
+      if (saved !== null) {
+        const previous = JSON.parse(saved)
+        if (!Number.isFinite(previous?.wall) || !Number.isFinite(previous?.up) || previous.up < 0) throw new Error("Invalid clock record")
+        const elapsed = wall - previous.wall
+        // After a reboot, only the current boot's uptime is evidence of elapsed time.
+        const elapsedUptime = up >= previous.up ? up - previous.up : up
+        if (elapsed < 0 || elapsed - elapsedUptime > DAY_MS) {
+          const reason = elapsed < 0 ? "is earlier than the last trusted backup time" : "advanced more than one day beyond the elapsed device uptime"
+          return `Retention was skipped because this device's clock ${reason}. Check the device clock before the next backup.`
+        }
+      }
+      // A skipped run must never make an untrusted time the baseline for the next run.
+      if (record) {
+        const observation = JSON.stringify({ wall, up })
+        if (observation !== saved) store.set(RETENTION_CLOCK, observation)
+      }
+    } catch {
+      return "Retention was skipped because TenuVault could not read or save the clock check in app storage."
+    }
   }
 
   private now(): Date {
