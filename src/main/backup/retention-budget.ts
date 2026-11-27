@@ -47,6 +47,11 @@ export class RetentionBudget {
 
   meter(response: Response): Response {
     if (!response.body) return response
+    const declared = Number(response.headers.get("content-length"))
+    if (Number.isFinite(declared) && declared > this.limits.bytes - this.bytes) {
+      void response.body.cancel().catch(() => undefined)
+      throw new RetentionBudgetError()
+    }
     const reader = response.body.getReader()
     const body = new ReadableStream<Uint8Array>({
       pull: async controller => {

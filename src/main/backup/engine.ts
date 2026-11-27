@@ -1398,6 +1398,7 @@ export class BackupEngine {
     const limit = !budget ? allBackups.length : !mixed ? budget.limits.candidates : isLargeBackup(current) ? Math.floor(budget.limits.candidates / 2) : Math.ceil(budget.limits.candidates / 2)
     const backups = allBackups.slice(start, start + limit)
     let lastProcessed: string | undefined
+    let reviewing: string | undefined
     let deferred = start + limit < allBackups.length
 
     if (!backups.length) return 0
@@ -1482,6 +1483,7 @@ export class BackupEngine {
     try {
       for (const [index, backup] of backups.entries()) {
         lastProcessed = backups[index - 1]?.prefix
+        reviewing = backup.prefix
         const entry = owners[index]
         const metadata = entry?.metadata
         let companion: Record<string, unknown> | null = null
@@ -1571,7 +1573,13 @@ export class BackupEngine {
       lastProcessed = backups.at(-1)?.prefix
     } catch (error) {
       if (!(error instanceof RetentionBudgetError)) { reportRemnants(); throw error }
-      if (!lastProcessed) throw error
+      if (!lastProcessed) {
+        if (!reviewing) throw error
+        // An oversized candidate must not permanently block later candidates. It stays
+        // intact and is reconsidered after the review reaches the end of the listing.
+        this.write(job, `Kept backup ${reviewing} because retention reached its storage budget while reviewing it.`, "warning")
+        lastProcessed = reviewing
+      }
       deferred = true
     }
     if (unverified) {

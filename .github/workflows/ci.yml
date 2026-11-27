@@ -124,15 +124,15 @@ jobs:
           path: out/smoke
           if-no-files-found: ignore
 
-      # A complete first sign-in in every browser engine, in the packaged Linux app, against a
-      # local stand-in for login.microsoftonline.com and the licensing service that the runner's
-      # hosts file and trust store point to (scripts/sign-in-e2e).
       - name: Check historical backup payloads on Linux
         timeout-minutes: 3
         env:
           TENUVAULT_SMOKE_SECTION: backup-upgrade
         run: xvfb-run -a node scripts/smoke.mjs out/smoke-upgrade
 
+      # A complete first sign-in in every browser engine, in the packaged Linux app, against a
+      # local stand-in for login.microsoftonline.com and the licensing service that the runner's
+      # hosts file and trust store point to (scripts/sign-in-e2e).
       - name: Package the Linux app
         run: npx electron-builder --config electron-builder.config.cjs --linux dir --publish never
 
