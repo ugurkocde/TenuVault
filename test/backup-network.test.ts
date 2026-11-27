@@ -1,4 +1,5 @@
 import { emptyIntuneRead } from "./helpers"
+import { createHash } from "node:crypto"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, verifyStorageAccess } from "../src/main/backup/engine"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -367,7 +368,7 @@ describe("backup request recovery", () => {
     // Each unreadable manifest, then the folder's marker (none here), read once.
     expect(reads).toBe(16)
     expect(deletes).toBe(0)
-    expect(job.log.join("\n")).toContain(`Could not read the metadata of 8 older backups: ${message.replace(/\.$/, "")}. They were left in place.`)
+    expect(job.log.join("\n")).toContain(`Could not read the metadata of 8 older backups: ${message.replace(/\.$/, "")}. Older backups were left in place.`)
     expect(job.log.join("\n")).not.toContain("Could not remove old backups")
     expect(job.log.join("\n")).not.toMatch(/did not respond|network stopped responding/)
     const manifestUrl = new URL(`https://contoso.blob.core.windows.net/intune-backups/${job.backupFolder}/metadata.json`)
@@ -382,7 +383,7 @@ describe("backup request recovery", () => {
     expect(saved.get(manifestUrl.pathname)).toBe(committed)
   })
 
-  it("still removes the other expired backups when one metadata blob cannot be decrypted", async () => {
+  it("keeps every expired backup when one metadata blob cannot be decrypted", async () => {
     requestTimers()
     vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
     const saved = new Map<string, Uint8Array>()
@@ -423,15 +424,9 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.exception).toBeUndefined()
     const log = job.log.join("\n")
-    // The newest readable backup is kept because it holds types this backup leaves out; the oldest is removed.
-    expect(log).toContain("Removed 1 backup older than 30 days.")
-    expect(log).toContain("Kept 1 older backup because it holds the newest copy of types this backup leaves out.")
-    expect(log).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. It was left in place.`)
-    expect(log).not.toContain("Could not remove old backups")
-    expect(log).not.toContain("not recorded as this tenant's")
-    expect(deleted.filter(path => path.includes("backup-2026-08-01-"))).toHaveLength(2)
-    expect(deleted.filter(path => path.includes("backup-2026-08-02-"))).toHaveLength(0)
-    expect(deleted.filter(path => path.includes("backup-2026-08-03-"))).toHaveLength(0)
+    expect(log).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. Older backups were left in place.`)
+    expect(log).not.toContain("Removed")
+    expect(deleted).toEqual([])
     expect([...saved.keys()].filter(path => path.includes("backup-2026-08-02-"))).toHaveLength(2)
   })
 
@@ -476,7 +471,6 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(deleted).toHaveLength(0)
     const log = job.log.join("\n")
-    expect(log).toContain("Kept 1 older backup not recorded as this tenant's")
     expect(log).toContain("Could not read the metadata of 1 older backup")
     expect(log).not.toContain("Removed")
   })
@@ -530,7 +524,7 @@ describe("backup request recovery", () => {
     const oldManifest = `/intune-backups/${oldPrefix}metadata.json`
     const oldPolicy = `/intune-backups/${oldPrefix}DeviceConfigurations/Old.json`
     const saved = new Map([
-      [oldManifest, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: request.scope.excluded } })],
+      [oldManifest, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: request.scope.excluded }, Items: { "DeviceConfigurations/old": { file: "Old.json", sha256: createHash("sha256").update(JSON.stringify({ id: "old" })).digest("hex") } } })],
       [oldPolicy, JSON.stringify({ id: "old" })],
     ])
     const original = new Map(saved)
@@ -550,7 +544,7 @@ describe("backup request recovery", () => {
       if (init?.method === "GET" && url.search) {
         const entries = url.searchParams.get("delimiter") === "/"
           ? `<BlobPrefix><Name>${oldPrefix}</Name></BlobPrefix>`
-          : [oldManifest, oldPolicy].map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`).join("")
+          : [...saved.keys()].filter(path => path.startsWith(`/intune-backups/${url.searchParams.get("prefix")}`)).map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`).join("")
         return new Response(`<EnumerationResults><Blobs>${entries}</Blobs></EnumerationResults>`)
       }
       if (init?.method === "GET") return new Response(saved.get(url.pathname), { headers: { "content-type": "application/json", etag: '"fixture"' } })

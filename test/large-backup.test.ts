@@ -1,5 +1,7 @@
 vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 
+import { createHash } from "node:crypto"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -117,19 +119,26 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
       expect(f.graph.stats().throttles).toBeGreaterThan(0)
     } finally { await f.graph.close() }
   }, 15_000)
-  it("deletes all index and relationship shards after a complete replacement", async () => {
+  it.each(["complete", "missing index", "missing relationship", "damaged relationship"])("checks every large inventory shard before deletion: %s", async state => {
     const f = await setup()
     const old = "backup-large-2020-01-01-000000"
     try {
       await f.store.createContainer(f.local, LARGE_BACKUP_CONTAINER)
       const write = (name: string, value: unknown) => f.store.put(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${old}/${name}`), Buffer.from(JSON.stringify(value)), "application/json")
       await write(".tenuvault-owner.json", { TenantId: TENANT, RunId: "old" })
-      await write(`${type.folder}/old.json`, { id: "old" })
-      await write(indexPath(type.folder, 0), [{ id: "old", file: "old.json", hash: "A".repeat(22) }])
-      await write(`_relations/${type.folder}/old/members/000000.json`, ["member"])
+      const oldObject = { id: "old", members: { format: "sorted-id-shards-v1", count: 1, shards: 1, complete: true, hash: createHash("sha256").update('"member"\n').digest("hex") } }
+      await write(`${type.folder}/old.json`, oldObject)
+      if (state !== "missing index") await write(indexPath(type.folder, 0), [{ id: "old", file: "old.json", hash: snapshotHash(oldObject) }])
+      if (state !== "missing relationship") await write(`_relations/${type.folder}/old/members/000000.json`, [state === "damaged relationship" ? "different" : "member"])
       await write("metadata.json", { TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Included: [type.folder] }, Items: {}, LargeItems: { [type.folder]: { version: 1, count: 1, shards: 1, complete: true } } })
       const job = await f.engine.waitForJob(f.start())
       expect(job.coverage).toBe("complete")
+      if (state !== "complete") {
+        expect(f.requests.filter(request => request.startsWith("DELETE "))).toEqual([])
+        if (state !== "missing index") expect((await f.store.list(f.local, LARGE_BACKUP_CONTAINER, `${old}/`)).some(blob => blob.name.endsWith("metadata.json"))).toBe(true)
+        expect(job.log.join(" ")).toMatch(/could not be verified|not available|is unavailable/)
+        return
+      }
       expect(await f.store.list(f.local, LARGE_BACKUP_CONTAINER, `${old}/`)).toEqual([])
       expect(await f.store.list(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${old}/`))).toEqual([])
       const deleted = f.requests.filter(request => request.startsWith("DELETE "))

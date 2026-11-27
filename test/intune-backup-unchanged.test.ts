@@ -122,7 +122,7 @@ async function run(scenario: Scenario) {
   const account = localStorageAccountName(TENANT)
   await store.createContainer(account, "intune-backups")
   for (const { folder, skipped } of OLDER) {
-    const metadata = { BackupFolder: folder, Status: "Success", Failures: 0, TenantId: TENANT, Scope: { Excluded: [], Included: INTUNE_TYPES.map((type) => type.folder) }, SkippedTypes: skipped, FailedTypes: [] }
+    const metadata = { BackupFolder: folder, Status: "Success", Failures: 0, TenantId: TENANT, Scope: { Excluded: [], Included: INTUNE_TYPES.map((type) => type.folder) }, SkippedTypes: skipped, FailedTypes: [], ItemCounts: { CompliancePolicies: 1, PowerShellScripts: 0 } }
     await store.put(account, "intune-backups", `${folder}/metadata.json`, Buffer.from(JSON.stringify(metadata)), "application/json")
     await store.put(account, "intune-backups", `${folder}/CompliancePolicies/Compliance.json`, Buffer.from("{}"), "application/json")
   }
@@ -144,6 +144,10 @@ async function run(scenario: Scenario) {
     const name = blob.name.slice(job.backupFolder!.length + 1)
     if (name === "metadata.json") manifest = JSON.parse(data.toString()) as Record<string, unknown>
     else files[name] = name === BACKUP_OWNER_FILE ? data.toString().replace(job.id, "<run>") : sha(data)
+  }
+  for (const [key, entry] of Object.entries(manifest.Items as Record<string, { file: string; sha256?: string }>)) {
+    expect(entry.sha256).toBe(files[`${key.split("/")[0]}/${entry.file}`])
+    delete entry.sha256
   }
   const folders = [...new Set((await store.list(account, "intune-backups")).map((blob) => blob.name.split("/")[0]!))].sort()
   const results = job.results ? without(job.results as unknown as Record<string, unknown>, ADDED.results) : undefined

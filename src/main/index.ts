@@ -666,6 +666,11 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
+    retentionProgress: {
+      get: key => appStore.get(`backup.retention.${key}`),
+      set: (key, prefix) => appStore.set(`backup.retention.${key}`, prefix),
+      delete: key => appStore.delete(`backup.retention.${key}`),
+    },
     // The connection is checked as a backup starts and after it ended. Neither waits for the other:
     // the backup runs whatever the check finds, and a check that fails is only an observation.
     // Whose sign-in the run reads with is noted as it starts, so its outcomes are credited to that sign-in.

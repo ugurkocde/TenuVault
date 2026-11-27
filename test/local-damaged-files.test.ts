@@ -285,7 +285,7 @@ describe("damaged local backup files", () => {
     const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
     expect(job.status).toBe("Completed")
     const log = job.log.join("\n")
-    expect(log).toContain("Retention is paused. 1 file in the backup folder could not be read and 1 backup is unavailable. Nothing in the backup folder is deleted until this is resolved")
+    expect(log).toContain(`Retention is paused. Backup ${NEW} is unavailable: 1 file listed in its manifest is missing or damaged.`)
     expect(log).not.toContain("Removed")
     // The expired backup is still there, next to the one just written.
     const folders = new Set((await store.list(account, CONTAINER)).map((blob) => blob.name.split("/")[0]))

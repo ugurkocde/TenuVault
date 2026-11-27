@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+import type { RetentionLimits } from "../src/main/backup/retention-budget"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { NextRequest } from "next/server"
@@ -24,8 +26,12 @@ const request = {
   scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) },
 }
 const owner = { Source: "TenuVault Desktop", TenantId: TENANT }
+const oldPolicy = { id: "old" }
+const sha256 = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
+const items = { "DeviceConfigurations/old": { file: "Old.json", sha256: sha256(oldPolicy) } }
+const completeManifest = { TenantId: TENANT, Status: "Success", Items: items, Scope: { Included: ["DeviceConfigurations"] } }
 
-function setup(options: { retention?: number; count?: number; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
   vi.useFakeTimers()
   vi.setSystemTime(now)
   const saved = new Map<string, Buffer>()
@@ -37,6 +43,7 @@ function setup(options: { retention?: number; count?: number; override?: (url: U
     const overridden = options.override?.(url, sent)
     if (overridden) return overridden
     if (url.hostname === "graph.microsoft.com") {
+      if (url.pathname.endsWith("/deviceCompliancePolicies")) return Response.json({ value: [] })
       return url.pathname.endsWith("/deviceConfigurations")
         ? Response.json({ value: Array.from({ length: options.count ?? 0 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
         : Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
@@ -60,21 +67,21 @@ function setup(options: { retention?: number; count?: number; override?: (url: U
   }
   registerStorageToken("token", TENANT)
   const fetch = legacyAzureReader(wireFetch, () => [master])
-  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30 })
+  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30, retentionLimits: options.limits })
   /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
   function seed(name: string, value: unknown, sealed = false, key = master) {
     const body = Buffer.from(typeof value === "string" ? value : JSON.stringify(value))
     saved.set(name, sealed ? sealLegacyAzure(body, key, TENANT, new URL(`${base}${name}`)) : body)
   }
   function folder(prefix: string, marker: unknown = owner, sealed = false) {
-    seed(`${prefix}DeviceConfigurations/Old.json`, { id: "old" }, sealed)
+    seed(`${prefix}DeviceConfigurations/Old.json`, oldPolicy, sealed)
     if (marker !== null) seed(`${prefix}${BACKUP_OWNER_FILE}`, marker, sealed)
   }
   return { engine, fetch, saved, calls, seed, folder }
 }
 
-async function complete(engine: BackupEngine) {
-  const job = engine.start(request)
+async function complete(engine: BackupEngine, scope = request.scope) {
+  const job = engine.start({ ...request, scope })
   await engine.waitForJob(job)
   await vi.advanceTimersByTimeAsync(0)
   expect(job.status).toBe("Completed")
@@ -146,7 +153,7 @@ describe("backup folder ownership", () => {
     const { engine, saved, calls, seed, folder } = setup()
     const expired = "backup-2026-08-01-020000/"
     folder(expired)
-    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Failed", Failures: 0, Scope: { Excluded: [] }, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 } })
+    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Failed", Failures: 0, Scope: { Excluded: [] }, Items: items, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 } })
     await complete(engine)
     expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
     expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`, `${expired}${BACKUP_OWNER_FILE}`])
@@ -186,21 +193,21 @@ describe("backup folder ownership", () => {
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
   })
 
-  it("ages out plain and openable legacy backups in a mixed container but never one no key opens", async () => {
+  it("keeps all backups when a legacy backup cannot be opened", async () => {
     const { engine, saved, seed, folder } = setup()
     const plain = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/", unopenable = "backup-2026-08-03-020000/"
-    const manifest = { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } }
+    const manifest = { TenantId: TENANT, Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } }
     folder(plain)
     seed(`${plain}metadata.json`, manifest)
     folder(legacy, owner, true)
     seed(`${legacy}metadata.json`, manifest, true)
     folder(unopenable, owner, true)
     seed(`${unopenable}metadata.json`, manifest, true, Buffer.alloc(32, 9))
-    const kept = [...saved.entries()].filter(([name]) => name.startsWith(unopenable))
+    const kept = [...saved.entries()]
     const job = await complete(engine)
-    expect([...saved.keys()].some(name => name.startsWith(plain) || name.startsWith(legacy))).toBe(false)
+    expect([...saved.keys()].some(name => name.startsWith(plain) || name.startsWith(legacy))).toBe(true)
     for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
-    expect(job.log.join("\n")).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. It was left in place.`)
+    expect(job.log.join("\n")).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. Older backups were left in place.`)
   })
 
   it("never deletes another tenant's untagged backup when a damaged manifest sits in the container", async () => {
@@ -209,20 +216,20 @@ describe("backup folder ownership", () => {
     folder(damaged)
     saved.set(`${damaged}metadata.json`, Buffer.from("{ not json"))
     folder(theirs, { ...owner, TenantId: OTHER })
-    seed(`${theirs}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${theirs}metadata.json`, { Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     const original = new Map(saved)
     const job = await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
-    expect(job.log.join("\n")).toContain("Could not read the metadata of 1 older backup: metadata.json is not valid JSON. It was left in place.")
+    expect(job.log.join("\n")).toContain("Could not read the metadata of 1 older backup: metadata.json is not valid JSON. Older backups were left in place.")
   })
 
   it("places an expired untagged backup by its ownership marker", async () => {
     const { engine, saved, seed, folder } = setup()
     const ours = "backup-2026-08-01-020000/", theirs = "backup-2026-08-02-020000/", damagedMarker = "backup-2026-08-03-020000/"
-    for (const prefix of [ours, theirs, damagedMarker]) seed(`${prefix}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    for (const prefix of [ours, theirs]) seed(`${prefix}metadata.json`, { Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     folder(ours)
     folder(theirs, { ...owner, TenantId: OTHER })
-    folder(damagedMarker, { Source: "TenuVault Desktop" })
+    folder(damagedMarker, { ...owner, TenantId: OTHER })
     const kept = [...saved.entries()].filter(([name]) => name.startsWith(theirs) || name.startsWith(damagedMarker))
     await complete(engine)
     expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
@@ -235,7 +242,7 @@ describe("backup folder ownership", () => {
     // Tenant B's run stopped before its manifest; tenant B's legacy backup records no tenant and has no marker.
     folder(abandoned, { ...owner, TenantId: OTHER })
     folder(legacy, null)
-    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${legacy}metadata.json`, { Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     const original = new Map(saved)
     await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
@@ -246,7 +253,7 @@ describe("backup folder ownership", () => {
     const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
     folder(abandoned, "{ damaged")
     folder(legacy, null)
-    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${legacy}metadata.json`, { Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     const original = new Map(saved)
     await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
@@ -257,23 +264,23 @@ describe("backup folder ownership", () => {
     const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
     folder(abandoned)
     folder(legacy, null)
-    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${legacy}metadata.json`, { Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     await complete(engine)
     expect([...saved.keys()].some((name) => name.startsWith(legacy))).toBe(false)
     expect(saved.has(`${abandoned}${BACKUP_OWNER_FILE}`)).toBe(true)
   })
 
-  it("keeps an untagged backup whose marker is oversized, reads it only to the cap, and continues", async () => {
+  it("keeps an untagged backup whose marker is oversized and stops retention at the cap", async () => {
     const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
     const oversized = "backup-2026-08-01-020000/", ours = "backup-2026-08-02-020000/"
     const { engine, saved, seed, folder } = setup({ override: (url, sent) => sent.method === "GET" && url.pathname.endsWith(`${oversized}${BACKUP_OWNER_FILE}`) ? new Response(big.body) : undefined })
-    seed(`${oversized}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${oversized}metadata.json`, { Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     folder(oversized)
-    seed(`${ours}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${ours}metadata.json`, { TenantId: TENANT, Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     folder(ours)
     const job = await complete(engine)
     expect(saved.has(`${oversized}metadata.json`)).toBe(true)
-    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
+    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(true)
     expect(job.log.join("\n")).toContain("is larger than the 32 MiB TenuVault reads")
     expect(big.pulled()).toBeLessThan(40)
   })
@@ -284,7 +291,7 @@ describe("backup folder ownership", () => {
     } })
     const expired = "backup-2026-08-01-020000/"
     folder(expired)
-    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     const first = await complete(engine)
     expect(first.log.join("\n")).toContain("protected by the storage account's immutability policy or legal hold")
     expect(saved.has(`${expired}metadata.json`)).toBe(false)
@@ -301,7 +308,7 @@ describe("backup folder ownership", () => {
     const { engine, calls, seed, folder } = setup()
     const expired = "backup-2026-08-01-020000/"
     folder(expired)
-    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     await complete(engine)
     expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`, `${expired}${BACKUP_OWNER_FILE}`])
   })
@@ -331,5 +338,66 @@ describe("backup folder ownership", () => {
     expect(zip.file("metadata.json")).not.toBeNull()
     expect(zip.file("DeviceConfigurations/Policy 0.json")).not.toBeNull()
     expect(await reviewArchive(raw)).toMatchObject({ tenantId: TENANT, backupId: job.backupFolder, count: 1 })
+  })
+})
+
+describe("verified retention coverage", () => {
+  it.each(["missing", "damaged", "unauthenticated", "hash mismatch", "valid"])("checks every referenced policy before replacing the older copy: %s", async condition => {
+    const { engine, saved, calls, seed, folder } = setup()
+    const older = "backup-2026-08-01-020000/"
+    const newer = "backup-2026-09-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    seed(`${newer}metadata.json`, {
+      ...completeManifest,
+      Items: condition === "unauthenticated" ? { "DeviceConfigurations/old": { file: "Old.json" } } : items,
+    })
+    if (condition !== "missing") {
+      const body = condition === "damaged" ? "{ malformed" : condition === "hash mismatch" ? { id: "old", changed: true } : oldPolicy
+      seed(`${newer}DeviceConfigurations/Old.json`, body)
+    }
+    // Even when the current run independently covers the type, failed verification stops the whole pass.
+    const scope = condition === "damaged" ? request.scope : { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) }
+    const job = await complete(engine, scope)
+    expect(saved.has(`${older}metadata.json`)).toBe(condition !== "valid")
+    expect(saved.has(`${newer}metadata.json`)).toBe(true)
+    const deletes = calls.filter(call => call.request.method === "DELETE")
+    if (condition === "valid") expect(deletes.map(call => call.name)).toEqual([`${older}metadata.json`, `${older}DeviceConfigurations/Old.json`, `${older}${BACKUP_OWNER_FILE}`])
+    else {
+      expect(deletes).toEqual([])
+      expect(job.log.join("\n")).toContain("could not be verified")
+    }
+  })
+
+  it.each(["requests", "bytes"] as const)("keeps the expired backup when the %s budget is exhausted", async limit => {
+    const limits = { candidates: 4, requests: 100, bytes: 100_000, [limit]: limit === "requests" ? 5 : 200 }
+    const { engine, saved, calls, seed, folder } = setup({ limits })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    const job = await complete(engine)
+    const reads = calls.filter(call => ["GET", "DELETE"].includes(call.request.method) && new URL(call.request.url).hostname !== "graph.microsoft.com")
+    expect(reads.length).toBeLessThanOrEqual(limits.requests)
+    expect(job.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+  })
+
+  it.each(["candidate", "request"])("continues with the next candidate after a %s limit", async limit => {
+    const { engine, saved, calls, seed, folder } = setup({ limits: { candidates: limit === "candidate" ? 1 : 8, requests: limit === "request" ? 25 : 100, bytes: 100_000 } })
+    const older = "backup-2026-08-01-020000/", newer = "backup-2026-09-01-020000/"
+    for (const prefix of [older, newer]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, completeManifest)
+    }
+    const first = await complete(engine)
+    expect(first.log.join("\n")).toContain("will continue reviewing older backups")
+    expect(saved.has(`${newer}metadata.json`)).toBe(false)
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    if (limit === "candidate") expect(calls.some(call => call.name === `${older}metadata.json` && call.request.method === "GET")).toBe(false)
+    await vi.advanceTimersByTimeAsync(1000)
+    await complete(engine)
+    expect(saved.has(`${older}metadata.json`)).toBe(false)
+    for (const call of calls.filter(call => call.request.method === "DELETE")) expect(call.request.headers.get("if-match")).toBe('"fixture"')
   })
 })

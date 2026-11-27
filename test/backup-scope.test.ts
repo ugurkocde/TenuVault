@@ -167,7 +167,7 @@ describe("BackupEngine with a scope", () => {
     await store.createContainer(account, "intune-backups")
     const put = (name: string, body: unknown) => store.put(account, "intune-backups", name, Buffer.from(JSON.stringify(body)), "application/json")
     // Oldest: a full backup. Middle: also expired, but without apps. Both are past retention.
-    await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] } })
+    await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", ItemCounts: { Apps: 1 }, Scope: { Excluded: [] } })
     await put("backup-2026-07-01-020000/Apps/Reader.json", {})
     await put("backup-2026-06-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] } })
     await put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: ["Apps"] } })

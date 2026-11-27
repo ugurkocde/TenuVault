@@ -292,7 +292,7 @@ describe("retention is scoped to the backup's tenant", () => {
     return { root, master, store, put, run }
   }
 
-  it("records the tenant and, in a container another tenant also uses, removes only this tenant's expired backups", async () => {
+  it("records the tenant and keeps all backups in a shared container when a manifest is unreadable", async () => {
     const { root, master, store, put, run } = await retentionSetup()
     await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", TenantId: TENANT.toUpperCase() })
     await put("backup-2026-07-02-020000/metadata.json", { Status: "Success", TenantId: OTHER })
@@ -306,6 +306,7 @@ describe("retention is scoped to the backup's tenant", () => {
     expect(job.status).toBe("Completed")
     expect(JSON.parse(await text(store, ACCOUNT, `${job.backupFolder}/metadata.json`)).TenantId).toBe(TENANT)
     expect(folders).toEqual([
+      "backup-2026-07-01-020000",
       "backup-2026-07-02-020000",
       "backup-2026-07-03-020000",
       "backup-2026-07-04-020000",
@@ -313,10 +314,9 @@ describe("retention is scoped to the backup's tenant", () => {
       "backup-2026-07-06-020000",
       "backup-2026-09-24-120000",
     ])
-    expect(log).toContain("Removed 1 backup older than 30 days.")
+    expect(log).not.toContain("Removed")
     // Metadata that is not a JSON object is unreadable, never a missing manifest: kept and reported.
-    expect(log).toContain("Kept 4 older backups not recorded as this tenant's")
-    expect(log).toContain("Could not read the metadata of 1 older backup: metadata.json is not a JSON object. It was left in place.")
+    expect(log).toContain("Could not read the metadata of 1 older backup: metadata.json is not a JSON object. Older backups were left in place.")
   })
 
   it("prunes backups from earlier versions when no other tenant uses the container", async () => {
@@ -337,17 +337,17 @@ describe("retention is scoped to the backup's tenant", () => {
   it("counts a backup from an earlier version as the newest copy of a type only when no other tenant uses the container", async () => {
     // Single tenant: the untagged August backup holds the newest copy of apps, so it stays and the tagged July one goes.
     const single = await retentionSetup()
-    await single.put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] } })
-    await single.put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, TenantId: TENANT })
+    await single.put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 } })
+    await single.put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 }, TenantId: TENANT })
     const one = await single.run({ excluded: ["Apps"] })
     expect(one.folders).toEqual(["backup-2026-08-01-020000", "backup-2026-09-24-120000"])
     expect(one.log).toContain("Kept 1 older backup because it holds the newest copy of types this backup leaves out.")
 
     // Shared: the untagged backup may be the other tenant's, so the tagged July backup keeps the newest copy of apps.
     const shared = await retentionSetup()
-    await shared.put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] } })
-    await shared.put("backup-2026-07-15-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, TenantId: OTHER })
-    await shared.put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, TenantId: TENANT })
+    await shared.put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 } })
+    await shared.put("backup-2026-07-15-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 }, TenantId: OTHER })
+    await shared.put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 }, TenantId: TENANT })
     const two = await shared.run({ excluded: ["Apps"] })
     expect(two.folders).toEqual(["backup-2026-07-01-020000", "backup-2026-07-15-020000", "backup-2026-08-01-020000", "backup-2026-09-24-120000"])
     expect(two.log).toContain("Kept 1 older backup because it holds the newest copy of types this backup leaves out.")

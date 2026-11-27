@@ -204,17 +204,18 @@ describe("failed backup manifest", () => {
     const { engine, saved } = setup({ count: 1, retention: 30 })
     const complete = "backup-2026-08-01-020000"
     const failed = "backup-2026-08-10-020000"
+    const sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
     // The older complete backup holds compliance policies, which the current scope leaves out.
     saved.set(`${complete}/CompliancePolicies/Old.json`, "{}")
-    saved.set(`${complete}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
+    saved.set(`${complete}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Excluded: [] }, Items: { "CompliancePolicies/old": { file: "Old.json", sha256 } }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
     saved.set(`${failed}/CompliancePolicies/Newer.json`, "{}")
-    saved.set(`${failed}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: status, Failures: 0, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
+    saved.set(`${failed}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: status, Failures: 0, Scope: { Excluded: [] }, Items: { "CompliancePolicies/newer": { file: "Newer.json", sha256 } }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(0)
     await engine.waitForJob(job)
     expect(job.status).toBe("Completed")
     expect(saved.has(`${complete}/metadata.json`)).toBe(true)
     expect(saved.has(`${complete}/CompliancePolicies/Old.json`)).toBe(true)
-    expect([...saved.keys()].some(name => name.startsWith(`${failed}/`))).toBe(false)
+    expect([...saved.keys()].some(name => name.startsWith(`${failed}/`))).toBe(true)
   })
 })

@@ -107,7 +107,7 @@ export async function captureLarge({ type, reader, pages, put, signal, saved, un
 
         const body = JSON.stringify(snapshot, null, 2)
         if (Buffer.byteLength(body) > (type.maxSnapshotBytes ?? 8 * 1024 * 1024)) throw new Error("The large snapshot exceeds its size limit")
-        await save(`${type.folder}/${objectId}.json`, body, { id: objectId, file: `${objectId}.json`, hash: snapshotHash(snapshot) })
+        await save(`${type.folder}/${objectId}.json`, body, { id: objectId, file: `${objectId}.json`, hash: snapshotHash(snapshot), sha256: createHash("sha256").update(body).digest("hex") })
         if (pending.size >= 16) await Promise.race(pending)
         if (failed) { await Promise.all(pending); throw failed }
       }

@@ -16,10 +16,10 @@ export async function* indexedEntries(folder: string, index: LargeIndex, read: J
 }
 
 /** A canonical archive order validates every reference before admitting its bytes. */
-export async function* largeFiles(metadata: Record<string, any>, read: JsonFileReader, relationship?: (shards: number) => void): AsyncGenerator<{ name: string; value: unknown }> {
+export async function* largeFiles(metadata: Record<string, any>, read: JsonFileReader, relationship?: (shards: number) => void, verify?: (name: string, hash?: string) => void): AsyncGenerator<{ name: string; value: unknown }> {
   yield { name: "metadata.json", value: metadata }
   const legacyPaths = new Set<string>()
-  for (const [identity, item] of Object.entries(metadata.Items ?? {}) as Array<[string, { file: string; hash: string }]>) {
+  for (const [identity, item] of Object.entries(metadata.Items ?? {}) as Array<[string, { file: string; hash: string; sha256?: string }]>) {
     const [folder, id, ...rest] = identity.split("/")
     if (!folder || !id || rest.length || !/^[A-Za-z0-9]+$/.test(folder) || !/^[^/\\]+\.json$/.test(item.file)) throw new Error("Invalid backup inventory")
     if (typeForFolder(folder)?.folder && Object.hasOwn(DIRECTORY_SCHEMAS, typeForFolder(folder)!.folder)) throw new Error("Large directory inventories require sharded archives")
@@ -27,6 +27,7 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
     if (legacyPaths.has(name.toLowerCase())) throw new Error("Duplicate archive path")
     legacyPaths.add(name.toLowerCase())
     if (value.id !== id || snapshotHash(value as Item) !== item.hash) throw new Error("Backup fingerprint mismatch")
+    verify?.(name, item.sha256)
     yield { name, value }
   }
   for (const [folder, index] of Object.entries(largeIndexes(metadata)).sort(([a], [b]) => a < b ? -1 : 1)) {
@@ -37,6 +38,7 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
     for (let shard = 0; shard < index.shards; shard++) {
       const name = indexPath(folder, shard)
       const entries = readIndexShard(await read(name), Math.min(LARGE_SHARD_ITEMS, index.count - shard * LARGE_SHARD_ITEMS), previous)
+      verify?.(name, metadata.LargeIndexHashes?.[name])
       yield { name, value: entries }
       for (const entry of entries) {
         if (folder in DIRECTORY_SCHEMAS && !directoryObjectId(folder, entry.id)) throw new Error("Invalid directory object ID")
@@ -44,6 +46,7 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
         const name = `${folder}/${entry.file}`, value = await read(name)
         if (value.id !== entry.id || snapshotHash(value as Item) !== entry.hash) throw new Error("Backup fingerprint mismatch")
         assertDirectorySnapshot(folder, value as Item)
+        verify?.(name, entry.sha256)
         yield { name, value }
         for (const [property, reference] of Object.entries(value) as Array<[string, any]>) {
           if (!reference || typeof reference !== "object" || Array.isArray(reference) || !["sorted-id-shards-v1", "sorted-object-shards-v1"].includes(reference.format)) continue

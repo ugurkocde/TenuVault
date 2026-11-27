@@ -7,7 +7,7 @@ export const LARGE_TYPE_REQUESTS = 250_000
 export const LARGE_JOB_MS = 8 * 60 * 60_000
 export interface LargeIndex { version: 1; count: number; shards: number; complete: boolean }
 export type LargeIndexes = Record<string, LargeIndex>
-export interface LargeEntry { id: string; file: string; hash: string }
+export interface LargeEntry { id: string; file: string; hash: string; sha256?: string }
 export const indexPath = (folder: string, shard: number) => `_index/${folder}/${String(shard).padStart(6, "0")}.json`
 export const relationPath = (folder: string, id: string, property: string, shard: number) => `_relations/${folder}/${id}/${property}/${String(shard).padStart(6, "0")}.json`
 export const safeLargeId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,160}$/.test(value)

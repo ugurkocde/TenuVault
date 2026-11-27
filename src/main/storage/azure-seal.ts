@@ -1,3 +1,5 @@
+import { meterLegacyBackupResponse } from '../backup/retention-budget'
+import { authenticatedBackupRead } from './authenticated-read'
 import { createDecipheriv, createHash, hkdfSync } from 'node:crypto'
 import { FetchApplicationError, FetchPreconditionError, LegacySealedError, OversizedSealedError } from '../api/network-error'
 import { LARGE_BACKUP_CONTAINER } from '../../shared/backup-storage'
@@ -119,7 +121,7 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
     catch { return fetchImpl(input, init) }
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
     if (!isBackupBlobRead(url, method)) return fetchImpl(input, init)
-    const response = await fetchImpl(input, init)
+    const response = meterLegacyBackupResponse(await fetchImpl(input, init))
     if (!response.ok || !response.body) return response
     // Only the first bytes are read to tell the formats apart, so a plain blob streams through to the
     // caller's own size cap instead of being buffered here. Body reads can fail in transit; only
@@ -147,6 +149,6 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
       throw new LegacySealedError(error, otherTenant)
     }
     headers.set('content-type', 'application/json')
-    return new Response(new Uint8Array(data), { status: response.status, headers })
+    return authenticatedBackupRead(new Response(new Uint8Array(data), { status: response.status, headers }))
   }
 }

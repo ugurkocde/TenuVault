@@ -16,6 +16,8 @@ import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
+import { RetentionBudget, RetentionBudgetError, RETENTION_LIMITS, type RetentionLimits } from "./retention-budget"
+import { verifyHalf, type VerifiedHalf } from "./retention-verification"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
 import { GRAPH, BlobClaimError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, providerErrorCode, providerStatus, withAbort, withRequestTimeout } from "./request"
@@ -134,6 +136,8 @@ export interface BackupEngineDeps {
   services?: (tenantId: string) => ServiceSelection
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
+  retentionLimits?: RetentionLimits
+  retentionProgress?: { get(key: string): string | null; set(key: string, prefix: string): void; delete(key: string): void }
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -314,6 +318,7 @@ async function tokenOrStop<T>(get: () => Promise<T>, outcome?: RunOutcome): Prom
 }
 
 export class BackupEngine {
+  private readonly retentionCursor = new Map<string, string>()
   private readonly jobs = new Map<string, BackupJob>()
   private readonly running = new Map<string, { job: BackupJob; key: string; mode: BackupAuthMode }>()
   private readonly executions = new Map<string, { controller: AbortController; done: Promise<BackupJob> }>()
@@ -918,6 +923,7 @@ export class BackupEngine {
     const items: BackupItems = {}
     const largeItems: LargeIndexes = {}
     const largeSizes: Record<string, number> = {}
+    const largeIndexHashes: Record<string, string> = {}
     let done = 0
     const itemTimeoutWarnings: string[] = []
     // Same shape as the runbook's metadata.json, describing what this run saved so far.
@@ -962,7 +968,7 @@ export class BackupEngine {
         ...(mixed ? { CompanionBackup: large ? ordinaryFolder : largeFolder, ...(!large ? { LargeBackupOutcomes: manifestOutcomes(outcomes.types.filter(type => !inFolder(type.folder))) } : {}) } : {}),
         // Per item fingerprints (by type folder and Intune ID), so backups can be compared without reading every file.
         Items: large ? {} : sortKeys(items),
-        ...(large ? { LargeItems: largeItems, LargeSizes: largeSizes } : {}),
+        ...(large ? { LargeItems: largeItems, LargeSizes: largeSizes, LargeIndexHashes: sortKeys(largeIndexHashes) } : {}),
         ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
         ...extra,
       }
@@ -1017,6 +1023,7 @@ export class BackupEngine {
         items[`${type.folder}/${item.id}`] = {
           file: `${fileName}.json`,
           hash: snapshotHash(detail),
+          sha256: createHash("sha256").update(body).digest("hex"),
           // What versions that could not read this type's assignments recorded, to compare with their backups.
           ...(type.assignmentsFormerlyExpanded ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
           ...(maskedView ? { hashWithMaskedSecrets: snapshotHash(maskedView) } : {}),
@@ -1151,6 +1158,7 @@ export class BackupEngine {
               if (error instanceof TokenError && causedBy(error, "SignInRequiredError")) throw error
               throw error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error })
             }
+            if (path.startsWith("_index/")) largeIndexHashes[path] = createHash("sha256").update(body).digest("hex")
             largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body)
           },
           signal: typeSignal,
@@ -1177,6 +1185,7 @@ export class BackupEngine {
       } finally { clearTimeout(typeTimer) }
     }
 
+    let committedLargeManifest: Record<string, unknown> | null = null
     if (largeClaimed) {
       try {
         const ending = typesNow(false)
@@ -1184,7 +1193,9 @@ export class BackupEngine {
         const status = failures ? (saved ? "CompletedWithWarnings" : "Failed") : nothingRead(ending) ? "Failed" : "Success"
         // In a split run the final ordinary manifest is the run's record, so only its commit can leave the
         // run unconfirmed; an ambiguous large commit is a failure of the large types below.
-        await commitManifest(largeFolder, manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder), !mixed)
+        const largeManifest = manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder)
+        await commitManifest(largeFolder, largeManifest, !mixed)
+        committedLargeManifest = largeManifest
       } catch (error) {
         network.signal.throwIfAborted()
         // Without their inventory the uploaded snapshots cannot be opened, so none of them counts as saved,
@@ -1264,20 +1275,22 @@ export class BackupEngine {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
     } else if (deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
-      const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
+      const budget = local ? undefined : new RetentionBudget(this.deps.retentionLimits ?? RETENTION_LIMITS)
+      const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork, budget)
       try {
-        const covered = restorableFolders(metadata)
-        if (mixed && largeClaimed && coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume === "large")) === "complete") for (const type of largeTypes) covered.add(type.folder)
-        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, covered, retentionNetwork.signal)
-        if (unreadableOlder > 0) retentionWarnings++
-        if (mixed && largeClaimed) {
-          const largeMetadata = { ...metadata, Scope: { Included: largeTypes.map(type => type.folder) } }
-          try { if (await this.applyRetention(job, largeStorage, largeFolder, coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume === "large")) === "complete" ? restorableFolders(largeMetadata) : new Set(), largeNetwork.signal)) retentionWarnings++ }
-          catch (error) { this.write(job, `Large backup retention was skipped. ${error instanceof Error ? error.message : String(error)}`, "warning"); retentionWarnings++ }
+        const pending: Array<() => Promise<void>> = []
+        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, budget, mixed, committedLargeManifest)
+        let unreadableLarge = 0
+        if (mixed && committedLargeManifest) {
+          unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, budget, mixed)
         }
+        if (unreadableOlder || unreadableLarge) retentionWarnings++
+        else for (const apply of pending) await apply()
       } catch (error) {
         retentionWarnings++
-        if (signal.aborted || Date.now() >= deadline) {
+        if (error instanceof RetentionBudgetError) {
+          this.write(job, "Retention reached its storage budget. Older backups will be reconsidered on the next run.", "warning")
+        } else if (signal.aborted || Date.now() >= deadline) {
           this.write(job, "Retention was interrupted; older backups are cleaned up on the next run", "warning")
         } else if (retentionNetwork.signal.aborted) {
           this.write(job, "Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.", "warning")
@@ -1359,16 +1372,16 @@ export class BackupEngine {
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<number> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<void>>, signal: AbortSignal, budget?: RetentionBudget, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
-    // Each storage class retains its own coverage, so large discovery cannot block ordinary deletion.
+    // Large discovery lists only root records, not the flat inventory of policy and relationship blobs.
     const ordinary = isLargeBackup(current) ? { prefixes: [] } : await storage.list("backup-", "/")
-    const large = isLargeBackup(current) ? await storage.list("backup-large-", "", LARGE_BACKUP_CONTAINER, true) : { blobs: [] }
-    const largePrefixes = [...new Set(large.blobs.map(name => `${name.split("/")[0]}/`))].filter(isLargeBackup)
+    const large = isLargeBackup(current) ? await storage.list("backup-large-", "/", LARGE_BACKUP_CONTAINER, true) : { blobs: [], prefixes: [] }
+    const largePrefixes = [...new Set([...large.prefixes, ...large.blobs.map(name => `${name.split("/")[0]}/`)])].filter(isLargeBackup)
     const prefixes = [...ordinary.prefixes, ...largePrefixes]
-    const backups = prefixes
+    const allBackups = [...new Set(prefixes)]
       .map((prefix) => {
         const match = /^backup-(?:large-)?(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
         if (!match || prefix === `${current}/`) return null
@@ -1378,6 +1391,16 @@ export class BackupEngine {
       .filter((backup) => backup !== null)
       .sort((a, b) => b.time - a.time)
 
+    const cursorKey = `${job.tenantId}/${job.storageAccountName}/${isLargeBackup(current)}`
+    const cursor = this.deps.retentionProgress?.get(cursorKey) ?? this.retentionCursor.get(cursorKey)
+    const after = cursor ? allBackups.findIndex(backup => backup.prefix < cursor) : 0
+    const start = after < 0 ? 0 : after
+    const limit = !budget ? allBackups.length : !mixed ? budget.limits.candidates : isLargeBackup(current) ? Math.floor(budget.limits.candidates / 2) : Math.ceil(budget.limits.candidates / 2)
+    const backups = allBackups.slice(start, start + limit)
+    let lastProcessed: string | undefined
+    let deferred = start + limit < allBackups.length
+
+    if (!backups.length) return 0
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
@@ -1386,14 +1409,13 @@ export class BackupEngine {
     let unreadableReason = ""
     // Metadata or a marker that cannot be opened (an Azure backup sealed by an earlier version with a
     // key this device lacks, a local file with a wrong key or damage, JSON that is not an object) or
-    // a local backup made unavailable by damaged files is unreadable: never ours, and it must not
-    // stop the review of the other backups. Any other failure stops retention.
+    // a local backup made unavailable by damaged files is unreadable, so retention keeps the whole set.
     const readFile = async (name: string): Promise<OwnershipFile> => {
       try {
         const value = await storage.readJson(name)
         return value === null ? { kind: "missing" } : { kind: "found", value }
       } catch (error) {
-        if (!(error instanceof FetchApplicationError) && !(error instanceof InventoryDamagedError)) throw error
+        if (error instanceof RetentionBudgetError || !(error instanceof FetchApplicationError)) throw error
         return { kind: "unreadable", error }
       }
     }
@@ -1417,9 +1439,22 @@ export class BackupEngine {
         owner: owner.kind === "owned" ? "this" : owner.kind === "other" ? "other" : "untagged",
       }
     }, signal)
-    // An unreadable backup may be another tenant's, so while one exists the container counts as
-    // shared and untagged backups from earlier versions stay, as they did before.
-    const shared = owners.some((entry) => entry?.owner === "other") || unreadable.size > 0
+    if (unreadable.size > 0) {
+      this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. Older backups were left in place.`, "warning")
+      return unreadable.size
+    }
+    const shared = backups.length !== allBackups.length || owners.some(entry => entry?.owner === "other")
+
+    const currentManifest = written ?? await storage.readJson(`${current}/metadata.json`)
+    if (!currentManifest) throw new Error("The latest backup has no readable manifest")
+    await verifyHalf(storage, `${current}/`, currentManifest)
+    const covered = completeFolders(currentManifest)
+    const currentCompanion = currentManifest.CompanionBackup
+    if (typeof currentCompanion === "string" && isLargeBackup(currentCompanion) && writtenCompanion && completeHalf(writtenCompanion)) {
+      if (!matchingCompanions(current, currentManifest, currentCompanion, writtenCompanion)) throw new Error("The latest backup's companion does not match")
+      await verifyHalf(storage, `${currentCompanion}/`, writtenCompanion)
+      for (const folder of completeFolders(writtenCompanion)) covered.add(folder)
+    }
 
     // Types no newer backup holds yet, walking from the newest backup to the oldest.
     const uncovered = new Set(INTUNE_TYPES.map((type) => type.folder).filter((folder) => !covered.has(folder)))
@@ -1429,13 +1464,12 @@ export class BackupEngine {
     let protectedKept = 0
     let partlyRemoved = 0
     let unverified = 0
-    const verify = async (prefix: string, names: string[]) => {
-      const verified = new Map<string, string>()
-      try {
-        await pool(names, CONCURRENCY, async name => { verified.set(name, await storage.verifyForDeletion(name)) }, signal)
-        return verified
-      } catch (error) {
+    const plan: Array<{ halves: VerifiedHalf[]; prefixes: string[]; remnant: boolean }> = []
+    const verify = async (prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) => {
+      try { return await verifyHalf(storage, prefix, manifest, listing, expectedOwner) }
+      catch (error) {
         signal.throwIfAborted()
+        if (error instanceof RetentionBudgetError || error instanceof RequestTimeoutError || error instanceof InventoryDamagedError) throw error
         unverified++
         this.write(job, `Kept backup ${prefix} because a file could not be verified: ${error instanceof Error ? error.message : String(error)}`, "warning")
         return null
@@ -1447,6 +1481,7 @@ export class BackupEngine {
     }
     try {
       for (const [index, backup] of backups.entries()) {
+        lastProcessed = backups[index - 1]?.prefix
         const entry = owners[index]
         const metadata = entry?.metadata
         let companion: Record<string, unknown> | null = null
@@ -1455,7 +1490,7 @@ export class BackupEngine {
         let validPair = false
         if (paired && typeof companionId === "string" && isBackupName(companionId) && isLargeBackup(companionId) !== isLargeBackup(backup.prefix)) {
           try { companion = await storage.readJson(`${companionId}/metadata.json`) }
-          catch { unverified++; this.write(job, `Kept mixed backup ${backup.prefix}: its companion is unreadable.`, "warning"); continue }
+          catch (error) { if (error instanceof RetentionBudgetError) throw error; unverified++; this.write(job, `Kept mixed backup ${backup.prefix}: its companion is unreadable.`, "warning"); continue }
           validPair = matchingCompanions(backup.prefix.slice(0, -1), metadata!, companionId, companion) && completeHalf(metadata) && completeHalf(companion)
         }
         // Older standalone manifests did not record Coverage, but successful complete indexes
@@ -1464,7 +1499,7 @@ export class BackupEngine {
           && (metadata.Failures === undefined || metadata.Failures === 0) && metadata.Coverage !== "Incomplete"
           && Object.values(metadata.LargeItems ?? {}).every((index: any) => index.complete === true)
         const remnant = !metadata || (paired && !validPair) || (isLargeBackup(backup.prefix) && !standaloneComplete)
-        if (remnant && !unreadable.has(index)) {
+        if (remnant) {
           const marker = entry?.claim ?? await readFile(`${backup.prefix}${BACKUP_OWNER_FILE}`)
           const claim = marker.kind === "found" ? marker.value as Record<string, unknown> : null
           const owned = ownedRemnant(backup.prefix.slice(0, -1), tenant, claim, metadata)
@@ -1486,28 +1521,17 @@ export class BackupEngine {
           // or its companion is missing, so it is never removed while it holds a type's newest copy.
           const providesCoverage = [...completeFolders(metadata)].filter(folder => uncovered.has(folder))
           const inGrace = backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000
-          const verified = !inGrace || providesCoverage.length ? await verify(backup.prefix, listing.blobs) : null
-          if (verified) for (const folder of providesCoverage) uncovered.delete(folder)
-          if (!verified || providesCoverage.length || inGrace) { remnants.kept++; remnants.keptBytes += bytes; continue }
-          let remaining = bytes
-          try {
-            const markerName = `${backup.prefix}${BACKUP_OWNER_FILE}`, manifestName = `${backup.prefix}metadata.json`
-            // Keep the ownership claim until the last payload has gone, so a later pass can finish.
-            for (const name of [...listing.blobs.filter(name => name === manifestName), ...listing.blobs.filter(name => name !== manifestName && name !== markerName), ...listing.blobs.filter(name => name === markerName)]) {
-              await storage.delete(name, verified.get(name)!)
-              const size = listing.sizes.get(name) ?? 0
-              remaining -= size
-              remnants.deletedBytes += size
-            }
-            remnants.deleted++
-          } catch (error) {
-            remnants.kept++; remnants.keptBytes += remaining
-            if (!(error instanceof ProtectedBlobError)) throw error
+          // An unfinished half cannot replace a complete backup.
+          const verified = !inGrace && !providesCoverage.length ? await verify(backup.prefix, metadata ?? null, listing, marker) : null
+          if (!verified || [...verified.counts.keys()].some(folder => uncovered.has(folder) || !typeForFolder(folder))) {
+            remnants.kept++; remnants.keptBytes += bytes; continue
           }
+          budget?.reserveDeletes(verified.blobs.size)
+          plan.push({ halves: [verified], prefixes: [backup.prefix], remnant: true })
           continue
         }
         if (!metadata || !entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
-          if (backup.time < cutoff && !unreadable.has(index)) unowned++
+          if (backup.time < cutoff) unowned++
           continue
         }
         // The ordinary half alone coordinates complete pairs and records both halves' coverage.
@@ -1527,49 +1551,79 @@ export class BackupEngine {
           Date.parse(parseBackupName(String(companionId))!.timestamp) < cutoff
           && [...restorableFolders(companion!)].every(folder => covered.has(folder))
         ))
-        if (!expired && !providesCoverage.length) continue
-        const unitPrefixes = [backup.prefix, ...(companion ? [`${companionId}/`] : [])]
-        const unitListings = await Promise.all(unitPrefixes.map(prefix => storage.listFolder(prefix)))
-        const blobs = unitListings.flatMap(listing => listing.blobs)
-        const verified = await verify(backup.prefix, blobs)
-        if (!verified) continue
-        for (const folder of providesCoverage) uncovered.delete(folder)
+        const verified = await verify(backup.prefix, metadata, undefined, entry.claim)
+        const other = companion && await verify(`${companionId}/`, companion)
+        if (!verified || (companion && !other)) continue
+        const coverage = providesCoverage.filter(folder => {
+          const inventory = other && companion && restorableFolders(companion).has(folder) ? companion : metadata
+          return inventory.Items !== undefined || inventory.ItemCounts !== undefined || inventory.LargeItems !== undefined || Array.isArray(inventory.Outcomes)
+        })
+        for (const folder of coverage) uncovered.delete(folder)
         if (!expired) continue
-        if (providesCoverage.length) {
+        const payloadFolders = [...verified.counts.keys(), ...(other ? other.counts.keys() : [])]
+        if (providesCoverage.length || payloadFolders.some(folder => uncovered.has(folder) || !typeForFolder(folder))) {
           kept++
           continue
         }
-        // The manifest goes first: a delete that stops at a protected file must not leave a
-        // metadata.json that still reports the backup as complete. A protected manifest stops
-        // before any policy file is touched.
-        const manifests = new Set(unitPrefixes.map(prefix => `${prefix}metadata.json`))
-        const markers = new Set(unitPrefixes.map(prefix => `${prefix}${BACKUP_OWNER_FILE}`))
-        let deleted = 0
-        try {
-          // Keep ownership until every policy is gone, including when a protected policy stops deletion.
-          for (const blob of [...blobs.filter((name) => manifests.has(name)), ...blobs.filter((name) => !manifests.has(name) && !markers.has(name)), ...blobs.filter((name) => markers.has(name))]) {
-            await storage.delete(blob, verified.get(blob)!)
-            deleted++
-          }
-        } catch (error) {
-          // Provider retention wins over local retention: the backup stays, and nothing here
-          // tries to shorten a policy or clear a hold to make the delete succeed.
-          if (!(error instanceof ProtectedBlobError)) throw error
-          protectedKept++
-          if (deleted > 0) partlyRemoved++
-          continue
-        }
-        removed++
+        budget?.reserveDeletes(verified.blobs.size + (other ? other.blobs.size : 0))
+        plan.push({ halves: other ? [verified, other] : [verified], prefixes: other ? [backup.prefix, `${companionId}/`] : [backup.prefix], remnant: false })
       }
-    } finally { reportRemnants() }
-    if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
-    if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
-    if (protectedKept > 0) {
-      this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`, "info")
+      lastProcessed = backups.at(-1)?.prefix
+    } catch (error) {
+      if (!(error instanceof RetentionBudgetError)) { reportRemnants(); throw error }
+      if (!lastProcessed) throw error
+      deferred = true
     }
-    if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
-    if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`, "warning")
-    return unreadable.size + remnants.unowned + unverified
+    if (unverified) {
+      reportRemnants()
+      return unverified
+    }
+
+    pending.push(async () => {
+      for (const unit of plan) {
+        const verified = new Map(unit.halves.flatMap(half => [...half.blobs]))
+        const size = (name: string) => unit.halves.reduce((sum, half) => sum + (half.listing.sizes.get(name) ?? 0), 0)
+        const manifests = new Set(unit.prefixes.map(prefix => `${prefix}metadata.json`))
+        const markers = new Set(unit.prefixes.map(prefix => `${prefix}${BACKUP_OWNER_FILE}`))
+        const names = [...verified.keys()]
+        let deleted = 0
+        let remaining = names.reduce((sum, name) => sum + size(name), 0)
+        const remove = async (name: string) => {
+          await storage.delete(name, verified.get(name)!)
+          deleted++
+          if (unit.remnant) { remaining -= size(name); remnants.deletedBytes += size(name) }
+        }
+        try {
+          for (const name of names.filter(name => manifests.has(name))) await remove(name)
+          await pool(names.filter(name => !manifests.has(name) && !markers.has(name)), 4, remove, signal)
+          for (const name of names.filter(name => markers.has(name))) await remove(name)
+          if (unit.remnant) remnants.deleted++
+          else removed++
+        } catch (error) {
+          if (!(error instanceof ProtectedBlobError)) throw error
+          if (unit.remnant) { remnants.kept++; remnants.keptBytes += remaining }
+          else { protectedKept++; if (deleted) partlyRemoved++ }
+        }
+      }
+      if (budget) {
+        if (deferred && lastProcessed) {
+          this.retentionCursor.set(cursorKey, lastProcessed)
+          this.deps.retentionProgress?.set(cursorKey, lastProcessed)
+        } else {
+          this.retentionCursor.delete(cursorKey)
+          this.deps.retentionProgress?.delete(cursorKey)
+        }
+        if (deferred) this.write(job, "Retention will continue reviewing older backups on the next run.", "info")
+      }
+      reportRemnants()
+      if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
+      if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
+      if (protectedKept > 0) {
+        this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`, "info")
+      }
+      if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
+    })
+    return 0
   }
 
   /** Adds a line to the log, in local time; a level also lists it among the run's notices. */

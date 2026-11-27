@@ -1,3 +1,4 @@
+import { authenticatedBackupRead } from "./authenticated-read"
 import { LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
@@ -224,7 +225,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
         // Stored metadata comes back the way Azure returns it, with the x-ms-meta- prefix.
         ...Object.fromEntries(Object.entries(blob.metadata ?? {}).map(([key, value]) => [`x-ms-meta-${key}`, value])),
       }
-      return new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers })
+      return authenticatedBackupRead(new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers }))
     }
     if (method === "DELETE") {
       await store.delete(account, container, blobName, { ifMatch: request.headers.get("if-match") ?? undefined })

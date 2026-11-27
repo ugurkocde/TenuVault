@@ -1,12 +1,17 @@
 import { backupBlobName, backupContainer, backupStoragePath, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../../shared/backup-storage"
 import { assertStorageAccountName } from "../../shared/storage-account"
 import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constants"
-import { readJsonCapped } from "../../shared/capped-body"
+import { wasBackupReadAuthenticated } from "../storage/authenticated-read"
+import { createHash } from "node:crypto"
+import { readBytesCapped, readJsonCapped } from "../../shared/capped-body"
 import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
+import type { RetentionBudget } from "./retention-budget"
 import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ImmutableBlobError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+
+export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; sha256: string }
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
@@ -15,6 +20,7 @@ export class BlobWriter {
     private readonly account: string,
     private readonly token: () => Promise<string>,
     private readonly network?: NetworkCircuit,
+    private readonly budget?: RetentionBudget,
   ) {
     assertStorageAccountName(account)
   }
@@ -127,16 +133,20 @@ export class BlobWriter {
     })
   }
 
-  /** Read the complete body through the local or legacy Azure decryption boundary before deletion. */
-  async verifyForDeletion(name: string): Promise<string> {
+  /** Retain the identity and the authentication evidence from the same read. */
+  async readForRetention(name: string): Promise<RetentionBlob> {
     return this.request(backupStoragePath(name), { method: "GET" }, async (response) => {
       if (!response.ok) throw await storageFailure(response, this.account)
-      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      const bytes = await readBytesCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
       const etag = response.headers.get("etag")
-      if (body.kind !== "json" || !body.value || typeof body.value !== "object" || !etag || etag === "*") {
-        throw new FetchApplicationError(new Error(`${name} could not be verified for deletion.`))
+      if (!bytes || !etag || etag === "*") throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`))
+      try {
+        const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+        if (!value || typeof value !== "object") throw new Error("Expected JSON data")
+        return { value, etag, authenticated: wasBackupReadAuthenticated(response), sha256: createHash("sha256").update(bytes).digest("hex") }
+      } catch (error) {
+        throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`, { cause: error }))
       }
-      return etag
     })
   }
 
@@ -171,10 +181,12 @@ export class BlobWriter {
           signal.throwIfAborted()
           beforeCommit?.signal.throwIfAborted()
           beforeCommit = undefined
+          this.budget?.dispatch(init.method === "DELETE")
           attempted = true
           onDispatch?.()
-          response = await this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
+          const send = () => this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
             ...init,
+            ...(this.budget ? { redirect: "error" as const } : {}),
             signal,
             headers: {
               ...(init.headers as Record<string, string> | undefined),
@@ -183,6 +195,7 @@ export class BlobWriter {
               ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
           })
+          response = await (this.budget ? this.budget.fetch(send) : send())
           if (retryableStatus(response.status) && attempt < REQUEST_ATTEMPTS - 1) {
             throw new RetryableStorageError((await storageError(response, this.account)).message)
           }
