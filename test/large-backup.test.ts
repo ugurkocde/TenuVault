@@ -142,7 +142,8 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
       expect(await f.store.list(f.local, LARGE_BACKUP_CONTAINER, `${old}/`)).toEqual([])
       expect(await f.store.list(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${old}/`))).toEqual([])
       const deleted = f.requests.filter(request => request.startsWith("DELETE "))
-      expect(deleted[0]).toContain("metadata.json")
+      const manifest = deleted.findIndex(request => request.endsWith("/metadata.json"))
+      expect(manifest).toBe(azure ? deleted.length - 2 : 0)
       expect(deleted.at(-1)).toContain(".tenuvault-owner.json")
       expect(deleted.some(request => request.includes("_relations"))).toBe(true)
     } finally { await f.graph.close() }

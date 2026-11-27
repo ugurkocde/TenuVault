@@ -296,8 +296,12 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     if (state === "interrupted") {
       expect((await f.store.list(local, BACKUP_CONTAINER, `${halves[0]}/`)).some(blob => blob.name.endsWith(".tenuvault-owner.json"))).toBe(true)
       expect(job.log.join(" ")).toContain("Could not remove old backups")
-      const interruptedRows = await (await history(f.request({ summary: true }))).json()
-      expect(interruptedRows.warnings.join(" ")).toContain("2 owned")
+      if (azure) {
+        for (const id of halves) expect(await f.read(id)).toMatchObject({ RunId: "same-run" })
+      } else {
+        const interruptedRows = await (await history(f.request({ summary: true }))).json()
+        expect(interruptedRows.warnings.join(" ")).toContain("2 owned")
+      }
       job = await run(new Date(now.getTime() + 1000))
     }
     const deleted = ["expired", "interrupted", "cancelled", "mismatched", "half-deleted pair"].includes(state)
@@ -308,6 +312,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     }
     if (["unowned", "foreign claim", "forged run claim", "forged folder claim"].includes(state)) expect(job.log.join(" ")).toMatch(/kept 1 unverified halves \([1-9]\d* bytes\)/)
     if (state === "off") expect(f.requests.filter(value => value.startsWith("DELETE"))).toHaveLength(0)
+    else if (azure && state === "interrupted") expect(job.log.join(" ")).toContain("Removed 1 backup")
     else expect(job.log.join(" ")).toMatch(/Remnant cleanup: deleted \d+ halves \(\d+ bytes\); kept \d+ owned halves \(\d+ bytes\)/)
     if (state === "in grace") {
       job = await run(new Date("2026-11-19T12:00:00Z"))

@@ -1454,7 +1454,7 @@ export class BackupEngine {
         return value === null ? { kind: "missing" } : { kind: "found", value }
       } catch (error) {
         signal.throwIfAborted()
-        if (error instanceof RequestTimeoutError || error instanceof InventoryDamagedError || !(error instanceof FetchApplicationError || error instanceof StorageError)) throw error
+        if (error instanceof InventoryDamagedError || !(error instanceof RequestTimeoutError || error instanceof FetchApplicationError || error instanceof StorageError)) throw error
         return { kind: "unreadable", error }
       }
     }
@@ -1482,6 +1482,8 @@ export class BackupEngine {
     }, signal)
     if (unreadable.size > 0) {
       this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. Older backups were left in place.`, "warning")
+      // An unreadable local inventory can hide the only surviving encrypted copy.
+      if (!limits) return unreadable.size
     }
     if (unreadable.size === backups.length) {
       advance()
@@ -1526,7 +1528,7 @@ export class BackupEngine {
     const plan: Array<{ halves: VerifiedHalf[]; prefixes: string[]; remnant: boolean; writer: BlobWriter }> = []
     const keptForReview = (prefix: string, error: unknown) => {
       signal.throwIfAborted()
-      if (error instanceof RetentionManifestMismatch || error instanceof RequestTimeoutError || error instanceof InventoryDamagedError) throw error
+      if (error instanceof RetentionManifestMismatch || error instanceof InventoryDamagedError) throw error
       unverified++
       noteRepeatedFailure(prefix)
       const reason = error instanceof Error ? error.message : String(error)
@@ -1669,7 +1671,9 @@ export class BackupEngine {
           const localStorage = isLocalAccount(job.storageAccountName)
           const manifestNames = names.filter(name => manifests.has(name))
           if (localStorage) for (const name of manifestNames) await remove(name)
-          await pool(names.filter(name => !manifests.has(name) && !markers.has(name)), 4, remove, signal)
+          for (const half of unit.halves) {
+            await pool([...half.blobs.keys()].filter(name => !manifests.has(name) && !markers.has(name)), 4, remove, signal)
+          }
           if (!localStorage) for (const name of manifestNames) await remove(name)
           for (const name of names.filter(name => markers.has(name))) await remove(name)
           for (const prefix of unit.prefixes) delete state.reviews[prefix]

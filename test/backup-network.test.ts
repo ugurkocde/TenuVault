@@ -560,8 +560,12 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.endTime).toBeDefined()
     expect(job.exception).toBeUndefined()
-    expect(job.log.filter(line => line.includes("Could not remove old backups:"))).toHaveLength(1)
-    expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds. Check your connection and retry. They will be reconsidered on the next run.")
+    if (failure === "metadata read") {
+      expect(job.log.join("\n")).toContain("Could not read the metadata of 1 older backup: Backup request timed out after 90 seconds.")
+    } else {
+      expect(job.log.filter(line => line.includes("Could not remove old backups:"))).toHaveLength(1)
+      expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds. Check your connection and retry. They will be reconsidered on the next run.")
+    }
     expect(signals).toHaveLength(3)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)

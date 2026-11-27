@@ -267,7 +267,7 @@ warnings. Stop the release if any backup cannot be read or a payload differs.
 
 - **Local backup folders.** Lab defaults to `Documents/TenuVault Lab Backups`. A saved Lab override pointing to `Documents/TenuVault Backups` opens for browsing only. In **Settings > Storage and recovery**, switch to the Lab folder or copy backups you can verify with your Lab-created recovery key. The original files are kept. Stable keeps its existing folder settings.
 
-- **Retention.** The app verifies every file of an expired backup before deleting it. An ordinary remnant with neither a 0.6 run record nor a large companion stays in place.
+- **Retention.** The app verifies every file of an expired backup before deleting it, including manifest fingerprints on encrypted policies. Azure cleanup keeps manifests through payload deletion and skips cleanup when the device clock disagrees with the latest backup or Azure timestamp. An ordinary remnant with neither a 0.6 run record nor a large companion stays in place.
 
 Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
 

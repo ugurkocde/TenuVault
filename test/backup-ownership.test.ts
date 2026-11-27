@@ -89,7 +89,7 @@ async function complete(engine: BackupEngine, scope = request.scope) {
   const job = engine.start({ ...request, scope })
   await engine.waitForJob(job)
   await vi.advanceTimersByTimeAsync(0)
-  expect(job.status).toBe("Completed")
+  expect(job.status, job.log.join("\n")).toBe("Completed")
   return job
 }
 
@@ -480,6 +480,20 @@ describe("verified retention coverage", () => {
       expect(job.log.join("\n").includes("Retention has repeatedly kept")).toBe(run === 3)
     }
     expect(saved.has(`${oversized}metadata.json`)).toBe(true)
+  })
+
+  it("gives a candidate its own byte budget after verifying the latest backup", async () => {
+    const { engine, saved, seed } = setup({ count: 1, limits: { candidates: 8, requests: 100, bytes: 13_000 },
+      override: url => url.hostname === "graph.microsoft.com" && url.pathname.endsWith("/deviceConfigurations/p0")
+        ? Response.json({ id: "p0", displayName: "Policy 0", description: "a".repeat(8_000), assignments: [] }) : undefined })
+    const older = "backup-2026-08-01-020000/"
+    const old = { id: "old", description: "b".repeat(8_000) }
+    seed(`${older}DeviceConfigurations/Old.json`, old)
+    seed(`${older}metadata.json`, { ...completeManifest, Items: { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(old) } } })
+    const job = await complete(engine)
+    expect(saved.get(`${job.backupFolder}/DeviceConfigurations/Policy 0.json`)!.length).toBeGreaterThan(8_000)
+    expect(saved.has(`${older}metadata.json`)).toBe(false)
+    expect(job.log.join("\n")).toContain("Removed 1 backup")
   })
 
   it.each([false, true])("resumes a byte-limited verification after restart and rechecks changed ETags (%s)", async changed => {
