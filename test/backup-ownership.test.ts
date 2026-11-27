@@ -402,7 +402,8 @@ describe("verified retention coverage", () => {
       hash: snapshotHash(mismatch === "legacy snapshot hash" ? oldPolicy : actual),
       ...(mismatch === "byte hash" ? { sha256: sha256(oldPolicy) } : {}),
     } } }, true)
-    const job = await complete(engine)
+    // Current covers only CompliancePolicies, so older depends on newer for DeviceConfigurations.
+    const job = await complete(engine, { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) })
     expect(saved.has(`${older}metadata.json`)).toBe(true)
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
     expect(job.log.join("\n")).toContain("does not match its manifest")

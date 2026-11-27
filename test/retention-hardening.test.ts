@@ -7,7 +7,7 @@ import { BlobWriter } from "../src/main/backup/blob-writer"
 import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { verifyHalf } from "../src/main/backup/retention-verification"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
-import { backupStoragePath } from "../src/shared/backup-storage"
+import { backupBlobName, backupContainer, backupStoragePath } from "../src/shared/backup-storage"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { indexPath } from "../src/shared/large-backup"
@@ -129,7 +129,7 @@ function setupAzure(options: {
     recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keys),
   })
   const engine = createEngine()
-  const keyOf = (logical: string) => backupStoragePath(logical)
+  const keyOf = (logical: string) => `${backupContainer(logical)}/${backupBlobName(logical)}`
   const seed = (logical: string, value: unknown) => {
     const body = Buffer.from(typeof value === "string" ? value : JSON.stringify(value))
     writeBlob(keyOf(logical), body)
@@ -306,5 +306,159 @@ describe("manifest TotalPolicies and ItemCounts consistency (item 1)", () => {
     await expect(verifyWithTotal(1)).rejects.toThrow("metadata.json counts could not be verified")
     expect(memoryStore().get("x")).toBeNull()
     expect(legacyRecoveryFingerprint([MASTER])).toBeTruthy()
+  })
+})
+
+describe("candidate-local failures, discovery budget, and newest-backup progress (items 4, 5, 6)", () => {
+  it.each(["hash mismatch", "unreadable payload", "damaged manifest"] as const)(
+    "keeps a failing Azure candidate (%s) and still deletes independently verified candidates, escalating after 3 runs (item 4)",
+    async failure => {
+      const progress = memoryStore()
+      const { createEngine, has, seed, folder } = setupAzure({ progress })
+      const first = "backup-2026-08-03-020000/"
+      const bad = "backup-2026-08-02-020000/"
+      const third = "backup-2026-08-01-020000/"
+      for (const prefix of [first, bad, third]) {
+        folder(prefix)
+        seed(`${prefix}metadata.json`, COMPLETE_MANIFEST)
+      }
+      if (failure === "hash mismatch") {
+        seed(`${bad}DeviceConfigurations/Old.json`, { id: "old", changed: true })
+      } else if (failure === "unreadable payload") {
+        seed(`${bad}DeviceConfigurations/Old.json`, "{ broken")
+      } else {
+        seed(`${bad}metadata.json`, "{ broken manifest")
+      }
+
+      const run1 = await runBackup(createEngine())
+      expect(has(`${first}metadata.json`), run1.log.join("\n")).toBe(false)
+      expect(has(`${third}metadata.json`), run1.log.join("\n")).toBe(false)
+      expect(has(`${bad}metadata.json`)).toBe(true)
+      expect(run1.log.join("\n")).not.toContain("Retention has repeatedly kept")
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      const run2 = await runBackup(createEngine())
+      expect(has(`${bad}metadata.json`)).toBe(true)
+      expect(run2.log.join("\n")).not.toContain("Retention has repeatedly kept")
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      const run3 = await runBackup(createEngine())
+      expect(has(`${bad}metadata.json`)).toBe(true)
+      expect(run3.log.join("\n")).toContain(`Retention has repeatedly kept backup ${bad}`)
+    },
+  )
+
+  it("persists discovery progress when candidate metadata reads exhaust the budget and advances to later candidates (item 5)", async () => {
+    const progress = memoryStore()
+    const { createEngine, has, seed, folder } = setupAzure({
+      progress,
+      limits: { candidates: 1, requests: 100, bytes: 4_000 },
+    })
+    const bloated = "backup-2026-08-02-020000/"
+    const normal = "backup-2026-08-01-020000/"
+    folder(bloated)
+    seed(`${bloated}metadata.json`, { ...COMPLETE_MANIFEST, Padding: "x".repeat(8_000) })
+    folder(normal)
+    seed(`${normal}metadata.json`, COMPLETE_MANIFEST)
+
+    const first = await runBackup(createEngine())
+    expect(has(`${bloated}metadata.json`)).toBe(true)
+    expect(has(`${normal}metadata.json`)).toBe(true)
+    expect(first.log.join("\n")).toContain("reached its storage budget")
+    expect(first.log.join("\n")).toContain("will continue reviewing older backups")
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    const second = await runBackup(createEngine())
+    expect(has(`${bloated}metadata.json`)).toBe(true)
+    expect(has(`${normal}metadata.json`), second.log.join("\n")).toBe(false)
+  })
+
+  it.each([false, true])(
+    "resumes newest-backup verification bound to exact folder and file identities, and starts fresh if the earlier replacement disappears (tamper: %s) (item 6)",
+    async tamper => {
+      const progress = memoryStore()
+      const big = "x".repeat(12_000)
+      const { createEngine, has, saved, keyOf, calls, seed, folder } = setupAzure({
+        progress,
+        count: 2,
+        limits: { candidates: 32, requests: 100, bytes: 20_000 },
+        override: url => {
+          if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+            return Response.json({ id: url.pathname.split("/").at(-1), description: big, assignments: [] })
+          }
+          return undefined
+        },
+      })
+      const older = "backup-2026-08-01-020000/"
+      folder(older)
+      seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+
+      const first = await runBackup(createEngine())
+      const firstPolicy = `${first.backupFolder}/DeviceConfigurations/Policy 0.json`
+      expect(first.log.join("\n")).toContain("reached its storage budget")
+      expect(has(`${older}metadata.json`)).toBe(true)
+      expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+
+      if (tamper) {
+        // Modify the already-verified file so its ETag changes; receipt must not be reused.
+        seed(firstPolicy, { id: "p0", description: "tampered" })
+      }
+      await vi.advanceTimersByTimeAsync(1_000)
+      const second = await runBackup(createEngine())
+      expect(has(`${older}metadata.json`), second.log.join("\n")).toBe(tamper)
+      expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(tamper ? 2 : 1)
+      if (tamper) {
+        expect(second.log.join("\n")).toContain("does not match its manifest")
+        // Remove the tampered earlier replacement: a new backup must start fresh and never reuse old receipts.
+        for (const key of [...saved.keys()]) {
+          if (key.includes(`${first.backupFolder}/`)) saved.delete(key)
+        }
+        expect(saved.has(keyOf(firstPolicy))).toBe(false)
+        await vi.advanceTimersByTimeAsync(1_000)
+        const third = await runBackup(createEngine())
+        const thirdPolicy = `${third.backupFolder}/DeviceConfigurations/Policy 0.json`
+        expect(calls.filter(call => call.name === thirdPolicy && call.request.method === "GET")).toHaveLength(1)
+        expect(third.log.join("\n")).toContain("reached its storage budget")
+      }
+    },
+  )
+
+  it("binds verifyHalf receipts to the exact backup prefix so receipts from one folder never match another (item 6)", async () => {
+    const policy = { id: "p0", displayName: "Same" }
+    const manifest = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Items: { "DeviceConfigurations/p0": { file: "P0.json", sha256: sha256(policy) } },
+      ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 },
+    }
+    const readPaths: string[] = []
+    const makeWriter = (prefix: string) => {
+      const files = new Map<string, Buffer>([
+        [`/intune-backups/${prefix}metadata.json`, Buffer.from(JSON.stringify(manifest))],
+        [`/intune-backups/${prefix}DeviceConfigurations/P0.json`, Buffer.from(JSON.stringify(policy))],
+      ])
+      const fetchImpl: typeof fetch = async input => {
+        const path = new URL(String(input)).pathname
+        readPaths.push(path)
+        return new Response(new Uint8Array(files.get(path)!), { status: 200, headers: { etag: '"same-etag"' } })
+      }
+      const etags = new Map<string, string>([
+        [`${prefix}metadata.json`, '"same-etag"'],
+        [`${prefix}DeviceConfigurations/P0.json`, '"same-etag"'],
+      ])
+      return {
+        writer: new BlobWriter(fetchImpl, "contoso", async () => "token"),
+        listing: { blobs: [...etags.keys()], prefixes: [], sizes: new Map(), etags },
+      }
+    }
+    const progress = { files: {} as Record<string, string>, attempts: 0 }
+    const a = makeWriter("backup-2026-10-12-120000/")
+    await verifyHalf(a.writer, "backup-2026-10-12-120000/", manifest, a.listing, undefined, progress)
+    // Even if a different backup folder has identical manifest, payload, and ETags, receipts must NOT match.
+    readPaths.length = 0
+    const b = makeWriter("backup-2026-10-12-120001/")
+    await verifyHalf(b.writer, "backup-2026-10-12-120001/", manifest, b.listing, undefined, progress)
+    expect(readPaths).toContain("/intune-backups/backup-2026-10-12-120001/DeviceConfigurations/P0.json")
   })
 })

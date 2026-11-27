@@ -24,7 +24,7 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
   const remaining = new Set(listing.blobs)
   const blobs = new Map<string, string>()
   const listedIdentities = [...remaining].sort().map(name => [name, listing.etags.get(name)])
-  const receiptIdentity = (evidence: unknown[]) => retentionIdentity([...evidence, keyFingerprint])
+  const receiptIdentity = (evidence: unknown[]) => retentionIdentity([prefix, ...evidence, keyFingerprint])
   const listedIdentity = progress && listedIdentities.every(([, etag]) => etag) && remaining.size === listing.blobs.length
     ? receiptIdentity([manifest, expectedOwner, listedIdentities]) : undefined
   if (listedIdentity && progress?.complete?.identity === listedIdentity) {
