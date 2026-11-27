@@ -1,5 +1,8 @@
+import { hardLinksUnsupportedWarning } from "../storage/local-blob-store"
 import { BlobLeaseError } from "./blob-writer"
 import { RequestTimeoutError } from "./request"
+
+export { hardLinksUnsupportedWarning }
 
 export const LEASE_DURATION_SECONDS = 60
 export const LEASE_DURATION_MS = LEASE_DURATION_SECONDS * 1000
@@ -220,6 +223,9 @@ export function createRetentionLeaseManager(): RetentionLeaseManager {
 export function leaseFailureKey(local: boolean, error: BlobLeaseError): string | undefined {
   if (local) {
     if (error.code === "LeaseUnavailable") return "local:lock"
+    if (error.code === "RetentionHardLinksUnsupported") {
+      return error.lockPath ? `local:no-hard-links:${error.lockPath}` : "local:no-hard-links"
+    }
     if (error.code === "RetentionLockManualIntervention") {
       return error.lockPath ? `local:manual:${error.lockPath}` : "local:manual"
     }
@@ -234,6 +240,9 @@ export function leaseFailureKey(local: boolean, error: BlobLeaseError): string |
 
 export function permanentLeaseFailureWarning(local: boolean, consecutiveRuns: number, error?: BlobLeaseError): string {
   if (local) {
+    if (error?.code === "RetentionHardLinksUnsupported") {
+      return hardLinksUnsupportedWarning(error.lockPath, consecutiveRuns)
+    }
     const isGate = Boolean(error?.lockPath?.endsWith(".reclaim"))
     if (error?.code === "RetentionLockManualIntervention") {
       const pathDetail = error.lockPath ? ` (${error.lockPath})` : ""

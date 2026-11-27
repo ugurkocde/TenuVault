@@ -402,9 +402,10 @@ export class BlobWriter {
               ?.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
             throw new ReplacementChangedError(message ? new Error(message) : await storageFailure(response, this.account), restoredEtag)
           }
-          if (code === "RetentionLockLost") {
+          if (code === "RetentionLockLost" || code === "RetentionHardLinksUnsupported") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
-            throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code)
+            const lockPath = decodeHeaderValue(response.headers.get("x-tenuvault-lock-path"))
+            throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code, lockPath)
           }
           if (isImmutabilityRefusal(response.status, code)) {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
@@ -422,9 +423,10 @@ export class BlobWriter {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
             throw new ReplacementChangedError(await storageFailure(response, this.account), restoredEtag)
           }
-          if (bodyCode === "RetentionLockLost") {
+          if (bodyCode === "RetentionLockLost" || bodyCode === "RetentionHardLinksUnsupported") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
-            throw new BlobLeaseError(await storageFailure(response, this.account), response.status, bodyCode)
+            const lockPath = decodeHeaderValue(response.headers.get("x-tenuvault-lock-path"))
+            throw new BlobLeaseError(await storageFailure(response, this.account), response.status, bodyCode, lockPath)
           }
           if (isImmutabilityRefusal(response.status, bodyCode)) {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true

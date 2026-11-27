@@ -6,7 +6,7 @@ import { FetchApplicationError, FetchPreconditionError } from "../api/network-er
 import { isLocalAccount } from "../storage/blob-emulator"
 import { releaseLocalRetentionGuard } from "../storage/local-blob-store"
 import { BlobLeaseError, ReplacementChangedError, wasDeleteConfirmedUnchanged, type BlobWriter, type ExpectedReplacement, type RetentionBlob } from "./blob-writer"
-import { createRetentionLeaseManager, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
+import { createRetentionLeaseManager, hardLinksUnsupportedWarning, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
 import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "./retention-budget"
 import { DAY_MS, HOUR_MS, RetentionClockError } from "./retention-clock"
 import { readRetentionProgress, retentionIdentity, type DeletionJournalEntry, type FreshVerificationProgress, type RetentionProgressStore } from "./retention-progress"
@@ -913,8 +913,10 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
             leaseFailureErrorThisRun = error
           }
           warning = true
-          const reason = error.message
-          notice(`Kept backup ${prefix} because the local retention lock could not be acquired: ${reason.replace(/\.$/, "")}.`, "warning")
+          if (error.code !== "RetentionHardLinksUnsupported") {
+            const reason = error.message
+            notice(`Kept backup ${prefix} because the local retention lock could not be acquired: ${reason.replace(/\.$/, "")}.`, "warning")
+          }
           completedPlan = false
           break
         }
@@ -1058,10 +1060,20 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         }
         if (error instanceof BlobLeaseError) {
           warning = true
-          const detail = local
-            ? `the local retention lock was lost: ${error.message.replace(/\.$/, "")}`
-            : `replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}`
-          notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${detail}.`, "warning")
+          if (local && error.code === "RetentionHardLinksUnsupported") {
+            const failureKey = leaseFailureKey(true, error)
+            if (failureKey) {
+              leaseAcquiredThisRun = false
+              hadLeaseAcquireFailure = true
+              leaseFailureKeyThisRun = failureKey
+              leaseFailureErrorThisRun = error
+            }
+          } else {
+            const detail = local
+              ? `the local retention lock was lost: ${error.message.replace(/\.$/, "")}`
+              : `replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}`
+            notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${detail}.`, "warning")
+          }
           completedPlan = false
           stopCleanup = true
           break
@@ -1104,6 +1116,9 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     if (count >= PERMANENT_LEASE_FAILURE_RUNS) {
       warning = true
       notice(permanentLeaseFailureWarning(local, count, leaseFailureErrorThisRun), "warning")
+    } else if (local && leaseFailureErrorThisRun?.code === "RetentionHardLinksUnsupported") {
+      warning = true
+      notice(hardLinksUnsupportedWarning(leaseFailureErrorThisRun.lockPath), "warning")
     }
   } else if (hadLeaseAcquireFailure && state.leaseFailures) {
     delete state.leaseFailures
