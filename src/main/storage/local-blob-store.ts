@@ -598,7 +598,7 @@ export class LocalBlobStore {
     await this.write(dir, async () => {
       const path = join(dir, entry.file)
       const info = await lstat(path, { bigint: true })
-      if (!info.isFile() || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
+      if (!info.isFile() || info.ino === 0n || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
       const quarantine = await mkdtemp(join(dir, ".retired-"))
       const held = join(quarantine, entry.file)
       try {

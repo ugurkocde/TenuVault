@@ -110,7 +110,7 @@ const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
 function historicalProfile(mode) {
   // Windows DPAPI binds the fixture to this runner's account. The unsigned Electron helper on
-  // macOS is a different Keychain client from the packaged app, so this section runs on Windows.
+  // macOS is a different Keychain client from the packaged app. Linux development smoke uses the frozen profile.
   if (packagedApp && process.platform === "darwin") throw new Error("Run the signed macOS upgrade check in RELEASING.md")
   const flags = process.platform === "linux" ? ["--no-sandbox", "--ozone-platform=x11", ...(!packagedApp ? ["--password-store=basic"] : [])] : []
   execFileSync(require("electron"), [...flags, join(desktopDir, "scripts", "backup-upgrade-profile.cjs")], {
@@ -289,6 +289,7 @@ if (upgradeProfile) {
     resourceGroupName: "local", storageAccountName: `tvlocal-${tenantId}`,
   }
   await check("Backup History lists both historical backups without warnings", async () => {
+    assert(await waitForCondition(`Boolean(window.tenuvault?.backups && document.getElementById("root")?.childElementCount)`, 30000), "the renderer bridge did not start")
     for (const summary of [false, true]) {
       const [status, history] = await evaluate(`fetch("/api/list-backups", { method: "POST", body: JSON.stringify(${JSON.stringify({ ...request, summary })}) }).then(async response => [response.status, await response.json()])`)
       assert(status === 200, `Backup History returned HTTP ${status}: ${history.error ?? ""}`)
