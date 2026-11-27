@@ -100,6 +100,9 @@ export class StorageUnreachableError extends StorageError {}
 export class RetryableStorageError extends Error {}
 export class RequestTimeoutError extends Error {}
 
+/** The verified blob changed before its conditional delete reached storage. */
+export class DeleteConditionError extends FetchApplicationError {}
+
 /** MSAL rethrows a token or discovery request that got no HTTP response with this code; it keeps only the original message. */
 const MSAL_NETWORK_ERROR = "network_error"
 

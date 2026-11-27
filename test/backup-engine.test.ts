@@ -587,7 +587,7 @@ describe("retention and storage protection", () => {
 
   it("removes the metadata first, so a partly deleted backup is not reported as complete", async () => {
     const { job, left, old } = await run("DeviceConfigurations/B.json")
-    expect(job.log.join("\n")).toContain("no longer offered as complete")
+    expect(job.log.join("\n")).toContain("Retention partly removed")
     expect(left).toEqual([`${old}/DeviceConfigurations/B.json`])
   })
 })

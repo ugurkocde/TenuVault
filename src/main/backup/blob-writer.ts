@@ -9,7 +9,7 @@ import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { RetentionBudget } from "./retention-budget"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ImmutableBlobError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, DeleteConditionError, ImmutableBlobError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; sha256: string }
 
@@ -158,6 +158,10 @@ export class BlobWriter {
       if (!response.ok && response.status !== 404) {
         const code = response.headers.get("x-ms-error-code") ?? ""
         if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)
+        if (response.status === 412 && code !== "BlobQuarantined") {
+          void response.body?.cancel().catch(() => undefined)
+          throw new DeleteConditionError(new Error(`${name} changed before it could be deleted.`))
+        }
         const text = await response.clone().text()
         const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
         if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)

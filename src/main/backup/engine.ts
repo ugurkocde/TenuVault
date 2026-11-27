@@ -20,7 +20,7 @@ import { RetentionBudget, RetentionBudgetError, RETENTION_LIMITS, type Retention
 import { RetentionManifestMismatch, verifyHalf, type VerifiedHalf } from "./retention-verification"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
-import { GRAPH, BlobClaimError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, providerErrorCode, providerStatus, withAbort, withRequestTimeout } from "./request"
+import { GRAPH, BlobClaimError, DeleteConditionError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, providerErrorCode, providerStatus, withAbort, withRequestTimeout } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
@@ -1463,7 +1463,6 @@ export class BackupEngine {
     let kept = 0
     let unowned = 0
     let protectedKept = 0
-    let partlyRemoved = 0
     let unverified = 0
     const plan: Array<{ halves: VerifiedHalf[]; prefixes: string[]; remnant: boolean }> = []
     const verify = async (prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) => {
@@ -1602,15 +1601,26 @@ export class BackupEngine {
           if (unit.remnant) { remaining -= size(name); remnants.deletedBytes += size(name) }
         }
         try {
-          for (const name of names.filter(name => manifests.has(name))) await remove(name)
+          // The local store treats a missing manifest entry as damage and refuses further deletes.
+          // In Azure, keep the manifests through the payload phase for recovery after a refusal.
+          const localStorage = isLocalAccount(job.storageAccountName)
+          const manifestNames = names.filter(name => manifests.has(name))
+          if (localStorage) for (const name of manifestNames) await remove(name)
           await pool(names.filter(name => !manifests.has(name) && !markers.has(name)), 4, remove, signal)
+          if (!localStorage) for (const name of manifestNames) await remove(name)
           for (const name of names.filter(name => markers.has(name))) await remove(name)
           if (unit.remnant) remnants.deleted++
           else removed++
         } catch (error) {
-          if (!(error instanceof ProtectedBlobError)) throw error
+          if (deleted) {
+            this.write(job, `Retention partly removed ${unit.prefixes.join(", ")}. Remaining files were kept for recovery.`, "warning")
+          }
+          if (!(error instanceof ProtectedBlobError) && !(error instanceof DeleteConditionError)) throw error
+          if (error instanceof DeleteConditionError) {
+            this.write(job, `Kept the remaining files in ${unit.prefixes.join(", ")} because a file changed during retention: ${error.message}`, "warning")
+          }
           if (unit.remnant) { remnants.kept++; remnants.keptBytes += remaining }
-          else { protectedKept++; if (deleted) partlyRemoved++ }
+          else if (error instanceof ProtectedBlobError) protectedKept++
         }
       }
       if (budget) {
@@ -1627,7 +1637,7 @@ export class BackupEngine {
       if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
       if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
       if (protectedKept > 0) {
-        this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`, "info")
+        this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.`, "info")
       }
       if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
     })

@@ -150,14 +150,14 @@ describe("backup folder ownership", () => {
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
   })
 
-  it("removes a failed backup past the retention period, manifest first and ownership last", async () => {
+  it("removes a failed backup past the retention period, payload first and ownership last", async () => {
     const { engine, saved, calls, seed, folder } = setup()
     const expired = "backup-2026-08-01-020000/"
     folder(expired)
     seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Failed", Failures: 0, Scope: { Excluded: [] }, Items: items, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 } })
     await complete(engine)
     expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
-    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`, `${expired}${BACKUP_OWNER_FILE}`])
+    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}DeviceConfigurations/Old.json`, `${expired}metadata.json`, `${expired}${BACKUP_OWNER_FILE}`])
   })
 
   it.each([old, "backup-2026-08-01-020000/"])("leaves manifestless folder %s untouched with valid same-tenant ownership", async prefix => {
@@ -295,14 +295,41 @@ describe("backup folder ownership", () => {
     seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     const first = await complete(engine)
     expect(first.log.join("\n")).toContain("protected by the storage account's immutability policy or legal hold")
-    expect(saved.has(`${expired}metadata.json`)).toBe(false)
+    expect(saved.has(`${expired}metadata.json`)).toBe(true)
     expect(saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(true)
-    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`])
+    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}DeviceConfigurations/Old.json`])
     await vi.advanceTimersByTimeAsync(1000)
     await complete(engine)
     expect(saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(true)
     expect(saved.has(`${expired}DeviceConfigurations/Old.json`)).toBe(true)
     expect(calls.some(call => call.request.method === "DELETE" && call.name.endsWith(BACKUP_OWNER_FILE))).toBe(false)
+  })
+
+  it("keeps the manifest after a conditional payload refusal and continues cleanup", async () => {
+    const changed = "backup-2026-08-03-020000/", next = "backup-2026-08-02-020000/", deferred = "backup-2026-08-01-020000/"
+    const { engine, saved, seed, folder } = setup({ limits: { candidates: 2, requests: 200, bytes: 100_000 }, override: (url, sent) => {
+      if (sent.method === "DELETE" && url.pathname.endsWith(`${changed}DeviceConfigurations/New.json`)) {
+        return new Response(null, { status: 412 })
+      }
+    } })
+    const anotherPolicy = { id: "new" }
+    for (const prefix of [changed, next, deferred]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, completeManifest)
+    }
+    seed(`${changed}DeviceConfigurations/New.json`, anotherPolicy)
+    seed(`${changed}metadata.json`, { ...completeManifest, Items: { ...items, "DeviceConfigurations/new": { file: "New.json", sha256: sha256(anotherPolicy) } } })
+    const first = await complete(engine)
+    expect(first.log.join("\n")).toContain("Retention partly removed")
+    expect(first.log.join("\n")).toContain("changed during retention")
+    expect(saved.has(`${changed}metadata.json`)).toBe(true)
+    expect(saved.has(`${changed}${BACKUP_OWNER_FILE}`)).toBe(true)
+    expect(saved.has(`${changed}DeviceConfigurations/Old.json`)).toBe(false)
+    expect(saved.has(`${next}metadata.json`)).toBe(false)
+    expect(saved.has(`${deferred}metadata.json`)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    await complete(engine)
+    expect(saved.has(`${deferred}metadata.json`)).toBe(false)
   })
 
   it("deletes ownership last after a complete retention deletion", async () => {
@@ -311,7 +338,7 @@ describe("backup folder ownership", () => {
     folder(expired)
     seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } })
     await complete(engine)
-    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`, `${expired}${BACKUP_OWNER_FILE}`])
+    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}DeviceConfigurations/Old.json`, `${expired}metadata.json`, `${expired}${BACKUP_OWNER_FILE}`])
   })
 
   it("leaves manifestless folders untouched when retention is disabled", async () => {
@@ -382,7 +409,7 @@ describe("verified retention coverage", () => {
     expect(saved.has(`${older}metadata.json`)).toBe(condition !== "valid")
     expect(saved.has(`${newer}metadata.json`)).toBe(true)
     const deletes = calls.filter(call => call.request.method === "DELETE")
-    if (condition === "valid") expect(deletes.map(call => call.name)).toEqual([`${older}metadata.json`, `${older}DeviceConfigurations/Old.json`, `${older}${BACKUP_OWNER_FILE}`])
+    if (condition === "valid") expect(deletes.map(call => call.name)).toEqual([`${older}DeviceConfigurations/Old.json`, `${older}metadata.json`, `${older}${BACKUP_OWNER_FILE}`])
     else {
       expect(deletes).toEqual([])
       expect(job.log.join("\n")).toContain("could not be verified")
