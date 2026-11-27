@@ -2757,7 +2757,8 @@ describe("round 12 findings", () => {
         expect(warn1[0]).toContain(hardLinksUnsupportedWarning(dir))
         expect(warn1[0]).toContain("NTFS, APFS or ext4")
         expect(warn1[0]).toContain("Backups and restores keep working")
-        expect(warn1[0]).toContain("delete them manually in TenuVault")
+        expect(warn1[0]).toContain("moved to a drive that supports hard links")
+        expect(warn1[0]).not.toContain("manually")
         expect(run1.log.join("\n")).not.toContain("local retention lock could not be acquired")
         expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old1)).length).toBe(3)
         expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old2)).length).toBe(3)
@@ -2969,5 +2970,29 @@ describe("round 12 findings", () => {
     expect(doc).toContain("exFAT")
     expect(doc).toContain("hard links")
     expect(doc).not.toContain("copying the file on drives without hard links")
+  })
+})
+
+describe("hard link re-probe", () => {
+  it("re-probes hard link support on every retention run instead of latching a single failure", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-reprobe-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    let refuse = true
+    vi.mocked(fsPromises.link).mockImplementation(async (existing, next) => {
+      if (refuse) throw Object.assign(new Error("EPERM: transient"), { code: "EPERM" })
+      return actual.link(existing, next)
+    })
+    try {
+      const first = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (e: unknown) => e)
+      expect(first).toBeInstanceOf(BlobLeaseUnsupportedError)
+      refuse = false
+      const id = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+      expect(typeof id).toBe("string")
+      await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, id)
+    } finally {
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
   })
 })
