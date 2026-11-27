@@ -124,6 +124,24 @@ export function manifestTypes(manifest: Record<string, unknown>, prefix: string)
     counts.has(folder) || Object.hasOwn(declared ?? {}, folder) || Array.isArray((manifest.Scope as { Included?: unknown })?.Included)))
 }
 
+export function blobPayloadFolder(prefix: string, name: string): { kind: "root" } | { kind: "folder"; folder: string } | { kind: "invalid" } {
+  if (!name.startsWith(prefix)) return { kind: "invalid" }
+  const rel = name.slice(prefix.length)
+  if (!rel || !isSafeArchivePath(rel)) return { kind: "invalid" }
+  if (rel === "metadata.json" || rel === BACKUP_OWNER_FILE) return { kind: "root" }
+  const parts = rel.split("/")
+  if (parts.length === 2 && parts[0] && /^[^/\\]+\.json$/.test(parts[1]!)) {
+    return { kind: "folder", folder: parts[0] }
+  }
+  return { kind: "invalid" }
+}
+
+export function matchesJournalTypes(prefix: string, name: string, journalTypes: Set<string>): boolean {
+  const parsed = blobPayloadFolder(prefix, name)
+  if (parsed.kind === "root") return true
+  return parsed.kind === "folder" && Boolean(typeForFolder(parsed.folder)) && journalTypes.has(parsed.folder)
+}
+
 export function checkOwner(marker: RetentionBlob, manifest: Record<string, unknown>, tenant: string, prefix: string): void {
   const { TenantId, RunId } = marker.value as Record<string, unknown>
   if (typeof TenantId !== "string" || TenantId.toLowerCase() !== tenant

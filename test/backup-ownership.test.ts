@@ -1124,6 +1124,41 @@ describe("retention verification", () => {
     }
   })
 
+  it.each([
+    { label: "manifestless with payload in remaining", withManifest: false, includePayloadInRemaining: true },
+    { label: "manifestless with payload omitted from remaining", withManifest: false, includePayloadInRemaining: false },
+    { label: "with manifest and unindexed payload in storage", withManifest: true, includePayloadInRemaining: false },
+  ])("discards an Azure deletion journal whose remaining payload sits outside journal.types ($label)", async ({ withManifest, includePayloadInRemaining }) => {
+    const key = `${TENANT}/contoso`
+    const etagOf = (saved: Map<string, Buffer>, name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+    const appItem = { id: "app1" }
+    const { engine, saved, calls, seed, progressData } = setup()
+    seed(expired + "Apps/App.json", appItem)
+    seed(expired + BACKUP_OWNER_FILE, owner)
+    if (withManifest) {
+      seed(expired + "metadata.json", {
+        TenantId: TENANT,
+        Status: "Success",
+        Scope: { Included: ["DeviceConfigurations"] },
+        Items: {},
+      })
+    }
+    const remaining = Object.fromEntries(
+      [...saved.keys()]
+        .filter(name => name.startsWith(expired) && (includePayloadInRemaining || !name.endsWith("Apps/App.json")))
+        .map(name => [name, etagOf(saved, name)]),
+    )
+    progressData.set(key, JSON.stringify({
+      reviews: {},
+      deletes: { [expired]: { prefix: expired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+    }))
+    await complete(engine)
+    expect(saved.has(expired + "Apps/App.json")).toBe(true)
+    expect(saved.has(expired + BACKUP_OWNER_FILE)).toBe(true)
+    expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+    expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+  })
+
   it("resumes a genuinely typeless backup through the deletion journal with noTypes set", async () => {
     let blockOwner = true
     const { engine, saved, calls, seed, progressData } = setup({

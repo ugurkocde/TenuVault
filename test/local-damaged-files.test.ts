@@ -5,9 +5,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
+import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { IncompleteInventoryError, LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
+import { INTUNE_TYPES } from "../src/shared/intune/registry"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -350,6 +352,77 @@ describe("damaged local backup files", () => {
     expect(job.status).toBe("Completed")
     expect(job.log.join("\n")).toContain("changed before deletion")
     expect((await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)).toContain(`${OLD}/metadata.json`)
+  })
+
+  it.each([
+    { label: "manifestless with payload in remaining", withManifest: false, includePayloadInRemaining: true },
+    { label: "manifestless with payload omitted from remaining", withManifest: false, includePayloadInRemaining: false },
+    { label: "with manifest and unindexed payload in storage", withManifest: true, includePayloadInRemaining: false },
+  ])("discards a local deletion journal whose remaining payload sits outside journal.types ($label)", async ({ withManifest, includePayloadInRemaining }) => {
+    const { store } = await setup()
+    const prefix = `${OLD}/`
+    await store.put(account, CONTAINER, `${prefix}Apps/App.json`, Buffer.from('{"id":"app1"}'), "application/json")
+    await store.put(account, CONTAINER, `${prefix}${BACKUP_OWNER_FILE}`, Buffer.from(`{"TenantId":"${TENANT}"}`), "application/json")
+    if (withManifest) {
+      await store.put(
+        account,
+        CONTAINER,
+        `${prefix}metadata.json`,
+        Buffer.from(JSON.stringify({ TenantId: TENANT, Status: "Success", Scope: { Included: ["DeviceConfigurations"] }, Items: {} })),
+        "application/json",
+      )
+    }
+    const blobs = await store.list(account, CONTAINER, prefix)
+    const etagOf = (blob: { etag?: string; lastModified: Date }) => blob.etag ?? `"0x${blob.lastModified.getTime().toString(16).toUpperCase()}"`
+    const remaining = Object.fromEntries(
+      blobs
+        .filter(blob => includePayloadInRemaining || !blob.name.endsWith("Apps/App.json"))
+        .map(blob => [blob.name, etagOf(blob)]),
+    )
+    const key = `${TENANT}/${account}`
+    const progressData = new Map<string, string>([
+      [key, JSON.stringify({
+        reviews: {},
+        deletes: {
+          [prefix]: { prefix, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+        },
+      })],
+    ])
+    const retentionProgress: RetentionProgressStore = {
+      get: k => progressData.get(k) ?? null,
+      set: (k, value) => { progressData.set(k, value) },
+      delete: k => { progressData.delete(k) },
+    }
+    const deletes: string[] = []
+    const graph = () => Response.json({ value: [] })
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (localAccountFromUrl(url)) {
+        if (request.method === "DELETE") deletes.push(decodeURIComponent(url.pathname))
+        return handleLocalBlobRequest(store, request)
+      }
+      return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
+    }) as typeof fetch
+    const engine = new BackupEngine({
+      fetch: fetchImpl,
+      getToken: async () => "token",
+      retentionDays: () => 30,
+      retentionProgress,
+      now: () => new Date("2026-09-24T12:00:00Z"),
+    })
+    const job = await engine.waitForJob(engine.get(engine.start({
+      tenantId: TENANT,
+      clientId: CLIENT,
+      storageAccountName: account,
+      scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) },
+    }).id)!)
+    expect(job.status).toBe("Completed")
+    const remainingAfter = (await store.list(account, CONTAINER, prefix)).map(blob => blob.name)
+    expect(remainingAfter).toContain(`${prefix}Apps/App.json`)
+    expect(remainingAfter).toContain(`${prefix}${BACKUP_OWNER_FILE}`)
+    expect(deletes).toEqual([])
+    expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
   })
 })
 

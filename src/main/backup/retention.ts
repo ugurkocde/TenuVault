@@ -1,5 +1,6 @@
 import { BACKUP_OWNER_FILE } from "../../shared/constants"
 import { parseBackupName } from "../../shared/intune/backup-names"
+import { typeForFolder } from "../../shared/intune/registry"
 import { resolveBackupOwnership } from "../../shared/backup-ownership"
 import { FetchApplicationError, FetchPreconditionError } from "../api/network-error"
 import { isLocalAccount } from "../storage/blob-emulator"
@@ -7,7 +8,7 @@ import type { BlobWriter, RetentionBlob } from "./blob-writer"
 import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "./retention-budget"
 import { DAY_MS, HOUR_MS, RetentionClockError } from "./retention-clock"
 import { readRetentionProgress, type DeletionJournalEntry, type RetentionProgressStore } from "./retention-progress"
-import { RetentionVerificationError, checkOwner, manifestTypes, verifyBackup } from "./retention-verification"
+import { RetentionVerificationError, checkOwner, manifestTypes, matchesJournalTypes, verifyBackup } from "./retention-verification"
 import { DeleteConditionError, InventoryDamagedError, ProtectedBlobError } from "./request"
 
 const UNREADABLE_ATTEMPTS = 3
@@ -300,13 +301,15 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       const journal = state.deletes?.[prefix]
       if (journal) {
         const remainingEntries = Object.entries(journal.remaining)
+        const journalTypes = new Set(journal.types)
         const journalValid = prefix !== latestPrefix
           && prefix !== anchorPrefix
           && journal.prefix === prefix
           && (journal.types.length === 0 ? journal.noTypes : !journal.noTypes)
-          && journal.types.every(entry => entry.length > 0)
-          && remainingEntries.every(([name, etag]) => name.startsWith(prefix) && name.length > prefix.length && etag.length > 0 && etag !== "*")
-          && (!journal.noTypes || remainingEntries.every(([name]) => name === prefix + "metadata.json" || name === prefix + owner))
+          && journal.types.every(entry => Boolean(typeForFolder(entry)))
+          && remainingEntries.every(([name, etag]) =>
+            name.startsWith(prefix) && name.length > prefix.length && etag.length > 0 && etag !== "*"
+            && matchesJournalTypes(prefix, name, journalTypes))
         if (!journalValid) {
           discardJournal(prefix, `Kept backup ${prefix} because its deletion journal failed validation and was discarded.`)
           warning = true
@@ -432,14 +435,6 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
             continue
           }
         }
-        const replacements = time < cutoff ? providersFor(journalTypes, shared, journal.noTypes) : null
-        if (!replacements) {
-          if (time < cutoff) kept++
-          warning = true
-          notice(`Kept the remaining files in backup ${prefix} because replacement coverage is no longer verified.`, "warning")
-          lastCompleted = prefix
-          continue
-        }
         const listing = await storage.list(prefix)
         const listedSet = new Set(listing.blobs)
         if (listedSet.size !== listing.blobs.length) {
@@ -450,6 +445,20 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         }
         if (!listedSet.size) {
           discardJournal(prefix)
+          lastCompleted = prefix
+          continue
+        }
+        if (listing.blobs.some(name => !matchesJournalTypes(prefix, name, journalTypes))) {
+          discardJournal(prefix, `Kept backup ${prefix} because its remaining files did not match its deletion journal types and the journal was discarded.`)
+          warning = true
+          lastCompleted = prefix
+          continue
+        }
+        const replacements = time < cutoff ? providersFor(journalTypes, shared, journal.noTypes) : null
+        if (!replacements) {
+          if (time < cutoff) kept++
+          warning = true
+          notice(`Kept the remaining files in backup ${prefix} because replacement coverage is no longer verified.`, "warning")
           lastCompleted = prefix
           continue
         }
