@@ -30,7 +30,13 @@ async function verifyReplacementUnchanged(storage: BlobWriter, prefix: string, e
   const seen = new Set(listing.blobs)
   if (seen.size !== listing.blobs.length || seen.size !== expected.size) return false
   for (const [path, etag] of expected) {
-    if (!seen.has(path) || listing.etags.get(path) !== etag) return false
+    if (!seen.has(path)) return false
+    if (listing.etags.has(path)) {
+      if (listing.etags.get(path) !== etag) return false
+    } else {
+      const current = await storage.readForRetention(path, true)
+      if (!current || current.etag !== etag) return false
+    }
   }
   return true
 }

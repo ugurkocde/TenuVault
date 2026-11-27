@@ -372,8 +372,8 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.endTime).toBeDefined()
     expect(job.exception).toBeUndefined()
-    // The first unreadable candidate stops the cleanup without spending another retry.
-    expect(reads).toBe(1)
+    // Candidate-local unreadable manifests are kept without stopping discovery or spending retries.
+    expect(reads).toBe(8)
     expect(deletes).toBe(0)
     expect(job.log.join("\n")).toContain(message.replace(/\.$/, ""))
     expect(job.log.join("\n")).not.toMatch(/did not respond|network stopped responding/)
@@ -384,7 +384,7 @@ describe("backup request recovery", () => {
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const calls = networkFetch.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(reads).toBe(1)
+    expect(reads).toBe(8)
     expect(networkFetch).toHaveBeenCalledTimes(calls)
     expect(saved.get(manifestUrl.pathname)).toBe(committed)
   })
