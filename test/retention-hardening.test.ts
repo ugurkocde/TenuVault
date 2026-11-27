@@ -419,7 +419,7 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
       if (tamper) {
         expect(second.log.join("\n")).toContain("does not match its manifest")
         // Remove the tampered earlier replacement: a new backup must start fresh and never reuse old receipts.
-        for (const key of [...saved.keys()]) {
+        for (const key of Array.from(saved.keys())) {
           if (key.includes(`${first.backupFolder}/`)) saved.delete(key)
         }
         expect(saved.has(keyOf(firstPolicy))).toBe(false)
@@ -583,8 +583,8 @@ describe("replacement protection, deletion journal, cursor safety, and per-backu
     expect(has(`${target}${BACKUP_OWNER_FILE}`)).toBe(true)
 
     // Remove run1's backup so no newer backup covers DeviceConfigurations in run2.
-    for (const key of [...calls.map(c => c.name)]) {
-      if (key.startsWith(`${run1.backupFolder}/`)) saved.delete(keyOf(key))
+    for (const call of calls) {
+      if (call.name.startsWith(`${run1.backupFolder}/`)) saved.delete(keyOf(call.name))
     }
     // Run 2 with narrower scope (CompliancePolicies only): replacement coverage does NOT cover DeviceConfigurations, so do not resume deleting.
     failSecondDelete = false

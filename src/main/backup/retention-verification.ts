@@ -136,12 +136,13 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
     }
   }
   if (manifest?.ItemCounts !== undefined) {
-    if (!manifest.ItemCounts || typeof manifest.ItemCounts !== "object" || Array.isArray(manifest.ItemCounts)) reject("metadata.json counts")
+    const itemCounts = manifest.ItemCounts
+    if (!itemCounts || typeof itemCounts !== "object" || Array.isArray(itemCounts)) reject("metadata.json counts")
     const verifiedPolicies = [...counts.entries()].reduce(
       (sum, [folder, count]) => (typeForFolder(folder) && !backupTypeUse(typeForFolder(folder)!).policyCount ? sum : sum + count),
       0,
     )
-    for (const [folder, count] of Object.entries(manifest.ItemCounts)) {
+    for (const [folder, count] of Object.entries(itemCounts as Record<string, unknown>)) {
       if (folder === "TotalPolicies") {
         if (count !== verifiedPolicies) reject("metadata.json counts")
       } else if (count !== (counts.get(folder) ?? 0)) {
