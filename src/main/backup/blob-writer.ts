@@ -221,7 +221,7 @@ export class BlobWriter {
     await this.withoutBudget().renewLeaseAt(path, leaseId, undefined, signal)
   }
 
-  /** Best-effort release of a blob lease. Never throws through the retention budget or aborted job circuit. */
+  /** Releases a blob lease outside the retention budget and aborted job circuit. Throws on HTTP 5xx; callers catch it, and an unreleased lease expires on its own. */
   async releaseLease(name: string, leaseId: string, signal?: AbortSignal): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}?comp=lease`
     await this.releaseLeaseAt(path, leaseId, signal)
