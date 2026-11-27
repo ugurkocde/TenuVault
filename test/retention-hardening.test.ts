@@ -10,7 +10,7 @@ import { verifyHalf } from "../src/main/backup/retention-verification"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
-import { backupBlobName, backupContainer, backupStoragePath } from "../src/shared/backup-storage"
+import { backupBlobName, backupContainer, backupStoragePath, untrustedTimeMarker } from "../src/shared/backup-storage"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { indexPath } from "../src/shared/large-backup"
@@ -840,5 +840,90 @@ describe("replacement protection, deletion journal, cursor safety, and per-backu
     } finally {
       undo()
     }
+  })
+})
+
+describe("retention clock diagnostics and protected untrusted-date markers", () => {
+  it("names the failing origin and reason (Age header) and escalates after 3 consecutive runs", async () => {
+    const progress = memoryStore()
+    let addAge = true
+    const { createEngine, has, seed, folder } = setupAzure({
+      progress,
+      override: url => {
+        if (addAge && url.hostname === "graph.microsoft.com") {
+          const response = Response.json({ value: [] })
+          response.headers.set("date", NOW.toUTCString())
+          response.headers.set("age", "15")
+          return response
+        }
+        return undefined
+      },
+    })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+
+    for (let run = 1; run <= 3; run++) {
+      const job = await runBackup(createEngine())
+      const log = job.log.join("\n")
+      expect(log).toContain("could not verify the time with Microsoft")
+      expect(log).toContain("Microsoft Graph")
+      expect(log).toContain("Age header")
+      expect(log.includes("Retention has repeatedly kept older backups")).toBe(run === 3)
+      expect(has(`${older}metadata.json`)).toBe(true)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+
+    // Once the proxy stops adding Age, retention succeeds and clears the deferral counter.
+    addAge = false
+    const recovered = await runBackup(createEngine())
+    expect(has(`${older}metadata.json`), recovered.log.join("\n")).toBe(false)
+    expect(recovered.log.join("\n")).not.toContain("Retention has repeatedly kept older backups")
+  })
+
+  it.each(["redirect", "cross-origin"] as const)("names Microsoft Graph and %s when Graph responses cannot supply trusted time", async mode => {
+    const { engine, has, seed, folder } = setupAzure({
+      override: url => {
+        if (url.hostname !== "graph.microsoft.com") return undefined
+        const response = withServerDate(Response.json({ value: [] }), NOW)
+        if (mode === "redirect") Object.defineProperty(response, "redirected", { value: true })
+        if (mode === "cross-origin") Object.defineProperty(response, "url", { value: "https://proxy.example.com/v1.0/deviceConfigurations" })
+        return response
+      },
+    })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+    const job = await runBackup(engine)
+    const log = job.log.join("\n")
+    expect(log).toContain("Microsoft Graph")
+    expect(log).toContain(mode)
+    expect(has(`${older}metadata.json`)).toBe(true)
+  })
+
+  it("warns and counts a warning when clearing an untrusted-date marker fails with ProtectedBlobError", async () => {
+    const formerlyFuture = "backup-2026-08-01-020000"
+    const marker = untrustedTimeMarker(formerlyFuture)
+    const { engine, has, seed, folder } = setupAzure({
+      override: (url, req) => {
+        if (req.method === "DELETE" && decodeURIComponent(url.pathname).endsWith(marker)) {
+          return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+        }
+        return undefined
+      },
+    })
+    folder(`${formerlyFuture}/`)
+    seed(`${formerlyFuture}/metadata.json`, COMPLETE_MANIFEST)
+    seed(marker, { BackupFolder: formerlyFuture, RunId: "earlier" })
+
+    const job = await runBackup(engine)
+    expect(has(marker)).toBe(true)
+    expect(has(`${formerlyFuture}/metadata.json`)).toBe(true)
+    expect(job.results?.warnings).toBeGreaterThanOrEqual(1)
+    expect(job.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(`Kept backup ${formerlyFuture} outside automatic retention`),
+    }))
+    expect(job.log.join("\n")).toContain("immutability")
   })
 })

@@ -36,7 +36,13 @@ import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
 import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
 
-class RetentionClockError extends Error {}
+class RetentionClockError extends Error {
+  constructor(message: string, readonly untrustedSource = false) {
+    super(message)
+  }
+}
+
+type TimeRejectReason = "non-2xx" | "redirect" | "cross-origin" | "age" | "date"
 
 const HOUR_MS = 3600_000
 const ORIGIN_SKEW_MS = 5 * 60_000
@@ -246,6 +252,7 @@ function answeredFetch(
   timeOrigins: ReadonlySet<string>,
   onOriginCall: (origin: string) => void,
   observeTime: (origin: string, time: number, tick: number) => void,
+  onTimeRejected: (origin: string, reason: TimeRejectReason) => void,
 ): typeof fetch {
   return async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
@@ -260,11 +267,21 @@ function answeredFetch(
     }
     // A network error response (status 0) is not an answer.
     if (response.type !== "error" && response.status !== 0 && url.hostname !== localHost) outcome.answered = true
-    if (timeSource && response.ok && !response.redirected && (!response.url || new URL(response.url).origin === url.origin)
-      && Number(response.headers.get("age") ?? 0) === 0) {
-      const date = response.headers.get("date")
-      const time = Date.parse(date ?? "")
-      if (Number.isFinite(time) && new Date(time).toUTCString() === date) observeTime(url.origin, time, performance.now())
+    if (timeSource) {
+      if (!response.ok) {
+        onTimeRejected(url.origin, "non-2xx")
+      } else if (response.redirected) {
+        onTimeRejected(url.origin, "redirect")
+      } else if (response.url && new URL(response.url).origin !== url.origin) {
+        onTimeRejected(url.origin, "cross-origin")
+      } else if (Number(response.headers.get("age") ?? 0) !== 0) {
+        onTimeRejected(url.origin, "age")
+      } else {
+        const date = response.headers.get("date")
+        const time = Date.parse(date ?? "")
+        if (Number.isFinite(time) && new Date(time).toUTCString() === date) observeTime(url.origin, time, performance.now())
+        else onTimeRejected(url.origin, "date")
+      }
     }
     return response
   }
@@ -587,6 +604,7 @@ export class BackupEngine {
     // Compare against time measured within this run, independent of the device wall clock.
     const calledOrigins = new Set<string>()
     const observations = new Map<string, { time: number; tick: number }>()
+    const timeRejections = new Map<string, Set<TimeRejectReason>>()
     let latestObservation: { time: number; tick: number } | undefined
     const fetchImpl = answeredFetch(
       this.deps.fetch,
@@ -600,16 +618,46 @@ export class BackupEngine {
         if (!previous || tick >= previous.tick) observations.set(origin, observation)
         if (!latestObservation || tick >= latestObservation.tick) latestObservation = observation
       },
+      (origin, reason) => {
+        let reasons = timeRejections.get(origin)
+        if (!reasons) {
+          reasons = new Set()
+          timeRejections.set(origin, reasons)
+        }
+        reasons.add(reason)
+      },
     )
-    const trustedTimeAt = (tick: number = performance.now()): { ok: true; time: number } | { ok: false; reason: string } => {
-      if (!latestObservation) return { ok: false, reason: NO_TRUSTED_TIME }
+    const formatTimeRejections = (missing: string[]): string => {
+      const labels: Record<TimeRejectReason, string> = {
+        age: "an Age header",
+        redirect: "a redirect",
+        "non-2xx": "non-2xx responses",
+        "cross-origin": "a cross-origin response",
+        date: "no valid Date header",
+      }
+      const details = missing.map(origin => {
+        const label = origin === GRAPH ? "Microsoft Graph" : "Azure Storage"
+        const reasons = [...(timeRejections.get(origin) ?? [])].map(reason => labels[reason])
+        return reasons.length ? `${label} returned ${reasons.join(", ")}` : `${label} gave no usable response`
+      })
+      return `TenuVault could not verify the time with Microsoft (${details.join("; ")}). Old backups were kept.`
+    }
+    const trustedTimeAt = (tick: number = performance.now()): { ok: true; time: number } | { ok: false; reason: string; untrustedSource?: boolean } => {
       if (!local && calledOrigins.has(GRAPH) && calledOrigins.has(storageOrigin)) {
         const graphTime = observations.get(GRAPH)
         const storageTime = observations.get(storageOrigin)
-        if (!graphTime || !storageTime) return { ok: false, reason: NO_TRUSTED_TIME }
-        const graphNow = graphTime.time + (tick - graphTime.tick)
-        const storageNow = storageTime.time + (tick - storageTime.tick)
+        const missing: string[] = []
+        if (!graphTime) missing.push(GRAPH)
+        if (!storageTime) missing.push(storageOrigin)
+        if (missing.length) return { ok: false, reason: formatTimeRejections(missing), untrustedSource: true }
+        const graphNow = graphTime!.time + (tick - graphTime!.tick)
+        const storageNow = storageTime!.time + (tick - storageTime!.tick)
         if (Math.abs(graphNow - storageNow) > ORIGIN_SKEW_MS) return { ok: false, reason: ORIGIN_TIME_MISMATCH }
+        return { ok: true, time: latestObservation!.time + (tick - latestObservation!.tick) }
+      }
+      if (!latestObservation) {
+        const missing = [...timeOrigins].filter(origin => calledOrigins.has(origin) && !observations.has(origin))
+        return { ok: false, reason: missing.length ? formatTimeRejections(missing) : NO_TRUSTED_TIME, untrustedSource: true }
       }
       return { ok: true, time: latestObservation.time + (tick - latestObservation.tick) }
     }
@@ -1349,19 +1397,21 @@ export class BackupEngine {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const limits = local ? undefined : this.deps.retentionLimits ?? RETENTION_LIMITS
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
+      const timeProgressKey = `${job.tenantId}/${job.storageAccountName}/${isLargeBackup(backupFolder)}`
       try {
         signal.throwIfAborted()
         if (Date.now() >= deadline) throw new Error("Backup job deadline reached")
         const startClock = trustedTimeAt(startedTick)
-        if (!startClock.ok) throw new RetentionClockError(startClock.reason)
+        if (!startClock.ok) throw new RetentionClockError(startClock.reason, startClock.untrustedSource)
         checkRetentionClock(started.getTime(), startClock.time)
         const checkClock = () => {
           const currentClock = trustedTimeAt()
-          if (!currentClock.ok) throw new RetentionClockError(currentClock.reason)
+          if (!currentClock.ok) throw new RetentionClockError(currentClock.reason, currentClock.untrustedSource)
           checkRetentionClock(this.now().getTime(), currentClock.time)
           return currentClock.time
         }
         const now = checkClock()
+        this.updateTimeDeferral(timeProgressKey, false)
         const keyFingerprint = limits ? this.deps.recoveryKeyFingerprint?.() : undefined
         const pending: Array<(checkClock: () => void) => Promise<number>> = []
         const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, now, keyFingerprint, limits, mixed, committedLargeManifest)
@@ -1381,6 +1431,12 @@ export class BackupEngine {
         retentionWarnings++
         if (error instanceof RetentionClockError) {
           this.write(job, error.message, "warning")
+          if (error.untrustedSource) {
+            const attempts = this.updateTimeDeferral(timeProgressKey, true)
+            if (attempts >= 3) {
+              this.write(job, `Retention has repeatedly kept older backups because it could not verify Microsoft time for ${attempts} consecutive runs. Check any network proxy or storage configuration and the backup log.`, "warning")
+            }
+          }
         } else if (error instanceof RetentionBudgetError) {
           this.write(job, "Retention reached its storage budget. Older backups will be reconsidered on the next run.", "warning")
         } else if (signal.aborted || Date.now() >= deadline) {
@@ -1482,7 +1538,7 @@ export class BackupEngine {
     let markerWarnings = 0
     const clearMarker = async (folder: string, writer: BlobWriter): Promise<boolean> => {
       const result = await this.clearUntrustedTime(job, writer, folder, signal)
-      if (result === "failed") markerWarnings++
+      if (result !== "cleared") markerWarnings++
       return result === "cleared"
     }
     for (const folder of marked) {
@@ -2089,6 +2145,30 @@ export class BackupEngine {
     }
   }
 
+  private updateTimeDeferral(key: string, failed: boolean): number {
+    const persisted = this.deps.retentionProgress
+    const saved = persisted?.get(key) ?? this.retentionProgress.get(key)
+    const state = readRetentionProgress(saved)
+    if (failed) {
+      state.timeAttempts = (state.timeAttempts ?? 0) + 1
+    } else {
+      if (!state.timeAttempts) return 0
+      delete state.timeAttempts
+    }
+    const hasDeletions = Boolean(state.deletions && Object.keys(state.deletions).length > 0)
+    const empty = !state.cursor && !state.latest && !state.latestAttempts && !state.timeAttempts
+      && Object.keys(state.reviews).length === 0 && !hasDeletions
+    if (empty) {
+      this.retentionProgress.delete(key)
+      if (saved) persisted?.delete(key)
+    } else {
+      const value = JSON.stringify(state)
+      this.retentionProgress.set(key, value)
+      persisted?.set(key, value)
+    }
+    return state.timeAttempts ?? 0
+  }
+
   private async clearUntrustedTime(job: BackupJob, storage: BlobWriter, folder: string, signal: AbortSignal): Promise<"cleared" | "protected" | "failed"> {
     try {
       await storage.delete(untrustedTimeMarker(folder))
@@ -2096,7 +2176,10 @@ export class BackupEngine {
     } catch (error) {
       signal.throwIfAborted()
       if (error instanceof InventoryDamagedError || error instanceof RetentionBudgetError) throw error
-      if (error instanceof ProtectedBlobError) return "protected"
+      if (error instanceof ProtectedBlobError) {
+        this.write(job, `Kept backup ${folder} outside automatic retention because its untrusted date marker is protected by storage immutability or a legal hold and could not be removed.`, "warning")
+        return "protected"
+      }
       this.write(job, `Kept backup ${folder} outside automatic retention because its untrusted date marker could not be removed.`, "warning")
       return "failed"
     }
