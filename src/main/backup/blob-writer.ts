@@ -24,7 +24,7 @@ export type { ExpectedReplacement }
 
 /** A replacement backup changed before a quarantined local delete could be finalized. */
 export class ReplacementChangedError extends FetchApplicationError {
-  constructor(cause: unknown) {
+  constructor(cause: unknown, readonly restoredEtag?: string) {
     super(cause)
     this.name = "ReplacementChangedError"
   }
@@ -269,6 +269,7 @@ export class BlobWriter {
 
   private async acquireLeaseAt(path: string, durationSeconds?: number, extraHeaders?: Record<string, string>): Promise<string> {
     const proposedId = randomUUID()
+    let acceptedLeaseId: string | undefined
     try {
       return await this.request(path, {
         method: "PUT",
@@ -286,6 +287,7 @@ export class BlobWriter {
             await this.releaseLeaseAt(path, leaseId).catch(() => undefined)
             signal.throwIfAborted()
           }
+          acceptedLeaseId = leaseId
           return leaseId
         }
         if (ambiguous && response.status === 409) {
@@ -298,7 +300,11 @@ export class BlobWriter {
         throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code, lockPath, lockHolder)
       })
     } catch (error) {
-      if (isLocalAccount(this.account)) releaseLocalRetentionGuard(proposedId)
+      if (acceptedLeaseId) await this.releaseLeaseAt(path, acceptedLeaseId).catch(() => undefined)
+      if (isLocalAccount(this.account)) {
+        if (acceptedLeaseId && acceptedLeaseId !== proposedId) releaseLocalRetentionGuard(acceptedLeaseId)
+        releaseLocalRetentionGuard(proposedId)
+      }
       if (this.network?.signal.aborted) throw error
       if (error instanceof BlobLeaseError) throw error
       throw new BlobLeaseError(error)
@@ -387,12 +393,14 @@ export class BlobWriter {
           const code = response.headers.get("x-ms-error-code") ?? ""
           const local = isLocalAccount(this.account)
           const unchangedHeader = response.headers.get("x-tenuvault-delete-unchanged") === "1"
+          const rawRestoredEtag = local ? response.headers.get("x-tenuvault-restored-etag") : null
+          const restoredEtag = rawRestoredEtag && rawRestoredEtag !== "*" ? rawRestoredEtag : undefined
           if (code === "ReplacementChanged") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
             const body = await response.clone().text().catch(() => "")
             const message = /<Message>([^<]+)<\/Message>/.exec(body)?.[1]
               ?.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
-            throw new ReplacementChangedError(message ? new Error(message) : await storageFailure(response, this.account))
+            throw new ReplacementChangedError(message ? new Error(message) : await storageFailure(response, this.account), restoredEtag)
           }
           if (code === "RetentionLockLost") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
@@ -412,7 +420,7 @@ export class BlobWriter {
           const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
           if (bodyCode === "ReplacementChanged") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
-            throw new ReplacementChangedError(await storageFailure(response, this.account))
+            throw new ReplacementChangedError(await storageFailure(response, this.account), restoredEtag)
           }
           if (bodyCode === "RetentionLockLost") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true

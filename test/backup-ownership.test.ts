@@ -828,17 +828,59 @@ describe("retention verification", () => {
     expect(afterCompleteC.newest).toBeUndefined()
     expect(afterCompleteC.reviews[prefixC]).toBeUndefined()
 
-    // Subcase C: restore partial C progress, then newest backup CHANGES to D -> C's newest receipts are cleared and D starts fresh.
+    // Subcase C: restore partial C progress, then a new backup D is written while C still exists ->
+    // C continues via its persisted receipt (does not re-read Policy 0) instead of restarting on D.
     folder(expired)
     seed(expired + "metadata.json", manifest)
     progressData.set(key, snapshotAfterPartialC)
+    const cReadsBeforeD = cPolicy0Reads()
     await vi.advanceTimersByTimeAsync(1_000)
-    const jobD = await complete(engine)
-    const prefixD = `${jobD.backupFolder}/`
-    const afterChangeD = readRetentionProgress(progressData.get(key))
-    expect(afterChangeD.reviews[prefixC]).toBeUndefined()
-    expect(afterChangeD.newest).toBe(prefixD)
-    expect(calls.filter(c => c.name === `${prefixD}DeviceConfigurations/Policy 0.json` && c.request.method === "GET")).toHaveLength(1)
+    await complete(engine)
+    expect(cPolicy0Reads()).toBe(cReadsBeforeD)
+
+    // Subcase D: restore partial C progress and remove C from storage -> next run clears C's receipts and starts fresh on E.
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    for (const name of saved.keys()) if (name.startsWith(prefixC)) saved.delete(name)
+    progressData.set(key, snapshotAfterPartialC)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const jobE = await complete(engine)
+    const prefixE = `${jobE.backupFolder}/`
+    const afterMissingC = readRetentionProgress(progressData.get(key))
+    expect(afterMissingC.reviews[prefixC]).toBeUndefined()
+    expect(afterMissingC.newest).toBe(prefixE)
+    expect(calls.filter(c => c.name === `${prefixE}DeviceConfigurations/Policy 0.json` && c.request.method === "GET")).toHaveLength(1)
+  })
+
+  it("round 7 item 4: bounded newest-backup verification finishes and deletes expired backups across consecutive BackupEngine runs", async () => {
+    const big = "b".repeat(70_000)
+    const { engine, saved, seed, folder } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+
+    // Every scheduled BackupEngine run writes a new backup folder (~140 KB > 110 KB byte budget).
+    // Bounded verification must continue its in-progress committed newest backup and delete
+    // expired within a small, bounded number of consecutive BackupEngine runs (no applyRetention calls).
+    let deletedRun = 0
+    for (let run = 1; run <= 8; run++) {
+      await complete(engine)
+      if (!saved.has(expired + "metadata.json")) {
+        deletedRun = run
+        break
+      }
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    expect(deletedRun).toBeGreaterThan(0)
+    expect(deletedRun).toBeLessThanOrEqual(8)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
   })
 
   it("keeps an unreadable candidate, cleans up other owned candidates immediately, and escalates to a persistent warning after 3 consecutive failures", async () => {

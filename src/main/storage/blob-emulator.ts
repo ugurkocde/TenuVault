@@ -288,7 +288,11 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       ? { "x-tenuvault-delete-unchanged": "1" }
       : undefined
     if (caught instanceof BlobProtectedError) return error(409, "BackupProtectedByRetention", caught.message, unchanged)
-    if (caught instanceof BlobReplacementChangedError) return error(409, "ReplacementChanged", caught.message, unchanged)
+    if (caught instanceof BlobReplacementChangedError) {
+      const headers: Record<string, string> = { ...unchanged }
+      if (caught.restoredEtag) headers["x-tenuvault-restored-etag"] = caught.restoredEtag
+      return error(409, "ReplacementChanged", caught.message, Object.keys(headers).length ? headers : undefined)
+    }
     if (caught instanceof BlobLeaseConflictError) {
       if (method === "DELETE") return error(412, "RetentionLockLost", caught.message, unchanged)
       const headers: Record<string, string> = {}

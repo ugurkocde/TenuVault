@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, NetworkCircuit } from "../src/main/backup/engine"
 import { BlobLeaseError, BlobWriter } from "../src/main/backup/blob-writer"
 import { permanentLeaseFailureWarning } from "../src/main/backup/retention-lease"
-import { type RetentionProgressStore } from "../src/main/backup/retention-progress"
+import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import {
   BlobLeaseConflictError,
@@ -19,6 +19,7 @@ import {
   parseDarwinPsStart,
   parseWindowsCreationDate,
   processStartKind,
+  waitForLocalRetentionGuardRegistration,
   type ProcessInfoReader,
 } from "../src/main/storage/local-blob-store"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
@@ -865,30 +866,35 @@ describe("round 5 CodeRabbit fixes", () => {
     const putPromise = storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json")
     await onRenameStart
 
-    // Start acquiring the retention lock protecting repPrefix on storeA.
-    let lockResolved = false
-    const lockPromise = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [repPrefix]).then(id => {
-      lockResolved = true
-      return id
-    })
-
-    // Give the event loop turns: lock acquisition MUST wait for the in-flight put to finish,
-    // while new puts to repPrefix are already blocked.
-    await new Promise(resolve => setTimeout(resolve, 30))
-    expect(lockResolved).toBe(false)
-    await expect(storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}DeviceConfigurations/new.json`, Buffer.from("{}"), "application/json"))
-      .rejects.toBeInstanceOf(BlobProtectedError)
-
-    // Allow the in-flight rename to commit.
-    allowRename()
-    await putPromise
-    const lockId = await lockPromise
+    let lockId: string | undefined
     try {
+      // Synchronize explicitly on guard registration before asserting that lock acquisition
+      // waits for the in-flight put while blocking new puts to repPrefix.
+      const guardRegistered = waitForLocalRetentionGuardRegistration(join(root, ACCOUNT, BACKUP_CONTAINER))
+      let lockResolved = false
+      const lockPromise = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [repPrefix]).then(id => {
+        lockResolved = true
+        return id
+      })
+
+      await guardRegistered
+      await Promise.resolve()
+      expect(lockResolved).toBe(false)
+      await expect(storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}DeviceConfigurations/new.json`, Buffer.from("{}"), "application/json"))
+        .rejects.toBeInstanceOf(BlobProtectedError)
+
+      // Allow the in-flight rename to commit.
+      allowRename()
+      await putPromise
+      lockId = await lockPromise
       // Final read under the lock is guaranteed to observe the committed v2 manifest.
       const read = await storeA.get(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`)
       expect(read.data.toString()).toBe('{"v":2}')
     } finally {
-      await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
+      allowRename()
+      await putPromise.catch(() => undefined)
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      if (lockId) await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
     }
   })
 
@@ -1097,29 +1103,53 @@ describe("round 5b reclaim gate", () => {
     }
   })
 
-  it("gate staleness: a dead same-host gate is reclaimed and a foreign-host gate warns naming the gate path", async () => {
+  it("gate staleness: a dead same-host gate is never auto-reclaimed and warns naming the gate path, like a foreign-host gate", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
     const root = mkdtempSync(join(tmpdir(), "tv-reclaim-gate-stale-")); roots.push(root)
     const deadPid = spawnSync(process.execPath, ["-e", ""]).pid!
-    const store = new LocalBlobStore(root, [MASTER])
-    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const storeA = new LocalBlobStore(root, [MASTER])
+    const storeB = new LocalBlobStore(root, [MASTER])
+    await storeA.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const lockPath = join(dir, ".tenuvault-retention.lock")
     const gatePath = `${lockPath}.reclaim`
 
-    // Stale lock plus a gate left by a dead same-host reclaimer: both are reclaimed.
-    writeFileSync(lockPath, JSON.stringify({ id: "stale-S", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
-    writeFileSync(gatePath, JSON.stringify({ id: "dead-gate", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
-    const id = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
-    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(id)
-    expect(existsSync(gatePath)).toBe(false)
-    await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, id)
+    // Stale lock plus a gate left by a dead same-host reclaimer: two concurrent reclaimers must
+    // both skip with the named manual warning, and neither the gate nor the lock may be moved.
+    const staleLock1 = JSON.stringify({ id: "stale-S", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" })
+    const deadGate = JSON.stringify({ id: "dead-gate", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" })
+    writeFileSync(lockPath, staleLock1)
+    writeFileSync(gatePath, deadGate)
+    let renames = 0
+    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+      if (String(from) === gatePath || String(from) === lockPath) renames++
+      return actual.rename(from, to)
+    })
+    try {
+      const [errA, errB] = await Promise.all([
+        storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (error: unknown) => error),
+        storeB.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (error: unknown) => error),
+      ])
+      for (const failure of [errA, errB]) {
+        expect(failure).toBeInstanceOf(BlobLeaseConflictError)
+        expect((failure as BlobLeaseConflictError).code).toBe("RetentionLockManualIntervention")
+        expect((failure as BlobLeaseConflictError).lockPath).toBe(gatePath)
+        expect((failure as Error).message).toContain(gatePath)
+        expect((failure as Error).message).toContain("Stop any TenuVault process on this computer")
+      }
+      expect(renames).toBe(0)
+      expect(readFileSync(lockPath, "utf8")).toBe(staleLock1)
+      expect(readFileSync(gatePath, "utf8")).toBe(deadGate)
+    } finally {
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+    }
 
     // Stale lock plus a foreign-host gate: manual warning naming the gate, nothing moved.
     const staleLock = JSON.stringify({ id: "stale-S2", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" })
     const foreignGate = JSON.stringify({ id: "foreign-gate", host: "other-computer", pid: deadPid, processStart: "dead", app: "TenuVault" })
     writeFileSync(lockPath, staleLock)
     writeFileSync(gatePath, foreignGate)
-    const failure = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (error: unknown) => error)
+    const failure = await storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (error: unknown) => error)
     expect(failure).toBeInstanceOf(BlobLeaseConflictError)
     expect((failure as BlobLeaseConflictError).code).toBe("RetentionLockManualIntervention")
     expect((failure as BlobLeaseConflictError).lockPath).toBe(gatePath)
@@ -1367,73 +1397,269 @@ describe("round 6 findings", () => {
     }
   })
 
-  it("P2 3: hard-link-free recovery replaces a 0-byte or partial-prefix live file after a crash, while preserving conflicts and links", async () => {
+  it("4722421526: hard-link-free recovery never overwrites a 0-byte, partial-prefix, or concurrently written live file and reports both paths", async () => {
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
     const root = mkdtempSync(join(tmpdir(), "tv-r6-p2-3-")); roots.push(root)
     const store = new LocalBlobStore(root, [MASTER])
     await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const prefix = "backup-2026-10-12-120000/"
-    await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","round":6}'), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","round":7}'), "application/json")
     const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
-    const fullBytes = readFileSync(join(dir, tvbFile))
+    const livePath = join(dir, tvbFile)
+    const fullBytes = readFileSync(livePath)
     const oldTime = (Date.now() - 120_000) / 1000
 
     vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     try {
-      // Case 1: crash right after open("wx") leaves a 0-byte live file.
+      // Case 1: 0-byte file at live -> never overwritten; held kept and conflict names both paths.
       const retiredZero = join(dir, ".retired-zero1")
+      const heldZero = join(retiredZero, tvbFile)
       mkdirSync(retiredZero)
-      renameSync(join(dir, tvbFile), join(retiredZero, tvbFile))
+      renameSync(livePath, heldZero)
       writeFileSync(join(retiredZero, ".quarantined"), "")
       utimesSync(join(retiredZero, ".quarantined"), oldTime, oldTime)
       utimesSync(retiredZero, oldTime, oldTime)
-      writeFileSync(join(dir, tvbFile), Buffer.alloc(0))
+      writeFileSync(livePath, Buffer.alloc(0))
 
       const damageZero = await store.damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(damageZero.files).toEqual([])
-      expect(existsSync(retiredZero)).toBe(false)
-      expect(readFileSync(join(dir, tvbFile)).equals(fullBytes)).toBe(true)
-      expect((await store.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe('{"Status":"Success","round":6}')
+      expect(damageZero.files).toHaveLength(1)
+      expect(damageZero.files[0]!.file).toBe(`.retired-zero1/${tvbFile}`)
+      expect(damageZero.files[0]!.reason).toContain(heldZero)
+      expect(damageZero.files[0]!.reason).toContain(livePath)
+      expect(existsSync(heldZero)).toBe(true)
+      expect(readFileSync(livePath).length).toBe(0)
+      rmSync(retiredZero, { recursive: true, force: true })
 
-      // Case 2: crash mid-copy leaves a strict byte prefix of held at live.
+      // Case 2: partial-prefix file at live (e.g. crash or concurrent writer) -> never overwritten; held kept and both paths named.
       const retiredPartial = join(dir, ".retired-part1")
+      const heldPartial = join(retiredPartial, tvbFile)
       mkdirSync(retiredPartial)
-      renameSync(join(dir, tvbFile), join(retiredPartial, tvbFile))
+      writeFileSync(heldPartial, fullBytes)
       writeFileSync(join(retiredPartial, ".quarantined"), "")
       utimesSync(join(retiredPartial, ".quarantined"), oldTime, oldTime)
       utimesSync(retiredPartial, oldTime, oldTime)
-      writeFileSync(join(dir, tvbFile), fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
+      const partialBytes = fullBytes.subarray(0, Math.floor(fullBytes.length / 2))
+      writeFileSync(livePath, partialBytes)
 
       const damagePartial = await store.damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(damagePartial.files).toEqual([])
-      expect(existsSync(retiredPartial)).toBe(false)
-      expect(readFileSync(join(dir, tvbFile)).equals(fullBytes)).toBe(true)
-      expect((await store.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe('{"Status":"Success","round":6}')
+      expect(damagePartial.files.some(f => f.file === `.retired-part1/${tvbFile}` && f.reason.includes(heldPartial) && f.reason.includes(livePath))).toBe(true)
+      expect(existsSync(heldPartial)).toBe(true)
+      expect(readFileSync(livePath).equals(partialBytes)).toBe(true)
+      rmSync(retiredPartial, { recursive: true, force: true })
 
-      // Case 3: live is a shorter file that is NOT a byte prefix of held -> conflict reported, live untouched.
+      // Case 3: live is a different file -> conflict reported with both paths, live untouched.
       const retiredDiff = join(dir, ".retired-diff2")
+      const heldDiff = join(retiredDiff, tvbFile)
       mkdirSync(retiredDiff)
-      renameSync(join(dir, tvbFile), join(retiredDiff, tvbFile))
+      writeFileSync(heldDiff, fullBytes)
       writeFileSync(join(retiredDiff, ".quarantined"), "")
       utimesSync(join(retiredDiff, ".quarantined"), oldTime, oldTime)
       utimesSync(retiredDiff, oldTime, oldTime)
-      writeFileSync(join(dir, tvbFile), Buffer.from("not-a-prefix"))
+      writeFileSync(livePath, Buffer.from("not-a-prefix"))
 
       const damageDiff = await store.damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(damageDiff.files.some(f => f.file === `.retired-diff2/${tvbFile}`)).toBe(true)
-      expect(readFileSync(join(dir, tvbFile)).toString()).toBe("not-a-prefix")
-      rmSync(join(dir, tvbFile), { force: true })
+      expect(damageDiff.files.some(f => f.file === `.retired-diff2/${tvbFile}` && f.reason.includes(heldDiff) && f.reason.includes(livePath))).toBe(true)
+      expect(readFileSync(livePath).toString()).toBe("not-a-prefix")
+      rmSync(livePath, { force: true })
 
-      // Case 4: live is a symlink to a 0-byte file -> lstat rejects link, conflict stays reported.
+      // Case 4: live is a symlink to a 0-byte file -> never overwritten, conflict stays reported.
       const linkTarget = join(root, "zero-target")
       writeFileSync(linkTarget, Buffer.alloc(0))
-      symlinkSync(linkTarget, join(dir, tvbFile))
+      symlinkSync(linkTarget, livePath)
       const damageLink = await store.damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(damageLink.files.some(f => f.file === `.retired-diff2/${tvbFile}`)).toBe(true)
+      expect(damageLink.files.some(f => f.file === `.retired-diff2/${tvbFile}` && f.reason.includes(heldDiff) && f.reason.includes(livePath))).toBe(true)
       expect(readFileSync(linkTarget).length).toBe(0)
     } finally {
       vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+})
+
+describe("round 7 findings", () => {
+  it("4722421520: with an unstealable gate held, lock check and move complete without interleaving from another reclaimer", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r7-gate-serial-")); roots.push(root)
+    const deadPid = spawnSync(process.execPath, ["-e", ""]).pid!
+    const storeA = new LocalBlobStore(root, [MASTER])
+    const storeB = new LocalBlobStore(root, [MASTER])
+    await storeA.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(dir, ".tenuvault-retention.lock")
+    const gatePath = `${lockPath}.reclaim`
+    writeFileSync(lockPath, JSON.stringify({ id: "stale-S", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
+
+    let lockMoveReached!: () => void
+    const onLockMove = new Promise<void>(resolve => { lockMoveReached = resolve })
+    let allowLockMove!: () => void
+    const waitLockMove = new Promise<void>(resolve => { allowLockMove = resolve })
+    let gateRenames = 0
+    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+      if (String(from) === gatePath && String(to).endsWith(".stale")) gateRenames++
+      if (String(from) === lockPath && String(to).endsWith(".stale")) {
+        lockMoveReached()
+        await waitLockMove
+      }
+      return actual.rename(from, to)
+    })
+    let lockIdA: string | undefined
+    try {
+      const acquireA = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+      await onLockMove
+      // A holds the gate and has checked the lock; B arrives now and must not move the gate or lock.
+      const errB = await storeB.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (error: unknown) => error)
+      expect(errB).toBeInstanceOf(BlobLeaseConflictError)
+      expect((errB as BlobLeaseConflictError).code).toBe("LeaseAlreadyPresent")
+      expect((errB as BlobLeaseConflictError).lockPath).toBe(gatePath)
+      expect(gateRenames).toBe(0)
+
+      allowLockMove()
+      lockIdA = await acquireA
+      expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(lockIdA)
+      expect(existsSync(gatePath)).toBe(false)
+    } finally {
+      allowLockMove()
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      if (lockIdA) await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockIdA)
+    }
+  })
+
+  it("4722421496: persists the bound ETag after copy-fallback restore so a later healthy run resumes partial deletion", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r7-restored-etag-")); roots.push(root)
+    const externalRoot = mkdtempSync(join(tmpdir(), "tv-r7-restored-etag-ext-")); roots.push(externalRoot)
+    const store = new LocalBlobStore(root, [MASTER])
+    const externalStore = new LocalBlobStore(externalRoot, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    await externalStore.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const extDir = join(externalRoot, ACCOUNT, BACKUP_CONTAINER)
+    const old = "backup-2026-08-01-020000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${old}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${old}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${old}metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+    const preRestoreEtag = (await store.get(ACCOUNT, BACKUP_CONTAINER, `${old}DeviceConfigurations/Old.json`)).blob.etag
+
+    const firstRunPrefix = "backup-2026-10-12-120000/"
+    await externalStore.put(ACCOUNT, BACKUP_CONTAINER, `${firstRunPrefix}metadata.json`, Buffer.from('{"Status":"Success","External":"changed"}'), "application/json")
+    const repTvbFile = readdirSync(extDir).find(f => f.endsWith(".tvb"))!
+    const extTvbBytes = readFileSync(join(extDir, repTvbFile))
+
+    const progressData = new Map<string, string>()
+    const progress: RetentionProgressStore = {
+      get: key => progressData.get(key) ?? null,
+      set: (key, value) => { progressData.set(key, value) },
+      delete: key => { progressData.delete(key) },
+    }
+    const progressKey = `${TENANT}/${ACCOUNT}`
+
+    // Force no-hard-links copy fallback for quarantine restore, and mutate replacement on the 2nd
+    // quarantine rename (payload Old.json, after metadata.json was already deleted).
+    let quarantineRenames = 0
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+      await actual.rename(from, to)
+      if (String(to).includes(".retired-")) {
+        quarantineRenames++
+        if (quarantineRenames === 2) {
+          const staged = join(dir, `${repTvbFile}.ext.tmp`)
+          writeFileSync(staged, extTvbBytes)
+          renameSync(staged, join(dir, repTvbFile))
+        }
+      }
+    })
+    try {
+      let currentNow = NOW
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const req = new Request(input, init)
+        const url = new URL(req.url)
+        if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), currentNow)
+        return handleLocalBlobRequest(store, req)
+      }
+      const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+      const engine = new BackupEngine({
+        fetch: fetchImpl,
+        getToken: async () => "token",
+        retentionDays: () => 30,
+        retentionProgress: progress,
+        now: () => currentNow,
+      })
+
+      const job1 = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+      await engine.waitForJob(job1)
+      expect(job1.status).toBe("Completed")
+      expect(quarantineRenames).toBe(2)
+
+      // metadata.json is gone, Old.json was restored via copy fallback with a NEW ETag,
+      // and the deletion journal recorded that exact bound ETag.
+      const savedAfterStop = readRetentionProgress(progressData.get(progressKey))
+      const journal = savedAfterStop.deletes?.[old]
+      expect(journal).toBeDefined()
+      const currentOldEtag = (await store.get(ACCOUNT, BACKUP_CONTAINER, `${old}DeviceConfigurations/Old.json`)).blob.etag
+      expect(currentOldEtag).not.toBe(preRestoreEtag)
+      expect(journal!.remaining[`${old}DeviceConfigurations/Old.json`]).toBe(currentOldEtag)
+
+      // Next run creates a fresh healthy newest backup -> partial deletion resumes cleanly!
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      currentNow = new Date(NOW.getTime() + 60_000)
+      const job2 = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+      await engine.waitForJob(job2)
+      expect(job2.status).toBe("Completed")
+      expect(await store.list(ACCOUNT, BACKUP_CONTAINER, old)).toEqual([])
+      expect(readRetentionProgress(progressData.get(progressKey)).deletes?.[old]).toBeUndefined()
+    } finally {
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+    }
+  })
+
+  it("4722421489: releases an accepted lease (Azure and local) when the job deadline expires before request() returns", async () => {
+    // 1. Azure blob lease accepted right as the job deadline elapses -> released before rethrowing.
+    let fakeNow = 1_000_000
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => fakeNow)
+    try {
+      const released: Array<{ action: string | null; leaseId: string | null }> = []
+      const azureFetch: typeof fetch = async (_input, init) => {
+        const headers = new Headers(init?.headers)
+        const action = headers.get("x-ms-lease-action")
+        if (action === "acquire") {
+          // Cross the deadline right as storage accepts the lease; signal is still un-aborted inside read().
+          fakeNow = 1_000_500
+          return new Response(null, { status: 201, headers: { "x-ms-lease-id": "accepted-azure-lease" } })
+        }
+        if (action === "release") {
+          released.push({ action, leaseId: headers.get("x-ms-lease-id") })
+          return new Response(null, { status: 200 })
+        }
+        return new Response(null, { status: 200 })
+      }
+      const network = new NetworkCircuit(3, undefined, 1_000_100)
+      const azureWriter = new BlobWriter(azureFetch, "contoso", async () => "token", network)
+      await expect(azureWriter.acquireLease("backup-2026-10-12-120000/metadata.json", 60)).rejects.toThrow(/timed out|deadline/i)
+      expect(released).toEqual([{ action: "release", leaseId: "accepted-azure-lease" }])
+
+      // 2. Local container retention lock accepted right as the job deadline elapses -> lock file and guard are cleaned up.
+      const root = mkdtempSync(join(tmpdir(), "tv-r7-deadline-local-")); roots.push(root)
+      const store = new LocalBlobStore(root, [MASTER])
+      await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+      const lockPath = join(root, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+      const repPrefix = "backup-2026-10-12-120000/"
+      fakeNow = 2_000_000
+      const localFetch: typeof fetch = async (input, init) => {
+        const req = new Request(input, init)
+        const res = await handleLocalBlobRequest(store, req)
+        if (req.headers.get("x-ms-lease-action") === "acquire" && res.ok) {
+          fakeNow = 2_000_500
+        }
+        return res
+      }
+      const localNetwork = new NetworkCircuit(3, undefined, 2_000_100)
+      const localWriter = new BlobWriter(localFetch, ACCOUNT, async () => "", localNetwork)
+      await expect(localWriter.acquireContainerLease([repPrefix])).rejects.toThrow(/timed out|deadline/i)
+      expect(existsSync(lockPath)).toBe(false)
+      await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}check.json`, Buffer.from("{}"), "application/json")).resolves.toBeDefined()
+    } finally {
+      nowSpy.mockRestore()
     }
   })
 })
