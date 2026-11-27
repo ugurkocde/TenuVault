@@ -257,6 +257,8 @@ export interface ProxyCredentialSummary {
 export interface BackupSettings {
   /** Folder that holds encrypted backups for tenants that store backups on this device. */
   localFolder: string
+  labFolderReadOnly?: boolean
+  canCopyLabBackups?: boolean
   /** Non-secret identifier of the current backup encryption key. */
   keyFingerprint: string
   /** The current key fingerprint matches the recorded recovery key export. */
@@ -561,6 +563,7 @@ export interface TenuVaultBridge {
     inventoryProblem: (tenantId: string) => Promise<string | null>
     /** Lets the admin pick a new folder. Existing backups stay where they are. */
     chooseFolder: () => Promise<BackupSettings>
+    useLabFolder: (copy: boolean) => Promise<BackupSettings>
     /** Opens the backup folder, or the tenant's own folder in it when one is given and it exists. */
     openFolder: (tenantId?: string) => Promise<void>
     /** Saves the recovery key to a file the admin chooses. */

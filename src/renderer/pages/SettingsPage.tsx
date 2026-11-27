@@ -298,6 +298,19 @@ function BackupsOnDevice() {
               Open folder
             </Button>
           </div>
+          {settings?.labFolderReadOnly && (
+            <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900" role="status">
+              <p>TenuVault Lab can browse this folder. It needs a separate folder to save backups and run retention.</p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={() => void run(async () => setSettings(await bridge.backups.useLabFolder(false)))}>
+                  Use the TenuVault Lab Backups folder
+                </Button>
+                {settings.canCopyLabBackups && <Button variant="outline" size="sm" onClick={() => void run(async () => setSettings(await bridge.backups.useLabFolder(true)))}>
+                  Copy verified Lab backups
+                </Button>}
+              </div>
+            </div>
+          )}
           <p className="text-xs text-gray-500">
             Changing the folder does not move existing backups. Move the folder's contents yourself to keep them visible.
             A network share works, since the files are encrypted.

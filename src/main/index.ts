@@ -55,7 +55,7 @@ import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/b
 import { requestTrialKey } from "./license/trial"
 import { assertArchiveFileSize, importConfirmedArchive, reviewArchive } from "./backup/archive"
 import { readFile, stat } from "node:fs/promises"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
@@ -96,6 +96,7 @@ import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { folderToOpen, localInventoryProblem } from "./backup/local-inventory"
+import { copyLabBackups, guardLabBackupWrites, isStableBackupFolder, LAB_FOLDER_ERROR } from "./backup/lab-folder"
 import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
 import { BackupReaderService, readerConfidenceRead } from "./auth/backup-reader"
@@ -450,14 +451,28 @@ async function bootstrap(): Promise<void> {
   const backupKeys = new BackupKeys(appStore)
   setRestoreJournalStore(appStore)
   setRestoreApprovalStore(appStore)
-  const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), __TV_LAB_BUILD__ ? "TenuVault Lab Backups" : "TenuVault Backups")
+  const stableFolder = join(app.getPath("documents"), "TenuVault Backups")
+  const labFolder = join(app.getPath("documents"), "TenuVault Lab Backups")
+  const guardBackupWrites = __TV_LAB_BUILD__ ? guardLabBackupWrites(stableFolder) : undefined
+  const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? (__TV_LAB_BUILD__ ? labFolder : stableFolder)
+  const labReadOnly = (folder: string) => __TV_LAB_BUILD__ && isStableBackupFolder(folder, stableFolder)
+  const labCopyKeyId = (key: Buffer) => createHash("sha256").update(key).digest("hex")
+  const labCopyKeys = () => {
+    const keys = backupKeys.existingKeyring()
+    const pinned = appStore.get("backup.lab-copy-key")
+    return pinned === null ? (keys.length === 1 ? keys : []) : keys.filter(key => labCopyKeyId(key) === pinned)
+  }
   let localStore: LocalBlobStore | null = null
-  const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
+  const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring(), undefined, guardBackupWrites))
   // The unreadable-backups warning reads inventories through its own store, so a check never shares
   // an index rebuild with a running backup or retention. Stores already coordinate through the folder.
   let checkStore: LocalBlobStore | null = null
-  const getCheckStore = () => (checkStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
-  const backupSettings = () => readBackupSettings(localFolder(), backupKeys, appStore)
+  const getCheckStore = () => (checkStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring(), undefined, guardBackupWrites))
+  const backupSettings = async () => {
+    const folder = localFolder()
+    const settings = await readBackupSettings(folder, backupKeys, appStore)
+    return labReadOnly(folder) ? { ...settings, labFolderReadOnly: true, canCopyLabBackups: labCopyKeys().length > 0 } : settings
+  }
 
   // Background requests never open a sign-in window; the renderer shows a prompt instead.
   const lastPrompt = new Map<string, number>()
@@ -2198,6 +2213,39 @@ async function bootstrap(): Promise<void> {
       throw new Error("A backup, restore, download or archive import is using the backup folder. Wait for it to finish, then change the folder.")
     }
   }
+  const setLocalFolder = (folder: string) => {
+    guardBackupWrites?.(folder)
+    appStore.set(LOCAL_FOLDER_KEY, folder)
+    localStore = null
+    checkStore = null
+  }
+  const useLabFolder = async (source: string, copy: boolean) => {
+    if (!guardBackupWrites) throw new Error("This folder action is only available in TenuVault Lab.")
+    assertLocalFolderIdle()
+    if (copy) {
+      const keys = labCopyKeys()
+      const confirmation = await dialog.showMessageBox(mainWindow!, {
+        type: "question", title: "Copy and verify Lab backups?",
+        message: "Continue only if the recovery key in this profile was created by TenuVault Lab.",
+        detail: "TenuVault Lab copies backup files it can verify with that key. The original files stay in their folder.",
+        buttons: ["Cancel", "Copy and verify"], defaultId: 0, cancelId: 0,
+      })
+      if (confirmation.response !== 1) return backupSettings()
+      assertLocalFolderIdle()
+      importingArchive = true
+      try {
+        const { copied, skipped } = await copyLabBackups(source, labFolder, keys, guardBackupWrites)
+        setLocalFolder(labFolder)
+        await dialog.showMessageBox(mainWindow!, {
+          type: skipped ? "warning" : "info", title: "Lab backup copies",
+          message: `Verified and copied ${copied} backup folders. Skipped ${skipped} unreadable or conflicting backups or files.`,
+          detail: "The original files stay in their folder.",
+        })
+      } finally { importingArchive = false }
+    } else setLocalFolder(labFolder)
+    return backupSettings()
+  }
+  handleTrusted("backups:useLabFolder", (_event, copy: unknown) => useLabFolder(localFolder(), copy === true))
   handleTrusted("backups:chooseFolder", async () => {
     assertLocalFolderIdle()
     const result = await dialog.showOpenDialog(mainWindow!, {
@@ -2209,16 +2257,25 @@ async function bootstrap(): Promise<void> {
     if (!result.canceled && folder) {
       // Work may have started while the dialog was open.
       assertLocalFolderIdle()
-      appStore.set(LOCAL_FOLDER_KEY, folder)
-      localStore = null
-      checkStore = null
+      if (labReadOnly(folder)) {
+        const choice = await dialog.showMessageBox(mainWindow!, {
+          type: "warning", title: "Use a separate backup folder", message: LAB_FOLDER_ERROR,
+          buttons: ["Cancel", "Use the TenuVault Lab Backups folder", ...(labCopyKeys().length ? ["Copy verified Lab backups"] : [])],
+          defaultId: 1, cancelId: 0,
+        })
+        if (choice.response !== 0) return useLabFolder(folder, choice.response === 2)
+      } else setLocalFolder(folder)
     }
     return backupSettings()
   })
   handleTrusted("backups:openFolder", async (_event, tenantId: unknown) => {
     const { mkdir } = await import("node:fs/promises")
-    await mkdir(localFolder(), { recursive: true })
-    const failure = await shell.openPath(await folderToOpen(localFolder(), tenantId))
+    const folder = localFolder()
+    if (!labReadOnly(folder)) {
+      guardBackupWrites?.(folder)
+      await mkdir(folder, { recursive: true })
+    }
+    const failure = await shell.openPath(await folderToOpen(folder, tenantId))
     if (failure) throw new Error(failure)
   })
   handleTrusted("backups:exportRecoveryKey", async () => {
@@ -2253,6 +2310,10 @@ async function bootstrap(): Promise<void> {
     // The imported key encrypts every new backup on this device, so the admin confirms it here, not only in the renderer.
     const review = await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Import recovery key", message: "Use this recovery key for new backups?", detail: "TenuVault encrypts new backups stored on this device with the imported key. Backups made with the previous key stay readable, and so do Azure backups that an earlier TenuVault version encrypted with the imported key. Import only a key you exported yourself or received from a source you trust.", buttons: ["Cancel", "Import key"], defaultId: 0, cancelId: 0 })
     if (review.response !== 1) return null
+    if (__TV_LAB_BUILD__ && appStore.get("backup.lab-copy-key") === null) {
+      const [key] = labCopyKeys()
+      appStore.set("backup.lab-copy-key", key ? labCopyKeyId(key) : "")
+    }
     backupKeys.importRecoveryKey(recoveryKey)
     localStore = null
     checkStore = null

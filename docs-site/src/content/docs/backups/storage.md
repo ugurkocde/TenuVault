@@ -138,6 +138,10 @@ New backups go to the new location. Existing backups stay where they are, and Te
 
 The **TenuVault Backup Writer** role can overwrite existing blobs in `intune-backups`. The storage owner chooses whether to enable blob versioning or apply an immutability policy. The separate audit writer grant permits read and create on the audit container.
 
+### TenuVault Lab folders
+
+If an earlier Lab build used the stable backup folder, Lab can still browse it. Backups, archive imports and retention use a separate folder. In **Settings > Storage and recovery**, choose **Use the TenuVault Lab Backups folder**. If the profile has an identifiable Lab-created recovery key, you can choose **Copy verified Lab backups**. Lab checks the copied files and leaves the originals where they are. Unreadable files and conflicting copies are reported.
+
 ## Retention
 
 TenuVault deletes old backups automatically so storage does not grow without limit.

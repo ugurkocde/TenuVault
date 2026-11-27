@@ -345,6 +345,7 @@ export class LocalBlobStore {
     private readonly root: string,
     masterKeys: Buffer[],
     private readonly writeFormat: Version = WRITE_FORMAT,
+    private readonly guardWrites?: (path: string) => void,
   ) {
     if (masterKeys.length === 0) throw new Error("A backup encryption key is required.")
     this.keyring = masterKeys.map(deriveKeys)
@@ -362,6 +363,7 @@ export class LocalBlobStore {
   async createContainer(account: string, container: string): Promise<boolean> {
     const existed = await this.containerExists(account, container)
     const dir = this.dir(account, container)
+    this.guardWrites?.(dir)
     await mkdirDurable(dir)
     if (!existed && !this.index.has(dir)) {
       // A container we just created starts with a known empty inventory.
@@ -657,6 +659,7 @@ export class LocalBlobStore {
 
   /** Own directory mutations update the cache without making the next put rebuild it. */
   private async write<T>(dir: string, run: () => Promise<T>): Promise<T> {
+    this.guardWrites?.(dir)
     this.writes.set(dir, (this.writes.get(dir) ?? 0) + 1)
     this.changed(dir)
     try {
@@ -1008,6 +1011,7 @@ export class LocalBlobStore {
   }
 
   private async writeBodyDamage(dir: string, value: Record<string, BodyDamage>): Promise<void> {
+    this.guardWrites?.(dir)
     const path = join(dir, BODY_DAMAGE_FILE)
     if (Object.keys(value).length === 0) {
       await rm(path, { force: true })

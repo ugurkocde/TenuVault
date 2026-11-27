@@ -255,7 +255,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for 0.6.0
 
-- **Local backup folders.** Lab now defaults to `Documents/TenuVault Lab Backups`. Stable defaults to `Documents/TenuVault Backups`. Saved folder choices are kept. If Lab wrote backups into the stable folder, export Lab's recovery key and import it into stable to read those backups alongside the stable ones.
+- **Local backup folders.** Lab defaults to `Documents/TenuVault Lab Backups`. A saved Lab override pointing to `Documents/TenuVault Backups` opens for browsing only. In **Settings > Storage and recovery**, switch to the Lab folder or copy backups you can verify with your Lab-created recovery key. The original files are kept. Stable keeps its existing folder settings.
 
 Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
 
