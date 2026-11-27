@@ -74,7 +74,8 @@ function isReview(value: unknown): value is VerificationProgress {
 export const MAX_FRESH_REPLACEMENTS = 128
 export const MAX_FRESH_PREFIX_LENGTH = 256
 export const MAX_FRESH_BINDING_LENGTH = 128
-export const MAX_FRESH_FILES = 10_000
+// Matches RETENTION_LIMITS.requests, so any fresh verification a run can perform fits in persisted progress.
+export const MAX_FRESH_FILES = 100_000
 export const MAX_FRESH_FILE_NAME_LENGTH = 1_024
 export const MAX_FRESH_RECEIPT_LENGTH = 256
 export const MAX_FRESH_COVERS = 128

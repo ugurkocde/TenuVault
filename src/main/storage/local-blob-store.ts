@@ -1573,8 +1573,9 @@ export class LocalBlobStore {
       })
     } finally {
       const cleanup = () => rm(tmpPath, { force: true }).then(() => undefined, () => undefined)
-      if (onTempFileCleanup) await onTempFileCleanup(cleanup)
-      else await cleanup()
+      // The test hook may only delay cleanup; a failing hook never masks the acquire result or skips cleanup.
+      if (onTempFileCleanup) await onTempFileCleanup(cleanup).catch(() => undefined)
+      await cleanup()
     }
   }
 
