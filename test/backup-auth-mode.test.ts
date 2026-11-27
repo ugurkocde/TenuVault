@@ -1,3 +1,4 @@
+import { withBackupServerTime } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -30,7 +31,7 @@ function setup(options: { reader?: boolean; storageAccountName?: string; retenti
     if (url.hostname === "graph.microsoft.com") {
       graphAuth.push(request.headers.get("authorization") ?? "")
       await gate
-      return Response.json({ value: [] })
+      return withBackupServerTime(Response.json({ value: [] }), new Date())
     }
     if (url.hostname.endsWith(".blob.core.windows.net")) {
       blobMethods.push(`${request.method} ${url.search}`)
@@ -173,7 +174,7 @@ describe("Backup Reader credential failures", () => {
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
         if (localAccountFromUrl(new URL(request.url))) return handleLocalBlobRequest(store, request)
-        return Response.json({ value: [] })
+        return withBackupServerTime(Response.json({ value: [] }), new Date())
       }) as typeof fetch,
       getToken: async () => "admin",
       unattendedTokens: () => reader(failure),

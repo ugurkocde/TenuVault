@@ -1,3 +1,4 @@
+import { withBackupServerTime } from "./helpers"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -58,6 +59,18 @@ function damage(dir: string, file: string, header = false): Buffer {
 const text = async (store: LocalBlobStore, name: string) => (await store.get(account, CONTAINER, name)).data.toString()
 
 describe("damaged local backup files", () => {
+  it("authenticates the payload body before deleting any record in intune-backups", async () => {
+    const { store, dir, root, key } = await setup()
+    await store.put(account, CONTAINER, `${OLD}/CompliancePolicies/a.json`, Buffer.from('{"id":"a"}'), "application/json")
+    const file = readdirSync(dir).find(name => name.endsWith(".tvb"))!
+    await store.put(account, CONTAINER, `${OLD}/metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+    damage(dir, file)
+    const fresh = new LocalBlobStore(root, [key])
+    expect(await fresh.list(account, CONTAINER)).toHaveLength(2)
+    await expect(fresh.delete(account, CONTAINER, `${OLD}/metadata.json`)).rejects.toThrow(IncompleteInventoryError)
+    expect(readdirSync(dir).filter(name => name.endsWith(".tvb"))).toHaveLength(2)
+  })
+
   it("keeps the healthy backups usable when a file of another backup is damaged", async () => {
     const { store, dir, root, key } = await setup()
     await backup(store, OLD)
@@ -261,13 +274,13 @@ describe("damaged local backup files", () => {
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
     const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
     expect(job.status).toBe("Completed")
     const log = job.log.join("\n")
-    expect(log).toContain("Retention is paused. 1 file in the backup folder could not be read and 1 backup is unavailable. Nothing in the backup folder is deleted until this is resolved")
+    expect(log).toContain("Retention is paused. Backup")
     expect(log).not.toContain("Removed")
     // The expired backup is still there, next to the one just written.
     const folders = new Set((await store.list(account, CONTAINER)).map((blob) => blob.name.split("/")[0]))

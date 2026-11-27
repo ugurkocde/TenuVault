@@ -1,3 +1,4 @@
+import { withBackupServerTime } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -22,7 +23,7 @@ function engineSetup(graph: (url: URL) => Response, options: { retentionDays?: n
     const request = new Request(input, init)
     const url = new URL(request.url)
     if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
-    return graph(url)
+    return withBackupServerTime(graph(url), options.now ? new Date(options.now) : undefined)
   }) as typeof fetch
   const engine = new BackupEngine({
     fetch: fetchImpl,
@@ -44,16 +45,31 @@ function emptyGraph(url: URL) {
 }
 
 describe("retention after an incomplete backup", () => {
+  it("keeps the older copy when a newer backup covering the same type fails verification", async () => {
+    const { engine, store, account } = engineSetup(emptyGraph, { retentionDays: 30, now: "2026-09-24T12:00:00Z" })
+    const older = "backup-2026-07-01-020000", newer = "backup-2026-08-01-020000"
+    await store.createContainer(account, "intune-backups")
+    const put = (name: string, body: unknown) => store.put(account, "intune-backups", name, Buffer.from(JSON.stringify(body)), "application/json")
+    const manifest = { Status: "Success", TenantId: TENANT, Scope: { Included: ["Apps"] }, Items: { "Apps/reader": { file: "Reader.json" } } }
+    await put(`${older}/Apps/Reader.json`, { id: "reader" })
+    await put(`${older}/metadata.json`, manifest)
+    await put(`${newer}/metadata.json`, manifest)
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: { excluded: ["Apps"] } }).id)
+    expect(job.status).toBe("Completed")
+    expect((await store.get(account, "intune-backups", `${older}/Apps/Reader.json`)).data.toString()).toBe('{"id":"reader"}')
+    expect(job.log.join(" ")).toMatch(/could not be verified|is unavailable/)
+  })
+
   it("keeps the last complete copy when a newer backup with warnings covers the same folder", async () => {
     const { engine, store, account } = engineSetup(emptyGraph, { retentionDays: 30, now: "2026-09-24T12:00:00Z" })
     await store.createContainer(account, "intune-backups")
     const put = (name: string, body: unknown) => store.put(account, "intune-backups", name, Buffer.from(JSON.stringify(body)), "application/json")
     // A: the last complete backup, holding apps. B: newer, but one item could not be read, so
     // its copy of apps may be missing that item. Both are past the retention period.
-    await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Failures: 0, Scope: { Excluded: [] } })
-    await put("backup-2026-07-01-020000/Apps/Reader.json", {})
-    await put("backup-2026-08-01-020000/metadata.json", { Status: "CompletedWithWarnings", Failures: 1, Scope: { Excluded: [] } })
-    await put("backup-2026-08-01-020000/Apps/Reader.json", {})
+    await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Failures: 0, Items: { "Apps/reader": { file: "Reader.json" } }, Scope: { Included: ["Apps"] } })
+    await put("backup-2026-07-01-020000/Apps/Reader.json", { id: "reader" })
+    await put("backup-2026-08-01-020000/metadata.json", { Status: "CompletedWithWarnings", Failures: 1, Items: { "Apps/reader": { file: "Reader.json" } }, Scope: { Included: ["Apps"] } })
+    await put("backup-2026-08-01-020000/Apps/Reader.json", { id: "reader" })
     // C: the new backup leaves apps out, so retention looks for the newest copy of them.
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: { excluded: ["Apps"] } }).id)
     expect(job.status).toBe("Completed")

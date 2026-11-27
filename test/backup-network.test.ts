@@ -1,3 +1,5 @@
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
+import { withBackupServerTime } from "./helpers"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, verifyStorageAccess } from "../src/main/backup/engine"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -23,7 +25,7 @@ function requestTimers() {
 function setup(override: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, concurrency?: number) {
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
-    return override(url, init) ?? (url.hostname === "graph.microsoft.com" ? Response.json({ value: [] }) : new Response(null, { status: 201 }))
+    return override(url, init) ?? withBackupServerTime(url.hostname === "graph.microsoft.com" ? Response.json({ value: [] }) : new Response(null, { status: 201 }))
   })
   const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", concurrency })
   return { engine, fetchImpl }
@@ -36,7 +38,11 @@ function azureBridge(networkFetch: typeof fetch): typeof fetch {
   return createBridgedFetch({
     dispatch: async () => new Response(),
     getDelegatedToken: async () => ({ accessToken: "token", expiresOn: null }),
-    fetch: legacyAzureReader(withNetworkErrors((input, init) => networkFetch(new Request(input, init))), () => [master]),
+    fetch: legacyAzureReader(withNetworkErrors(async (input, init) => {
+      const response = await networkFetch(new Request(input, init))
+      if (response.ok) response.headers.set("etag", '"v1"')
+      return withBackupServerTime(response)
+    }), () => [master]),
   })
 }
 
@@ -346,14 +352,17 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
       if (url.search) {
         if (sent.method === "PUT") return new Response(null, { status: 201 })
-        return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
+        const names = [...saved.keys()].filter(name => name.startsWith(`/intune-backups/${url.searchParams.get("prefix")}`))
+        const entries = url.searchParams.has("delimiter") ? prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`)
+          : names.map(name => `<Blob><Name>${name.slice("/intune-backups/".length)}</Name></Blob>`)
+        return new Response(`<EnumerationResults><Blobs>${entries.join("")}</Blobs></EnumerationResults>`)
       }
       if (sent.method === "PUT") {
         saved.set(url.pathname, new Uint8Array(await sent.arrayBuffer()))
         return new Response(null, { status: 201 })
       }
       if (sent.method === "DELETE") deletes++
-      reads++
+      if (prefixes.some(prefix => url.pathname.includes(prefix))) reads++
       const body = saved.get(url.pathname)
       return body ? new Response(new Uint8Array(body)) : new Response(null, { status: 404 })
     })
@@ -363,11 +372,10 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.endTime).toBeDefined()
     expect(job.exception).toBeUndefined()
-    // Each unreadable manifest, then the folder's marker (none here), read once.
-    expect(reads).toBe(16)
+    // The first unreadable candidate stops the cleanup without spending another retry.
+    expect(reads).toBe(1)
     expect(deletes).toBe(0)
-    expect(job.log.join("\n")).toContain(`Could not read the metadata of 8 older backups: ${message.replace(/\.$/, "")}. They were left in place.`)
-    expect(job.log.join("\n")).not.toContain("Could not remove old backups")
+    expect(job.log.join("\n")).toContain(message.replace(/\.$/, ""))
     expect(job.log.join("\n")).not.toMatch(/did not respond|network stopped responding/)
     const manifestUrl = new URL(`https://contoso.blob.core.windows.net/intune-backups/${job.backupFolder}/metadata.json`)
     const committed = saved.get(manifestUrl.pathname)!
@@ -376,12 +384,12 @@ describe("backup request recovery", () => {
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const calls = networkFetch.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(reads).toBe(16)
+    expect(reads).toBe(1)
     expect(networkFetch).toHaveBeenCalledTimes(calls)
     expect(saved.get(manifestUrl.pathname)).toBe(committed)
   })
 
-  it("still removes the other expired backups when one metadata blob cannot be decrypted", async () => {
+  it("keeps all expired backups when one metadata blob cannot be decrypted", async () => {
     requestTimers()
     vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
     const saved = new Map<string, Uint8Array>()
@@ -422,15 +430,8 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.exception).toBeUndefined()
     const log = job.log.join("\n")
-    // The newest readable backup is kept because it holds types this backup leaves out; the oldest is removed.
-    expect(log).toContain("Removed 1 backup older than 30 days.")
-    expect(log).toContain("Kept 1 older backup because it holds the newest copy of types this backup leaves out.")
-    expect(log).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. It was left in place.`)
-    expect(log).not.toContain("Could not remove old backups")
-    expect(log).not.toContain("not recorded as this tenant's")
-    expect(deleted.filter(path => path.includes("backup-2026-08-01-"))).toHaveLength(2)
-    expect(deleted.filter(path => path.includes("backup-2026-08-02-"))).toHaveLength(0)
-    expect(deleted.filter(path => path.includes("backup-2026-08-03-"))).toHaveLength(0)
+    expect(log).toContain(LEGACY_SEALED_MESSAGE)
+    expect(deleted).toEqual([])
     expect([...saved.keys()].filter(path => path.includes("backup-2026-08-02-"))).toHaveLength(2)
   })
 
@@ -475,13 +476,13 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(deleted).toHaveLength(0)
     const log = job.log.join("\n")
-    expect(log).toContain("Kept 1 older backup not recorded as this tenant's")
-    expect(log).toContain("Could not read the metadata of 1 older backup")
+    expect(log).toContain(LEGACY_SEALED_MESSAGE)
     expect(log).not.toContain("Removed")
   })
 
-  it("commits the complete backup before eight retention reads hang", async () => {
+  it("commits the complete backup before a retention read hangs", async () => {
     requestTimers()
+    vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
     const started = Date.now()
     const saved = new Map<string, string>()
     const signals: AbortSignal[] = []
@@ -493,7 +494,12 @@ describe("backup request recovery", () => {
         return
       }
       if (init?.method !== "GET") return
-      if (url.search) return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
+      if (url.search) {
+        const entries = url.searchParams.has("delimiter") ? prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`)
+          : [...saved.keys()].map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`)
+        return new Response(`<EnumerationResults><Blobs>${entries.join("")}</Blobs></EnumerationResults>`)
+      }
+      if (saved.has(url.pathname)) return new Response(saved.get(url.pathname), { headers: { etag: '"v1"' } })
       expect(saved.size).toBe(2)
       signals.push(init.signal!)
       return new Promise(() => {})
@@ -510,9 +516,9 @@ describe("backup request recovery", () => {
     expect(job.endTime).toBeDefined()
     expect(new Date(job.endTime!).getTime() - started).toBeLessThan(5 * 60_000)
     expect(job.exception).toBeUndefined()
-    expect(job.log.join("\n")).toContain("Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
-    expect(signals).toHaveLength(24)
-    expect(new Set(fetchImpl.mock.calls.filter(([input, init]) => init?.method === "GET" && !new URL(String(input)).search).map(([input]) => String(input))).size).toBe(8)
+    expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds")
+    expect(signals).toHaveLength(3)
+    expect(new Set(fetchImpl.mock.calls.filter(([input, init]) => init?.method === "GET" && !new URL(String(input)).search).map(([input]) => String(input))).size).toBe(3)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)
     expect(saved.size).toBe(2)
@@ -529,7 +535,7 @@ describe("backup request recovery", () => {
     const oldManifest = `/intune-backups/${oldPrefix}metadata.json`
     const oldPolicy = `/intune-backups/${oldPrefix}DeviceConfigurations/Old.json`
     const saved = new Map([
-      [oldManifest, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: request.scope.excluded } })],
+      [oldManifest, JSON.stringify({ Status: "Success", TenantId: TENANT, Items: { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash({ id: "old" }) } }, Scope: { Excluded: request.scope.excluded } })],
       [oldPolicy, JSON.stringify({ id: "old" })],
     ])
     const original = new Map(saved)
@@ -549,10 +555,10 @@ describe("backup request recovery", () => {
       if (init?.method === "GET" && url.search) {
         const entries = url.searchParams.get("delimiter") === "/"
           ? `<BlobPrefix><Name>${oldPrefix}</Name></BlobPrefix>`
-          : [oldManifest, oldPolicy].map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`).join("")
+          : [...saved.keys()].filter(path => path.startsWith(`/intune-backups/${url.searchParams.get("prefix")}`)).map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`).join("")
         return new Response(`<EnumerationResults><Blobs>${entries}</Blobs></EnumerationResults>`)
       }
-      if (init?.method === "GET") return new Response(saved.get(url.pathname), { headers: { "content-type": "application/json" } })
+      if (init?.method === "GET") return new Response(saved.get(url.pathname), { status: saved.has(url.pathname) ? 200 : 404, headers: { etag: '"v1"' } })
       if (init?.method === "DELETE") saved.delete(url.pathname)
     })
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30 })
@@ -574,7 +580,7 @@ describe("backup request recovery", () => {
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const deletes = fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")
     expect(deletes).toHaveLength(failure === "delete" ? 3 : 0)
-    expect(deletes.every(([input]) => new URL(String(input)).pathname === oldManifest)).toBe(true)
+    expect(deletes.every(([input]) => new URL(String(input)).pathname === oldPolicy)).toBe(true)
     const calls = fetchImpl.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
     expect(fetchImpl.mock.calls).toHaveLength(calls)

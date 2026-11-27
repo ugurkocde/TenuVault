@@ -1,6 +1,8 @@
+import { meterLegacyBackupResponse } from '../backup/retention-budget'
+import { authenticatedBackupRead } from './authenticated-read'
 import { createDecipheriv, createHash, hkdfSync } from 'node:crypto'
 import { FetchApplicationError, FetchPreconditionError, LegacySealedError, OversizedSealedError } from '../api/network-error'
-import { MAX_BACKUP_ARCHIVE_BYTES } from '../../shared/constants'
+import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from '../../shared/constants'
 
 /**
  * Reads backups in Azure storage. New Azure backups are plain JSON: Azure encrypts them at rest and
@@ -24,6 +26,13 @@ export function registerStorageToken(token: string, tenant: string): void {
 const key = (master: Buffer) => Buffer.from(hkdfSync('sha256', master, Buffer.alloc(0), 'tenuvault-azure-backup-v1', 32))
 function aad(tenant: string, url: URL) { return Buffer.from(JSON.stringify([tenant.toLowerCase(), url.hostname, decodeURIComponent(url.pathname)])) }
 
+/** A full fingerprint of the recovery keyring used to authenticate a sealed read. */
+export function legacyRecoveryFingerprint(masters: Buffer[]): string {
+  const hash = createHash('sha256')
+  for (const master of masters) hash.update(master)
+  return hash.digest('hex')
+}
+
 /** Whether a blob is in the legacy `TVAZ1` envelope. */
 export function isLegacySealed(raw: Buffer): boolean {
   return raw.subarray(0, MAGIC.length).equals(MAGIC)
@@ -44,7 +53,7 @@ export function openLegacySealed(raw: Buffer, masters: Buffer[], tenant: string,
 /** A blob read in the backup container: a GET without a query (listings and versions pass through). */
 function isBackupBlobRead(url: URL, method: string): boolean {
   return method === 'GET' && !url.search && /^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname)
-    && url.pathname.startsWith('/intune-backups/')
+    && url.pathname.startsWith(`/${BACKUP_CONTAINER}/`)
 }
 
 /** Reads at least `size` bytes from the start of a stream, or all of it when it is shorter. */
@@ -118,7 +127,7 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
     catch { return fetchImpl(input, init) }
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
     if (!isBackupBlobRead(url, method)) return fetchImpl(input, init)
-    const response = await fetchImpl(input, init)
+    const response = meterLegacyBackupResponse(await fetchImpl(input, init))
     if (!response.ok || !response.body) return response
     // Only the first bytes are read to tell the formats apart, so a plain blob streams through to the
     // caller's own size cap instead of being buffered here. Body reads can fail in transit; only
@@ -146,6 +155,6 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
       throw new LegacySealedError(error, otherTenant)
     }
     headers.set('content-type', 'application/json')
-    return new Response(new Uint8Array(data), { status: response.status, headers })
+    return authenticatedBackupRead(new Response(new Uint8Array(data), { status: response.status, headers }), legacyRecoveryFingerprint(keyring))
   }
 }

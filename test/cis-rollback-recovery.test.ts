@@ -1,3 +1,4 @@
+import { withBackupServerTime } from "./helpers"
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyCisRemediation, approveCisRemediation, createCisRollback, planCisRemediation, previewCisRemediation, previewCisRollback } from "../src/main/features/cis-remediation/engine"
@@ -218,7 +219,7 @@ describe("the recovery backup in the real backup engine and API host", () => {
     for (const tenantId of [TENANT_A, TENANT_B, TENANT_C]) {
       const account = localStorageAccountName(tenantId)
       await store.createContainer(account, "intune-backups")
-      await store.put(account, "intune-backups", `${OLD_BACKUP}/metadata.json`, Buffer.from("{}"), "application/json")
+      await store.put(account, "intune-backups", `${OLD_BACKUP}/metadata.json`, Buffer.from('{"Items":{}}'), "application/json")
     }
     const access = backupAuthorization({ license, tokenFor: async () => ({ accessToken: "token" }), retentionDays: () => 30 })
     // The fetch bridge's license check of local backup storage, as createBridgedFetch makes it.
@@ -233,7 +234,7 @@ describe("the recovery backup in the real backup engine and API host", () => {
         }
         return handleLocalBlobRequest(store, request)
       }
-      return graph(url)
+      return withBackupServerTime(graph(url), new Date("2026-11-03T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: storageFetch, getToken: access.getToken, retentionDays: access.retentionDays, now: () => new Date("2026-11-03T12:00:00Z") })
     const host: ApiHost = new ApiHost({

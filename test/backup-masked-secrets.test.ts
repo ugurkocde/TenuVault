@@ -1,3 +1,4 @@
+import { withBackupServerTime } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -40,7 +41,7 @@ function setup(options: { decrypt?: boolean; retentionDays?: number; excludedTyp
       if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
       const path = decodeURIComponent(url.pathname)
       graphPaths.push(path)
-      if (path === "/beta/deviceManagement/deviceConfigurations") return Response.json({ value: [{ id: "cfg1", displayName: "Wi-Fi" }] })
+      if (path === "/beta/deviceManagement/deviceConfigurations") return withBackupServerTime(Response.json({ value: [{ id: "cfg1", displayName: "Wi-Fi" }] }), new Date(clock))
       if (path === "/beta/deviceManagement/deviceConfigurations/cfg1") return Response.json(profile())
       if (path.includes("getOmaSettingPlainTextValue")) {
         return decrypt

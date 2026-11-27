@@ -1,11 +1,22 @@
 import { assertStorageAccountName } from "../../shared/storage-account"
 import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constants"
-import { readJsonCapped } from "../../shared/capped-body"
+import { createHash } from "node:crypto"
+import { backupReadKeyFingerprint, wasBackupReadAuthenticated } from "../storage/authenticated-read"
+import type { RetentionBudget } from "./retention-budget"
+import { readBytesCapped } from "../../shared/capped-body"
 import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, DeleteConditionError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+
+export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; keyFingerprint?: string; sha256: string }
+
+export interface BlobListing {
+  blobs: string[]
+  prefixes: string[]
+  etags: Map<string, string>
+}
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
@@ -14,8 +25,13 @@ export class BlobWriter {
     private readonly account: string,
     private readonly token: () => Promise<string>,
     private readonly network?: NetworkCircuit,
+    private readonly budget?: RetentionBudget,
   ) {
     assertStorageAccountName(account)
+  }
+
+  withBudget(budget: RetentionBudget): BlobWriter {
+    return new BlobWriter(this.fetchImpl, this.account, this.token, this.network, budget)
   }
 
   async ensureContainer(): Promise<void> {
@@ -65,9 +81,10 @@ export class BlobWriter {
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
-  async list(prefix: string, delimiter = ""): Promise<{ blobs: string[]; prefixes: string[] }> {
+  async list(prefix: string, delimiter = ""): Promise<BlobListing> {
     const blobs: string[] = []
     const prefixes: string[] = []
+    const etags = new Map<string, string>()
     let marker = ""
     const seen = new Set<string>()
     do {
@@ -81,41 +98,61 @@ export class BlobWriter {
       if (xml === null) break
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
-      for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
+      for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>([\s\S]*?)<\/Blob>/g)) {
+        const name = decode(m[1]!)
+        const properties = m[2]!
+        blobs.push(name)
+        const raw = /<Etag>([^<]+)<\/Etag>/i.exec(properties)?.[1]
+        if (raw) {
+          const etag = decode(raw)
+          if (etag !== "*") etags.set(name, etag.startsWith('"') ? etag : `"${etag}"`)
+        }
+      }
       // The marker is XML-escaped like the names; send back the name it stands for.
       marker = decode(/<NextMarker>([^<]+)<\/NextMarker>/.exec(xml)?.[1] ?? "")
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes }
+    return { blobs, prefixes, etags }
   }
 
-  /**
-   * A JSON object blob, or null when it does not exist. A blob that exists but is not a JSON object
-   * (damaged, or written by something else) throws a FetchApplicationError: it is unreadable, never
-   * the same as a missing blob, so retention keeps it and counts the container as shared.
-   */
-  async readJson(name: string): Promise<Record<string, unknown> | null> {
+  /** Retain the identity and the authentication evidence from the same read. */
+  async readForRetention(name: string): Promise<RetentionBlob>
+  async readForRetention(name: string, optional: true): Promise<RetentionBlob | null>
+  async readForRetention(name: string, optional = false): Promise<RetentionBlob | null> {
     return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
-      if (response.status === 404) return null
+      if (optional && response.status === 404) {
+        void response.body?.cancel().catch(() => undefined)
+        return null
+      }
       if (!response.ok) throw await storageFailure(response, this.account)
-      // Capped like every other backup read; an oversized file is unreadable, never buffered whole.
-      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
-      if (body.kind === "oversized") throw new FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))
-      if (body.kind === "invalid") throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not valid JSON`))
-      const value = body.value
-      if (!value || typeof value !== "object" || Array.isArray(value)) throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not a JSON object`))
-      return value as Record<string, unknown>
+      const bytes = await readBytesCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      const etag = response.headers.get("etag")
+      if (!bytes) throw new FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))
+      if (!etag || etag === "*") throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`))
+      try {
+        const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected JSON object")
+        return { value, etag, authenticated: wasBackupReadAuthenticated(response), keyFingerprint: backupReadKeyFingerprint(response), sha256: createHash("sha256").update(bytes).digest("hex") }
+      } catch (error) {
+        throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`, { cause: error }))
+      }
     })
   }
 
-  async delete(name: string): Promise<void> {
+  async delete(name: string, etag?: string): Promise<void> {
     await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, {
       method: "DELETE",
+      ...(etag ? { headers: { "if-match": etag } } : {}),
     }, async (response) => {
       if (!response.ok && response.status !== 404) {
         const code = response.headers.get("x-ms-error-code") ?? ""
         if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)
+        if (response.status === 412 && (etag || code === "BlobQuarantined")) {
+          if (code === "BlobQuarantined") throw new DeleteConditionError(await storageFailure(response, this.account))
+          void response.body?.cancel().catch(() => undefined)
+          throw new DeleteConditionError(new Error(`${name} changed before it could be deleted.`))
+        }
         const text = await response.clone().text()
         const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
         if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
@@ -139,10 +176,12 @@ export class BlobWriter {
           signal.throwIfAborted()
           beforeCommit?.signal.throwIfAborted()
           beforeCommit = undefined
+          this.budget?.dispatch(init.method === "DELETE")
           attempted = true
           onDispatch?.()
-          response = await this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
+          const send = () => this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
             ...init,
+            ...(this.budget ? { redirect: "error" as const } : {}),
             signal,
             headers: {
               ...(init.headers as Record<string, string> | undefined),
@@ -151,6 +190,7 @@ export class BlobWriter {
               ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
           })
+          response = await (this.budget ? this.budget.fetch(send) : send())
           if (retryableStatus(response.status) && attempt < REQUEST_ATTEMPTS - 1) {
             throw new RetryableStorageError(await storageError(response, this.account))
           }

@@ -28,3 +28,8 @@ export function endlessBody(chunks = 40, first: Uint8Array = new Uint8Array(0)):
   })
   return { body, pulled: () => pulled }
 }
+
+export function withBackupServerTime(response: Response, time = new Date()): Response {
+  response.headers.set("date", time.toUTCString())
+  return response
+}

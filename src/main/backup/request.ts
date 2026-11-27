@@ -48,11 +48,11 @@ export class InventoryDamagedError extends StorageError {}
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
 export async function storageFailure(response: Response, account: string): Promise<StorageError> {
   const code = response.headers.get("x-ms-error-code")
-  if (code === "InventoryIncomplete" || code === "BackupUnavailable") {
+  if (code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined") {
     const text = await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
     const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
-    return new InventoryDamagedError(decoded)
+    return code === "BlobQuarantined" ? new StorageError(decoded) : new InventoryDamagedError(decoded)
   }
   return new StorageError(await storageError(response, account))
 }
@@ -63,6 +63,9 @@ export class StorageUnreachableError extends StorageError {}
 
 export class RetryableStorageError extends Error {}
 export class RequestTimeoutError extends Error {}
+
+/** The verified blob changed before its conditional delete reached storage. */
+export class DeleteConditionError extends FetchApplicationError {}
 
 /** MSAL rethrows a token or discovery request that got no HTTP response with this code; it keeps only the original message. */
 const MSAL_NETWORK_ERROR = "network_error"

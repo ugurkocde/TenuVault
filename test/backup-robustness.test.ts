@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, JOB_DEADLINE_MS, MANIFEST_COMMIT_GRACE_MS, type BackupJob } from "../src/main/backup/engine"
 import { BackupScheduler } from "../src/main/backup/scheduler"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
-import { memoryStore } from "./helpers"
+import { memoryStore, withBackupServerTime } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const OTHER = "33333333-3333-3333-3333-333333333333"
@@ -39,14 +39,14 @@ function setup(options: { count?: number; retention?: number; retentionDays?: ()
         if (!url.search) {
           saved.set(name, String(init.body))
         }
-        return new Response(null, { status: 201 })
+        return withBackupServerTime(new Response(null, { status: 201 }), options.now?.())
       }
       if (init.method === "DELETE") {
         saved.delete(name)
         return new Response(null, { status: 202 })
       }
       return saved.has(name)
-        ? new Response(saved.get(name))
+        ? new Response(saved.get(name), { headers: { etag: '"v1"' } })
         : new Response(null, { status: 404 })
     },
   })
@@ -179,7 +179,7 @@ describe("storage read retries", () => {
         if (attempts.length === 2) throw new TypeError("Connection reset")
       }
     } })
-    saved.set(old, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: scope.excluded } }))
+    saved.set(old, JSON.stringify({ Status: "Success", TenantId: TENANT, Items: {}, Scope: { Excluded: scope.excluded } }))
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(999)
     expect(attempts).toEqual([0])
@@ -261,7 +261,7 @@ describe("manifest commit and retention interruption", () => {
     expect(job.status).toBe("Completed")
     expect(job.exception).toBeUndefined()
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
-    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; remaining backups will be reconsidered on the next run")
     expect(calls.some(call => call.url.searchParams.get("comp") === "list")).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
   })
@@ -409,7 +409,7 @@ describe("manifest commit and retention interruption", () => {
     expect(job.status).toBe("Completed")
     expect(job.exception).toBeUndefined()
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
-    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; remaining backups will be reconsidered on the next run")
     expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: "Success", Failures: 0 })
     expect(calls.some(call => call.init.method === "DELETE")).toBe(false)
     expect(calls.some(call => call.url.searchParams.get("comp") === "list")).toBe(false)
@@ -440,7 +440,7 @@ describe("manifest commit and retention interruption", () => {
       if (interrupt === "deadline" && url.hostname === "graph.microsoft.com") return nearDeadlineListing(url, ++pages)
       if (init.method === "DELETE" && url.pathname.includes(old)) return new Promise(() => {})
     } })
-    saved.set(`${old}/metadata.json`, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: scope.excluded } }))
+    saved.set(`${old}/metadata.json`, JSON.stringify({ Status: "Success", TenantId: TENANT, Items: {}, Scope: { Excluded: scope.excluded } }))
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(interrupt === "deadline" ? JOB_DEADLINE_MS - 500 : 0)
     const deletion = calls.find(call => call.init.method === "DELETE")!
@@ -452,7 +452,7 @@ describe("manifest commit and retention interruption", () => {
     expect(job.status).toBe("Completed")
     expect(job.exception).toBeUndefined()
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
-    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; remaining backups will be reconsidered on the next run")
     expect(deletion.init.signal!.aborted).toBe(true)
     expect(saved.has(`${old}/metadata.json`)).toBe(true)
     const count = calls.length
@@ -477,7 +477,7 @@ describe("manifest commit and retention interruption", () => {
     await vi.advanceTimersByTimeAsync(JOB_DEADLINE_MS)
     await engine.waitForJob(job)
     expect(job.status).toBe("Completed")
-    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; remaining backups will be reconsidered on the next run")
     expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(true)
     expect(saved.has(old)).toBe(true)
     expect(calls.some(call => call.init.method === "DELETE")).toBe(false)
