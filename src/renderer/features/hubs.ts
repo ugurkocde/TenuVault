@@ -111,7 +111,7 @@ export const HUBS: Hub[] = [
         feature: "promotion",
         path: "/api/promotion",
         summary: "Promotes selected Settings Catalog policies from a development tenant to production, one way and on demand.",
-        points: ["Pro: between the two tenants of your license, or two tenants on a Pro trial.", "Production is backed up and checked for changes right before apply.", "Assignments are excluded until reviewed separately."],
+        points: ["Both tenants need Pro, a Pro trial, or MSP.", "Production is backed up and checked for changes right before apply.", "Assignments are excluded until reviewed separately."],
         Component: lazy(() => import("./promotion/PromotionTab")),
       },
       {

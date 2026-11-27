@@ -58,9 +58,10 @@ no route or screen of its own; promotion, baseline upgrades and standards call i
 ## Plan boundary
 
 - Community: unavailable (402).
-- Pro: only between the two tenants of the same license. The destination is the request tenant,
-  the source is named in `targetTenants` so its license is checked, and `sameLicense` must be
-  true (403 otherwise). No MSP bulk or portfolio endpoint is used or unlocked.
+- Pro: between any two connected tenants on Pro, a Pro trial or MSP, however each is licensed.
+  The destination is the request tenant, the source is named in `targetTenants` so its license
+  is checked, and `proPair` must be true (403 otherwise). No MSP bulk or portfolio endpoint is
+  used or unlocked.
 - MSP: the same promotion.
 - Downgrade or expiry: stored promotions stay readable; planning, applying and rollback answer
   402.
@@ -97,4 +98,4 @@ no route or screen of its own; promotion, baseline upgrades and standards call i
    Rollback: the promoted policy is removed.
 9. Disconnect the network during an apply of a two-policy promotion: the result shows
    `uncertain`; reconnect and Reconcile and retry: verified operations are not written again.
-10. Try with a tenant from another license as source: expect the Pro two-tenant refusal.
+10. Try with a Community or unlicensed tenant as source: expect the plan refusal.

@@ -9,6 +9,8 @@ import { createEvidenceManifest, frameworkRulesetSha256 } from "../src/shared/co
 import { ISO_27001, SOC_2, NIST_800_53 } from "../src/shared/compliance"
 import { DOMAINS } from "../src/main/features/domains"
 import type { Plan } from "../src/shared/plans"
+import { proPair } from "../src/main/license/same-license"
+import type { TenantLicenseStatus } from "../src/shared/ipc"
 import { call, fakeDeps, fakeOibSources, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { FakeTenant, setting, stringSetting, wire } from "./feature-change-sets-fakes"
 
@@ -51,8 +53,8 @@ const newPack = pack(NEW, "v4.0", [
 const newerPack = pack(NEWER, "v4.1", [{ name: DEFENDER, settings: [setting(ARCHIVE, `${ARCHIVE}_1`), integer("n", 5)] }])
 const newestPack = pack(NEWEST, "v4.2", [{ name: DEFENDER, settings: [setting(ARCHIVE, `${ARCHIVE}_0`), integer("n", 5)] }])
 
-function setup(plans: Record<string, Plan> = { [TENANT_A]: "pro", [TENANT_B]: "pro" }, options: { sameLicense?: boolean } = {}) {
-  const deps = fakeDeps({ plans, sameLicense: () => options.sameLicense ?? true })
+function setup(plans: Record<string, Plan> = { [TENANT_A]: "pro", [TENANT_B]: "pro" }, options: { proPair?: boolean; licenses?: Array<Pick<TenantLicenseStatus, "tenantId" | "plan" | "entitled" | "source">> } = {}) {
+  const deps = fakeDeps({ plans, proPair: (a, b) => options.licenses ? proPair(options.licenses, a, b) : options.proPair ?? true })
   const tenantA = new FakeTenant(TENANT_A)
   const tenantB = new FakeTenant(TENANT_B)
   const tenantC = new FakeTenant(TENANT_C)
@@ -509,15 +511,65 @@ describe("/api/custom-baselines", () => {
     expect((await context.post({ action: "list" }, TENANT_A)).body.deployments).toHaveLength(0)
     expect((await context.post({ action: "get", id: baseline.id })).body.baseline.deployments).toEqual([expect.objectContaining({ targetTenantId: TENANT_B, version: 1 })])
 
-    const otherLicense = setup({ [TENANT_A]: "pro", [TENANT_B]: "pro" }, { sameLicense: false })
-    const foreign = await customize(otherLicense)
-    expect((await otherLicense.post({ action: "deploy", id: foreign.id, sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }, TENANT_B)).status).toBe(403)
+    const unpaired = setup({ [TENANT_A]: "pro", [TENANT_B]: "pro" }, { proPair: false })
+    const foreign = await customize(unpaired)
+    expect((await unpaired.post({ action: "deploy", id: foreign.id, sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }, TENANT_B)).status).toBe(403)
 
-    const msp = setup({ [TENANT_A]: "msp", [TENANT_C]: "msp" }, { sameLicense: false })
+    const msp = setup({ [TENANT_A]: "msp", [TENANT_C]: "msp" })
     const mspBaseline = await customize(msp)
     expect((await msp.post({ action: "deploy", id: mspBaseline.id, sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }, TENANT_C)).status).toBe(200)
     const community = setup({ [TENANT_A]: "pro", [TENANT_B]: "community" })
     const proBaseline = await customize(community)
     expect((await community.post({ action: "deploy", id: proBaseline.id, sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }, TENANT_B)).status).toBe(402)
+  })
+
+  it("deploys into another tenant between any two Pro, Pro trial or MSP tenants, however each is licensed", async () => {
+    const licenses = [
+      { tenantId: TENANT_A, plan: "pro" as const, entitled: true, source: "key" as const },
+      { tenantId: TENANT_B, plan: "pro" as const, entitled: true, source: "trial" as const },
+      { tenantId: TENANT_C, plan: "msp" as const, entitled: true, source: "tenant" as const },
+    ]
+    const deploy = (context: Context, id: string, target: string) => context.post({ action: "deploy", id, sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }, target)
+
+    // A Pro key tenant and a tenant on the automatic Pro trial: their licenses differ.
+    const mixed = setup({ [TENANT_A]: "pro", [TENANT_B]: "pro", [TENANT_C]: "msp" }, { licenses })
+    const baseline = await customize(mixed)
+    expect((await deploy(mixed, baseline.id, TENANT_B)).status).toBe(200)
+    expect((await deploy(mixed, baseline.id, TENANT_C)).status).toBe(200)
+
+    // A tenant whose entitlement ended does not pair, even when its stored plan still reads Pro.
+    const lapsed = setup({ [TENANT_A]: "pro", [TENANT_B]: "pro" }, { licenses: [licenses[0]!, { ...licenses[1]!, entitled: false }] })
+    const lapsedBaseline = await customize(lapsed)
+    expect(await deploy(lapsed, lapsedBaseline.id, TENANT_B)).toMatchObject({ status: 403 })
+
+    // An MSP destination checks the pair too: an owner whose entitlement ended, or that has no license entry, is refused.
+    const mspLapsed = setup({ [TENANT_A]: "pro", [TENANT_C]: "msp" }, { licenses: [{ ...licenses[0]!, entitled: false }, licenses[2]!] })
+    expect(await deploy(mspLapsed, (await customize(mspLapsed)).id, TENANT_C)).toMatchObject({ status: 403 })
+    const mspMissing = setup({ [TENANT_A]: "pro", [TENANT_C]: "msp" }, { licenses: [licenses[2]!] })
+    expect(await deploy(mspMissing, (await customize(mspMissing)).id, TENANT_C)).toMatchObject({ status: 403 })
+
+    // Deploying a baseline into its own tenant never consults the pair.
+    const own = setup({ [TENANT_A]: "pro", [TENANT_B]: "pro" }, { proPair: false })
+    expect((await own.post({ action: "deploy", id: (await customize(own)).id })).status).toBe(200)
+  })
+
+  it("re-checks the pair before a deployment from another tenant is approved or applied, but still lets it be rejected", async () => {
+    const licenses = [
+      { tenantId: TENANT_A, plan: "pro" as const, entitled: true, source: "key" as const },
+      { tenantId: TENANT_B, plan: "pro" as const, entitled: true, source: "trial" as const },
+    ]
+    const context = setup({ [TENANT_A]: "pro", [TENANT_B]: "pro" }, { licenses })
+    const baseline = await customize(context)
+    const deployed = await context.post({ action: "deploy", id: baseline.id, sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }, TENANT_B)
+    expect(deployed.status).toBe(200)
+    const ids = { id: deployed.body.deployment.id, changeSetId: deployed.body.changeSet.id }
+    const hashes = { contentHash: "0".repeat(64), targetFingerprint: "0".repeat(64) }
+    expect((await context.post({ action: "change-preview", ...ids }, TENANT_B)).status).toBe(200)
+
+    licenses[0] = { ...licenses[0]!, entitled: false }
+    expect(await context.post({ action: "change-preview", ...ids }, TENANT_B)).toMatchObject({ status: 403 })
+    expect(await context.post({ action: "change-approve", ...ids, ...hashes }, TENANT_B)).toMatchObject({ status: 403 })
+    expect(await context.post({ action: "change-apply", ...ids, contentHash: hashes.contentHash, confirm: true }, TENANT_B)).toMatchObject({ status: 403 })
+    expect((await context.post({ action: "change-reject", ...ids }, TENANT_B)).status).toBe(200)
   })
 })

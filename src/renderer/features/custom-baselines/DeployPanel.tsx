@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query"
 import { useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
-import { allows, type Plan } from "../../../shared/plans"
 import { toast } from "../../lib/toast"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { ChangeSetFlow } from "../shared/ChangeSetFlow"
@@ -19,7 +18,7 @@ const card = "space-y-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,
  * in a change set that is reviewed, approved and applied here with a pre-change backup.
  * Assignments are never written; created policies are unassigned.
  */
-export function DeployPanel({ tenant, baseline, version, allowed, plan, deployments, onChanged }: { tenant: Tenant; baseline: Baseline; version: VersionView; allowed: boolean; plan: Plan | null; deployments: Deployment[]; onChanged: () => void }) {
+export function DeployPanel({ tenant, baseline, version, allowed, deployments, onChanged }: { tenant: Tenant; baseline: Baseline; version: VersionView; allowed: boolean; deployments: Deployment[]; onChanged: () => void }) {
   const tenants = useTenants()
   const owner = baseline.tenantId
   const targets = tenants.filter((entry) => entry.credentials?.tenantId)
@@ -68,7 +67,7 @@ export function DeployPanel({ tenant, baseline, version, allowed, plan, deployme
                 {targets.map((entry) => <option key={entry.id} value={entry.credentials!.tenantId}>{entry.name}{entry.credentials!.tenantId === owner ? " (this baseline's tenant)" : ""}</option>)}
               </select>
             </label>
-            <p className="self-end text-xs text-gray-500">{other ? (plan && allows(plan, "portfolio") ? "MSP: any connected tenant on MSP." : "Pro: only the other tenant covered by the same license, or another tenant on a Pro trial when this one runs a trial too. Both licenses are checked.") : "The baseline's own tenant."}</p>
+            <p className="self-end text-xs text-gray-500">{other ? "Any connected tenant on Pro, a Pro trial or MSP. Both licenses are checked." : "The baseline's own tenant."}</p>
           </div>
           <fieldset className="space-y-1">
             <legend className="text-xs text-gray-500">Policies (none selected deploys all)</legend>

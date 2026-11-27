@@ -23,7 +23,7 @@ const assignment = (groupId: string, filterId: string | null = null): Item => ({
 } as unknown as Item)
 
 function setup() {
-  const deps = fakeDeps({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro" }, sameLicense: () => true })
+  const deps = fakeDeps({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro" } })
   const dev = new FakeTenant(TENANT_A)
   const prod = new FakeTenant(TENANT_B)
   const wired = wire(deps, [dev, prod])
