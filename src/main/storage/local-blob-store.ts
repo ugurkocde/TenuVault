@@ -232,6 +232,36 @@ export function processStartKind(token: string | number): string | null {
   return COMPARABLE_START_KINDS.has(kind) ? kind : null
 }
 
+function parseLinuxStartToken(token: string): { bootId: string | null; ticks: string } | null {
+  if (!token.startsWith("proc:")) return null
+  const rest = token.slice("proc:".length)
+  const sep = rest.lastIndexOf(":")
+  if (sep < 0) return /^\d+$/.test(rest) ? { bootId: null, ticks: rest } : null
+  const bootId = rest.slice(0, sep)
+  const ticks = rest.slice(sep + 1)
+  if (!bootId || !/^\d+$/.test(ticks)) return null
+  return { bootId, ticks }
+}
+
+/**
+ * Compares a recorded lock process-start token against an observed token for a live PID.
+ * Linux `proc:` tokens require boot-id evidence on both sides so `proc:<boot>:<ticks>` vs
+ * `proc:<ticks>` (when boot_id was unreadable) is treated as inconclusive rather than stale.
+ */
+export function compareProcessStart(recorded: string | number, observed: string): "same" | "different" | "incomparable" {
+  const observedKind = processStartKind(observed)
+  const recordedKind = processStartKind(recorded)
+  if (!observedKind || !recordedKind || observedKind !== recordedKind) return "incomparable"
+  const recordedText = recorded as string
+  if (recordedKind === "proc") {
+    const rec = parseLinuxStartToken(recordedText)
+    const obs = parseLinuxStartToken(observed)
+    if (!rec || !obs || !rec.bootId || !obs.bootId) return "incomparable"
+    return rec.bootId === obs.bootId && rec.ticks === obs.ticks ? "same" : "different"
+  }
+  return observed === recordedText ? "same" : "different"
+}
+
 /** Parses Linux `/proc/<pid>/stat` text into a `proc:` token, `"gone"` for dead/zombie processes, or null. */
 export function parseLinuxProcStat(statText: string, bootId: string | null): string | "gone" | null {
   const closeParen = statText.lastIndexOf(")")
@@ -421,13 +451,22 @@ function parseLegacyRetentionLock(raw: string): LegacyRetentionLockRecord | null
 }
 
 function manualLockWarning(lockPath: string, reason: string): string {
-  return `Retention lock file ${lockPath} (${reason}) was not reclaimed automatically. Delete it only if no other computer is running TenuVault on this backup folder.`
+  return `Retention lock file ${lockPath} (${reason}) was not reclaimed automatically. Stop any TenuVault process on this computer that uses this backup folder. Delete it only if no other computer is running TenuVault on this backup folder.`
 }
 
-function waitMs(ms: number): Promise<void> {
-  return new Promise(resolve => {
-    const timer = setTimeout(resolve, ms)
+function waitMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason)
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal!.reason)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
     timer.unref?.()
+    signal?.addEventListener("abort", onAbort, { once: true })
   })
 }
 
@@ -442,6 +481,62 @@ function waitMs(ms: number): Promise<void> {
  */
 const protectedPrefixesByDir = new Map<string, Map<string, number>>()
 const lockProtectedEntries = new Map<string, Array<{ dir: string; prefix: string }>>()
+
+interface InFlightPut {
+  name: string
+  done: Promise<void>
+}
+const inFlightPutsByDir = new Map<string, Set<InFlightPut>>()
+
+function trackInFlightPut(dir: string, name: string): () => void {
+  const key = resolve(dir)
+  let resolveDone!: () => void
+  const done = new Promise<void>(resolvePromise => { resolveDone = resolvePromise })
+  const entry: InFlightPut = { name, done }
+  let set = inFlightPutsByDir.get(key)
+  if (!set) {
+    set = new Set()
+    inFlightPutsByDir.set(key, set)
+  }
+  set.add(entry)
+  let finished = false
+  return () => {
+    if (finished) return
+    finished = true
+    set?.delete(entry)
+    if (set && set.size === 0) inFlightPutsByDir.delete(key)
+    resolveDone()
+  }
+}
+
+async function waitForInFlightPuts(dir: string, prefixes: string[] | undefined, signal?: AbortSignal): Promise<void> {
+  if (!prefixes?.length) return
+  const key = resolve(dir)
+  const normalized = prefixes.map(normalizePrefix)
+  const matches = (name: string) => normalized.some(prefix => name.startsWith(prefix))
+  while (true) {
+    signal?.throwIfAborted()
+    const set = inFlightPutsByDir.get(key)
+    if (!set) return
+    const pending = [...set].filter(entry => matches(entry.name)).map(entry => entry.done)
+    if (pending.length === 0) return
+    const all = Promise.all(pending)
+    if (!signal) {
+      await all
+    } else {
+      let onAbort: () => void = () => undefined
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(signal.reason)
+        signal.addEventListener("abort", onAbort, { once: true })
+      })
+      try {
+        await Promise.race([all, aborted])
+      } finally {
+        signal.removeEventListener("abort", onAbort)
+      }
+    }
+  }
+}
 
 function normalizePrefix(prefix: string): string {
   return prefix.endsWith("/") ? prefix : `${prefix}/`
@@ -883,44 +978,50 @@ export class LocalBlobStore {
       const path = join(dir, file)
       const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
       let written: BigIntStats
+      let donePut: (() => void) | undefined
       try {
-        const handle = await open(tmp, "wx", 0o600)
         try {
-          await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
-          await handle.sync()
-          written = await handle.stat({ bigint: true })
+          const handle = await open(tmp, "wx", 0o600)
+          try {
+            await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
+            await handle.sync()
+            written = await handle.stat({ bigint: true })
+          } finally {
+            await handle.close()
+          }
+          donePut = trackInFlightPut(dir, name)
+          assertPrefixNotProtected(dir, name)
+          if (createOnly) await this.publishNew(tmp, path)
+          else await rename(tmp, path)
+          this.changed(dir)
+          if (process.platform !== "win32") await syncDirectory(dir)
+        } catch (error) {
+          if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
+            throw new BlobAlreadyExistsError(name)
+          }
+          throw error
         } finally {
-          await handle.close()
+          await rm(tmp, { force: true })
         }
-        assertPrefixNotProtected(dir, name)
-        if (createOnly) await this.publishNew(tmp, path)
-        else await rename(tmp, path)
-        this.changed(dir)
-        if (process.platform !== "win32") await syncDirectory(dir)
-      } catch (error) {
-        if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
-          throw new BlobAlreadyExistsError(name)
-        }
-        throw error
-      } finally {
-        await rm(tmp, { force: true })
-      }
 
-      const published = await stat(path, { bigint: true })
-      const sameFile = published.dev === written.dev && published.ino === written.ino && published.size === written.size && published.mtimeNs === written.mtimeNs
-      // Rename can change ctime. Use its final stamp only after verifying the written file's identity.
-      const info = sameFile ? published : written
-      const stamp = fileStamp(info)
-      const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
-      if (sameFile) this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
-      else {
-        // Keep the replacement's authenticated filename and metadata for the next mutation.
-        const replacement = await this.readEntry(dir, account, container, file)
-        if (replacement !== VANISHED && !(replacement instanceof Unreadable) && replacement.name === name) this.updateEntry(dir, entries, name, replacement)
-        else this.index.delete(dir)
-        this.changed(dir)
+        const published = await stat(path, { bigint: true })
+        const sameFile = published.dev === written.dev && published.ino === written.ino && published.size === written.size && published.mtimeNs === written.mtimeNs
+        // Rename can change ctime. Use its final stamp only after verifying the written file's identity.
+        const info = sameFile ? published : written
+        const stamp = fileStamp(info)
+        const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
+        if (sameFile) this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
+        else {
+          // Keep the replacement's authenticated filename and metadata for the next mutation.
+          const replacement = await this.readEntry(dir, account, container, file)
+          if (replacement !== VANISHED && !(replacement instanceof Unreadable) && replacement.name === name) this.updateEntry(dir, entries, name, replacement)
+          else this.index.delete(dir)
+          this.changed(dir)
+        }
+        return blob
+      } finally {
+        donePut?.()
       }
-      return blob
     })
   }
 
@@ -987,8 +1088,7 @@ export class LocalBlobStore {
             || moved.size !== info.size || moved.mtimeNs !== info.mtimeNs) {
             this.index.delete(dir)
             try {
-              await link(held, path)
-              await rm(held)
+              await this.restoreQuarantinedFile(held, path, dir)
               needsRecovery = false
               renamed = false
             } catch (error) {
@@ -1072,7 +1172,8 @@ export class LocalBlobStore {
     return (this.processInfo ?? defaultProcessInfoReader).readProcessStart(pid)
   }
 
-  private async publishLockFile(tmpPath: string, lockPath: string): Promise<void> {
+  private async publishLockFile(tmpPath: string, lockPath: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
     if (this.hardLinks) {
       try {
         await link(tmpPath, lockPath)
@@ -1086,6 +1187,7 @@ export class LocalBlobStore {
     // same handle. A crash in the short gap between create and write leaves an empty lock, which retention reports
     // with the named manual warning; backups and restores are never blocked by it.
     const record = await readFile(tmpPath)
+    signal?.throwIfAborted()
     const handle = await open(lockPath, "wx", 0o600)
     try {
       await handle.writeFile(record)
@@ -1102,9 +1204,11 @@ export class LocalBlobStore {
    * Acquires an owner-and-process cross-process retention lock file scoped to one container directory.
    * Never expires while its holding process is alive; no time-based expiry or renewal.
    */
-  async acquireRetentionLock(account: string, container: string, proposedId?: string, protectedPrefixes?: string[]): Promise<string> {
+  async acquireRetentionLock(account: string, container: string, proposedId?: string, protectedPrefixes?: string[], signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted()
     const dir = this.dir(account, container)
     await mkdir(dir, { recursive: true, mode: 0o700 })
+    signal?.throwIfAborted()
     const lockPath = join(dir, RETENTION_LOCK_FILE)
     const id = proposedId || randomBytes(16).toString("hex")
     const record: RetentionLockRecord = {
@@ -1114,6 +1218,7 @@ export class LocalBlobStore {
       processStart: await this.ownProcessStart(),
       app: "TenuVault",
     }
+    signal?.throwIfAborted()
     const tmpPath = join(dir, `${RETENTION_LOCK_FILE}.${randomBytes(8).toString("hex")}.tmp`)
     try {
       const handle = await open(tmpPath, "wx", 0o600)
@@ -1133,13 +1238,25 @@ export class LocalBlobStore {
     }
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
+        signal?.throwIfAborted()
+        let published = false
         try {
-          await this.publishLockFile(tmpPath, lockPath)
+          await this.publishLockFile(tmpPath, lockPath, signal)
+          published = true
           await rm(tmpPath, { force: true }).catch(() => undefined)
           if (process.platform !== "win32") await syncDirectory(dir)
+          signal?.throwIfAborted()
           this.registerLockProtectedPrefixes(dir, id, protectedPrefixes)
+          await waitForInFlightPuts(dir, protectedPrefixes, signal)
+          signal?.throwIfAborted()
           return id
         } catch (error) {
+          if (published) {
+            await this.releaseRetentionLock(account, container, id).catch(() => undefined)
+            this.releaseLockProtectedPrefixes(dir, id)
+            throw error
+          }
+          if (signal?.aborted) throw error
           const code = (error as NodeJS.ErrnoException).code
           if (code !== "EEXIST") {
             if (code && UNSUPPORTED_LOCK_ERRORS.has(code)) {
@@ -1147,7 +1264,7 @@ export class LocalBlobStore {
             }
             throw error
           }
-          if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath))) {
+          if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath, signal))) {
             throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
               code: "LeaseAlreadyPresent",
               lockPath,
@@ -1228,12 +1345,151 @@ export class LocalBlobStore {
     })
   }
 
-  private async reclaimStaleRetentionLock(lockPath: string): Promise<boolean> {
+  /**
+   * Judges whether the recorded holder of a lock-shaped file is provably gone. Returns "live" only
+   * for a same-host process whose comparable start token matches. Anything unobservable throws the
+   * manual-intervention warning naming `path`, so the file is preserved.
+   */
+  private async assessLockHolder(path: string, lock: RetentionLockRecord): Promise<"stale" | "live"> {
+    if (lock.host !== hostname()) {
+      throw new BlobLeaseConflictError(manualLockWarning(path, `held by another computer (${lock.host})`), {
+        code: "RetentionLockManualIntervention",
+        lockPath: path,
+      })
+    }
+    if (!this.isPidAlive(lock.pid)) return "stale"
+    const observedStart = await this.readProcessStart(lock.pid)
+    if (observedStart === "gone") return "stale"
+    if (observedStart === null) {
+      throw new BlobLeaseConflictError(
+        manualLockWarning(path, `could not verify whether process ${lock.pid} is still the original holder`),
+        { code: "RetentionLockManualIntervention", lockPath: path },
+      )
+    }
+    const comparison = compareProcessStart(lock.processStart, observedStart)
+    if (comparison === "incomparable") {
+      throw new BlobLeaseConflictError(
+        manualLockWarning(path, `could not compare process start token for process ${lock.pid}`),
+        { code: "RetentionLockManualIntervention", lockPath: path },
+      )
+    }
+    return comparison === "different" ? "stale" : "live"
+  }
+
+  /**
+   * Creates the reclaim gate file `<lock>.reclaim` exclusively, serializing stale-lock reclaimers
+   * across processes. Returns null when a live reclaimer already holds the gate. A gate left by a
+   * dead same-host process is reclaimed with the same aside-and-verify rule as the lock itself;
+   * a foreign or unobservable gate holder throws the manual warning naming the gate path.
+   */
+  private async acquireReclaimGate(lockPath: string, signal?: AbortSignal): Promise<{ gatePath: string; id: string } | null> {
+    const gatePath = `${lockPath}.reclaim`
+    const id = randomBytes(16).toString("hex")
+    const record: RetentionLockRecord = {
+      id,
+      host: hostname(),
+      pid: process.pid,
+      processStart: await this.ownProcessStart(),
+      app: "TenuVault",
+    }
+    signal?.throwIfAborted()
+    const tmpPath = `${gatePath}.${randomBytes(8).toString("hex")}.tmp`
+    try {
+      const handle = await open(tmpPath, "wx", 0o600)
+      try {
+        await handle.writeFile(JSON.stringify(record))
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      for (let attempt = 0; attempt < 2; attempt++) {
+        signal?.throwIfAborted()
+        try {
+          await this.publishLockFile(tmpPath, gatePath, signal)
+          return { gatePath, id }
+        } catch (error) {
+          if (signal?.aborted) throw error
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        }
+        let gateState = await this.readRetentionLockState(gatePath)
+        if (gateState.kind === "unparseable") {
+          await waitMs(UNPARSEABLE_LOCK_REREAD_MS, signal)
+          gateState = await this.readRetentionLockState(gatePath)
+        }
+        if (gateState.kind === "missing") continue
+        if (gateState.kind !== "current") {
+          throw new BlobLeaseConflictError(manualLockWarning(gatePath, "the reclaim gate file could not be parsed"), {
+            code: "RetentionLockManualIntervention",
+            lockPath: gatePath,
+          })
+        }
+        if ((await this.assessLockHolder(gatePath, gateState.lock)) === "live") return null
+        signal?.throwIfAborted()
+        const gateId = gateState.lock.id
+        await this.reclaimLockAside(gatePath, movedRaw => parseRetentionLock(movedRaw)?.id === gateId)
+      }
+      return null
+    } finally {
+      await rm(tmpPath, { force: true }).catch(() => undefined)
+    }
+  }
+
+  /** Best-effort gate release: moves the gate aside and removes it only if it is still ours. */
+  private async releaseReclaimGate(gatePath: string, id: string): Promise<void> {
+    const aside = `${gatePath}.${randomBytes(8).toString("hex")}.release`
+    try {
+      await rename(gatePath, aside)
+    } catch {
+      return
+    }
+    const movedRaw = await readFile(aside, "utf8").catch(() => null)
+    if (movedRaw !== null && parseRetentionLock(movedRaw)?.id === id) {
+      await rm(aside, { force: true }).catch(() => undefined)
+      return
+    }
+    try {
+      await link(aside, gatePath)
+      await rm(aside, { force: true }).catch(() => undefined)
+    } catch {
+      console.warn(`[backups] Retention reclaim gate ${gatePath} changed during release; the moved gate file was kept at ${aside}.`)
+    }
+  }
+
+  /**
+   * Removes a lock already judged stale, serialized by the reclaim gate. Invariant: a stale lock S
+   * is only ever removed by a reclaimer holding the gate (its owner is dead), so while we hold the
+   * gate and still see exactly S, S cannot be replaced before our rename. A live lock is therefore
+   * never moved aside. If the lock under the gate is no longer S, it is treated as held.
+   */
+  private async reclaimUnderGate(
+    lockPath: string,
+    isJudgedStale: (state: Awaited<ReturnType<LocalBlobStore["readRetentionLockState"]>>) => boolean,
+    matchesMoved: (movedRaw: string) => boolean,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const gate = await this.acquireReclaimGate(lockPath, signal)
+    if (!gate) return false
+    try {
+      signal?.throwIfAborted()
+      const state = await this.readRetentionLockState(lockPath)
+      if (state.kind === "missing") return true
+      if (!isJudgedStale(state)) return false
+      const gateState = await this.readRetentionLockState(gate.gatePath)
+      if (gateState.kind !== "current" || gateState.lock.id !== gate.id) return false
+      return await this.reclaimLockAside(lockPath, matchesMoved)
+    } finally {
+      await this.releaseReclaimGate(gate.gatePath, gate.id)
+    }
+  }
+
+  private async reclaimStaleRetentionLock(lockPath: string, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted()
     let state = await this.readRetentionLockState(lockPath)
     if (state.kind === "unparseable") {
-      await waitMs(UNPARSEABLE_LOCK_REREAD_MS)
+      await waitMs(UNPARSEABLE_LOCK_REREAD_MS, signal)
       state = await this.readRetentionLockState(lockPath)
     }
+    signal?.throwIfAborted()
     if (state.kind === "missing") return true
     if (state.kind === "unparseable") {
       throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be parsed"), {
@@ -1249,56 +1505,33 @@ export class LocalBlobStore {
           { code: "RetentionLockManualIntervention", lockPath },
         )
       }
-      return this.reclaimLockAside(lockPath, movedRaw => {
-        const moved = parseLegacyRetentionLock(movedRaw)
-        return moved?.id === legacy.id && moved.expiresAt === legacy.expiresAt
-      })
+      signal?.throwIfAborted()
+      return this.reclaimUnderGate(
+        lockPath,
+        current => current.kind === "legacy" && current.lock.id === legacy.id && current.lock.expiresAt === legacy.expiresAt,
+        movedRaw => {
+          const moved = parseLegacyRetentionLock(movedRaw)
+          return moved?.id === legacy.id && moved.expiresAt === legacy.expiresAt
+        },
+        signal,
+      )
     }
     const { lock } = state
-    const localHost = hostname()
-    if (lock.host !== localHost) {
-      throw new BlobLeaseConflictError(manualLockWarning(lockPath, `held by another computer (${lock.host})`), {
-        code: "RetentionLockManualIntervention",
-        lockPath,
-      })
-    }
-    let stale = false
-    if (!this.isPidAlive(lock.pid)) {
-      stale = true
-    } else {
-      const observedStart = await this.readProcessStart(lock.pid)
-      if (observedStart === "gone") {
-        stale = true
-      } else if (observedStart === null) {
-        throw new BlobLeaseConflictError(
-          manualLockWarning(lockPath, `could not verify whether process ${lock.pid} is still the original holder`),
-          { code: "RetentionLockManualIntervention", lockPath },
-        )
-      } else {
-        const observedKind = processStartKind(observedStart)
-        const recordedKind = processStartKind(lock.processStart)
-        if (!observedKind || !recordedKind || observedKind !== recordedKind) {
-          throw new BlobLeaseConflictError(
-            manualLockWarning(lockPath, `could not compare process start token for process ${lock.pid}`),
-            { code: "RetentionLockManualIntervention", lockPath },
-          )
-        }
-        if (observedStart !== lock.processStart) {
-          stale = true
-        }
-      }
-    }
-    if (!stale) {
+    const assessment = await this.assessLockHolder(lockPath, lock)
+    signal?.throwIfAborted()
+    if (assessment === "live") {
       throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
         code: "LeaseAlreadyPresent",
         lockPath,
         holderId: lock.id,
       })
     }
-    return this.reclaimLockAside(lockPath, movedRaw => {
-      const moved = parseRetentionLock(movedRaw)
-      return moved?.id === lock.id
-    })
+    return this.reclaimUnderGate(
+      lockPath,
+      current => current.kind === "current" && current.lock.id === lock.id,
+      movedRaw => parseRetentionLock(movedRaw)?.id === lock.id,
+      signal,
+    )
   }
 
   async releaseRetentionLock(account: string, container: string, id: string): Promise<{ warning?: string }> {
@@ -1541,6 +1774,60 @@ export class LocalBlobStore {
     }
   }
 
+  /**
+   * Restores a quarantined file to its live path without ever overwriting an occupied live name.
+   * Uses a hard link where supported, resuming cleanly if a prior crash left both names linked to
+   * the same file. On volumes without hard links (for example exFAT), creates the live file
+   * exclusively ("wx"), writes and fsyncs the full bytes, syncs the directory, and removes the
+   * held copy; if an earlier copy-recovery crashed after syncing identical encrypted bytes, it
+   * removes the held copy and continues.
+   */
+  private async restoreQuarantinedFile(held: string, live: string, dir: string): Promise<void> {
+    if (this.hardLinks) {
+      try {
+        await link(held, live)
+        if (process.platform !== "win32") await syncDirectory(dir)
+        await rm(held)
+        return
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? ""
+        if (code === "EEXIST") {
+          if (await isSameFile(held, live)) {
+            await rm(held)
+            return
+          }
+          throw error
+        }
+        if (!NO_HARD_LINKS.has(code)) throw error
+        this.hardLinks = false
+      }
+    }
+    const data = await readFile(held)
+    let handle: Awaited<ReturnType<typeof open>>
+    try {
+      handle = await open(live, "wx", 0o600)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        if (await isSameFile(held, live) || await isIdenticalFileCopy(held, live)) {
+          await rm(held)
+          return
+        }
+      }
+      throw error
+    }
+    try {
+      await handle.writeFile(data)
+      await handle.sync()
+    } catch (error) {
+      await handle.close().catch(() => undefined)
+      await rm(live, { force: true }).catch(() => undefined)
+      throw error
+    }
+    await handle.close()
+    if (process.platform !== "win32") await syncDirectory(dir)
+    await rm(held)
+  }
+
   private async recoverRetired(dir: string, account: string, container: string, names: string[]): Promise<DamagedFile[]> {
     const held: Array<{ folder: string; file: string; since: number }> = []
     const damage: DamagedFile[] = []
@@ -1580,9 +1867,7 @@ export class LocalBlobStore {
           if (entry !== VANISHED && !(entry instanceof Unreadable)) {
             backup = backupFolderOf(entry.name)
             if (counts.get(file) === 1 && Date.now() - since > RETIRED_GRACE_MS && !isPrefixProtected(dir, entry.name)) {
-              // A link publishes the whole file and never overwrites an occupied live path.
-              await link(path, join(dir, file))
-              await rm(path)
+              await this.restoreQuarantinedFile(path, join(dir, file), dir)
               await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
               await rmdir(join(dir, folder)).catch(() => undefined)
               continue
@@ -1869,6 +2154,26 @@ function safeSegment(value: string): string {
   const safe = value.replace(/[^a-zA-Z0-9-]/g, "_")
   if (!safe || safe === "." || safe === "..") throw new Error(`Invalid storage name: ${value}`)
   return safe
+}
+
+async function isSameFile(a: string, b: string): Promise<boolean> {
+  try {
+    const [infoA, infoB] = await Promise.all([lstat(a, { bigint: true }), lstat(b, { bigint: true })])
+    return infoA.isFile() && infoB.isFile() && infoA.ino !== 0n && infoA.dev === infoB.dev && infoA.ino === infoB.ino
+  } catch {
+    return false
+  }
+}
+
+async function isIdenticalFileCopy(a: string, b: string): Promise<boolean> {
+  try {
+    const [infoA, infoB] = await Promise.all([lstat(a, { bigint: true }), lstat(b, { bigint: true })])
+    if (!infoA.isFile() || !infoB.isFile() || infoA.size === 0n || infoA.size !== infoB.size) return false
+    const [bytesA, bytesB] = await Promise.all([readFile(a), readFile(b)])
+    return bytesA.equals(bytesB)
+  } catch {
+    return false
+  }
 }
 
 /** BigInt stats keep the full inode and nanosecond times, so a replaced file never shares a stamp with the old one. */

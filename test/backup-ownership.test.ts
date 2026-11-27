@@ -525,8 +525,12 @@ describe("retention verification", () => {
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
     if (changeKey) keyring.splice(0, 1, Buffer.alloc(32, 9))
     await vi.advanceTimersByTimeAsync(1_000)
-    await complete(engine)
-    expect(saved.has(expired + "metadata.json")).toBe(changeKey)
+    const secondJob = await complete(engine)
+    // The resumed anchor finishes from its receipts (or re-reads after a key change), but the
+    // newest backup must also be payload-verified before any delete (4721701675) and that check
+    // cannot finish within the remaining byte budget, so deletion is deferred this run.
+    expect(secondJob.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(changeKey ? 2 : 1)
   })
 
@@ -598,8 +602,12 @@ describe("retention verification", () => {
     expect(saved.has(expired + "metadata.json")).toBe(true)
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(1_000)
-    await complete(engine)
-    expect(saved.has(expired + "metadata.json")).toBe(false)
+    const secondJob = await complete(engine)
+    // The anchor's receipts are kept (its payload is not re-read), but verifying the newest
+    // backup before any delete (4721701675) leaves no budget for the candidate, so the
+    // expired backup is kept this run instead of being deleted.
+    expect(secondJob.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
   })
 
@@ -686,6 +694,62 @@ describe("retention verification", () => {
     const fallbackPolicy = `${recovered.backupFolder}/DeviceConfigurations/Policy 0.json`
     expect(calls.some(call => call.name === fallbackPolicy && call.request.method === "GET")).toBe(true)
     expect(saved.has(expired + "metadata.json")).toBe(false)
+  })
+
+  it("4721701675: deletes nothing when the newest backup fails payload verification while a resumed older backup is the anchor", async () => {
+    const big = "s".repeat(20_000)
+    let hitBudget = true
+    let tamperNewest = false
+    let firstPrefix = ""
+    const { engine, saved, calls, seed, folder, progressData } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 200_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (hitBudget && req.method === "GET" && url.pathname.endsWith("/Policy%201.json")) {
+          hitBudget = false
+          vi.advanceTimersByTime(JOB_DEADLINE_MS)
+          return new Promise(() => {})
+        }
+        // The newest backup's payload cannot be read back (the resumed anchor's payloads can).
+        if (tamperNewest && req.method === "GET" && firstPrefix && !url.pathname.includes(firstPrefix) && url.pathname.endsWith("/Policy%200.json")) {
+          return new Response(null, { status: 404 })
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    // First run creates backup B and stops during its verification, leaving B as the resumed
+    // anchor with a receipt for Policy 0.
+    const firstJob = await complete(engine)
+    firstPrefix = `${firstJob.backupFolder}/`
+    const key = `${TENANT}/contoso`
+    const stored = JSON.parse(progressData.get(key)!) as Record<string, unknown>
+    expect((stored as { latest?: string }).latest).toBe(firstPrefix)
+    const anchorPolicyReads = () => calls.filter(call => call.name === `${firstPrefix}DeviceConfigurations/Policy 0.json` && call.request.method === "GET").length
+    expect(anchorPolicyReads()).toBe(1)
+    progressData.set(key, JSON.stringify({ ...stored, cursor: firstPrefix }))
+
+    // Second run creates newest backup C. B is the anchor and verifies from its receipt, but
+    // C's payloads fail verification, so the expired candidate must not be deleted.
+    tamperNewest = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    const secondJob = await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(secondJob.results?.notices).toContainEqual(expect.objectContaining({ level: "warning" }))
+    // B's receipts were kept: its Policy 0 payload was not re-read.
+    expect(anchorPolicyReads()).toBe(1)
+
+    // With C healthy again, the next run deletes the expired candidate (retention is not
+    // silently disabled forever), still without re-reading B's receipted payload.
+    progressData.set(key, JSON.stringify({ ...stored, cursor: firstPrefix }))
+    tamperNewest = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(anchorPolicyReads()).toBe(1)
   })
 
   it("keeps an unreadable candidate, cleans up other owned candidates immediately, and escalates to a persistent warning after 3 consecutive failures", async () => {
@@ -1120,7 +1184,11 @@ describe("retention verification", () => {
       expect(saved.has(anchor + "metadata.json")).toBe(true)
       expect(saved.has(nextLatest + "metadata.json")).toBe(true)
       expect(calls.some(call => call.request.method === "DELETE" && (call.name.startsWith(anchor) || call.name.startsWith(nextLatest)))).toBe(false)
-      expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+      // Both tampered journals were discarded. A journal for the expired candidate may remain
+      // because verifying the newest backup (4721701675) can exhaust the budget mid-cleanup.
+      const remainingDeletes = readRetentionProgress(progressData.get(key)).deletes
+      expect(remainingDeletes?.[anchor]).toBeUndefined()
+      expect(remainingDeletes?.[nextLatest]).toBeUndefined()
     }
   })
 

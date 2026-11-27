@@ -157,6 +157,9 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     delete state.latestAttempts
   }
   let latestProgress = state.reviews[anchorPrefix] ??= { files: {}, attempts: 0 }
+  // Discard protected-target journals before verification too, so a budget stop during
+  // verification cannot leave a tampered journal for the anchor behind.
+  discardJournal(anchorPrefix, `Discarded an invalid deletion journal for protected backup ${anchorPrefix}.`)
   let beforeLatestFiles = Object.keys(latestProgress.files).length
   let anchorVerified: Awaited<ReturnType<typeof verifyBackup>>
   let unreadableAnchor: { prefix: string; error: unknown } | undefined
@@ -195,6 +198,22 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         beforeLatestFiles = 0
         anchorVerified = await verifyAnchor()
       } else {
+        throw error
+      }
+    }
+    if (anchorPrefix !== latestPrefix) {
+      // The anchor is a resumed older backup, but no deletion may run while the newest
+      // backup is incomplete: verify its listed payloads with the same checks before
+      // any DELETE. A mismatch (or a budget stop) throws here, before the plan phase,
+      // so nothing is deleted; receipts for both backups are kept for the next run.
+      const newestProgress = state.reviews[latestPrefix] ??= { files: {}, attempts: 0 }
+      try {
+        const roots = new Map([["metadata.json", manifest], [owner, claim]])
+        await verifyBackup(storage, latestPrefix, written, roots, await storage.list(latestPrefix), keyFingerprint, newestProgress)
+        if (!Object.keys(newestProgress.files).length) delete state.reviews[latestPrefix]
+      } catch (error) {
+        if (!Object.keys(newestProgress.files).length) delete state.reviews[latestPrefix]
+        save()
         throw error
       }
     }
@@ -899,7 +918,11 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     } finally {
       if (localLockId) {
         try {
-          const releaseWarning = await storage.releaseContainerLease(localLockId).catch(() => undefined)
+          const releaseWarning = await storage.releaseContainerLease(localLockId).catch(() => {
+            warning = true
+            notice("The local retention lock could not be released. It stays on disk until TenuVault exits.", "warning")
+            return undefined
+          })
           if (releaseWarning) {
             warning = true
             notice(releaseWarning, "warning")

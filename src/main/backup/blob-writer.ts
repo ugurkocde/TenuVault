@@ -268,10 +268,15 @@ export class BlobWriter {
           "x-ms-proposed-lease-id": proposedId,
           ...extraHeaders,
         },
-      }, async (response, _signal, ambiguous) => {
+      }, async (response, signal, ambiguous) => {
         if (response.ok) {
+          const leaseId = response.headers.get("x-ms-lease-id") || proposedId
           void response.body?.cancel().catch(() => undefined)
-          return response.headers.get("x-ms-lease-id") || proposedId
+          if (signal.aborted) {
+            await this.releaseLeaseAt(path, leaseId).catch(() => undefined)
+            signal.throwIfAborted()
+          }
+          return leaseId
         }
         if (ambiguous && response.status === 409) {
           // An earlier attempt may have acquired this proposed lease before its response was lost.
@@ -343,7 +348,7 @@ export class BlobWriter {
         void response.body?.cancel().catch(() => undefined)
         throw new StorageError(`Lease release failed with HTTP ${response.status}.`)
       }
-      const warning = response.headers.get("x-tenuvault-lock-warning") ?? undefined
+      const warning = decodeHeaderValue(response.headers.get("x-tenuvault-lock-warning"))
       void response.body?.cancel().catch(() => undefined)
       return warning
     } finally {

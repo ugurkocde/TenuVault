@@ -1,17 +1,19 @@
 import { spawnSync } from "node:child_process"
 import { createHash, randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import * as fsPromises from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { BackupEngine } from "../src/main/backup/engine"
-import { BlobWriter } from "../src/main/backup/blob-writer"
+import { BackupEngine, NetworkCircuit } from "../src/main/backup/engine"
+import { BlobLeaseError, BlobWriter } from "../src/main/backup/blob-writer"
+import { permanentLeaseFailureWarning } from "../src/main/backup/retention-lease"
 import { type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import {
   BlobLeaseConflictError,
   BlobProtectedError,
+  compareProcessStart,
   createProcessInfoReader,
   LocalBlobStore,
   parseDarwinPsStart,
@@ -651,10 +653,527 @@ describe("round 4 local retention lock hardening", () => {
     await engine.waitForJob(job)
     expect(job.status).toBe("Completed")
     expect(engineReleaseAttempts).toBe(2)
+    expect(job.log.join("\n")).toContain("The local retention lock could not be released.")
+    expect(job.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining("The local retention lock could not be released."),
+    }))
     const backups = (await store.list(ACCOUNT, BACKUP_CONTAINER)).map(b => b.name)
     const anchorMetadata = backups.find(n => n.startsWith("backup-2026-10-12-") && n.endsWith("/metadata.json"))!
     expect(anchorMetadata).toBeTruthy()
     await expect(store.put(ACCOUNT, BACKUP_CONTAINER, anchorMetadata, Buffer.from('{"unlocked":true}'), "application/json"))
       .resolves.toBeDefined()
   })
+})
+
+describe("round 5 CodeRabbit fixes", () => {
+  it("4721701660: releases lock file and write guard when a local lock acquire aborts before guard registration", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-lock-abort-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(dir, ".tenuvault-retention.lock")
+    const repPrefix = "backup-2026-10-12-120000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":1}'), "application/json")
+
+    let markPublished!: () => void
+    const published = new Promise<void>(resolve => { markPublished = resolve })
+    let releaseLink!: () => void
+    const resumeLink = new Promise<void>(resolve => { releaseLink = resolve })
+
+    vi.mocked(fsPromises.link).mockImplementationOnce(async (from, to) => {
+      await actual.link(from, to)
+      markPublished()
+      await resumeLink
+    })
+
+    const controller = new AbortController()
+    const network = new NetworkCircuit(3, controller.signal, Date.now() + 60_000)
+    let pendingEmulator: Promise<Response> | undefined
+    const writer = new BlobWriter(async (input, init) => {
+      const req = new Request(input, init)
+      pendingEmulator = handleLocalBlobRequest(store, req)
+      return pendingEmulator
+    }, ACCOUNT, async () => "token", network)
+
+    const acquirePromise = writer.acquireContainerLease([repPrefix])
+    await published
+    // Lock file was published on disk, while the store is still paused before registering the write guard.
+    expect(existsSync(lockPath)).toBe(true)
+
+    controller.abort(new Error("Caller timed out"))
+    await expect(acquirePromise).rejects.toThrow("Caller timed out")
+
+    // Resume the paused store call and wait for it to settle.
+    releaseLink()
+    await pendingEmulator?.catch(() => undefined)
+
+    // Neither the lock file nor the write guard may remain.
+    expect(existsSync(lockPath)).toBe(false)
+    await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json"))
+      .resolves.toBeDefined()
+  })
+
+  it("4721701729: treats mixed Linux proc tokens without boot_id as inconclusive while still reclaiming dead or reused PIDs", async () => {
+    expect(compareProcessStart("proc:boot-1:123", "proc:123")).toBe("incomparable")
+    expect(compareProcessStart("proc:123", "proc:boot-1:123")).toBe("incomparable")
+    expect(compareProcessStart("proc:boot-1:123", "proc:boot-1:123")).toBe("same")
+    expect(compareProcessStart("proc:boot-1:123", "proc:boot-1:456")).toBe("different")
+    expect(compareProcessStart("proc:boot-1:123", "proc:boot-2:123")).toBe("different")
+
+    const root = mkdtempSync(join(tmpdir(), "tv-lock-linux-fields-")); roots.push(root)
+    let alive = true
+    let observed: string | "gone" | null = "proc:123"
+    const reader: ProcessInfoReader = {
+      isPidAlive: () => alive,
+      readProcessStart: async () => observed,
+    }
+    const store = new LocalBlobStore(root, [MASTER], undefined, reader)
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(root, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+
+    // Recorded has boot_id, contender cannot read boot_id -> inconclusive, preserves lock via manual warning.
+    const mixedLock = JSON.stringify({ id: "live-holder", host: hostname(), pid: 4321, processStart: "proc:boot-1:123", app: "TenuVault" })
+    writeFileSync(lockPath, mixedLock)
+    await expect(store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toMatchObject({
+      code: "RetentionLockManualIntervention",
+      lockPath,
+    })
+    expect(readFileSync(lockPath, "utf8")).toBe(mixedLock)
+
+    // Recorded lacks boot_id, contender has boot_id -> also inconclusive, preserves lock.
+    const reverseMixed = JSON.stringify({ id: "live-holder-2", host: hostname(), pid: 4321, processStart: "proc:123", app: "TenuVault" })
+    writeFileSync(lockPath, reverseMixed)
+    observed = "proc:boot-1:123"
+    await expect(store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toMatchObject({
+      code: "RetentionLockManualIntervention",
+      lockPath,
+    })
+    expect(readFileSync(lockPath, "utf8")).toBe(reverseMixed)
+
+    // Comparable boot_id with different ticks -> proven PID reuse -> reclaimed.
+    writeFileSync(lockPath, mixedLock)
+    observed = "proc:boot-1:999"
+    const reclaimedReuse = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedReuse)
+    await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, reclaimedReuse)
+
+    // Confirmed dead holder -> still reclaimed even when lock had no boot_id.
+    writeFileSync(lockPath, reverseMixed)
+    alive = false
+    const reclaimedDead = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedDead)
+    await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, reclaimedDead)
+  })
+
+  it("4721701740: removes held copy when live and held refer to the same file, and still reports conflict when they differ", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retired-same-file-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const prefix = "backup-2026-10-12-120000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+    const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
+
+    // Case A: crash after link(held, live) before rm(held) -> both names point to the same inode.
+    const retiredSame = join(dir, ".retired-same1")
+    mkdirSync(retiredSame)
+    linkSync(join(dir, tvbFile), join(retiredSame, tvbFile))
+    const stampSame = join(retiredSame, ".quarantined")
+    writeFileSync(stampSame, "")
+    const oldTime = (Date.now() - 120_000) / 1000
+    utimesSync(stampSame, oldTime, oldTime)
+    utimesSync(retiredSame, oldTime, oldTime)
+
+    const damageSame = await store.damage(ACCOUNT, BACKUP_CONTAINER)
+    expect(damageSame.files).toEqual([])
+    expect(damageSame.unavailable.size).toBe(0)
+    expect(existsSync(retiredSame)).toBe(false)
+    expect(existsSync(join(dir, tvbFile))).toBe(true)
+    expect((await store.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe('{"Status":"Success"}')
+
+    // Case B: live and held are different files -> conflict is still reported and neither file is removed.
+    const retiredDiff = join(dir, ".retired-diff1")
+    mkdirSync(retiredDiff)
+    // Copy bytes into a separate file (new inode) and overwrite live with new content.
+    writeFileSync(join(retiredDiff, tvbFile), readFileSync(join(dir, tvbFile)))
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","v":2}'), "application/json")
+    const stampDiff = join(retiredDiff, ".quarantined")
+    writeFileSync(stampDiff, "")
+    utimesSync(stampDiff, oldTime, oldTime)
+    utimesSync(retiredDiff, oldTime, oldTime)
+
+    const damageDiff = await store.damage(ACCOUNT, BACKUP_CONTAINER)
+    expect(damageDiff.files).toHaveLength(1)
+    expect(damageDiff.files[0]!.file).toBe(`.retired-diff1/${tvbFile}`)
+    expect(existsSync(join(retiredDiff, tvbFile))).toBe(true)
+    expect(existsSync(join(dir, tvbFile))).toBe(true)
+  })
+
+  it("4721701663: both local lock warnings tell operators to stop same-computer TenuVault processes before deleting the lock", () => {
+    const manual = permanentLeaseFailureWarning(true, 3, new BlobLeaseError(new Error("manual"), 409, "RetentionLockManualIntervention", "/backups/.tenuvault-retention.lock"))
+    const sameHolder = permanentLeaseFailureWarning(true, 3, new BlobLeaseError(new Error("held"), 409, "LeaseAlreadyPresent", "/backups/.tenuvault-retention.lock", "holder-1"))
+    for (const msg of [manual, sameHolder]) {
+      expect(msg).toContain("Stop any TenuVault process on this computer that uses this backup folder")
+      expect(msg).toContain("no other computer is running TenuVault on this backup folder")
+    }
+  })
+
+  it("4721701716: percent-encodes and decodes x-tenuvault-lock-warning for non-Latin-1 paths", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-lock-備-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(root, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+    const writer = new BlobWriter(async (input, init) => handleLocalBlobRequest(store, new Request(input, init)), ACCOUNT, async () => "token")
+
+    const lockId = await writer.acquireContainerLease()
+    // Replace lock file so releaseRetentionLock returns a warning containing lockPath (with 備).
+    writeFileSync(lockPath, JSON.stringify({ id: "other-holder", host: hostname(), pid: process.pid, processStart: "other", app: "TenuVault" }))
+    const warning = await writer.releaseContainerLease(lockId)
+    expect(warning).toBeDefined()
+    expect(warning).toContain("備")
+    expect(warning).toContain(lockPath)
+
+    // Clean release returns undefined warning.
+    rmSync(lockPath, { force: true })
+    const cleanId = await writer.acquireContainerLease()
+    expect(await writer.releaseContainerLease(cleanId)).toBeUndefined()
+  })
+
+  it("4721701725: waits for an in-flight put rename on a protected prefix before lock acquisition returns", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-inflight-put-")); roots.push(root)
+    const storeA = new LocalBlobStore(root, [MASTER])
+    const storeB = new LocalBlobStore(root, [MASTER])
+    await storeA.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const repPrefix = "backup-2026-10-12-120000/"
+    await storeA.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":1}'), "application/json")
+
+    let renameStarted!: () => void
+    const onRenameStart = new Promise<void>(resolve => { renameStarted = resolve })
+    let allowRename!: () => void
+    const waitRename = new Promise<void>(resolve => { allowRename = resolve })
+
+    vi.mocked(fsPromises.rename).mockImplementationOnce(async (from, to) => {
+      renameStarted()
+      await waitRename
+      return actual.rename(from, to)
+    })
+
+    // Start a put on storeB; pause it after assertPrefixNotProtected, right at rename().
+    const putPromise = storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json")
+    await onRenameStart
+
+    // Start acquiring the retention lock protecting repPrefix on storeA.
+    let lockResolved = false
+    const lockPromise = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [repPrefix]).then(id => {
+      lockResolved = true
+      return id
+    })
+
+    // Give the event loop turns: lock acquisition MUST wait for the in-flight put to finish,
+    // while new puts to repPrefix are already blocked.
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(lockResolved).toBe(false)
+    await expect(storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}DeviceConfigurations/new.json`, Buffer.from("{}"), "application/json"))
+      .rejects.toBeInstanceOf(BlobProtectedError)
+
+    // Allow the in-flight rename to commit.
+    allowRename()
+    await putPromise
+    const lockId = await lockPromise
+    try {
+      // Final read under the lock is guaranteed to observe the committed v2 manifest.
+      const read = await storeA.get(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`)
+      expect(read.data.toString()).toBe('{"v":2}')
+    } finally {
+      await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
+    }
+  })
+
+  it("4721701734: recovers quarantined files safely without hard links (exFAT), never overwrites an occupied live name, and resumes after copy crash", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-retired-no-hardlinks-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const prefix = "backup-2026-10-12-120000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","exfat":1}'), "application/json")
+    const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
+
+    const noHardLinkError = () => Object.assign(new Error("Operation not permitted"), { code: "EPERM" })
+    vi.mocked(fsPromises.link).mockRejectedValue(noHardLinkError())
+
+    const oldTime = (Date.now() - 120_000) / 1000
+    try {
+      // Case A: live is absent -> exclusive create + copy + fsync restores live and removes held.
+      const retired1 = join(dir, ".retired-exfat1")
+      mkdirSync(retired1)
+      renameSync(join(dir, tvbFile), join(retired1, tvbFile))
+      const stamp1 = join(retired1, ".quarantined")
+      writeFileSync(stamp1, "")
+      utimesSync(stamp1, oldTime, oldTime)
+      utimesSync(retired1, oldTime, oldTime)
+
+      const damage1 = await store.damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(damage1.files).toEqual([])
+      expect(existsSync(retired1)).toBe(false)
+      expect(existsSync(join(dir, tvbFile))).toBe(true)
+      expect((await store.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe('{"Status":"Success","exfat":1}')
+
+      // Case B: crash after copy+fsync before rm(held) -> live and held have identical encrypted bytes -> resumes cleanly.
+      const retired2 = join(dir, ".retired-exfat2")
+      mkdirSync(retired2)
+      writeFileSync(join(retired2, tvbFile), readFileSync(join(dir, tvbFile)))
+      const stamp2 = join(retired2, ".quarantined")
+      writeFileSync(stamp2, "")
+      utimesSync(stamp2, oldTime, oldTime)
+      utimesSync(retired2, oldTime, oldTime)
+
+      const damage2 = await store.damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(damage2.files).toEqual([])
+      expect(existsSync(retired2)).toBe(false)
+      expect(existsSync(join(dir, tvbFile))).toBe(true)
+
+      // Case C: live is occupied by a DIFFERENT file -> open("wx") never overwrites live and damage is reported.
+      const retired3 = join(dir, ".retired-exfat3")
+      mkdirSync(retired3)
+      writeFileSync(join(retired3, tvbFile), readFileSync(join(dir, tvbFile)))
+      await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","exfat":2}'), "application/json")
+      const stamp3 = join(retired3, ".quarantined")
+      writeFileSync(stamp3, "")
+      utimesSync(stamp3, oldTime, oldTime)
+      utimesSync(retired3, oldTime, oldTime)
+
+      const damage3 = await store.damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(damage3.files).toHaveLength(1)
+      expect(damage3.files[0]!.file).toBe(`.retired-exfat3/${tvbFile}`)
+      expect(existsSync(join(retired3, tvbFile))).toBe(true)
+      // Live file was NOT overwritten with held copy.
+      rmSync(retired3, { recursive: true, force: true })
+      expect((await store.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe('{"Status":"Success","exfat":2}')
+    } finally {
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+})
+
+describe("round 5b reclaim gate", () => {
+  const STALE_PID = 4321
+
+  function reuseReader(pause?: { wait: Promise<void>; reached: () => void }): ProcessInfoReader {
+    return {
+      isPidAlive: pid => pid === process.pid || pid === STALE_PID,
+      readProcessStart: async pid => {
+        if (pid === process.pid) return "ps:own-start"
+        if (pause) {
+          pause.reached()
+          await pause.wait
+        }
+        return "ps:new-start"
+      },
+    }
+  }
+
+  function writeStaleLock(lockPath: string) {
+    writeFileSync(lockPath, JSON.stringify({ id: "stale-S", host: hostname(), pid: STALE_PID, processStart: "ps:old-start", app: "TenuVault" }))
+  }
+
+  it("4721713622 and 4721717681: a delayed reclaimer that judged the old stale lock never moves the new holder's live lock", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-reclaim-gate-")); roots.push(root)
+    const first = new LocalBlobStore(root, [MASTER], undefined, reuseReader())
+    await first.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(dir, ".tenuvault-retention.lock")
+    writeStaleLock(lockPath)
+
+    // R2 observes stale S and pauses while judging its holder.
+    let reached!: () => void
+    const reachedPromise = new Promise<void>(resolve => { reached = resolve })
+    let resume!: () => void
+    const wait = new Promise<void>(resolve => { resume = resolve })
+    const delayed = new LocalBlobStore(root, [MASTER], undefined, reuseReader({ wait, reached }))
+    const delayedAcquire = delayed.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    // Attach a handler now; asserted below.
+    const delayedOutcome = delayedAcquire.then(id => ({ id }), (error: unknown) => ({ error }))
+    await reachedPromise
+
+    // R1 reclaims S under the gate and a new holder N publishes its live lock.
+    const holderId = await first.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(holderId)
+    expect(existsSync(`${lockPath}.reclaim`)).toBe(false)
+
+    // Count any attempt to move the live lock file from here on.
+    let lockRenames = 0
+    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+      if (String(from) === lockPath) lockRenames++
+      return actual.rename(from, to)
+    })
+    try {
+      // R2 resumes with its stale judgment of S. Under the gate it re-reads the lock,
+      // sees N instead of S, and must not rename N's lock aside.
+      resume()
+      const outcome = await delayedOutcome
+      expect(outcome).toMatchObject({ error: expect.any(BlobLeaseConflictError) })
+      expect(lockRenames).toBe(0)
+      expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(holderId)
+      expect(readdirSync(dir).filter(f => f.includes(".stale"))).toEqual([])
+      expect(existsSync(`${lockPath}.reclaim`)).toBe(false)
+
+      // A third instance still gets a conflict while N holds the lock.
+      const third = new LocalBlobStore(root, [MASTER], undefined, reuseReader())
+      await expect(third.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
+      expect(lockRenames).toBe(0)
+    } finally {
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      await first.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, holderId)
+    }
+  })
+
+  it("4721740763: a holder past its ownership check keeps the lock while a delayed reclaimer and a third instance are refused", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-reclaim-gate-delete-")); roots.push(root)
+    const holder = new LocalBlobStore(root, [MASTER], undefined, reuseReader())
+    await holder.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(dir, ".tenuvault-retention.lock")
+    const prefix = "backup-2026-08-01-020000/"
+    await holder.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await holder.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await holder.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+    const blob = (await holder.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).blob
+    writeStaleLock(lockPath)
+
+    let reached!: () => void
+    const reachedPromise = new Promise<void>(resolve => { reached = resolve })
+    let resume!: () => void
+    const wait = new Promise<void>(resolve => { resume = resolve })
+    const delayed = new LocalBlobStore(root, [MASTER], undefined, reuseReader({ wait, reached }))
+    const delayedOutcome = delayed.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+      .then(id => ({ id }), (error: unknown) => ({ error }))
+    await reachedPromise
+
+    // N reclaims S and holds the lock.
+    const holderId = await holder.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+
+    // Pause N's delete after its final ownership check, with the quarantine rename pending.
+    let renamePending!: () => void
+    const renamePendingPromise = new Promise<void>(resolve => { renamePending = resolve })
+    let allowRename!: () => void
+    const renameWait = new Promise<void>(resolve => { allowRename = resolve })
+    let lockRenames = 0
+    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+      if (String(from) === lockPath) lockRenames++
+      if (String(to).includes(".retired-")) {
+        renamePending()
+        await renameWait
+      }
+      return actual.rename(from, to)
+    })
+    try {
+      const deleting = holder.delete(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, { ifMatch: blob.etag, retentionLockId: holderId })
+      const deleteOutcome = deleting.then(() => ({ ok: true }), (error: unknown) => ({ error }))
+      await renamePendingPromise
+
+      // The delayed reclaimer resumes now, while N's rename is still pending.
+      resume()
+      const outcome = await delayedOutcome
+      expect(outcome).toMatchObject({ error: expect.any(BlobLeaseConflictError) })
+      expect(lockRenames).toBe(0)
+      expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(holderId)
+
+      // No third instance can acquire and overlap N's in-flight delete.
+      const third = new LocalBlobStore(root, [MASTER], undefined, reuseReader())
+      await expect(third.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
+
+      allowRename()
+      expect(await deleteOutcome).toEqual({ ok: true })
+      expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(holderId)
+    } finally {
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      await holder.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, holderId)
+    }
+  })
+
+  it("gate staleness: a dead same-host gate is reclaimed and a foreign-host gate warns naming the gate path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-reclaim-gate-stale-")); roots.push(root)
+    const deadPid = spawnSync(process.execPath, ["-e", ""]).pid!
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(dir, ".tenuvault-retention.lock")
+    const gatePath = `${lockPath}.reclaim`
+
+    // Stale lock plus a gate left by a dead same-host reclaimer: both are reclaimed.
+    writeFileSync(lockPath, JSON.stringify({ id: "stale-S", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
+    writeFileSync(gatePath, JSON.stringify({ id: "dead-gate", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
+    const id = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(id)
+    expect(existsSync(gatePath)).toBe(false)
+    await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, id)
+
+    // Stale lock plus a foreign-host gate: manual warning naming the gate, nothing moved.
+    const staleLock = JSON.stringify({ id: "stale-S2", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" })
+    const foreignGate = JSON.stringify({ id: "foreign-gate", host: "other-computer", pid: deadPid, processStart: "dead", app: "TenuVault" })
+    writeFileSync(lockPath, staleLock)
+    writeFileSync(gatePath, foreignGate)
+    const failure = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (error: unknown) => error)
+    expect(failure).toBeInstanceOf(BlobLeaseConflictError)
+    expect((failure as BlobLeaseConflictError).code).toBe("RetentionLockManualIntervention")
+    expect((failure as BlobLeaseConflictError).lockPath).toBe(gatePath)
+    expect((failure as Error).message).toContain(gatePath)
+    expect(readFileSync(lockPath, "utf8")).toBe(staleLock)
+    expect(readFileSync(gatePath, "utf8")).toBe(foreignGate)
+  })
+
+  it("4721742279: cleanup preserves the candidate when an in-flight write from another store instance changes the replacement", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-inflight-cleanup-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    const otherStore = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const old = "backup-2026-08-01-020000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${old}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${old}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${old}metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+    const newestPrefix = "backup-2026-10-12-120000/"
+
+    let renameStarted!: () => void
+    const renameStartedPromise = new Promise<void>(resolve => { renameStarted = resolve })
+    let allowRename!: () => void
+    const renameWait = new Promise<void>(resolve => { allowRename = resolve })
+    vi.mocked(fsPromises.rename).mockImplementationOnce(async (from, to) => {
+      renameStarted()
+      await renameWait
+      return actual.rename(from, to)
+    })
+    // A write from another instance passes its guard check (no guard yet) and pauses at rename.
+    const inFlight = otherStore.put(ACCOUNT, BACKUP_CONTAINER, `${newestPrefix}metadata.json`, Buffer.from('{"Status":"Success","Tampered":true}'), "application/json")
+    const inFlightOutcome = inFlight.then(() => ({ ok: true }), (error: unknown) => ({ error }))
+    await renameStartedPromise
+
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), NOW)
+      return handleLocalBlobRequest(store, req)
+    }
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => NOW })
+    const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+    const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+    const finished = engine.waitForJob(job).then(() => "finished" as const)
+    // Retention must wait at lock acquisition for the in-flight write, so the job cannot
+    // finish while the rename is paused. Give it ample time to (wrongly) finish without the fix.
+    const early = await Promise.race([finished, new Promise<"waiting">(resolve => setTimeout(() => resolve("waiting"), 3000))])
+    expect(early).toBe("waiting")
+    allowRename()
+    expect(await inFlightOutcome).toEqual({ ok: true })
+    await finished
+    expect(job.status).toBe("Completed")
+    // The replacement changed before deletion, so the expired candidate is preserved.
+    expect(job.log.join("\n")).toContain("changed before deletion")
+    expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old)).map(b => b.name)).toContain(`${old}metadata.json`)
+  }, 30_000)
 })
