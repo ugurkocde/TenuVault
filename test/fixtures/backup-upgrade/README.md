@@ -11,3 +11,9 @@ ownership marker and two policies. `legacy-azure.bin` was written by the last
 sealed Azure writer (`sealAzure` at `2faa1e62`) using the older key, the same
 tenant, and the November 1 compliance policy's Azure blob URL in the test.
 Azure writes on origin/main already used plain JSON.
+
+The Windows packaged smoke run wraps the frozen state in Electron safeStorage
+using the runner's DPAPI account. It copies the encrypted blobs unchanged, asks
+the app's Backup History route to list both snapshots, and uses the same OS
+account to decrypt and compare the stored keyring after the packaged app exits.
+macOS CI runs the frozen fixture tests alongside its normal packaged smoke.

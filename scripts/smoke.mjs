@@ -29,6 +29,7 @@ const require = createRequire(import.meta.url)
 const desktopDir = resolve(import.meta.dirname, "..")
 const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "out", "smoke"))
 const packagedApp = process.env.TENUVAULT_SMOKE_APP
+const upgradeProfile = process.env.TENUVAULT_SMOKE_SECTION === "backup-upgrade"
 
 // A packaged build would check for updates like an installed app; the suite switches the update
 // channel, so a release could download and, on macOS, replace the app under test when it quits.
@@ -105,6 +106,18 @@ if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOK
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
 const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
+function historicalProfile(mode) {
+  // Windows DPAPI binds the fixture to this runner's account. The unsigned Electron helper on
+  // macOS is a different Keychain client from the packaged app, so this section runs on Windows.
+  if (packagedApp && process.platform !== "win32") throw new Error("The packaged upgrade profile requires Windows DPAPI")
+  const flags = process.platform === "linux" ? ["--no-sandbox", "--ozone-platform=x11"] : []
+  execFileSync(require("electron"), [...flags, join(desktopDir, "scripts", "backup-upgrade-profile.cjs")], {
+    env: { ...env, TV_SMOKE_UPGRADE_MODE: mode, TV_SMOKE_UPGRADE_PROFILE: profile, TV_SMOKE_UPGRADE_FIXTURE: join(desktopDir, "test", "fixtures", "backup-upgrade") },
+    stdio: "inherit", timeout: 30_000,
+  })
+}
+
+if (upgradeProfile) historicalProfile("seed")
 // Only a development run needs the electron package, and it loads after the policy step, so a
 // missing package cannot skip the recovery of a packaged run.
 app = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
@@ -264,6 +277,28 @@ async function disableAnimations() {
     style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }"
     document.head.appendChild(style)
   })()`)
+}
+
+if (upgradeProfile) {
+  await check("Backup History lists both historical backups without warnings", async () => {
+    const tenantId = "11111111-1111-1111-1111-111111111111"
+    const request = {
+      tenantId, appId: "22222222-2222-2222-2222-222222222222",
+      clientSecret: "tenuvault-desktop-delegated-auth", subscriptionId: "local",
+      resourceGroupName: "local", storageAccountName: `tvlocal-${tenantId}`,
+    }
+    for (const summary of [false, true]) {
+      const [status, history] = await evaluate(`fetch("/api/list-backups", { method: "POST", body: JSON.stringify(${JSON.stringify({ ...request, summary })}) }).then(async response => [response.status, await response.json()])`)
+      assert(status === 200, `Backup History returned HTTP ${status}: ${history.error ?? ""}`)
+      assert(JSON.stringify(history.backups.map(row => [row.id, row.status, row.totalPolicies])) === JSON.stringify([
+        ["backup-2026-11-02-020000", "Success", 2], ["backup-2026-11-01-020000", "Success", 2],
+      ]), "Backup History did not return the two historical backups")
+      assert(!history.warnings?.length && !history.damagedFiles && !history.unreadableBackups, "Backup History reported unreadable files")
+    }
+    const problem = await evaluate(`window.tenuvault.backups.inventoryProblem(${JSON.stringify(tenantId)})`)
+    assert(problem === null, "The historical backup inventory reported damage")
+  })
+  await finish()
 }
 
 await check("first run shows the welcome screen", async () => {
@@ -2212,6 +2247,16 @@ async function finish() {
   const exited = new Promise((r) => app.once("exit", r))
   app.kill()
   await Promise.race([exited, sleep(5000)])
+  if (upgradeProfile) {
+    try {
+      assert(appStopped(), "The upgraded app did not exit")
+      historicalProfile("verify")
+      console.log("ok   the historical keyring is unchanged")
+    } catch (error) {
+      failures++
+      console.log(`FAIL historical keyring: ${error.message}`)
+    }
+  }
   // Chromium helper processes can hold the profile briefly on Windows; cleanup must not fail the run.
   try {
     rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
