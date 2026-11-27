@@ -87,6 +87,20 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
       const result = await (await history(f.request({ summary }))).json()
       expect(result.backups).toMatchObject([{ id: ordinaryId, companionId: largeId, untrustedDate: true }])
     }
+
+    // Once Microsoft time passes both halves' date and retention expires, both markers are cleared and normal retention removes the pair.
+    const later = new Date("2026-11-22T12:00:00Z")
+    f.setServerTime(later)
+    const laterEngine = new BackupEngine({
+      fetch: f.fetcher, now: () => later, getToken: async () => jwt({ scp: "Policy.Read.All" }),
+      services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1,
+    })
+    const laterJob = await laterEngine.waitForJob(laterEngine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope }))
+    expect(laterJob.status, laterJob.log.join("\n")).toBe("Completed")
+    await expect(f.store.get(local, BACKUP_CONTAINER, untrustedTimeMarker(ordinaryId))).rejects.toThrow()
+    await expect(f.store.get(local, LARGE_BACKUP_CONTAINER, untrustedTimeMarker(largeId))).rejects.toThrow()
+    expect(await f.store.list(local, BACKUP_CONTAINER, `${ordinaryId}/`)).toEqual([])
+    expect(await f.store.list(local, LARGE_BACKUP_CONTAINER, `${largeId}/`)).toEqual([])
   })
   async function pair() {
     undo = registerTestTypes([largeType])

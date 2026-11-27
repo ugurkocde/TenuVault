@@ -37,7 +37,7 @@ const sha256 = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const items = { "DeviceConfigurations/old": { file: "Old.json", sha256: sha256(oldPolicy) } }
 const completeManifest = { TenantId: TENANT, Status: "Success", Items: items, Scope: { Included: ["DeviceConfigurations"] } }
 
-function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; progress?: RetentionProgressStore; serverTime?: () => Date | null; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; progress?: RetentionProgressStore; serverTime?: () => Date | null; graphTime?: () => Date | null; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
   vi.useFakeTimers()
   vi.setSystemTime(now)
   const saved = new Map<string, Buffer>()
@@ -77,8 +77,12 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
   const fetch = legacyAzureReader(async (input, init) => {
     const response = await wireFetch(input, init)
     const url = new URL(input instanceof Request ? input.url : input)
-    const serverTime = options.serverTime ? options.serverTime() : now
-    return url.hostname === "contoso.blob.core.windows.net" && serverTime ? withServerDate(response, serverTime) : response
+    const serverTime = url.hostname === "graph.microsoft.com"
+      ? (options.graphTime ? options.graphTime() : options.serverTime ? options.serverTime() : now)
+      : url.hostname === "contoso.blob.core.windows.net"
+        ? (options.serverTime ? options.serverTime() : now)
+        : null
+    return serverTime && !response.headers.has("date") ? withServerDate(response, serverTime) : response
   }, () => keys)
   const createEngine = () => new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" },
     retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, retentionProgress: options.progress,
@@ -431,7 +435,7 @@ describe("verified retention coverage", () => {
     }
   })
 
-  it("keeps a future-dated backup permanently without using it to replace a needed copy", async () => {
+  it("revalidates a marked future-dated backup and applies normal retention once its date is no longer in the future", async () => {
     let serverTime = now
     const { engine, createEngine, saved, calls, seed, folder } = setup({ serverTime: () => serverTime })
     const older = "backup-2026-08-01-020000/"
@@ -449,12 +453,98 @@ describe("verified retention coverage", () => {
     expect(saved.has(`${future}/metadata.json`)).toBe(true)
     expect(saved.has(untrustedTimeMarker(future))).toBe(true)
 
+    // Still in the future by 30 minutes: keep the marker and keep future out of retention coverage.
+    serverTime = new Date("2026-10-13T11:30:00Z")
+    vi.setSystemTime(serverTime)
+    await complete(createEngine(), withoutConfigurations)
+    expect(saved.has(untrustedTimeMarker(future))).toBe(true)
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(saved.has(`${future}/metadata.json`)).toBe(true)
+    expect(calls.filter(call => call.request.method === "PUT" && call.name === untrustedTimeMarker(future))).toHaveLength(1)
+
+    // No longer in the future, still inside 30-day retention: remove the marker and allow normal coverage.
+    serverTime = new Date("2026-10-14T12:00:00Z")
+    vi.setSystemTime(serverTime)
+    await complete(createEngine(), withoutConfigurations)
+    expect(saved.has(untrustedTimeMarker(future))).toBe(false)
+    expect(saved.has(`${older}metadata.json`)).toBe(false)
+    expect(saved.has(`${future}/metadata.json`)).toBe(true)
+
+    // Past 30-day retention: normal retention verifies and deletes it.
     serverTime = new Date("2026-12-12T12:00:00Z")
     vi.setSystemTime(serverTime)
     await complete(createEngine())
-    expect(saved.has(`${older}metadata.json`)).toBe(false)
-    expect(saved.has(`${future}/metadata.json`)).toBe(true)
-    expect(calls.filter(call => call.request.method === "PUT" && call.name === untrustedTimeMarker(future))).toHaveLength(1)
+    expect(saved.has(`${future}/metadata.json`)).toBe(false)
+  })
+
+  it("still verifies every file before removing a previously marked backup once its date is past", async () => {
+    let serverTime = new Date("2026-12-12T12:00:00Z")
+    const { engine, saved, seed, folder } = setup({ serverTime: () => serverTime })
+    vi.setSystemTime(serverTime)
+    const formerlyFuture = "backup-2026-10-13-120000"
+    folder(`${formerlyFuture}/`)
+    seed(`${formerlyFuture}/metadata.json`, completeManifest)
+    seed(`${formerlyFuture}/DeviceConfigurations/Old.json`, { id: "old", changed: true })
+    seed(untrustedTimeMarker(formerlyFuture), { BackupFolder: formerlyFuture, RunId: "earlier" })
+
+    const job = await complete(engine)
+    expect(saved.has(untrustedTimeMarker(formerlyFuture))).toBe(false)
+    expect(saved.has(`${formerlyFuture}/metadata.json`)).toBe(true)
+    expect(job.log.join("\n")).toContain("could not be verified")
+  })
+
+  it("skips retention with a warning when Graph and Azure Storage times disagree by more than five minutes", async () => {
+    let graphNow = new Date("2026-10-12T12:00:00Z")
+    let storageNow = new Date("2026-10-12T12:06:00Z")
+    const { engine, createEngine, saved, calls, seed, folder } = setup({
+      graphTime: () => graphNow,
+      serverTime: () => storageNow,
+    })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+
+    const disagreed = await complete(engine)
+    expect(disagreed.log.join("\n")).toContain("Microsoft Graph and Azure Storage reported different times")
+    expect(disagreed.results?.warnings).toBe(1)
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+
+    // Within five minutes: retention proceeds normally.
+    storageNow = new Date("2026-10-12T12:04:00Z")
+    vi.setSystemTime(new Date("2026-10-12T12:01:00Z"))
+    const agreed = await complete(createEngine())
+    expect(saved.has(`${older}metadata.json`), agreed.log.join("\n")).toBe(false)
+  })
+
+  it("completes an Azure backup across a redirected Blob response without using it as a time source", async () => {
+    let redirectedOnce = false
+    let savedMap!: Map<string, Buffer>
+    const { engine, saved, seed, folder } = setup({
+      count: 1,
+      override: (url, sent) => {
+        if (url.hostname !== "contoso.blob.core.windows.net" || sent.method !== "PUT" || !url.pathname.endsWith("/metadata.json")) return undefined
+        expect(sent.redirect).not.toBe("error")
+        redirectedOnce = true
+        return (async () => {
+          const name = decodeURIComponent(url.pathname.slice("/intune-backups/".length))
+          savedMap.set(name, Buffer.from(await sent.arrayBuffer()))
+          const response = withServerDate(new Response(null, { status: 201 }), new Date("2030-01-01T00:00:00Z"))
+          Object.defineProperty(response, "redirected", { value: true })
+          Object.defineProperty(response, "url", { value: url.href })
+          return response
+        })()
+      },
+    })
+    savedMap = saved
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+
+    const job = await complete(engine)
+    expect(redirectedOnce).toBe(true)
+    expect(job.status).toBe("Completed")
+    expect(saved.has(`${older}metadata.json`), job.log.join("\n")).toBe(false)
   })
 
   it("uses the Azure response Date on the first run, even when the device clock is ahead", async () => {
@@ -485,7 +575,7 @@ describe("verified retention coverage", () => {
   })
 
   it("keeps expired Azure backups when Azure returns no Date header", async () => {
-    const { engine, saved, calls, seed, folder } = setup({ serverTime: () => null })
+    const { engine, saved, calls, seed, folder } = setup({ graphTime: () => now, serverTime: () => null })
     const older = "backup-2026-08-01-020000/"
     folder(older)
     seed(`${older}metadata.json`, completeManifest)

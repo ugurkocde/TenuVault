@@ -39,7 +39,9 @@ import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadR
 class RetentionClockError extends Error {}
 
 const HOUR_MS = 3600_000
+const ORIGIN_SKEW_MS = 5 * 60_000
 const NO_TRUSTED_TIME = "TenuVault could not verify the time with Microsoft. Old backups were kept."
+const ORIGIN_TIME_MISMATCH = "Microsoft Graph and Azure Storage reported different times. Old backups were kept."
 const DAY_MS = 86400_000
 
 /**
@@ -237,24 +239,32 @@ function recordFailure(outcome: RunOutcome, error: unknown): void {
  * storage account (`localHost`) come from this device, not the network. A request that ends
  * because the job aborted it says nothing new: the abort reason is classified where it is raised.
  */
-function answeredFetch(fetchImpl: typeof fetch, outcome: RunOutcome, localHost: string | null, timeOrigin: string, observeTime: (time: number) => void): typeof fetch {
+function answeredFetch(
+  fetchImpl: typeof fetch,
+  outcome: RunOutcome,
+  localHost: string | null,
+  timeOrigins: ReadonlySet<string>,
+  onOriginCall: (origin: string) => void,
+  observeTime: (origin: string, time: number, tick: number) => void,
+): typeof fetch {
   return async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-    const timeSource = url.origin === timeOrigin
+    const timeSource = timeOrigins.has(url.origin)
+    if (timeSource) onOriginCall(url.origin)
     let response: Response
     try {
-      response = await fetchImpl(input, timeSource ? { ...init, redirect: "error", cache: "no-store" } : init)
+      response = await fetchImpl(input, timeSource ? { ...init, cache: "no-store" } : init)
     } catch (error) {
       if (!init?.signal?.aborted) recordFailure(outcome, error)
       throw error
     }
     // A network error response (status 0) is not an answer.
     if (response.type !== "error" && response.status !== 0 && url.hostname !== localHost) outcome.answered = true
-    if (timeSource && response.ok && !response.redirected && (!response.url || new URL(response.url).origin === timeOrigin)
+    if (timeSource && response.ok && !response.redirected && (!response.url || new URL(response.url).origin === url.origin)
       && Number(response.headers.get("age") ?? 0) === 0) {
       const date = response.headers.get("date")
       const time = Date.parse(date ?? "")
-      if (Number.isFinite(time) && new Date(time).toUTCString() === date) observeTime(time)
+      if (Number.isFinite(time) && new Date(time).toUTCString() === date) observeTime(url.origin, time, performance.now())
     }
     return response
   }
@@ -572,13 +582,37 @@ export class BackupEngine {
     }
     const local = isLocalAccount(request.storageAccountName)
     const storageHost = `${request.storageAccountName.toLowerCase()}.blob.core.windows.net`
+    const storageOrigin = `https://${storageHost}`
+    const timeOrigins = new Set(local ? [GRAPH] : [GRAPH, storageOrigin])
     // Compare against time measured within this run, independent of the device wall clock.
-    const clock: { first?: { time: number; tick: number }; latest?: { time: number; tick: number } } = {}
-    const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? storageHost : null, local ? GRAPH : `https://${storageHost}`, time => {
-      if (clock.latest && time < clock.latest.time) return
-      clock.latest = { time, tick: performance.now() }
-      clock.first ??= clock.latest
-    })
+    const calledOrigins = new Set<string>()
+    const observations = new Map<string, { time: number; tick: number }>()
+    let latestObservation: { time: number; tick: number } | undefined
+    const fetchImpl = answeredFetch(
+      this.deps.fetch,
+      outcome,
+      local ? storageHost : null,
+      timeOrigins,
+      origin => { calledOrigins.add(origin) },
+      (origin, time, tick) => {
+        const observation = { time, tick }
+        const previous = observations.get(origin)
+        if (!previous || tick >= previous.tick) observations.set(origin, observation)
+        if (!latestObservation || tick >= latestObservation.tick) latestObservation = observation
+      },
+    )
+    const trustedTimeAt = (tick: number = performance.now()): { ok: true; time: number } | { ok: false; reason: string } => {
+      if (!latestObservation) return { ok: false, reason: NO_TRUSTED_TIME }
+      if (!local && calledOrigins.has(GRAPH) && calledOrigins.has(storageOrigin)) {
+        const graphTime = observations.get(GRAPH)
+        const storageTime = observations.get(storageOrigin)
+        if (!graphTime || !storageTime) return { ok: false, reason: NO_TRUSTED_TIME }
+        const graphNow = graphTime.time + (tick - graphTime.tick)
+        const storageNow = storageTime.time + (tick - storageTime.tick)
+        if (Math.abs(graphNow - storageNow) > ORIGIN_SKEW_MS) return { ok: false, reason: ORIGIN_TIME_MISMATCH }
+      }
+      return { ok: true, time: latestObservation.time + (tick - latestObservation.tick) }
+    }
     const streaming = this.hasLargeTypes(request.tenantId, request.scope ?? EVERYTHING)
     let backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
@@ -1298,9 +1332,8 @@ export class BackupEngine {
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
     let retentionWarnings = 0
-    const first = clock.first
-    const trustedStart = first && first.time - (first.tick - startedTick)
-    if (trustedStart !== undefined && started.getTime() > trustedStart + HOUR_MS) {
+    const trustedStart = trustedTimeAt(startedTick)
+    if (trustedStart.ok && started.getTime() > trustedStart.time + HOUR_MS) {
       // Mark the committed halves separately so either can be discovered on its own.
       for (const folder of [backupFolder, ...(mixed && committedLargeManifest ? [largeFolder] : [])]) {
         if (!await this.markUntrustedTime(job, isLargeBackup(folder) ? largeStorage : storage, folder)) retentionWarnings++
@@ -1319,14 +1352,16 @@ export class BackupEngine {
       try {
         signal.throwIfAborted()
         if (Date.now() >= deadline) throw new Error("Backup job deadline reached")
-        if (!clock.latest || trustedStart === undefined) throw new RetentionClockError(NO_TRUSTED_TIME)
-        checkRetentionClock(started.getTime(), trustedStart)
+        const startClock = trustedTimeAt(startedTick)
+        if (!startClock.ok) throw new RetentionClockError(startClock.reason)
+        checkRetentionClock(started.getTime(), startClock.time)
         const checkClock = () => {
-          const { time, tick } = clock.latest!
-          checkRetentionClock(this.now().getTime(), time + (performance.now() - tick))
+          const currentClock = trustedTimeAt()
+          if (!currentClock.ok) throw new RetentionClockError(currentClock.reason)
+          checkRetentionClock(this.now().getTime(), currentClock.time)
+          return currentClock.time
         }
-        checkClock()
-        const now = clock.latest.time
+        const now = checkClock()
         const keyFingerprint = limits ? this.deps.recoveryKeyFingerprint?.() : undefined
         const pending: Array<(checkClock: () => void) => Promise<number>> = []
         const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, now, keyFingerprint, limits, mixed, committedLargeManifest)
@@ -1358,7 +1393,7 @@ export class BackupEngine {
       }
     } else if (!complete) {
       this.write(job, "Older backups were kept because this backup is incomplete.", "info")
-      if (!clock.latest && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+      if (!latestObservation && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
         this.write(job, NO_TRUSTED_TIME, "warning")
         retentionWarnings++
       }
@@ -1441,6 +1476,17 @@ export class BackupEngine {
     const ordinary = isLargeBackup(current) ? { blobs: [], prefixes: [] } : await discovery.list("backup-", "/")
     const large = isLargeBackup(current) ? await discovery.list("backup-large-", "/", LARGE_BACKUP_CONTAINER, true) : { blobs: [], prefixes: [] }
     const marked = new Set([...ordinary.blobs, ...large.blobs].map(untrustedTimeFolder).filter(isBackupName))
+    let markerWarnings = 0
+    const clearMarker = async (folder: string, writer: BlobWriter): Promise<boolean> => {
+      const result = await this.clearUntrustedTime(job, writer, folder, signal)
+      if (result === "failed") markerWarnings++
+      return result === "cleared"
+    }
+    for (const folder of marked) {
+      const parsed = parseBackupName(folder)
+      if (!parsed || Date.parse(parsed.timestamp) > now) continue
+      if (await clearMarker(folder, metered())) marked.delete(folder)
+    }
     const largePrefixes = [...new Set([...large.prefixes, ...large.blobs.map(name => `${name.split("/")[0]}/`)])].filter(isLargeBackup)
     const prefixes = [...ordinary.prefixes, ...largePrefixes]
     const allBackups = [...new Set(prefixes)]
@@ -1449,10 +1495,26 @@ export class BackupEngine {
         return !folder || !folder.name.startsWith("backup-") || folder.name === current ? [] : [{ prefix, time: Date.parse(folder.timestamp) }]
       })
     const protectedTime = async (folder: string, writer: BlobWriter): Promise<boolean> => {
-      if (marked.has(folder)) return true
-      if (await writer.readJson(untrustedTimeMarker(folder))) return true
-      if (Date.parse(parseBackupName(folder)!.timestamp) <= now + HOUR_MS) return false
-      await this.markUntrustedTime(job, writer, folder)
+      const folderTime = Date.parse(parseBackupName(folder)!.timestamp)
+      if (marked.has(folder)) {
+        if (folderTime > now) return true
+        if (!await clearMarker(folder, writer)) return true
+        marked.delete(folder)
+        return false
+      }
+      if (await writer.readJson(untrustedTimeMarker(folder))) {
+        if (folderTime > now) {
+          marked.add(folder)
+          return true
+        }
+        if (!await clearMarker(folder, writer)) {
+          marked.add(folder)
+          return true
+        }
+        return false
+      }
+      if (folderTime <= now + HOUR_MS) return false
+      if (!await this.markUntrustedTime(job, writer, folder)) markerWarnings++
       marked.add(folder)
       return true
     }
@@ -1462,7 +1524,10 @@ export class BackupEngine {
       const folder = backup.prefix.slice(0, -1)
       if (marked.has(folder) || backup.time > now + HOUR_MS) {
         ignored.push(backup)
-        if (!marked.has(folder) && await this.markUntrustedTime(job, metered(), folder)) marked.add(folder)
+        if (!marked.has(folder)) {
+          if (await this.markUntrustedTime(job, metered(), folder)) marked.add(folder)
+          else markerWarnings++
+        }
       } else {
         ordered.push(backup)
       }
@@ -1498,7 +1563,7 @@ export class BackupEngine {
     const limit = !limits ? ordered.length : !mixed ? limits.candidates : isLargeBackup(current) ? Math.floor(limits.candidates / 2) : Math.ceil(limits.candidates / 2)
     const backups = ordered.slice(start, start + limit)
 
-    if (!backups.length) return 0
+    if (!backups.length) return markerWarnings
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
@@ -1550,11 +1615,11 @@ export class BackupEngine {
     if (unreadable.size > 0) {
       this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. Older backups were left in place.`, "warning")
       // An unreadable local inventory can hide the only surviving encrypted copy.
-      if (!limits) return unreadable.size
+      if (!limits) return unreadable.size + markerWarnings
     }
     if (unreadable.size === backups.length) {
       advance()
-      return unreadable.size
+      return unreadable.size + markerWarnings
     }
     let shared = unreadable.size > 0 || backups.length !== ordered.length || owners.some(entry => entry?.owner === "other")
     // Untagged backups can only be removed if the visible history gives no sign of a shared container.
@@ -1774,7 +1839,7 @@ export class BackupEngine {
       if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
       return warnings
     })
-    return unverified
+    return unverified + markerWarnings
   }
 
   /** Adds a line to the log, in local time; a level also lists it among the run's notices. */
@@ -1791,6 +1856,19 @@ export class BackupEngine {
       if (error instanceof BlobClaimError) return true
       this.write(job, `Kept backup ${folder} because its date is in the future. TenuVault could not save its untrusted date marker.`, "warning")
       return false
+    }
+  }
+
+  private async clearUntrustedTime(job: BackupJob, storage: BlobWriter, folder: string, signal: AbortSignal): Promise<"cleared" | "protected" | "failed"> {
+    try {
+      await storage.delete(untrustedTimeMarker(folder))
+      return "cleared"
+    } catch (error) {
+      signal.throwIfAborted()
+      if (error instanceof InventoryDamagedError || error instanceof RetentionBudgetError) throw error
+      if (error instanceof ProtectedBlobError) return "protected"
+      this.write(job, `Kept backup ${folder} outside automatic retention because its untrusted date marker could not be removed.`, "warning")
+      return "failed"
     }
   }
 

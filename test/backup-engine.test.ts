@@ -575,7 +575,7 @@ describe("retention", () => {
     }, expired)
   })
 
-  it("ignores and keeps a future-dated local backup without blocking retention of older backups", async () => {
+  it("ignores and keeps a future-dated local backup until server time passes its date, then applies normal retention", async () => {
     const old = "backup-2026-08-01-120000"
     await clockFixture(async ({ clocks, run, has }) => {
       clocks("2026-10-29T12:00:00Z", "2026-09-24T12:00:00Z")
@@ -589,8 +589,165 @@ describe("retention", () => {
       expect(corrected.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
       expect(await has(old)).toBe(false)
       expect(await has(future)).toBe(true)
+
+      clocks("2026-12-01T12:00:00Z")
+      const expired = await run()
+      expect(expired.log.join("\n")).toContain("Removed 2 backups older than 30 days.")
+      expect(await has(future)).toBe(false)
     }, old)
   })
+
+  it("uses the most recent time observation by monotonic tick instead of the maximum Date", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-tick-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const container = "intune-backups"
+      const old = "backup-2026-08-01-120000"
+      await store.createContainer(account, container)
+      await store.put(account, container, `${old}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT })), "application/json")
+      const graph = fakeGraph()
+      let tick = 1000
+      const spy = vi.spyOn(performance, "now").mockImplementation(() => { tick += 100; return tick })
+      let graphCalls = 0
+      try {
+        const engine = new BackupEngine({
+          fetch: async (input, init) => {
+            const request = new Request(input, init)
+            const url = new URL(request.url)
+            if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+            graphCalls++
+            // First response carries a larger Date three hours ahead; later responses carry the real time.
+            const observed = graphCalls === 1 ? new Date("2026-09-24T15:00:00Z") : new Date("2026-09-24T12:00:00Z")
+            return withServerDate(graph(url), observed)
+          },
+          getToken: async () => "token",
+          retentionDays: () => 30,
+          now: () => new Date("2026-09-24T12:00:00Z"),
+        })
+        const job = await finished(engine, engine.start({
+          tenantId: TENANT, clientId: CLIENT, storageAccountName: account,
+          scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) },
+        }).id)
+        expect(graphCalls).toBeGreaterThan(1)
+        expect(job.status).toBe("Completed")
+        expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+        expect(await store.list(account, container, `${old}/`)).toHaveLength(0)
+      } finally {
+        spy.mockRestore()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("extrapolates the most recent time observation to now using the monotonic tick", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-extrapolate-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const container = "intune-backups"
+      // Not expired at 12:00:00Z, expired once extrapolated 20 minutes forward to 12:20:00Z.
+      const borderline = "backup-2026-08-25-121000"
+      await store.createContainer(account, container)
+      await store.put(account, container, `${borderline}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT })), "application/json")
+      const graph = fakeGraph()
+      let tick = 10_000
+      let wall = new Date("2026-09-24T12:00:00Z")
+      const spy = vi.spyOn(performance, "now").mockImplementation(() => tick)
+      try {
+        const engine = new BackupEngine({
+          fetch: async (input, init) => {
+            const request = new Request(input, init)
+            const url = new URL(request.url)
+            if (localAccountFromUrl(url)) {
+              const response = await handleLocalBlobRequest(store, request)
+              if (request.method === "PUT" && url.pathname.endsWith("/metadata.json")) {
+                tick += 20 * 60_000
+                wall = new Date("2026-09-24T12:20:00Z")
+              }
+              return response
+            }
+            tick += 10
+            return withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
+          },
+          getToken: async () => "token",
+          retentionDays: () => 30,
+          now: () => wall,
+        })
+        const job = await finished(engine, engine.start({
+          tenantId: TENANT, clientId: CLIENT, storageAccountName: account,
+          scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) },
+        }).id)
+        expect(job.status).toBe("Completed")
+        expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+        expect(await store.list(account, container, `${borderline}/`)).toHaveLength(0)
+      } finally {
+        spy.mockRestore()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each(["429", "age", "redirected", "cross-origin"] as const)(
+    "ignores Graph response Date when condition fails: %s",
+    async condition => {
+      const root = mkdtempSync(join(tmpdir(), "tv-retention-obs-"))
+      try {
+        const store = new LocalBlobStore(root, [randomBytes(32)])
+        const account = localStorageAccountName(TENANT)
+        const container = "intune-backups"
+        const old = "backup-2026-08-01-120000"
+        await store.createContainer(account, container)
+        await store.put(account, container, `${old}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT })), "application/json")
+        const graph = fakeGraph()
+        const wall = new Date("2026-09-24T12:00:00Z")
+        let throttled = false
+        const engine = new BackupEngine({
+          fetch: async (input, init) => {
+            const request = new Request(input, init)
+            const url = new URL(request.url)
+            if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+            if (condition === "redirected") {
+              if (init?.redirect === "error") throw new TypeError("Unexpected redirect: error")
+              const response = withServerDate(graph(url), wall)
+              Object.defineProperty(response, "redirected", { value: true })
+              Object.defineProperty(response, "url", { value: url.href })
+              return response
+            }
+            if (condition === "429") {
+              if (!throttled) {
+                throttled = true
+                return withServerDate(new Response("", { status: 429, headers: { "retry-after": "0.001" } }), wall)
+              }
+              return graph(url)
+            }
+            if (condition === "age") {
+              const response = withServerDate(graph(url), wall)
+              response.headers.set("age", "30")
+              return response
+            }
+            const response = withServerDate(graph(url), wall)
+            Object.defineProperty(response, "url", { value: `https://other.example${url.pathname}` })
+            return response
+          },
+          getToken: async () => "token",
+          retentionDays: () => 30,
+          now: () => wall,
+        })
+        const job = await finished(engine, engine.start({
+          tenantId: TENANT, clientId: CLIENT, storageAccountName: account,
+          scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) },
+        }).id)
+        expect(job.status, job.log.join("\n")).toBe("Completed")
+        expect(job.log.join("\n")).toContain("could not verify the time with Microsoft")
+        expect(await store.list(account, container, `${old}/`)).toHaveLength(1)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
 
   it("keeps retention in UTC when DST ends and the device changes time zone", async () => {
     const old = "backup-2026-10-02-065000"
