@@ -257,6 +257,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 - **Local backup folders.** Lab defaults to `Documents/TenuVault Lab Backups`. A saved Lab override pointing to `Documents/TenuVault Backups` opens for browsing only. In **Settings > Storage and recovery**, switch to the Lab folder or copy backups you can verify with your Lab-created recovery key. The original files are kept. Stable keeps its existing folder settings.
 
+- **Retention.** The app verifies every file of an expired backup before deleting it. An ordinary remnant with neither a 0.6 run record nor a large companion stays in place.
+
 Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
 
 - **Azure backup coverage.** Run the cloud backup setup script again with the existing values to deploy backup runbook 1.6.1. This version verifies policy details and records incomplete reads so change reports can qualify comparisons. The Schedule tab prompts for an update when the last run reports a version earlier than 1.6.1. The audit capability threshold remains 1.5.0.

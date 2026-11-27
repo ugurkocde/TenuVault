@@ -298,7 +298,7 @@ function BackupsOnDevice() {
               Open folder
             </Button>
           </div>
-          {settings?.labFolderReadOnly && (
+          {typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__ && settings?.labFolderReadOnly && (
             <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900" role="status">
               <p>TenuVault Lab can browse this folder. It needs a separate folder to save backups and run retention.</p>
               <div className="flex flex-wrap gap-2">

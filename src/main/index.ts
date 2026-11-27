@@ -452,7 +452,7 @@ async function bootstrap(): Promise<void> {
   setRestoreJournalStore(appStore)
   setRestoreApprovalStore(appStore)
   const stableFolder = join(app.getPath("documents"), "TenuVault Backups")
-  const labFolder = join(app.getPath("documents"), "TenuVault Lab Backups")
+  const labFolder = __TV_LAB_BUILD__ ? join(app.getPath("documents"), "TenuVault Lab Backups") : ""
   const guardBackupWrites = __TV_LAB_BUILD__ ? guardLabBackupWrites(stableFolder) : undefined
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? (__TV_LAB_BUILD__ ? labFolder : stableFolder)
   const labReadOnly = (folder: string) => __TV_LAB_BUILD__ && isStableBackupFolder(folder, stableFolder)
@@ -2220,7 +2220,7 @@ async function bootstrap(): Promise<void> {
     checkStore = null
   }
   const useLabFolder = async (source: string, copy: boolean) => {
-    if (!guardBackupWrites) throw new Error("This folder action is only available in TenuVault Lab.")
+    if (!guardBackupWrites) throw new Error("The backup folder action is unavailable.")
     assertLocalFolderIdle()
     if (copy) {
       const keys = labCopyKeys()
@@ -2245,7 +2245,7 @@ async function bootstrap(): Promise<void> {
     } else setLocalFolder(labFolder)
     return backupSettings()
   }
-  handleTrusted("backups:useLabFolder", (_event, copy: unknown) => useLabFolder(localFolder(), copy === true))
+  if (__TV_LAB_BUILD__) handleTrusted("backups:useLabFolder", (_event, copy: unknown) => useLabFolder(localFolder(), copy === true))
   handleTrusted("backups:chooseFolder", async () => {
     assertLocalFolderIdle()
     const result = await dialog.showOpenDialog(mainWindow!, {
