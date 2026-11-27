@@ -286,6 +286,71 @@ describe("damaged local backup files", () => {
     const folders = new Set((await store.list(account, CONTAINER)).map((blob) => blob.name.split("/")[0]))
     expect([...folders].sort()).toEqual([OLD, NEW, "backup-2026-09-24-120000"])
   })
+
+  it("resumes a partially deleted local backup whose manifest was already removed, while keeping unjournaled manifestless folders untouched", async () => {
+    const { store } = await setup()
+    await backup(store, OLD)
+    const unjournaled = "backup-2026-07-15-020000"
+    await store.put(account, CONTAINER, `${unjournaled}/CompliancePolicies/a.json`, Buffer.from('{"id":"a"}'), "application/json")
+    await store.put(account, CONTAINER, `${unjournaled}/${BACKUP_OWNER_FILE}`, Buffer.from(`{"TenantId":"${TENANT}"}`), "application/json")
+    let failFirstPayloadDelete = true
+    const graph = (url: URL) => Response.json(url.pathname.endsWith("/assignments") ? { value: [] } : { value: [] })
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (localAccountFromUrl(url)) {
+        if (failFirstPayloadDelete && request.method === "DELETE" && url.pathname.endsWith(`/${OLD}/CompliancePolicies/a.json`)) {
+          failFirstPayloadDelete = false
+          return new Response(null, { status: 412 })
+        }
+        return handleLocalBlobRequest(store, request)
+      }
+      return withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
+    }) as typeof fetch
+    let clockTime = new Date("2026-09-24T12:00:00Z")
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => clockTime })
+    const first = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
+    expect(first.status).toBe("Completed")
+    // Local deleted OLD/metadata.json first, then failed on a.json: OLD is now manifestless with remaining files.
+    const remainingOld = (await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)
+    expect(remainingOld).not.toContain(`${OLD}/metadata.json`)
+    expect(remainingOld).toContain(`${OLD}/CompliancePolicies/a.json`)
+    expect(remainingOld).toContain(`${OLD}/${BACKUP_OWNER_FILE}`)
+
+    // Next run resumes OLD from the journal and removes its remaining files, while unjournaled stays untouched.
+    clockTime = new Date("2026-09-24T12:00:05Z")
+    const second = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
+    expect(second.status).toBe("Completed")
+    expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
+    expect((await store.list(account, CONTAINER, `${unjournaled}/`)).map(blob => blob.name)).toContain(`${unjournaled}/CompliancePolicies/a.json`)
+  })
+
+  it("stops local deletion when a replacing backup file changes identity before delete", async () => {
+    const { store } = await setup()
+    await backup(store, OLD)
+    let modified = false
+    const graph = (url: URL) => Response.json(url.pathname.endsWith("/assignments") ? { value: [] } : { value: [] })
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (localAccountFromUrl(url)) {
+        // Modify the newest backup's metadata right after OLD's payload is verified, before OLD's deletes start.
+        if (!modified && request.method === "GET" && url.pathname.endsWith(`/${OLD}/CompliancePolicies/b.json`)) {
+          modified = true
+          const response = await handleLocalBlobRequest(store, request)
+          await store.put(account, CONTAINER, `backup-2026-09-24-120000/metadata.json`, Buffer.from('{"Status":"Success","Changed":true}'), "application/json")
+          return response
+        }
+        return handleLocalBlobRequest(store, request)
+      }
+      return withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
+    }) as typeof fetch
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
+    const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
+    expect(job.status).toBe("Completed")
+    expect(job.log.join("\n")).toContain("changed before deletion")
+    expect((await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)).toContain(`${OLD}/metadata.json`)
+  })
 })
 
 describe("backup history with damaged local files", () => {

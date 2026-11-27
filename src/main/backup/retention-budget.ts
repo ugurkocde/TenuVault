@@ -24,11 +24,22 @@ export class RetentionBudget {
   private requests = 0
   private reserved = 0
   private bytes = 0
+  private inCleanup = false
 
   constructor(readonly limits: RetentionLimits) {}
 
   get exhausted(): boolean {
     return this.bytes >= this.limits.bytes || this.requests + this.reserved >= this.limits.requests
+  }
+
+  async withCleanup<T>(run: () => Promise<T>): Promise<T> {
+    const previous = this.inCleanup
+    this.inCleanup = true
+    try {
+      return await run()
+    } finally {
+      this.inCleanup = previous
+    }
   }
 
   reserveDeletes(count: number): void {
@@ -38,9 +49,10 @@ export class RetentionBudget {
   }
 
   dispatch(deleting: boolean): void {
-    if (this.requests + (deleting ? 0 : this.reserved) >= this.limits.requests) throw new RetentionBudgetError()
+    const reserved = deleting || this.inCleanup
+    if (this.requests + (reserved ? 0 : this.reserved) >= this.limits.requests) throw new RetentionBudgetError()
     this.requests++
-    if (deleting) this.reserved = Math.max(0, this.reserved - 1)
+    if (reserved) this.reserved = Math.max(0, this.reserved - 1)
   }
 
   async fetch(send: () => Promise<Response>): Promise<Response> {

@@ -850,6 +850,176 @@ describe("retention verification", () => {
     expect(saved.has(c0 + "metadata.json")).toBe(false)
     expect(saved.has(c1 + "metadata.json")).toBe(false)
   })
+
+  it("re-checks replacement file identities immediately before each candidate's deletes and stops on any mismatch", async () => {
+    let newestPrefix = ""
+    let tamperOn: "before-first" | "before-second" = "before-first"
+    let tampered = false
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 1,
+      override: (url, req) => {
+        if (req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+          const match = /\/(backup-[^/]+\/)/.exec(url.pathname)
+          if (match) newestPrefix = match[1]!
+        }
+        // Trigger tamper right before the first candidate's delete (when the last candidate finishes verification)
+        // or during the first candidate's delete (before the second candidate's deletes start).
+        if (!tampered && newestPrefix && tamperOn === "before-first"
+          && req.method === "GET" && url.pathname.endsWith(`${expired}DeviceConfigurations/Old.json`)) {
+          tampered = true
+          seed(`${newestPrefix}DeviceConfigurations/Policy 0.json`, { id: "p0", modified: true })
+        }
+        if (!tampered && newestPrefix && tamperOn === "before-second"
+          && req.method === "DELETE" && url.pathname.endsWith(`${newerExpired}${BACKUP_OWNER_FILE}`)) {
+          tampered = true
+          seed(`${newestPrefix}DeviceConfigurations/Policy 0.json`, { id: "p0", modified: true })
+        }
+      },
+    })
+    folder(newerExpired)
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+
+    // Case 1: replacement changes before the first delete -> keeps both candidates.
+    const first = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+    expect(first.log.join("\n")).toContain("changed before deletion")
+
+    // Case 2: replacement changes between candidate 1 and candidate 2 -> stops before candidate 2.
+    tamperOn = "before-second"
+    tampered = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const second = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(second.log.join("\n")).toContain("changed before deletion")
+  })
+
+  it.each(["key", "clock"] as const)("runs the recovery-key and clock guard before each planned backup's deletes (%s)", async change => {
+    let triggered = false
+    const { engine, saved, seed, folder, keyring } = setup({
+      serverTime: () => now,
+      override: (url, req) => {
+        if (!triggered && req.method === "DELETE" && url.pathname.endsWith(`${newerExpired}${BACKUP_OWNER_FILE}`)) {
+          triggered = true
+          if (change === "key") keyring.splice(0, 1, Buffer.alloc(32, 9))
+          else vi.setSystemTime(new Date(now.getTime() - 2 * 3_600_000))
+        }
+      },
+    })
+    folder(newerExpired)
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const job = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(job.log.join("\n")).toContain(change === "key" ? "recovery key changed" : "differs from Microsoft's time")
+  })
+
+  it("does not advance the cursor past planned deletes that never started when interrupted", async () => {
+    const c0 = "backup-2026-08-03-020000/"
+    const c1 = "backup-2026-08-02-020000/"
+    const c2 = "backup-2026-08-01-020000/"
+    let cancelBeforeFirstDelete = true
+    let activeJobId = ""
+    let engineRef!: BackupEngine
+    const { engine, saved, seed, folder } = setup({
+      limits: { candidates: 2, requests: 100, bytes: 100_000 },
+      override: (url, req) => {
+        if (cancelBeforeFirstDelete && req.method === "DELETE" && url.pathname.includes(c0)) {
+          cancelBeforeFirstDelete = false
+          engineRef.cancel(activeJobId)
+          return new Promise(() => {})
+        }
+      },
+    })
+    engineRef = engine
+    for (const prefix of [c0, c1, c2]) {
+      folder(prefix)
+      seed(prefix + "metadata.json", manifest)
+    }
+    const first = engine.start(request)
+    activeJobId = first.id
+    await engine.waitForJob(first)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(first.status).toBe("Completed")
+    expect(first.log.join("\n")).toContain("Retention was interrupted")
+    expect(saved.has(c0 + "metadata.json")).toBe(true)
+    expect(saved.has(c1 + "metadata.json")).toBe(true)
+    expect(saved.has(c2 + "metadata.json")).toBe(true)
+    // Next run must reconsider c0 instead of skipping past the unstarted window to c2.
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(c0 + "metadata.json")).toBe(false)
+    expect(saved.has(c2 + "metadata.json")).toBe(true)
+  })
+
+  it("resumes a partially deleted Azure backup via the deletion journal after re-verifying coverage and preserves original ETags", async () => {
+    const itemA = { id: "a" }
+    const itemB = { id: "b" }
+    const twoItemManifest = {
+      TenantId: TENANT, Status: "Success", Scope: { Included: ["DeviceConfigurations"] },
+      Items: {
+        "DeviceConfigurations/a": { file: "A.json", hash: snapshotHash(itemA), sha256: createHash("sha256").update(JSON.stringify(itemA)).digest("hex") },
+        "DeviceConfigurations/b": { file: "B.json", hash: snapshotHash(itemB), sha256: createHash("sha256").update(JSON.stringify(itemB)).digest("hex") },
+      },
+    }
+    let blockB = true
+    const { engine, saved, calls, seed } = setup({
+      override: (url, req) => {
+        if (blockB && req.method === "DELETE" && url.pathname.endsWith(`${expired}DeviceConfigurations/B.json`)) {
+          return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+        }
+      },
+    })
+    seed(expired + "DeviceConfigurations/A.json", itemA)
+    seed(expired + "DeviceConfigurations/B.json", itemB)
+    seed(expired + BACKUP_OWNER_FILE, owner)
+    seed(expired + "metadata.json", twoItemManifest)
+
+    // Run 1 deletes A.json then is refused on B.json; journal records remaining files.
+    const first = await complete(engine)
+    expect(first.log.join("\n")).toContain("Kept the remaining files in backup")
+    expect(saved.has(expired + "DeviceConfigurations/A.json")).toBe(false)
+    expect(saved.has(expired + "DeviceConfigurations/B.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + BACKUP_OWNER_FILE)).toBe(true)
+
+    // If replacement coverage no longer covers DeviceConfigurations, remaining files stay kept.
+    blockB = false
+    for (const name of saved.keys()) if (name.startsWith(`${first.backupFolder}/`)) saved.delete(name)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const narrowed = engine.start({ ...request, scope: { excluded: INTUNE_TYPES.map(type => type.folder) } })
+    await engine.waitForJob(narrowed)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(saved.has(expired + "DeviceConfigurations/B.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+
+    // If a remaining file changed, its original ETag no longer matches so remaining files are kept.
+    const originalB = saved.get(expired + "DeviceConfigurations/B.json")!
+    seed(expired + "DeviceConfigurations/B.json", { id: "b", tampered: true })
+    await vi.advanceTimersByTimeAsync(1_000)
+    const modified = await complete(engine)
+    expect(modified.log.join("\n")).toContain("changed before it could be deleted")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    saved.set(expired + "DeviceConfigurations/B.json", originalB)
+
+    // Once coverage holds and remaining files match their original ETags, Run 4 deletes only the remaining files.
+    const beforeResume = calls.length
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
+    const resumedDeletes = calls.slice(beforeResume).filter(call => call.request.method === "DELETE").map(call => call.name)
+    expect(resumedDeletes).toEqual([
+      expired + "DeviceConfigurations/B.json",
+      expired + "metadata.json",
+      expired + BACKUP_OWNER_FILE,
+    ])
+  })
 })
 
 describe("retention server time", () => {
