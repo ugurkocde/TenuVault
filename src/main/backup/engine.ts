@@ -17,6 +17,7 @@ import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } f
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { RetentionBudget, RetentionBudgetError, RETENTION_LIMITS, type RetentionLimits } from "./retention-budget"
+import { readRetentionProgress, type RetentionProgressStore } from "./retention-progress"
 import { RetentionManifestMismatch, verifyHalf, type VerifiedHalf } from "./retention-verification"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
@@ -137,7 +138,7 @@ export interface BackupEngineDeps {
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
   retentionLimits?: RetentionLimits
-  retentionProgress?: { get(key: string): string | null; set(key: string, prefix: string): void; delete(key: string): void }
+  retentionProgress?: RetentionProgressStore
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -318,7 +319,7 @@ async function tokenOrStop<T>(get: () => Promise<T>, outcome?: RunOutcome): Prom
 }
 
 export class BackupEngine {
-  private readonly retentionCursor = new Map<string, string>()
+  private readonly retentionProgress = new Map<string, string>()
   private readonly jobs = new Map<string, BackupJob>()
   private readonly running = new Map<string, { job: BackupJob; key: string; mode: BackupAuthMode }>()
   private readonly executions = new Map<string, { controller: AbortController; done: Promise<BackupJob> }>()
@@ -1275,17 +1276,18 @@ export class BackupEngine {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
     } else if (deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
-      const budget = local ? undefined : new RetentionBudget(this.deps.retentionLimits ?? RETENTION_LIMITS)
-      const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork, budget)
+      const limits = local ? undefined : this.deps.retentionLimits ?? RETENTION_LIMITS
+      const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
-        const pending: Array<() => Promise<void>> = []
-        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, budget, mixed, committedLargeManifest)
+        const pending: Array<() => Promise<number>> = []
+        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, limits, mixed, committedLargeManifest)
         let unreadableLarge = 0
         if (mixed && committedLargeManifest) {
-          unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, budget, mixed)
+          unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, limits, mixed)
         }
-        if (unreadableOlder || unreadableLarge) retentionWarnings++
-        else for (const apply of pending) await apply()
+        let deletionWarnings = 0
+        for (const apply of pending) deletionWarnings += await apply()
+        if (unreadableOlder || unreadableLarge || deletionWarnings) retentionWarnings++
       } catch (error) {
         retentionWarnings++
         if (error instanceof RetentionBudgetError) {
@@ -1372,13 +1374,15 @@ export class BackupEngine {
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<void>>, signal: AbortSignal, budget?: RetentionBudget, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<number>>, signal: AbortSignal, limits?: RetentionLimits, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
+    const metered = () => limits ? storage.withBudget(new RetentionBudget(limits)) : storage
+    const discovery = metered()
     // Large discovery lists only root records, not the flat inventory of policy and relationship blobs.
-    const ordinary = isLargeBackup(current) ? { prefixes: [] } : await storage.list("backup-", "/")
-    const large = isLargeBackup(current) ? await storage.list("backup-large-", "/", LARGE_BACKUP_CONTAINER, true) : { blobs: [], prefixes: [] }
+    const ordinary = isLargeBackup(current) ? { prefixes: [] } : await discovery.list("backup-", "/")
+    const large = isLargeBackup(current) ? await discovery.list("backup-large-", "/", LARGE_BACKUP_CONTAINER, true) : { blobs: [], prefixes: [] }
     const largePrefixes = [...new Set([...large.prefixes, ...large.blobs.map(name => `${name.split("/")[0]}/`)])].filter(isLargeBackup)
     const prefixes = [...ordinary.prefixes, ...largePrefixes]
     const allBackups = [...new Set(prefixes)]
@@ -1392,44 +1396,70 @@ export class BackupEngine {
       .sort((a, b) => b.time - a.time)
 
     const cursorKey = `${job.tenantId}/${job.storageAccountName}/${isLargeBackup(current)}`
-    const cursor = this.deps.retentionProgress?.get(cursorKey) ?? this.retentionCursor.get(cursorKey)
-    const after = cursor ? allBackups.findIndex(backup => backup.prefix < cursor) : 0
+    const persisted = this.deps.retentionProgress
+    let savedProgress = persisted?.get(cursorKey) ?? this.retentionProgress.get(cursorKey)
+    const state = readRetentionProgress(savedProgress)
+    const saveProgress = () => {
+      if (!limits) return
+      const value = JSON.stringify(state)
+      if (value === savedProgress) return
+      if (value === '{"reviews":{}}') {
+        this.retentionProgress.delete(cursorKey)
+        if (savedProgress) persisted?.delete(cursorKey)
+        savedProgress = undefined
+      } else {
+        this.retentionProgress.set(cursorKey, value)
+        persisted?.set(cursorKey, value)
+        savedProgress = value
+      }
+    }
+    const advance = () => {
+      if (start + limit < allBackups.length) state.cursor = backups.at(-1)?.prefix
+      else delete state.cursor
+      if (state.cursor) this.write(job, "Retention will continue reviewing older backups on the next run.", "info")
+      saveProgress()
+    }
+    const after = state.cursor ? allBackups.findIndex(backup => backup.prefix < state.cursor!) : 0
     const start = after < 0 ? 0 : after
-    const limit = !budget ? allBackups.length : !mixed ? budget.limits.candidates : isLargeBackup(current) ? Math.floor(budget.limits.candidates / 2) : Math.ceil(budget.limits.candidates / 2)
+    const limit = !limits ? allBackups.length : !mixed ? limits.candidates : isLargeBackup(current) ? Math.floor(limits.candidates / 2) : Math.ceil(limits.candidates / 2)
     const backups = allBackups.slice(start, start + limit)
-    let lastProcessed: string | undefined
-    let reviewing: string | undefined
-    let deferred = start + limit < allBackups.length
 
     if (!backups.length) return 0
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
     const owners: Array<{ metadata: Record<string, unknown> | null; owner: "this" | "other" | "untagged"; claim?: OwnershipFile } | null> = Array.from({ length: backups.length }, () => null)
+    const review = (prefix: string) => state.reviews[prefix] ??= { files: {}, attempts: 0 }
+    const noteRepeatedFailure = (prefix: string) => {
+      const progress = review(prefix)
+      progress.attempts++
+      if (progress.attempts >= 3) this.write(job, `Retention has repeatedly kept backup ${prefix} because it could not finish verification. Review its storage and the backup log.`, "warning")
+    }
     const unreadable = new Set<number>()
     let unreadableReason = ""
-    // Metadata or a marker that cannot be opened (an Azure backup sealed by an earlier version with a
-    // key this device lacks, a local file with a wrong key or damage, JSON that is not an object) or
-    // a local backup made unavailable by damaged files is unreadable, so retention keeps the whole set.
-    const readFile = async (name: string): Promise<OwnershipFile> => {
+    // Unknown ownership makes the container shared. Only explicitly owned candidates can still be removed.
+    const readFile = async (writer: BlobWriter, name: string): Promise<OwnershipFile> => {
       try {
-        const value = await storage.readJson(name)
+        const value = await writer.readJson(name)
         return value === null ? { kind: "missing" } : { kind: "found", value }
       } catch (error) {
-        if (error instanceof RetentionBudgetError || !(error instanceof FetchApplicationError)) throw error
+        signal.throwIfAborted()
+        if (error instanceof RequestTimeoutError || error instanceof InventoryDamagedError || !(error instanceof FetchApplicationError || error instanceof StorageError)) throw error
         return { kind: "unreadable", error }
       }
     }
+    const candidateWriters = backups.map(metered)
     await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
       let claim: OwnershipFile | undefined
       const { manifest, owner } = await resolveBackupOwnership(async (file) => {
-        const read = await readFile(`${backup.prefix}${file}`)
+        const read = await readFile(candidateWriters[index]!, `${backup.prefix}${file}`)
         if (file === BACKUP_OWNER_FILE) claim = read
         return read
       }, tenant)
       const failure = manifest.kind === "unreadable" ? manifest.error : owner.kind === "unreadable" ? owner.error : null
       if (failure !== null) {
         unreadable.add(index)
+        noteRepeatedFailure(backup.prefix)
         unreadableReason ||= failure instanceof Error ? failure.message : String(failure)
         return
       }
@@ -1442,19 +1472,35 @@ export class BackupEngine {
     }, signal)
     if (unreadable.size > 0) {
       this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. Older backups were left in place.`, "warning")
+    }
+    if (unreadable.size === backups.length) {
+      advance()
       return unreadable.size
     }
-    const shared = backups.length !== allBackups.length || owners.some(entry => entry?.owner === "other")
+    const shared = unreadable.size > 0 || backups.length !== allBackups.length || owners.some(entry => entry?.owner === "other")
 
-    const currentManifest = written ?? await storage.readJson(`${current}/metadata.json`)
+    // The latest backup is the reference for all candidates and has its own request and job budgets.
+    const reference = () => limits ? storage.withBudget(new RetentionBudget({ ...limits, bytes: Infinity })) : storage
+    const latest = reference()
+    const currentManifest = written ?? await latest.readJson(`${current}/metadata.json`)
     if (!currentManifest) throw new Error("The latest backup has no readable manifest")
-    await verifyHalf(storage, `${current}/`, currentManifest)
     const covered = completeFolders(currentManifest)
     const currentCompanion = currentManifest.CompanionBackup
-    if (typeof currentCompanion === "string" && isLargeBackup(currentCompanion) && writtenCompanion && completeHalf(writtenCompanion)) {
-      if (!matchingCompanions(current, currentManifest, currentCompanion, writtenCompanion)) throw new Error("The latest backup's companion does not match")
-      await verifyHalf(storage, `${currentCompanion}/`, writtenCompanion)
-      for (const folder of completeFolders(writtenCompanion)) covered.add(folder)
+    try {
+      await verifyHalf(latest, `${current}/`, currentManifest)
+      if (typeof currentCompanion === "string" && isLargeBackup(currentCompanion) && writtenCompanion && completeHalf(writtenCompanion)) {
+        if (!matchingCompanions(current, currentManifest, currentCompanion, writtenCompanion)) throw new Error("The latest backup's companion does not match")
+        await verifyHalf(reference(), `${currentCompanion}/`, writtenCompanion)
+        for (const folder of completeFolders(writtenCompanion)) covered.add(folder)
+      }
+      delete state.latestAttempts
+    } catch (error) {
+      if (error instanceof RetentionBudgetError) {
+        state.latestAttempts = (state.latestAttempts ?? 0) + 1
+        saveProgress()
+        if (state.latestAttempts >= 3) this.write(job, "Retention repeatedly reached its verification budget for the newest backup. Review storage size and the backup log. Older backups are kept.", "warning")
+      }
+      throw error
     }
 
     // Types no newer backup holds yet, walking from the newest backup to the oldest.
@@ -1463,26 +1509,34 @@ export class BackupEngine {
     let kept = 0
     let unowned = 0
     let protectedKept = 0
-    let unverified = 0
-    const plan: Array<{ halves: VerifiedHalf[]; prefixes: string[]; remnant: boolean }> = []
-    const verify = async (prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) => {
-      try { return await verifyHalf(storage, prefix, manifest, listing, expectedOwner) }
-      catch (error) {
-        signal.throwIfAborted()
-        if (error instanceof RetentionManifestMismatch || error instanceof RetentionBudgetError || error instanceof RequestTimeoutError || error instanceof InventoryDamagedError) throw error
-        unverified++
-        this.write(job, `Kept backup ${prefix} because a file could not be verified: ${error instanceof Error ? error.message : String(error)}`, "warning")
-        return null
-      }
+    let unverified = unreadable.size
+    const plan: Array<{ halves: VerifiedHalf[]; prefixes: string[]; remnant: boolean; writer: BlobWriter }> = []
+    const keptForReview = (prefix: string, error: unknown) => {
+      signal.throwIfAborted()
+      if (error instanceof RetentionManifestMismatch || error instanceof RequestTimeoutError || error instanceof InventoryDamagedError) throw error
+      unverified++
+      noteRepeatedFailure(prefix)
+      const reason = error instanceof Error ? error.message : String(error)
+      const budgetReached = error instanceof RetentionBudgetError
+      this.write(job, budgetReached ? `Kept backup ${prefix} because retention reached its storage budget while reviewing it.`
+        : `Kept backup ${prefix} because a file could not be verified: ${reason}`, "warning")
+    }
+    const verify = (writer: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) =>
+      verifyHalf(writer, prefix, manifest, listing, expectedOwner, limits ? review(prefix) : undefined)
+    const deletionWriter = (count: number) => {
+      if (!limits) return storage
+      const budget = new RetentionBudget(limits)
+      budget.reserveDeletes(count)
+      return storage.withBudget(budget)
     }
     const remnants = { deleted: 0, deletedBytes: 0, kept: 0, keptBytes: 0, unowned: 0, unownedBytes: 0 }
     const reportRemnants = () => {
       if (remnants.deleted || remnants.kept || remnants.unowned) this.write(job, `Remnant cleanup: deleted ${remnants.deleted} halves (${remnants.deletedBytes} bytes); kept ${remnants.kept} owned halves (${remnants.keptBytes} bytes) for recovery or storage protection; kept ${remnants.unowned} unverified halves (${remnants.unownedBytes} bytes) for manual review. Recovery grace is ${REMNANT_RECOVERY_DAYS} days after the ${days}-day retention period.`, remnants.unowned ? "warning" : "info")
     }
-    try {
-      for (const [index, backup] of backups.entries()) {
-        lastProcessed = backups[index - 1]?.prefix
-        reviewing = backup.prefix
+    for (const [index, backup] of backups.entries()) {
+      if (unreadable.has(index)) continue
+      const writer = candidateWriters[index]!
+      try {
         const entry = owners[index]
         const metadata = entry?.metadata
         let companion: Record<string, unknown> | null = null
@@ -1490,8 +1544,7 @@ export class BackupEngine {
         const paired = companionId !== undefined || metadata?.LargeBackupOutcomes !== undefined
         let validPair = false
         if (paired && typeof companionId === "string" && isBackupName(companionId) && isLargeBackup(companionId) !== isLargeBackup(backup.prefix)) {
-          try { companion = await storage.readJson(`${companionId}/metadata.json`) }
-          catch (error) { if (error instanceof RetentionBudgetError) throw error; unverified++; this.write(job, `Kept mixed backup ${backup.prefix}: its companion is unreadable.`, "warning"); continue }
+          companion = await writer.readJson(`${companionId}/metadata.json`)
           validPair = matchingCompanions(backup.prefix.slice(0, -1), metadata!, companionId, companion) && completeHalf(metadata) && completeHalf(companion)
         }
         // Older standalone manifests did not record Coverage, but successful complete indexes
@@ -1501,16 +1554,16 @@ export class BackupEngine {
           && Object.values(metadata.LargeItems ?? {}).every((index: any) => index.complete === true)
         const remnant = !metadata || (paired && !validPair) || (isLargeBackup(backup.prefix) && !standaloneComplete)
         if (remnant) {
-          const marker = entry?.claim ?? await readFile(`${backup.prefix}${BACKUP_OWNER_FILE}`)
+          const marker = entry?.claim ?? await readFile(writer, `${backup.prefix}${BACKUP_OWNER_FILE}`)
           const claim = marker.kind === "found" ? marker.value as Record<string, unknown> : null
           const owned = ownedRemnant(backup.prefix.slice(0, -1), tenant, claim, metadata)
-          const listing = await storage.listFolder(backup.prefix)
+          const listing = await writer.listFolder(backup.prefix)
           const bytes = [...listing.sizes.values()].reduce((sum, size) => sum + size, 0)
           const id = backup.prefix.slice(0, -1)
           const linked = claim?.CompanionBackup ?? metadata?.CompanionBackup
           let modern = isLargeBackup(id) || (typeof linked === "string" && isLargeBackup(linked) && isBackupName(linked))
           if (owned && !modern && listing.blobs.includes(`${backup.prefix}${BACKUP_RUN_RECORD_FILE}`)) {
-            const record = await readFile(`${backup.prefix}${BACKUP_RUN_RECORD_FILE}`)
+            const record = await readFile(writer, `${backup.prefix}${BACKUP_RUN_RECORD_FILE}`)
             if (record.kind === "found") {
               const value = record.value as Record<string, unknown>
               modern = value.BackupFolder === id && value.RunId === claim?.RunId
@@ -1523,12 +1576,12 @@ export class BackupEngine {
           const providesCoverage = [...completeFolders(metadata)].filter(folder => uncovered.has(folder))
           const inGrace = backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000
           // An unfinished half cannot replace a complete backup.
-          const verified = !inGrace && !providesCoverage.length ? await verify(backup.prefix, metadata ?? null, listing, marker) : null
+          const verified = !inGrace && !providesCoverage.length ? await verify(writer, backup.prefix, metadata ?? null, listing, marker) : null
           if (!verified || [...verified.counts.keys()].some(folder => uncovered.has(folder) || !typeForFolder(folder))) {
             remnants.kept++; remnants.keptBytes += bytes; continue
           }
-          budget?.reserveDeletes(verified.blobs.size)
-          plan.push({ halves: [verified], prefixes: [backup.prefix], remnant: true })
+          review(backup.prefix).attempts = 0
+          plan.push({ halves: [verified], prefixes: [backup.prefix], remnant: true, writer: deletionWriter(verified.blobs.size) })
           continue
         }
         if (!metadata || !entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
@@ -1552,9 +1605,9 @@ export class BackupEngine {
           Date.parse(parseBackupName(String(companionId))!.timestamp) < cutoff
           && [...restorableFolders(companion!)].every(folder => covered.has(folder))
         ))
-        const verified = await verify(backup.prefix, metadata, undefined, entry.claim)
-        const other = companion && await verify(`${companionId}/`, companion)
-        if (!verified || (companion && !other)) continue
+        const verified = await verify(writer, backup.prefix, metadata, undefined, entry.claim)
+        const other = companion && await verify(metered(), `${companionId}/`, companion)
+        if (limits) review(backup.prefix).attempts = 0
         const coverage = providesCoverage.filter(folder => {
           const inventory = other && companion && restorableFolders(companion).has(folder) ? companion : metadata
           return inventory.Items !== undefined || inventory.ItemCounts !== undefined || inventory.LargeItems !== undefined || Array.isArray(inventory.Outcomes)
@@ -1566,27 +1619,17 @@ export class BackupEngine {
           kept++
           continue
         }
-        budget?.reserveDeletes(verified.blobs.size + (other ? other.blobs.size : 0))
-        plan.push({ halves: other ? [verified, other] : [verified], prefixes: other ? [backup.prefix, `${companionId}/`] : [backup.prefix], remnant: false })
+        plan.push({ halves: other ? [verified, other] : [verified], prefixes: other ? [backup.prefix, `${companionId}/`] : [backup.prefix],
+          remnant: false, writer: deletionWriter(verified.blobs.size + (other ? other.blobs.size : 0)) })
+      } catch (error) {
+        keptForReview(backup.prefix, error)
       }
-      lastProcessed = backups.at(-1)?.prefix
-    } catch (error) {
-      if (!(error instanceof RetentionBudgetError)) { reportRemnants(); throw error }
-      if (!lastProcessed) {
-        if (!reviewing) throw error
-        // An oversized candidate must not permanently block later candidates. It stays
-        // intact and is reconsidered after the review reaches the end of the listing.
-        this.write(job, `Kept backup ${reviewing} because retention reached its storage budget while reviewing it.`, "warning")
-        lastProcessed = reviewing
-      }
-      deferred = true
-    }
-    if (unverified) {
-      reportRemnants()
-      return unverified
     }
 
+    // Another half may still detect a manifest mismatch and veto this run's removals.
+    saveProgress()
     pending.push(async () => {
+      let warnings = 0
       for (const unit of plan) {
         const verified = new Map(unit.halves.flatMap(half => [...half.blobs]))
         const size = (name: string) => unit.halves.reduce((sum, half) => sum + (half.listing.sizes.get(name) ?? 0), 0)
@@ -1596,7 +1639,7 @@ export class BackupEngine {
         let deleted = 0
         let remaining = names.reduce((sum, name) => sum + size(name), 0)
         const remove = async (name: string) => {
-          await storage.delete(name, verified.get(name)!)
+          await unit.writer.delete(name, verified.get(name)!)
           deleted++
           if (unit.remnant) { remaining -= size(name); remnants.deletedBytes += size(name) }
         }
@@ -1609,30 +1652,24 @@ export class BackupEngine {
           await pool(names.filter(name => !manifests.has(name) && !markers.has(name)), 4, remove, signal)
           if (!localStorage) for (const name of manifestNames) await remove(name)
           for (const name of names.filter(name => markers.has(name))) await remove(name)
+          for (const prefix of unit.prefixes) delete state.reviews[prefix]
           if (unit.remnant) remnants.deleted++
           else removed++
         } catch (error) {
           if (deleted) {
+            warnings++
             this.write(job, `Retention partly removed ${unit.prefixes.join(", ")}. Remaining files were kept for recovery.`, "warning")
           }
           if (!(error instanceof ProtectedBlobError) && !(error instanceof DeleteConditionError)) throw error
           if (error instanceof DeleteConditionError) {
+            warnings++
             this.write(job, `Kept the remaining files in ${unit.prefixes.join(", ")} because a file changed during retention: ${error.message}`, "warning")
           }
           if (unit.remnant) { remnants.kept++; remnants.keptBytes += remaining }
           else if (error instanceof ProtectedBlobError) protectedKept++
         }
       }
-      if (budget) {
-        if (deferred && lastProcessed) {
-          this.retentionCursor.set(cursorKey, lastProcessed)
-          this.deps.retentionProgress?.set(cursorKey, lastProcessed)
-        } else {
-          this.retentionCursor.delete(cursorKey)
-          this.deps.retentionProgress?.delete(cursorKey)
-        }
-        if (deferred) this.write(job, "Retention will continue reviewing older backups on the next run.", "info")
-      }
+      advance()
       reportRemnants()
       if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
       if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
@@ -1640,8 +1677,9 @@ export class BackupEngine {
         this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.`, "info")
       }
       if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
+      return warnings
     })
-    return 0
+    return unverified
   }
 
   /** Adds a line to the log, in local time; a level also lists it among the run's notices. */

@@ -569,7 +569,7 @@ describe("backup request recovery", () => {
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const deletes = fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")
     expect(deletes).toHaveLength(failure === "delete" ? 3 : 0)
-    expect(deletes.every(([input]) => new URL(String(input)).pathname === oldManifest)).toBe(true)
+    expect(deletes.every(([input]) => new URL(String(input)).pathname === oldPolicy)).toBe(true)
     const calls = fetchImpl.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
     expect(fetchImpl.mock.calls).toHaveLength(calls)

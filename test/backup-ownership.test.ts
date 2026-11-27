@@ -1,5 +1,6 @@
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { createHash } from "node:crypto"
+import type { RetentionProgressStore } from "../src/main/backup/retention-progress"
 import type { RetentionLimits } from "../src/main/backup/retention-budget"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
@@ -32,11 +33,12 @@ const sha256 = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const items = { "DeviceConfigurations/old": { file: "Old.json", sha256: sha256(oldPolicy) } }
 const completeManifest = { TenantId: TENANT, Status: "Success", Items: items, Scope: { Included: ["DeviceConfigurations"] } }
 
-function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; progress?: RetentionProgressStore; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
   vi.useFakeTimers()
   vi.setSystemTime(now)
   const saved = new Map<string, Buffer>()
   const calls: Array<{ name: string; request: Request }> = []
+  const etag = (name: string) => options.progress && saved.has(name) ? `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"` : '"fixture"'
   const wireFetch: typeof fetch = async (input, init) => {
     const sent = new Request(input, init), url = new URL(sent.url)
     const name = decodeURIComponent(url.pathname.slice("/intune-backups/".length))
@@ -53,7 +55,7 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
       const names = [...saved.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
       const entries = url.searchParams.has("delimiter")
         ? [...new Set(names.map(name => `${name.split("/")[0]}/`))].map(name => `<BlobPrefix><Name>${name}</Name></BlobPrefix>`)
-        : names.map(name => `<Blob><Name>${name}</Name></Blob>`)
+        : names.map(name => `<Blob><Name>${name}</Name><Properties><Etag>${etag(name)}</Etag></Properties></Blob>`)
       return new Response(`<Blobs>${entries.join("")}</Blobs>`)
     }
     if (sent.method === "PUT") {
@@ -64,11 +66,13 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
       saved.delete(name)
       return new Response(null, { status: 202 })
     }
-    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: { etag: '"fixture"' } })
+    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: { etag: etag(name) } })
   }
   registerStorageToken("token", TENANT)
   const fetch = legacyAzureReader(wireFetch, () => [master])
-  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30, retentionLimits: options.limits })
+  const createEngine = () => new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" },
+    retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, retentionProgress: options.progress })
+  const engine = createEngine()
   /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
   function seed(name: string, value: unknown, sealed = false, key = master) {
     const body = Buffer.from(typeof value === "string" ? value : JSON.stringify(value))
@@ -78,7 +82,7 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
     seed(`${prefix}DeviceConfigurations/Old.json`, oldPolicy, sealed)
     if (marker !== null) seed(`${prefix}${BACKUP_OWNER_FILE}`, marker, sealed)
   }
-  return { engine, fetch, saved, calls, seed, folder }
+  return { engine, createEngine, fetch, saved, calls, seed, folder }
 }
 
 async function complete(engine: BackupEngine, scope = request.scope) {
@@ -194,7 +198,7 @@ describe("backup folder ownership", () => {
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
   })
 
-  it("keeps all backups when a legacy backup cannot be opened", async () => {
+  it("keeps just the unreadable legacy backup when the other backups can be verified", async () => {
     const { engine, saved, seed, folder } = setup()
     const plain = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/", unopenable = "backup-2026-08-03-020000/"
     const manifest = { TenantId: TENANT, Status: "Success", Items: items, Scope: { Excluded: request.scope.excluded } }
@@ -204,9 +208,9 @@ describe("backup folder ownership", () => {
     seed(`${legacy}metadata.json`, manifest, true)
     folder(unopenable, owner, true)
     seed(`${unopenable}metadata.json`, manifest, true, Buffer.alloc(32, 9))
-    const kept = [...saved.entries()]
+    const kept = [...saved.entries()].filter(([name]) => name.startsWith(unopenable))
     const job = await complete(engine)
-    expect([...saved.keys()].some(name => name.startsWith(plain) || name.startsWith(legacy))).toBe(true)
+    expect([...saved.keys()].some(name => name.startsWith(plain) || name.startsWith(legacy))).toBe(false)
     for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
     expect(job.log.join("\n")).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. Older backups were left in place.`)
   })
@@ -271,7 +275,7 @@ describe("backup folder ownership", () => {
     expect(saved.has(`${abandoned}${BACKUP_OWNER_FILE}`)).toBe(true)
   })
 
-  it("keeps an untagged backup whose marker is oversized and stops retention at the cap", async () => {
+  it("keeps an untagged backup whose marker is oversized and reviews other candidates", async () => {
     const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
     const oversized = "backup-2026-08-01-020000/", ours = "backup-2026-08-02-020000/"
     const { engine, saved, seed, folder } = setup({ override: (url, sent) => sent.method === "GET" && url.pathname.endsWith(`${oversized}${BACKUP_OWNER_FILE}`) ? new Response(big.body) : undefined })
@@ -281,7 +285,7 @@ describe("backup folder ownership", () => {
     folder(ours)
     const job = await complete(engine)
     expect(saved.has(`${oversized}metadata.json`)).toBe(true)
-    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(true)
+    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
     expect(job.log.join("\n")).toContain("is larger than the 32 MiB TenuVault reads")
     expect(big.pulled()).toBeLessThan(40)
   })
@@ -403,13 +407,13 @@ describe("verified retention coverage", () => {
       const body = condition === "damaged" ? "{ malformed" : condition === "hash mismatch" ? { id: "old", changed: true } : oldPolicy
       seed(`${newer}DeviceConfigurations/Old.json`, body)
     }
-    // Even when the current run independently covers the type, failed verification stops the whole pass.
+    // A failed read supplies no coverage. Independent current coverage still permits cleanup.
     const scope = condition === "damaged" ? request.scope : { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) }
     const job = await complete(engine, scope)
-    expect(saved.has(`${older}metadata.json`)).toBe(condition !== "valid")
+    expect(saved.has(`${older}metadata.json`)).toBe(!["valid", "damaged"].includes(condition))
     expect(saved.has(`${newer}metadata.json`)).toBe(true)
     const deletes = calls.filter(call => call.request.method === "DELETE")
-    if (condition === "valid") expect(deletes.map(call => call.name)).toEqual([`${older}DeviceConfigurations/Old.json`, `${older}metadata.json`, `${older}${BACKUP_OWNER_FILE}`])
+    if (["valid", "damaged"].includes(condition)) expect(deletes.map(call => call.name)).toEqual([`${older}DeviceConfigurations/Old.json`, `${older}metadata.json`, `${older}${BACKUP_OWNER_FILE}`])
     else {
       expect(deletes).toEqual([])
       expect(job.log.join("\n")).toContain("could not be verified")
@@ -424,7 +428,7 @@ describe("verified retention coverage", () => {
     seed(`${older}metadata.json`, completeManifest)
     const job = await complete(engine)
     const reads = calls.filter(call => ["GET", "DELETE"].includes(call.request.method) && new URL(call.request.url).hostname !== "graph.microsoft.com")
-    expect(reads.length).toBeLessThanOrEqual(limits.requests)
+    expect(reads.filter(call => call.name.startsWith(older)).length).toBeLessThanOrEqual(limits.requests)
     expect(job.log.join("\n")).toContain("reached its storage budget")
     expect(saved.has(`${older}metadata.json`)).toBe(true)
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
@@ -440,15 +444,46 @@ describe("verified retention coverage", () => {
     seed(`${oversized}metadata.json`, { ...completeManifest, Items: { "DeviceConfigurations/old": { file: "Old.json", sha256: sha256(bigPolicy) } } })
     const first = await complete(engine)
     expect(first.log.join("\n")).toContain(`Kept backup ${oversized} because retention reached its storage budget`)
-    expect(saved.has(`${older}metadata.json`)).toBe(true)
-    await vi.advanceTimersByTimeAsync(1000)
-    await complete(engine)
-    expect(saved.has(`${oversized}metadata.json`)).toBe(true)
     expect(saved.has(`${older}metadata.json`)).toBe(false)
+    for (let run = 2; run <= 3; run++) {
+      await vi.advanceTimersByTimeAsync(1000)
+      const job = await complete(engine)
+      expect(job.log.join("\n").includes("Retention has repeatedly kept")).toBe(run === 3)
+    }
+    expect(saved.has(`${oversized}metadata.json`)).toBe(true)
   })
 
-  it.each(["candidate", "request"])("continues with the next candidate after a %s limit", async limit => {
-    const { engine, saved, calls, seed, folder } = setup({ limits: { candidates: limit === "candidate" ? 1 : 8, requests: limit === "request" ? 25 : 100, bytes: 100_000 } })
+  it.each([false, true])("resumes a byte-limited verification after restart and rechecks changed ETags (%s)", async changed => {
+    const values = new Map<string, string>()
+    const progress = { get: (key: string) => values.get(key) ?? null, set: (key: string, value: string) => { values.set(key, value) },
+      delete: (key: string) => { values.delete(key) } }
+    const { engine, createEngine, saved, calls, seed, folder } = setup({ progress, limits: { candidates: 8, requests: 100, bytes: 13_000 } })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    const first = { id: "first", description: "a".repeat(8_000) }
+    const second = { id: "second", description: "b".repeat(8_000) }
+    const firstPath = `${older}DeviceConfigurations/First.json`
+    const secondPath = `${older}DeviceConfigurations/Second.json`
+    saved.delete(`${older}DeviceConfigurations/Old.json`)
+    seed(firstPath, first)
+    seed(secondPath, second)
+    seed(`${older}metadata.json`, { ...completeManifest, Items: {
+      "DeviceConfigurations/first": { file: "First.json", hash: snapshotHash(first) },
+      "DeviceConfigurations/second": { file: "Second.json", hash: snapshotHash(second) },
+    } })
+    expect((await complete(engine)).log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    if (changed) seed(firstPath, { ...first, description: "changed" })
+    calls.length = 0
+    await vi.advanceTimersByTimeAsync(1000)
+    const resumed = await complete(createEngine())
+    expect(saved.has(`${older}metadata.json`)).toBe(changed)
+    expect(calls.some(call => call.name === firstPath && call.request.method === "GET")).toBe(changed)
+    if (changed) expect(resumed.log.join("\n")).toContain("does not match its manifest")
+  })
+
+  it("continues with the next candidate after reaching the candidate limit", async () => {
+    const { engine, saved, calls, seed, folder } = setup({ limits: { candidates: 1, requests: 25, bytes: 100_000 } })
     const older = "backup-2026-08-01-020000/", newer = "backup-2026-09-01-020000/"
     for (const prefix of [older, newer]) {
       folder(prefix)
@@ -458,7 +493,7 @@ describe("verified retention coverage", () => {
     expect(first.log.join("\n")).toContain("will continue reviewing older backups")
     expect(saved.has(`${newer}metadata.json`)).toBe(false)
     expect(saved.has(`${older}metadata.json`)).toBe(true)
-    if (limit === "candidate") expect(calls.some(call => call.name === `${older}metadata.json` && call.request.method === "GET")).toBe(false)
+    expect(calls.some(call => call.name === `${older}metadata.json` && call.request.method === "GET")).toBe(false)
     await vi.advanceTimersByTimeAsync(1000)
     await complete(engine)
     expect(saved.has(`${older}metadata.json`)).toBe(false)
