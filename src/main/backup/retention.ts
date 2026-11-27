@@ -5,6 +5,7 @@ import { resolveBackupOwnership } from "../../shared/backup-ownership"
 import { FetchApplicationError, FetchPreconditionError } from "../api/network-error"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { BlobLeaseError, wasDeleteConfirmedUnchanged, type BlobWriter, type RetentionBlob } from "./blob-writer"
+import { createRetentionLeaseManager, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
 import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "./retention-budget"
 import { DAY_MS, HOUR_MS, RetentionClockError } from "./retention-clock"
 import { readRetentionProgress, type DeletionJournalEntry, type RetentionProgressStore } from "./retention-progress"
@@ -12,8 +13,6 @@ import { RetentionVerificationError, checkOwner, manifestTypes, matchesJournalTy
 import { DeleteConditionError, InventoryDamagedError, ProtectedBlobError, StorageError } from "./request"
 
 const UNREADABLE_ATTEMPTS = 3
-const LEASE_DURATION_SECONDS = 60
-const LEASE_RENEW_MS = 30_000
 
 function isCandidateUnreadable(error: unknown): boolean {
   if (error instanceof RetentionVerificationError) return true
@@ -90,7 +89,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   const key = `${tenant}/${run.account}`
   const rawProgress = run.progress.get(key)
   const state = readRetentionProgress(rawProgress)
-  if (rawProgress && !state.cursor && !state.latest && !state.latestAttempts && !Object.keys(state.reviews).length && !state.deletes) {
+  if (rawProgress && !state.cursor && !state.latest && !state.latestAttempts && !state.leaseFailures && !Object.keys(state.reviews).length && !state.deletes) {
     run.progress.delete(key)
   }
   const latestPrefix = `${current}/`
@@ -106,7 +105,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       for (const prefix of Object.keys(state.deletes)) if (!existing.has(prefix)) delete state.deletes[prefix]
       if (!Object.keys(state.deletes).length) delete state.deletes
     }
-    if (!state.cursor && !state.latest && !state.latestAttempts && !Object.keys(state.reviews).length && !state.deletes) run.progress.delete(key)
+    if (!state.cursor && !state.latest && !state.latestAttempts && !state.leaseFailures && !Object.keys(state.reviews).length && !state.deletes) run.progress.delete(key)
     else run.progress.set(key, JSON.stringify(state))
   }
   const advance = (prefix: string | undefined) => {
@@ -705,65 +704,32 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     })
   }
 
-  const startRenewal = (renew: () => Promise<void>) => {
-    let renewedAt = Date.now()
-    let renewError: unknown
-    let activeRenew: Promise<void> | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let stopped = false
-    const runRenew = async () => {
-      await renew()
-      renewedAt = Date.now()
-    }
-    const schedule = () => {
-      if (stopped) return
-      timer = setTimeout(() => {
-        if (stopped || activeRenew || renewError) return
-        const pending = runRenew()
-        activeRenew = pending
-        void pending.then(
-          () => { if (activeRenew === pending) activeRenew = undefined; schedule() },
-          error => { renewError = error; if (activeRenew === pending) activeRenew = undefined },
-        )
-      }, LEASE_RENEW_MS)
-      timer.unref?.()
-    }
-    schedule()
-    return {
-      async ensureFresh() {
-        if (renewError) throw renewError
-        if (activeRenew) await activeRenew
-        if (renewError) throw renewError
-        if (Date.now() - renewedAt >= LEASE_RENEW_MS) {
-          const pending = runRenew()
-          activeRenew = pending
-          try { await pending }
-          catch (error) { renewError = error; throw error }
-          finally { if (activeRenew === pending) activeRenew = undefined }
-        }
-      },
-      async stop() {
-        stopped = true
-        if (timer) clearTimeout(timer)
-        if (activeRenew) await activeRenew.catch(() => undefined)
-      },
-    }
-  }
-
   let removed = 0
   let completedPlan = true
+  let leaseAcquiredThisRun = false
+  let leaseFailureKeyThisRun: string | undefined
+  let hadLeaseAcquireFailure = false
   for (const { prefix, identities, types, noTypes, untagged, replacements, resumed } of plan) {
     if (prefix === latestPrefix || prefix === anchorPrefix) continue
     run.beforeDelete()
-    const leases: Array<{ name: string; leaseId: string }> = []
-    let localLockId: string | undefined
+    const leaseManager = createRetentionLeaseManager()
     let stopCleanup = false
     try {
       if (local) {
         try {
-          localLockId = await budget.withCleanup(() => storage.acquireContainerLease(LEASE_DURATION_SECONDS))
+          const startedAt = Date.now()
+          const localLockId = await budget.withCleanup(() => storage.acquireContainerLease(LEASE_DURATION_SECONDS))
+          leaseManager.track({
+            leaseId: localLockId,
+            expiresAt: startedAt + LEASE_DURATION_MS,
+            renew: signal => storage.renewContainerLease(localLockId, LEASE_DURATION_SECONDS, signal),
+            release: signal => storage.releaseContainerLease(localLockId, signal),
+          })
+          leaseAcquiredThisRun = true
         } catch (error) {
           if (!(error instanceof BlobLeaseError)) throw error
+          hadLeaseAcquireFailure = true
+          leaseFailureKeyThisRun ??= leaseFailureKey(true, error)
           warning = true
           const reason = error.message
           notice(`Kept backup ${prefix} because the local retention lock could not be acquired: ${reason.replace(/\.$/, "")}.`, "warning")
@@ -781,12 +747,21 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         try {
           await budget.withCleanup(async () => {
             for (const name of replacementBlobs) {
+              const startedAt = Date.now()
               const leaseId = await storage.acquireLease(name, LEASE_DURATION_SECONDS)
-              leases.push({ name, leaseId })
+              leaseManager.track({
+                leaseId,
+                expiresAt: startedAt + LEASE_DURATION_MS,
+                renew: signal => storage.renewLease(name, leaseId, signal),
+                release: signal => storage.releaseLease(name, leaseId, signal),
+              })
             }
           })
+          leaseAcquiredThisRun = true
         } catch (error) {
           if (!(error instanceof BlobLeaseError)) throw error
+          hadLeaseAcquireFailure = true
+          leaseFailureKeyThisRun ??= leaseFailureKey(false, error)
           warning = true
           const reason = error.message
           notice(`Kept backup ${prefix} because replacement backups could not be leased before deletion: ${reason.replace(/\.$/, "")}.`, "warning")
@@ -794,110 +769,121 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           continue
         }
       }
-      const renewal = startRenewal(async () => {
-        if (local && localLockId) {
-          await storage.renewContainerLease(localLockId, LEASE_DURATION_SECONDS)
-        } else {
-          for (const { name, leaseId } of leases) await storage.renewLease(name, leaseId)
-        }
-      })
       try {
-        // Under the Azure blob leases (or local retention lock), verify every replacement is still intact.
-        const changedReplacement = await checkReplacementsIntact(replacements)
-        if (changedReplacement) {
+        await leaseManager.ensureFresh()
+      } catch (error) {
+        if (!(error instanceof BlobLeaseError)) throw error
+        warning = true
+        notice(`Kept backup ${prefix} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
+        completedPlan = false
+        stopCleanup = true
+        continue
+      }
+      // Under the Azure blob leases (or local retention lock), verify every replacement is still intact.
+      const changedReplacement = await checkReplacementsIntact(replacements)
+      if (changedReplacement) {
+        warning = true
+        notice(`Kept remaining backups because replacement backup ${changedReplacement} changed before deletion.`, "warning")
+        completedPlan = false
+        stopCleanup = true
+        continue
+      }
+      const manifest = prefix + "metadata.json"
+      const marker = prefix + owner
+      const payloads = [...identities.keys()].filter(name => name !== manifest && name !== marker)
+      // Local inventory flags a missing manifest entry as damage. Azure keeps the manifest
+      // until all conditional payload deletes succeed, and both keep ownership until the end.
+      const order = (local ? [manifest, ...payloads, marker] : [...payloads, manifest, marker]).filter(name => identities.has(name))
+      const remaining = Object.fromEntries(order.map(name => [name, identities.get(name)!]))
+      const priorAbsent = state.deletes?.[prefix]?.absent
+      state.deletes ??= {}
+      state.deletes[prefix] = {
+        prefix,
+        remaining,
+        types: [...types],
+        noTypes,
+        untagged,
+        ...(priorAbsent?.length ? { absent: priorAbsent } : {}),
+      }
+      save()
+      let deleted = 0
+      try {
+        for (const name of order) {
+          const etag = identities.get(name)
+          if (etag) {
+            await leaseManager.ensureFresh()
+            if (local) {
+              const changedBeforeDelete = await checkReplacementsIntact(replacements)
+              if (changedBeforeDelete) {
+                if (!deleted && !resumed && state.deletes) {
+                  delete state.deletes[prefix]
+                  if (!Object.keys(state.deletes).length) delete state.deletes
+                }
+                save()
+                warning = true
+                notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because replacement backup ${changedBeforeDelete} changed before deletion.`, "warning")
+                completedPlan = false
+                stopCleanup = true
+                break
+              }
+            }
+            await storage.delete(name, etag)
+            deleted++
+            delete remaining[name]
+            if (!Object.keys(remaining).length && state.deletes) {
+              delete state.deletes[prefix]
+              if (!Object.keys(state.deletes).length) delete state.deletes
+            }
+            save()
+          }
+        }
+        if (stopCleanup) continue
+        if (state.deletes) {
+          delete state.deletes[prefix]
+          if (!Object.keys(state.deletes).length) delete state.deletes
+        }
+        removed++
+        advance(prefix)
+      } catch (error) {
+        if (!deleted && !resumed && (wasDeleteConfirmedUnchanged(error) || error instanceof BlobLeaseError) && state.deletes) {
+          delete state.deletes[prefix]
+          if (!Object.keys(state.deletes).length) delete state.deletes
+        }
+        save()
+        if (error instanceof BlobLeaseError) {
           warning = true
-          notice(`Kept remaining backups because replacement backup ${changedReplacement} changed before deletion.`, "warning")
+          notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
           completedPlan = false
           stopCleanup = true
           continue
         }
-        const manifest = prefix + "metadata.json"
-        const marker = prefix + owner
-        const payloads = [...identities.keys()].filter(name => name !== manifest && name !== marker)
-        // Local inventory flags a missing manifest entry as damage. Azure keeps the manifest
-        // until all conditional payload deletes succeed, and both keep ownership until the end.
-        const order = (local ? [manifest, ...payloads, marker] : [...payloads, manifest, marker]).filter(name => identities.has(name))
-        const remaining = Object.fromEntries(order.map(name => [name, identities.get(name)!]))
-        const priorAbsent = state.deletes?.[prefix]?.absent
-        state.deletes ??= {}
-        state.deletes[prefix] = {
-          prefix,
-          remaining,
-          types: [...types],
-          noTypes,
-          untagged,
-          ...(priorAbsent?.length ? { absent: priorAbsent } : {}),
-        }
-        save()
-        let deleted = 0
-        try {
-          for (const name of order) {
-            const etag = identities.get(name)
-            if (etag) {
-              await renewal.ensureFresh()
-              if (local) {
-                const changedBeforeDelete = await checkReplacementsIntact(replacements)
-                if (changedBeforeDelete) {
-                  if (!deleted && !resumed && state.deletes) {
-                    delete state.deletes[prefix]
-                    if (!Object.keys(state.deletes).length) delete state.deletes
-                  }
-                  save()
-                  warning = true
-                  notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because replacement backup ${changedBeforeDelete} changed before deletion.`, "warning")
-                  completedPlan = false
-                  stopCleanup = true
-                  break
-                }
-              }
-              await storage.delete(name, etag)
-              deleted++
-              delete remaining[name]
-              if (!Object.keys(remaining).length && state.deletes) {
-                delete state.deletes[prefix]
-                if (!Object.keys(state.deletes).length) delete state.deletes
-              }
-              save()
-            }
-          }
-          if (stopCleanup) continue
-          if (state.deletes) {
-            delete state.deletes[prefix]
-            if (!Object.keys(state.deletes).length) delete state.deletes
-          }
-          removed++
-          advance(prefix)
-        } catch (error) {
-          if (!deleted && !resumed && wasDeleteConfirmedUnchanged(error) && state.deletes) {
-            delete state.deletes[prefix]
-            if (!Object.keys(state.deletes).length) delete state.deletes
-          }
-          save()
-          if (error instanceof BlobLeaseError) {
-            warning = true
-            notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
-            completedPlan = false
-            stopCleanup = true
-            continue
-          }
-          if (!(error instanceof DeleteConditionError) && !(error instanceof ProtectedBlobError)) throw error
-          warning = true
-          const reason = error instanceof ProtectedBlobError ? "storage immutability or a legal hold refused deletion" : error.message
-          notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${reason.replace(/\.$/, "")}.`, "warning")
-          advance(prefix)
-        }
-      } finally {
-        await renewal.stop()
+        if (!(error instanceof DeleteConditionError) && !(error instanceof ProtectedBlobError)) throw error
+        warning = true
+        const reason = error instanceof ProtectedBlobError ? "storage immutability or a legal hold refused deletion" : error.message
+        notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${reason.replace(/\.$/, "")}.`, "warning")
+        advance(prefix)
       }
     } finally {
-      if (localLockId) {
-        await storage.releaseContainerLease(localLockId).catch(() => undefined)
-      }
-      for (const { name, leaseId } of leases) {
-        await storage.releaseLease(name, leaseId).catch(() => undefined)
-      }
+      await leaseManager.cleanup()
     }
     if (stopCleanup) break
+  }
+  if (leaseAcquiredThisRun) {
+    if (state.leaseFailures) {
+      delete state.leaseFailures
+      save()
+    }
+  } else if (leaseFailureKeyThisRun) {
+    const count = state.leaseFailures?.key === leaseFailureKeyThisRun ? state.leaseFailures.count + 1 : 1
+    state.leaseFailures = { key: leaseFailureKeyThisRun, count }
+    save()
+    if (count >= PERMANENT_LEASE_FAILURE_RUNS) {
+      warning = true
+      notice(permanentLeaseFailureWarning(local, count), "warning")
+    }
+  } else if (hadLeaseAcquireFailure && state.leaseFailures) {
+    delete state.leaseFailures
+    save()
   }
   if (completedPlan && hasPendingCursor) {
     const hasMore = Boolean(pendingCursor && older.some(backup => backup.prefix < pendingCursor!))

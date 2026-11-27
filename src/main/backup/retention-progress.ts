@@ -23,10 +23,16 @@ export interface DeletionJournalEntry {
   absent?: string[]
 }
 
+export interface LeaseFailureProgress {
+  key: string
+  count: number
+}
+
 export interface RetentionProgress {
   cursor?: string
   latest?: string
   latestAttempts?: number
+  leaseFailures?: LeaseFailureProgress
   reviews: Record<string, VerificationProgress>
   deletes?: Record<string, DeletionJournalEntry>
 }
@@ -79,6 +85,10 @@ function isProgress(state: unknown): state is RetentionProgress {
   if (state.cursor !== undefined && typeof state.cursor !== "string") return false
   if (state.latest !== undefined && typeof state.latest !== "string") return false
   if (state.latestAttempts !== undefined && !isNonNegativeInt(state.latestAttempts)) return false
+  if (state.leaseFailures !== undefined) {
+    if (!isRecord(state.leaseFailures) || typeof state.leaseFailures.key !== "string" || !state.leaseFailures.key
+      || !isNonNegativeInt(state.leaseFailures.count) || state.leaseFailures.count < 1) return false
+  }
   if (!isRecord(state.reviews) || !Object.values(state.reviews).every(isReview)) return false
   if (state.deletes !== undefined && (!isRecord(state.deletes) || !Object.entries(state.deletes).every(([key, entry]) => isDeletionJournal(key, entry)))) return false
   return true

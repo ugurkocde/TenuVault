@@ -572,7 +572,7 @@ describe("damaged local backup files", () => {
       const { root, store } = await setup()
       const otherInstance = new LocalBlobStore(root, [Buffer.alloc(32, 3)])
       await backup(store, OLD)
-      const lockId = await otherInstance.acquireRetentionLock(60_000)
+      const lockId = await otherInstance.acquireRetentionLock(account, CONTAINER, 60_000)
       const graph = () => Response.json({ value: [] })
       const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
@@ -588,14 +588,14 @@ describe("damaged local backup files", () => {
       expect((await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)).toContain(`${OLD}/metadata.json`)
 
       // Once released by the other instance, retention acquires and releases the lock and deletes OLD.
-      await otherInstance.releaseRetentionLock(lockId)
+      await otherInstance.releaseRetentionLock(account, CONTAINER, lockId)
       clock = new Date("2026-09-24T12:00:05Z")
       const unblocked = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
       expect(unblocked.status).toBe("Completed")
       expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
       // Lock file must be cleaned up after retention finishes so another instance can acquire it immediately.
-      const reacquired = await otherInstance.acquireRetentionLock(60_000)
-      await otherInstance.releaseRetentionLock(reacquired)
+      const reacquired = await otherInstance.acquireRetentionLock(account, CONTAINER, 60_000)
+      await otherInstance.releaseRetentionLock(account, CONTAINER, reacquired)
     }
   })
 })
