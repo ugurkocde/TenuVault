@@ -32,7 +32,7 @@ Use copies when you want to inspect an old configuration next to the current one
 
 * The copy's name is the original name with a `[Restored]` prefix, for example `[Restored] Contoso Defender Antivirus`.
 * Without **Restore assignments**, copies are created unassigned, so they do not reach any device until you assign them in Intune.
-* With **Restore assignments** (Pro and MSP), copies get the same groups and filters as in the backup. The review step then warns: "Assigned copies reach devices at their next check-in."
+* With **Restore assignments** (Pro and MSP), copies get the groups and filters verified in Review. The review step then warns: "Assigned copies reach devices at their next check-in."
 * Some objects cannot be copied, only updated in place. Examples are the tenant default enrollment configuration ("This is the tenant default. Restore updates it in place."), the default Company Portal branding ("This is the default branding. Restore updates it in place.") and the tenant-wide compliance policy settings. Use **Replace in place** for those.
 
 Community restores exactly one item at a time, always as an unassigned copy.
@@ -75,7 +75,7 @@ A few properties are handled specially so a replace does not cause side effects:
 
 ## Restore assignments
 
-"Assign restored items to the same groups and filters as in the backup. Without this, copies are created unassigned" (or, when replacing, "current assignments stay as they are").
+With this option off, copies are created unassigned and a replacement keeps its live assignments.
 
 **Restore assignments** is available on Pro and MSP, and applies to every selected item.
 
@@ -86,6 +86,12 @@ TenuVault also takes care of these details:
 * Assignments an item inherited from a policy set are not restored as direct assignments. They come back when you restore the policy set.
 * Enrollment configurations and terms and conditions do not accept exclusion assignments, so exclusions are left out for those types.
 * When the settings match but only the assignments differ, the item is labelled **Skip** with assignments off, and **Overwrite the current version** with assignments on.
+
+### Resolve missing references
+
+In **Review**, check the assignment references for the destination. When a group or filter has been removed or recreated, select an existing replacement and tick **Confirmed**, or tick **Skip assignment** to omit that assignment. If you skip every assignment for an in-place restore, the item keeps its current assignments. Map a missing scope tag to an existing tag or explicitly choose **Default**. Then select **Check assignment references**. A matching name is a suggestion and requires confirmation.
+
+TenuVault checks the references for restorable items before writing any policy. If the app cannot read an original group in the same tenant, Review warns and restore uses the original ID. Replacement groups and cross-tenant mappings require a readable group in the destination. Grant [Group read access](/security/permissions/#group-read-groupmemberreadall) and check the references again if a mapped group is unreadable. With **Restore assignments** on, **Validate backup (no changes)** also checks for missing references against the live tenant. Confirmed mappings are available for the current app session by source and destination. Older backups, and backups made without group read access, may have no group names. You can still choose a replacement by its ID.
 
 ### Types that need assignments reconciled in Intune
 
@@ -158,7 +164,7 @@ On the **Review** step, **Overwrite the current version** lists each property th
 
 ## Where restored items go
 
-By default, items are restored to the tenant selected at the top of **Backup & Restore**. On MSP, **Copy to other tenants instead** sends copies to other connected tenants. Copies to other tenants always use **Create copies**, keep their original names, get the Default scope tag and are never assigned. See [Restore to another tenant](/restore/cross-tenant/).
+By default, items are restored to the tenant selected at the top of **Backup & Restore**. On MSP, **Copy to other tenants instead** sends copies to other connected tenants. Copies to other tenants always use **Create copies** and keep their original names. By default, they use the Default scope tag and arrive unassigned. To include assignments, turn on **Restore assignments** and confirm the group, filter and scope tag mappings for each destination. See [Restore to another tenant](/restore/cross-tenant/).
 
 ## Related pages
 

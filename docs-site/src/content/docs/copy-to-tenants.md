@@ -15,13 +15,11 @@ Open **Copy to Tenants** in the sidebar, directly under **Drift Detection**.
 * It runs only when you start it. Copy to Tenants never runs on its own and never copies back from a target. Later edits in the source reach a target only through a new copy that you review and approve.
 * It remembers which policy in a target each source policy was written to. The next copy of the same policy updates that policy instead of creating another one.
 * It writes nothing for a policy that is already up to date: when neither the source policy nor its copy in the target changed since the last copy, that policy is skipped in that target.
-* It does not copy assignments. New policies are created unassigned, and the assignments of existing policies stay as they are.
+* Assignments are off by default. Turn on **Include assignments** to review and map the source targeting in each destination.
 * It does not copy secret values. Values Intune masks must be set again in each target.
 * It does not delete anything in a target.
 
 Copy to Tenants works like [Dev to Prod](/changes/#dev-to-prod), with more than one target and links between the source and target policies: each target gets its own reviewed change set, backup and rollback, and a failure in one target never stops or undoes another.
-
-Use [Dev to Prod](/changes/#dev-to-prod) to promote assignments and map groups in the destination.
 
 ## What your plan includes
 
@@ -70,6 +68,8 @@ Every other connected tenant shows as a card with its name and domain.
 * On Pro, only the other tenant of your license can be chosen. It shows **Available on Pro**. When the source runs a Pro trial, every other tenant that runs a Pro trial can be chosen in the same way. The other tenants show **MSP** and the note "Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP."
 * A tenant whose plan does not include Copy to Tenants, or that you are not signed in to, cannot be chosen.
 
+To copy assignment targeting, turn on **Include assignments**. This is off by default. With it off, new copies are unassigned and linked policies keep their current assignments. With it on, a linked policy’s current assignments are replaced by the reviewed source assignments.
+
 Click **Review N tenants**. TenuVault plans the copy and reads every target tenant. Nothing is written.
 
 While the plan runs, the review says what is being read, for example **Reading Contoso Lab and 3 target tenants**, with a moving bar. Each target then appears and shows **Checking against the live tenant** until its own check finishes, then its result. A read that takes longer than five seconds shows how long it has been running, for example **Still reading, 12 s**, so a slow tenant does not look stuck.
@@ -78,8 +78,8 @@ While the plan runs, the review says what is being read, for example **Reading C
 
 The review shows one block per target. Each selected policy shows what happens in that target:
 
-* **Create**: the policy does not exist in the target yet, or was never copied to it, and is created unassigned.
-* **Update**: an earlier copy linked this policy, and the linked policy in the target is updated. Its assignments stay as they are.
+* **Create**: the policy does not exist in the target yet, or was never copied to it, and is created in the target.
+* **Update**: an earlier copy linked this policy, and the linked policy in the target is updated. It keeps its assignments unless **Include assignments** is on.
 * **Skip: already up to date**: neither the source policy nor its copy in the target changed since the last copy, and this copy uses the same options for that target as the copy that wrote it (whether assignments are included and the confirmed mappings). Nothing is written for it. If TenuVault cannot read the source to check, or the options differ, the policy is planned as an update instead.
 * **No change**: the policy is updated, but no setting differs from the policy in the target, for example when the target was not read back after an earlier copy and a change there cannot be ruled out. It is written again unchanged.
 * **Blocked**: the policy cannot be copied to this target. The finding below it says why, and nothing is written to that target.
@@ -92,12 +92,18 @@ Warnings show under the policy they concern, for example:
 * **Earlier copy unconfirmed**: an earlier copy of this policy to this target has an unconfirmed result, so copying again may create a second policy. Retry that earlier copy first so TenuVault can check.
 * **Same name**: a policy with the same name already exists in the target, and this copy creates another one. A matching name never links policies. The warning shows once per policy, with the count read from the live tenant.
 * **Secrets**: the policy holds values Intune masks. They are not copied and must be set again in the target.
-* **Assignments not copied**: the source policy has assignments. They are not copied; a new policy is created unassigned and an existing one keeps its assignments.
-* **Default scope tag**: a scope tag of the source policy has no matching tag in the target, so the new policy uses the Default scope tag instead.
+* **Assignments not copied**: **Include assignments** is off. A new policy is created unassigned and an existing one keeps its assignments.
+* **Default scope tag**: with **Include assignments** off, a new policy uses Default when a source scope tag has no matching tag in the target.
 
 A target is left out, with the reason shown in its block, when it could not be planned or read, when a finding blocks it, or when it has no backup storage and you chose to back up first. The other targets are not affected.
 
 When a selected policy holds secrets, tick **I understand that secrets in these policies are not copied and must be set again in each target.** TenuVault then plans the copy again with your acknowledgement. **Approve and copy** stays unavailable until you do.
+
+#### Map assignments and scope tags
+
+With **Include assignments** on, review the mapping table for each target. Search for a destination group by name or object ID, then select the named result. Choose target filters and scope tags from the lists. A unique display-name match is offered as a candidate. If TenuVault cannot read a mapped group, the target is blocked until you grant [Group read access](/security/permissions/#group-read-groupmemberreadall) and review the mappings again. Tick **Confirmed** for each mapping, then select **Review updated mappings**. A target with unresolved assignments is left out. The built-in Default scope tag is portable. New policies can use confirmed scope tag mappings and linked policies keep their existing scope tags.
+
+Confirmed mappings are remembered per source and target tenant for the current app session. Include and exclude targeting and filter intent are carried over as reviewed. Only direct assignments are copied.
 
 #### Backup before changes
 
@@ -178,7 +184,7 @@ If the linked policy was deleted in the target, the next copy creates it again a
 * Four policy types: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles.
 * At most 25 policies per copy.
 * At most 25 target tenants per copy.
-* Assignments and secret values are not copied.
+* Copying assignments is optional. Secret values must be set again in the destination.
 * Copy to Tenants is one way and runs only when you start it.
 
 ## Related pages

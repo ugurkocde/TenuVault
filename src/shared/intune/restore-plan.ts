@@ -1,4 +1,5 @@
 import { cleanAssignment, COMMON_READ_ONLY, itemName, type IntuneType, type Item, type Json, type Step } from "./registry"
+import { hasLegacyScopeTagAssignments, isLegacyScopeTagAssignment } from "./restore-assignments"
 import { isGraphId } from "../security"
 
 /**
@@ -65,6 +66,11 @@ export function passwordResetWarning(snapshot: unknown): string | undefined {
     if (value && typeof value === "object") pending.push(...Object.values(value))
   }
   return undefined
+}
+
+/** The same eligibility rule for the wizard and assignment preflight. */
+export function restoreItemBlocker(mode: "copy" | "replace", item: { blocker?: string; replaceBlocker?: string; live?: string }): string | undefined {
+  return mode === "replace" && item.live !== "missing" ? item.replaceBlocker : item.blocker
 }
 
 /** Separate creation from replacement; defaults can only be updated in place. */
@@ -147,9 +153,10 @@ function assignmentSteps(type: IntuneType, snapshot: Item, replace = false): Ste
   const assignments = (Array.isArray(snapshot.assignments) ? (snapshot.assignments as Item[]) : [])
     // Assignments inherited from a policy set come back with the set; copying them would make them direct.
     .filter((assignment) => typeof assignment.source !== "string" || assignment.source === "direct")
+    .filter((assignment) => !isLegacyScopeTagAssignment(type, assignment))
     .map(cleanAssignment)
     .filter((assignment) => !(type.exclusionsUnsupported && isExclusion(assignment)))
-  if (!type.assign || (!assignments.length && !replace)) return []
+  if (!type.assign || (!assignments.length && (!replace || hasLegacyScopeTagAssignments(type, snapshot)))) return []
   if (type.assign === "post") {
     return assignments.map((body) => ({ method: "POST", path: `${type.path}/{id}/assignments`, body, kind: "assignments" }))
   }

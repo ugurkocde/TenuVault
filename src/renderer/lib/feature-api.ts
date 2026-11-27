@@ -1,4 +1,3 @@
-import type { Tenant } from "~/contexts/TenantContext"
 import type { Feature } from "../../shared/plans"
 import type { FeatureRoutePath } from "../../shared/feature-routes"
 
@@ -14,7 +13,7 @@ export class FeatureApiError extends Error {
  * Calls a roadmap workflow route for the selected tenant: `POST path { tenantId, action, ...body }`.
  * Throws FeatureApiError with the route's message on any non-2xx answer.
  */
-export async function featureCall<T>(path: FeatureRoutePath, tenant: Tenant | undefined, action: string, body: Record<string, unknown> = {}): Promise<T> {
+export async function featureCall<T>(path: FeatureRoutePath, tenant: { credentials?: { tenantId: string } } | undefined, action: string, body: Record<string, unknown> = {}): Promise<T> {
   const tenantId = tenant?.credentials?.tenantId
   if (!tenantId) throw new FeatureApiError("Select a tenant first.", 400)
   const response = await fetch(path, {

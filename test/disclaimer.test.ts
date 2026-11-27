@@ -16,6 +16,7 @@ describe("tenantWriteTargets", () => {
     const writes: Array<[string, Record<string, unknown>]> = [
       ["/api/restore-backup", { restoreType: "selective", mode: "copy" }],
       ["/api/restore-backup", { restoreType: "full", mode: "replace" }],
+      ["/api/restore-backup", { action: "assignment-review", approvalAction: "submit" }],
       ["/api/revert-policy", { action: "revert" }],
       ["/api/revert-policy", { action: "restore" }],
       ["/api/oib", { action: "oib-deploy" }],
@@ -43,6 +44,8 @@ describe("tenantWriteTargets", () => {
     const reads: Array<[string, Record<string, unknown>]> = [
       ["/api/backup/start", {}],
       ["/api/restore-preview", {}],
+      ["/api/restore-backup", { action: "assignment-review", assignments: true, targetTenants: [{ tenantId: B }] }],
+      ["/api/restore-validate", { liveAssignmentTargets: true }],
       ["/api/list-backups", {}],
       ["/api/detect-drifts", {}],
       ["/api/oib", { action: "oib-compare" }],

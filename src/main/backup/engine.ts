@@ -1,3 +1,5 @@
+import { readGroupStates } from "../../shared/intune/group-reads"
+import { restoreReferences, type AssignmentKind } from "../../shared/intune/restore-assignments"
 import { auditUserFromToken } from "../api/audit-sink"
 import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
@@ -599,6 +601,8 @@ export class BackupEngine {
     const items: BackupItems = {}
     let done = 0
     const itemTimeoutWarnings: string[] = []
+    const assignmentIds: Partial<Record<AssignmentKind, Set<string>>> = {}
+    let assignmentNames: Partial<Record<AssignmentKind, Record<string, string>>> = {}
     // Same shape as the runbook's metadata.json, describing what this run saved so far.
     const manifest = (status: string, ended: Date, extra: Record<string, unknown> = {}) => {
       const seconds = Math.round((ended.getTime() - started.getTime()) / 1000)
@@ -630,6 +634,7 @@ export class BackupEngine {
         ...(maskedItems.length ? { MaskedSecretItems: maskedItems } : {}),
         // Per item fingerprints (by type folder and Intune ID), so backups can be compared without reading every file.
         Items: sortKeys(items),
+        ...(Object.keys(assignmentNames).length ? { AssignmentReferenceNames: assignmentNames } : {}),
         ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
         ...extra,
       }
@@ -646,6 +651,7 @@ export class BackupEngine {
         const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, reader, keepMasked ? { keepMasked: (error) => (masked = keepMasked(error)) } : {})
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
+        for (const { kind, sourceId } of restoreReferences(type, detail)) (assignmentIds[kind] ??= new Set()).add(sourceId.toLowerCase())
         const maskedView = withMaskedSecrets(type, detail)
         items[`${type.folder}/${item.id}`] = {
           file: `${fileName}.json`,
@@ -684,6 +690,29 @@ export class BackupEngine {
         this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
       }
     }, network.signal)
+
+    // These display names are optional hints for a later restore, especially if an object is deleted.
+    const namesFor = (kind: AssignmentKind, entries: Item[]) => Object.fromEntries(entries.flatMap((entry) =>
+      typeof entry.id === "string" && typeof entry.displayName === "string" && assignmentIds[kind]?.has(entry.id.toLowerCase())
+        ? [[entry.id.toLowerCase(), entry.displayName]] : []))
+    const groups = await readGroupStates(async (method, path, body) => {
+      try {
+        const result = method === "GET" ? await reader.get(path) : await graph.batchGet<Item>(`${GRAPH}/beta/$batch`, body)
+        return { status: 200, body: result }
+      } catch (error) {
+        if (error instanceof GraphError) return { status: error.status, body: {} }
+        throw error
+      }
+    }, assignmentIds.group ?? [])
+    const filters = lists.find((list) => list?.type.folder === "AssignmentFilters")?.items ?? []
+    const scopeTags = lists.find((list) => list?.type.folder === "ScopeTags")?.items ?? []
+    const namesByKind = {
+      group: Object.fromEntries([...groups].flatMap(([id, state]) => state.name ? [[id, state.name]] : [])),
+      filter: namesFor("filter", filters as Item[]),
+      scopeTag: namesFor("scopeTag", scopeTags as Item[]),
+    }
+    assignmentNames = Object.fromEntries(Object.entries(namesByKind).filter(([, names]) => Object.keys(names).length))
+    network.signal.throwIfAborted()
 
     const ended = this.now()
     const totalPolicies = policyCount(counts)

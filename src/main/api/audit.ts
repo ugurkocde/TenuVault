@@ -121,7 +121,7 @@ export function createAuditRecorder(
 async function observeRestoreResponse(bodyText: string, response: Response, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void) {
   const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string; approvalAction?: string; approvalId?: string; restoreType?: string; selectedPolicies?: unknown[]; assignments?: boolean }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
-  if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
+  if ((!body.approvalAction && body.action === "assignment-review") || ["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
   const data = await response.json().catch(() => ({})) as {
     outcome?: { success: boolean; partial?: boolean; approval?: unknown; approvalState?: string; policyId?: string; path: string; error?: string }
     success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean

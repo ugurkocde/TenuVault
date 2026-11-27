@@ -35,6 +35,44 @@ it('retains the created ID and blocks replay when a follow-up response is lost',
   }, { mode: 'copy', assignments: false })
   expect(await restorer.restore(path, snapshot)).toMatchObject({ success: false, partial: true, policyId: 'created', retryable: false, repairToken: undefined })
 })
+it('rejects assignment skips for a repair before replaying its stored assignment step', async () => {
+  const path = 'backup-test/ConfigurationPolicies/policy.json'
+  const tenantId = '11111111-1111-4111-8111-111111111111'
+  const writes: string[] = []
+  const snapshot = { id: 'original', name: 'Policy', settings: [], assignments: [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] }
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.hostname.endsWith('.blob.core.windows.net')) {
+      return Response.json(url.pathname.endsWith('metadata.json') ? { Status: 'Success', TenantId: tenantId } : snapshot)
+    }
+    if (init?.method === 'POST') {
+      writes.push(url.pathname)
+      if (url.pathname.endsWith('/assign')) {
+        return writes.filter((path) => path.endsWith('/assign')).length === 1
+          ? Response.json({ error: { message: 'Rejected assignment' } }, { status: 400 })
+          : new Response(null, { status: 204 })
+      }
+      return Response.json({ id: 'created' }, { status: 201 })
+    }
+    return Response.json({ id: 'created', name: '[Restored] Policy' })
+  })
+  const body = { tenantId, appId: 'app', clientSecret: 'test', storageAccountName: 'test', backupId: 'backup-test', restoreType: 'selective', assignments: true }
+  const run = (selection: object, skippedAssignments?: Record<string, string[]>) => POST(new NextRequest('http://tenuvault.internal/api/restore-backup', {
+    method: 'POST', body: JSON.stringify({ ...body, selectedPolicies: [selection], skippedAssignments }),
+  }))
+  const first = await (await run({ path })).json()
+  const selection = { path, repairToken: first.details.results[0].repairToken }
+  expect(selection.repairToken).toBeTypeOf('string')
+  const rejected = await run(selection, { [path]: ['0'] })
+  expect(rejected.status).toBe(400)
+  expect(await rejected.json()).toEqual({ error: 'Repair requests must select one target and valid repair tokens' })
+  expect(writes).toEqual(['/beta/deviceManagement/configurationPolicies', '/beta/deviceManagement/configurationPolicies/created/assign'])
+  expect(await (await run(selection)).json()).toMatchObject({ success: true })
+  expect(writes.at(-1)).toBe('/beta/deviceManagement/configurationPolicies/created/assign')
+  expect(writes).toHaveLength(3)
+})
+
 it('lets another authorized admin repair a partial restore and audits the executing actor', async () => {
   let reject = true
   let creates = 0

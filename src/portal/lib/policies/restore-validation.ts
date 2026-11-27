@@ -1,14 +1,14 @@
 import { backupManifest, incompleteReason, snapshotHash } from "./backup-manifest"
 import { dependencyReferences } from "../../../shared/intune/dependencies"
+import { isLegacyScopeTagAssignment, isScopeTagGroupTarget } from "../../../shared/intune/restore-assignments"
 import { assignmentsUnread } from "../../../shared/intune/read"
 import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
 import { buildRestorePlan, buildUpdatePlan, restoreBlocker } from "../../../shared/intune/restore-plan"
 
 /**
  * A restore dry run: reads a whole backup back and checks every item without writing to the
- * tenant. This module never calls Microsoft Graph and never creates a change set; it only
- * reads snapshots through the reader it is given and reuses the restore manifest checks and
- * the restore planner, so a passing item is one a real restore could read and rebuild.
+ * tenant. It reads snapshots through the reader it is given, checks the restore payload and optionally checks
+ * assignment references through a read-only callback.
  */
 
 export type ValidationCheckId = "read" | "fingerprint" | "payload" | "assignments"
@@ -58,6 +58,7 @@ export interface ValidateBackupInput {
   /** Policy files present in backup storage for this backup. */
   listedPaths: string[]
   readSnapshot: (path: string) => Promise<SnapshotRead>
+  checkAssignmentTargets?: (path: string, snapshot: Item) => Promise<string | undefined>
 }
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -79,9 +80,11 @@ function assignmentFailure(type: ReturnType<typeof typeForFolder>, snapshot: Ite
   const assignments = snapshot.assignments as Item[]
   for (const [index, assignment] of assignments.entries()) {
     if (!assignment || typeof assignment !== "object" || Array.isArray(assignment)) return `Assignment ${index + 1} is not an object.`
+    if (isLegacyScopeTagAssignment(type, assignment)) continue
     const target = assignment.target as Item | undefined
     if (!target || typeof target !== "object" || Array.isArray(target)) return `Assignment ${index + 1} has no target.`
     if (typeof target["@odata.type"] !== "string" || !target["@odata.type"]) return `Assignment ${index + 1} has no target type.`
+    if (isScopeTagGroupTarget(target) && (typeof target.entraObjectId !== "string" || !GUID.test(target.entraObjectId))) return `Assignment ${index + 1} has an invalid scope tag group ID.`
     if (target.groupId !== undefined && (typeof target.groupId !== "string" || !GUID.test(target.groupId))) return `Assignment ${index + 1} references a group ID that is not valid: ${String(target.groupId)}`
   }
   try {
@@ -166,7 +169,7 @@ export async function validateBackup(input: ValidateBackupInput): Promise<Backup
           checks.push(check("payload", false, error instanceof Error ? error.message : String(error)))
         }
         if (checks.find((entryCheck) => entryCheck.id === "payload")?.ok) {
-          const failure = assignmentFailure(type, snapshot)
+          const failure = assignmentFailure(type, snapshot) ?? await input.checkAssignmentTargets?.(path, snapshot)
           checks.push(failure ? check("assignments", false, failure) : check("assignments", true, snapshot.assignments === undefined ? "No assignments recorded." : undefined))
         } else {
           checks.push(check("assignments", false, "Not checked: the policy payload cannot be restored."))

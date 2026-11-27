@@ -1,3 +1,6 @@
+import { groupNamePath, readGroupStates, type GroupState } from "../../../shared/intune/group-reads"
+import { referenceTargetId, suggestGroups } from "../../../shared/intune/reference-mapping"
+import { assignmentsUnread } from "../../../shared/intune/read"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
 import { toGroup } from "../../oib/assignments"
@@ -6,7 +9,7 @@ import { isGraphId, isGuid } from "../../../shared/security"
 import type { Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { FeatureError } from "../route"
-import { createListingMemo, getOne, GraphReadError, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
+import { createListingMemo, GraphReadError, getOne, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
 import { containsRedaction, hashOf, sanitizeSnapshot, unsupportedReason } from "../change-sets/model"
 import { extractReferences, referenceFindings, resolveReferences, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
 
@@ -26,6 +29,7 @@ export interface ResolveInput {
   /** Existing destination object to update, chosen explicitly; null creates a new object. */
   targetObjectId: string | null
   includeAssignments: boolean
+  verifyAssignments?: boolean
   dropUnsupportedExclusions: boolean
   acknowledgeRedacted?: boolean
   mappings: Mapping[]
@@ -96,7 +100,7 @@ async function names(graph: GraphCall, kind: Exclude<ReferenceKind, "group">, me
 }
 
 /** Whether the tenant can verify the group and whether Intune can assign it. */
-export async function groupState(graph: GraphCall, id: string): Promise<{ state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }> {
+export async function groupState(graph: GraphCall, id: string): Promise<GroupState> {
   try {
     const group = await getOne(graph, `groups/${encodeURIComponent(id)}?$select=id,displayName,securityEnabled,groupTypes`)
     if (!group) return { state: "missing", name: null }
@@ -207,19 +211,32 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
     targetObjects[kind] = await read("Destination objects", () => names(targetGraph, kind, targetListings))
     sourceNames[kind] = (sameTenant ? targetObjects[kind] : await read("Source objects", () => names(sourceGraph, kind, sourceListings))) ?? new Map()
   }
-  const groupStates = new Map<string, Awaited<ReturnType<typeof groupState>>>()
-  const sourceGroupNames = new Map<string, string>()
-  for (const reference of references.filter((entry) => entry.kind === "group")) {
-    const mapping = input.mappings.find((entry) => entry.kind === "group" && entry.confirmed && entry.sourceId.toLowerCase() === reference.sourceId.toLowerCase())
-    const targetId = mapping?.targetId ?? (sameTenant ? reference.sourceId : null)
-    if (targetId) groupStates.set(targetId.toLowerCase(), await read("The destination group", () => groupState(targetGraph, targetId)))
-    const sourceGroup = sameTenant && targetId ? groupStates.get(targetId.toLowerCase())! : await groupState(sourceGraph, reference.sourceId).catch(() => null)
-    if (sourceGroup?.name) sourceGroupNames.set(reference.sourceId.toLowerCase(), sourceGroup.name)
-  }
-  sourceNames.group = sourceGroupNames
+  const sourceGroupIds = references.filter((entry) => entry.kind === "group").map((entry) => entry.sourceId)
+  const targetGroupIds = sourceGroupIds.flatMap((id) => referenceTargetId("group", id, input.mappings, sameTenant) ?? [])
+  const [groupStates, originals] = await Promise.all([
+    read("The destination group", async () => new Map(await Promise.all(
+      [...new Set(targetGroupIds.map((id) => id.toLowerCase()))].map(async (id) => [id, await groupState(targetGraph, id)] as const),
+    ))),
+    readGroupStates(sourceGraph, sourceGroupIds),
+  ])
+  sourceNames.group = new Map(sourceGroupIds.flatMap((id) => {
+    const name = originals.get(id.toLowerCase())?.name
+    return name ? [[id.toLowerCase(), name]] : []
+  }))
   const resolutions = resolveReferences(references, { mappings: input.mappings, sourceNames, targetObjects, groupStates, sameTenant })
-  findings.push(...referenceFindings(resolutions.filter((reference) => reference.kind !== "scopeTag" || reference.state === "mapped-unverified")))
-  const translated = translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions, destinationSnapshot: input.targetObjectId ? targetPolicy : undefined, acknowledgeRedacted: input.acknowledgeRedacted })
+  if (input.verifyAssignments) {
+    await suggestGroups(resolutions, async (name) => {
+      const groups = await listAll(targetGraph, groupNamePath(name), targetListings).catch(() => [])
+      return new Map(groups.flatMap((group) => typeof group.id === "string" ? [[group.id.toLowerCase(), String(group.displayName ?? "")]] : []))
+    })
+  }
+  findings.push(...referenceFindings(resolutions.filter((reference) => input.verifyAssignments || reference.kind !== "scopeTag" || reference.state === "mapped-unverified")))
+  if (input.verifyAssignments) {
+    if (assignmentsUnread(type, sourceSnapshot) || !Array.isArray(sourceSnapshot.assignments)) {
+      findings.push({ code: "unsupported-target", severity: "blocking", message: "Source assignments could not be read. Check the source policy before copying its assignments." })
+    }
+  }
+  const translated = translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions, destinationSnapshot: input.targetObjectId ? targetPolicy : undefined, acknowledgeRedacted: input.acknowledgeRedacted, verifyScopeTags: input.verifyAssignments })
   findings.push(...translated.findings)
 
   if (input.targetObjectId && !targetPolicy) findings.push({ code: "missing-mapping", severity: "blocking", message: "The chosen destination object does not exist in the destination tenant." })

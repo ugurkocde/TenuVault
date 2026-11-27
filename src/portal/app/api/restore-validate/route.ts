@@ -1,3 +1,6 @@
+import { assignmentDirectory, assignmentReviewer, parseAssignmentMappings, parseSkippedAssignments } from "~/lib/policies/assignment-review"
+import { graphCaller } from "~/lib/policies/graph-restore"
+import { isGuid } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { validPolicyPath } from "~/lib/policies/restore"
@@ -8,11 +11,11 @@ import type { Item } from "../../../../shared/intune/registry"
 const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
 const storageHeaders = (storageToken: string) => ({ "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` })
 
-async function storageToken(tenantId: string, appId: string, clientSecret: string): Promise<string> {
+async function readToken(tenantId: string, appId: string, clientSecret: string, scope = "https://storage.azure.com/.default"): Promise<string> {
   const response = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope: "https://storage.azure.com/.default", grant_type: "client_credentials" }),
+    body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope, grant_type: "client_credentials" }),
   })
   if (!response.ok) throw new Error("Failed to get access token")
   return ((await response.json()) as { access_token: string }).access_token
@@ -21,8 +24,7 @@ async function storageToken(tenantId: string, appId: string, clientSecret: strin
 /**
  * Restore dry run: validates a whole backup end to end without changing anything:
  *   POST /api/restore-validate { tenantId, appId, clientSecret, storageAccountName, backupId }
- * Only reads backup storage. It never requests a Microsoft Graph token, never writes to the
- * tenant and never creates a change set, so it is not a tenant write and needs no disclaimer.
+ * With liveAssignmentTargets, it also reads the groups, filters and scope tags of the selected tenant(s).
  */
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
@@ -34,7 +36,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const token = await storageToken(tenantId, appId, clientSecret)
+    const token = await readToken(tenantId, appId, clientSecret)
 
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupId}/`)}`
     const xml = await listBlobPages(listUrl, token)
@@ -65,7 +67,40 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const report = await validateBackup({ backupId, metadata, listedPaths, readSnapshot })
+    const sourceId = tenantId.toLowerCase()
+    const cross = body.targetTenants !== undefined
+    let targets = [{ tenantId: sourceId, appId }]
+    if (cross) {
+      if (body.liveAssignmentTargets !== true || !Array.isArray(body.targetTenants) || !body.targetTenants.length || body.targetTenants.length > 50 ||
+        body.targetTenants.some((target) => !isGuid(target?.tenantId) || !isGuid(target?.appId) || target.tenantId.toLowerCase() === sourceId)) {
+        return NextResponse.json({ error: "Choose connected destination tenants." }, { status: 400 })
+      }
+      targets = body.targetTenants.map((target) => ({ tenantId: target.tenantId.toLowerCase(), appId: target.appId }))
+    }
+    let mappings, skipped
+    try {
+      mappings = parseAssignmentMappings(body.assignmentMappings, targets.map((target) => target.tenantId))
+      skipped = parseSkippedAssignments(body.skippedAssignments, listedPaths)
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid assignment review options." }, { status: 400 })
+    }
+    const directory = async (id: string, client: string) => assignmentDirectory(graphCaller(await readToken(id, client, clientSecret, "https://graph.microsoft.com/.default")))
+    const sourceDirectory = body.liveAssignmentTargets === true && owned.owned ? await directory(tenantId, appId) : undefined
+    const reviewers = sourceDirectory ? await Promise.all(targets.map(async (target) => ({
+      id: target.tenantId,
+      reader: assignmentReviewer(sourceDirectory, cross ? await directory(target.tenantId, target.appId) : sourceDirectory,
+        metadata, !cross, mappings[target.tenantId] ?? [], skipped),
+    }))) : []
+    const report = await validateBackup({
+      backupId, metadata, listedPaths, readSnapshot,
+      checkAssignmentTargets: reviewers.length ? async (path, snapshot) => {
+        const failures = await Promise.all(reviewers.map(async ({ id, reader }) => {
+          const errors = (await reader.review(path, snapshot))?.review.errors ?? []
+          return errors.length ? `${cross ? `Destination ${id}. ` : ""}${errors.join(" ")}` : ""
+        }))
+        return failures.filter(Boolean).join(" ") || undefined
+      } : undefined,
+    })
     return NextResponse.json(report)
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "The backup validation failed." }, { status: 500 })

@@ -18,6 +18,11 @@ export interface TenantGroup {
   dynamic: boolean
 }
 
+export function groupKind(securityEnabled: unknown, groupTypes: unknown): TenantGroup["kind"] {
+  if (Array.isArray(groupTypes) && groupTypes.includes("Unified")) return "microsoft365"
+  return securityEnabled === true ? "security" : "other"
+}
+
 export interface GroupSearchResult {
   readable: boolean
   groups: TenantGroup[]

@@ -44,12 +44,13 @@ export function GroupCountLabel({ counts, scope }: { counts?: GroupCounts; scope
   </span>
 }
 
-export function GroupSearch({ directory, label, scope, disabled, unavailable, onPick }: {
+export function GroupSearch({ directory, label, scope, disabled, unavailable, candidate, onPick }: {
   directory: GroupDirectory
   label: string
   scope?: "device" | "user"
   disabled?: boolean
   unavailable?: ReadonlyMap<string, string>
+  candidate?: { targetId: string; targetName: string } | null
   onPick: (group: TenantGroup) => void
 }) {
   const id = useId()
@@ -92,6 +93,10 @@ export function GroupSearch({ directory, label, scope, disabled, unavailable, on
   }
 
   return <div className="mt-2">
+    {candidate && <button type="button" disabled={disabled} className="mb-1 text-left text-xs text-blue-700 underline dark:text-blue-300" onClick={() => {
+      setText(candidate.targetId)
+      input.current?.focus()
+    }}>Search for same-name candidate "{candidate.targetName}"</button>}
     <input ref={input} aria-label={label} value={text} disabled={disabled} onChange={event => setText(event.target.value)} autoComplete="off"
       onKeyDown={event => {
         if (event.key !== "Enter") return

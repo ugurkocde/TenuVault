@@ -1,4 +1,5 @@
 import { GROUP_CHECK_REQUIRED } from "../../../shared/group-access"
+import { usableReference, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 import type { IntuneType, Item, Json } from "../../../shared/intune/registry"
 import { cleanAssignment } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -14,32 +15,7 @@ import { containsRedaction, containsSecret } from "../change-sets/model"
  * dropped explicitly), never includes; filter types are preserved exactly.
  */
 
-export type ReferenceKind = "group" | "filter" | "scopeTag" | "reusableSetting"
-
-export interface Mapping {
-  kind: ReferenceKind
-  sourceId: string
-  targetId: string
-  /** The admin reviewed this mapping. Unconfirmed mappings (for example name suggestions) are never used. */
-  confirmed: boolean
-}
-
-export interface ReferenceResolution {
-  kind: ReferenceKind
-  sourceId: string
-  sourceName: string | null
-  targetId: string | null
-  targetName: string | null
-  /**
-   * portable: the same built-in object exists in every tenant (Default scope tag).
-   * mapped: confirmed and read in the target. mapped-unverified: confirmed but the target could
-   * not be read. missing: no confirmed mapping. rejected: the
-   * confirmed target does not exist or has the wrong kind.
-   */
-  state: "portable" | "mapped" | "mapped-unverified" | "missing" | "rejected"
-  /** A candidate with the same display name. Never used without explicit confirmation. */
-  suggestion: { targetId: string; targetName: string } | null
-}
+export { resolveReferences, type Mapping, type ReferenceKind, type ReferenceResolution } from "../../../shared/intune/reference-mapping"
 
 export interface DependencyFinding {
   code: "missing-mapping" | "rejected-mapping" | "unsupported-type" | "unsupported-target" | "ordering" | "unknown-membership" | "exclusion-unsupported" | "exclusion-dropped" | "display-name-only" | "assignments-excluded" | "secret-values" | "scope-tags-kept" | "scope-tag-default" | "sync-link-missing" | "sync-unconfirmed"
@@ -116,49 +92,6 @@ export function hasSecretValues(snapshot: Item): boolean {
   return found
 }
 
-/**
- * Resolves each reference with the confirmed mappings and what the target tenant holds.
- * `targetObjects` has the objects read in the target per kind (id to name), or null for a kind
- * that could not be read. `readGroup` states per mapped group whether it exists.
- */
-export function resolveReferences(
-  references: Array<{ kind: ReferenceKind; sourceId: string }>,
-  input: {
-    mappings: Mapping[]
-    sourceNames: Partial<Record<ReferenceKind, Map<string, string>>>
-    targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>>
-    groupStates: Map<string, { state: "found" | "missing" | "unknown" | "unassignable"; name: string | null }>
-    sameTenant: boolean
-  },
-): ReferenceResolution[] {
-  return references.map(({ kind, sourceId }) => {
-    const sourceName = input.sourceNames[kind]?.get(sourceId.toLowerCase()) ?? null
-    const base = { kind, sourceId, sourceName }
-    if (kind === "scopeTag" && sourceId === "0") return { ...base, targetId: "0", targetName: "Default", state: "portable", suggestion: null }
-    const mapping = input.mappings.find((entry) => entry.kind === kind && entry.sourceId.toLowerCase() === sourceId.toLowerCase() && entry.confirmed === true)
-    // Within one tenant a reference points at the same object; it is still read to prove it exists.
-    const targetId = mapping?.targetId ?? (input.sameTenant ? sourceId : null)
-    const objects = input.targetObjects[kind]
-    let suggestion: ReferenceResolution["suggestion"] = null
-    if (!targetId && sourceName && objects) {
-      const matches = [...objects].filter(([, name]) => name.trim().toLowerCase() === sourceName.trim().toLowerCase())
-      if (matches.length === 1) suggestion = { targetId: matches[0]![0], targetName: matches[0]![1] }
-    }
-    if (!targetId) return { ...base, targetId: null, targetName: null, state: "missing", suggestion }
-    if (kind === "group") {
-      const group = input.groupStates.get(targetId.toLowerCase())
-      if (!group || group.state === "unknown") return { ...base, targetId, targetName: group?.name ?? null, state: "mapped-unverified", suggestion: null }
-      if (group.state === "unassignable") return { ...base, targetId, targetName: group.name, state: "rejected", suggestion: null }
-      if (group.state === "missing") return { ...base, targetId, targetName: null, state: "rejected", suggestion: null }
-      return { ...base, targetId, targetName: group.name, state: "mapped", suggestion: null }
-    }
-    if (!objects) return { ...base, targetId, targetName: null, state: "mapped-unverified", suggestion: null }
-    const name = objects.get(targetId.toLowerCase())
-    if (name === undefined) return { ...base, targetId, targetName: null, state: "rejected", suggestion: null }
-    return { ...base, targetId, targetName: name, state: "mapped", suggestion: null }
-  })
-}
-
 /** Findings about references: missing, rejected, name-only suggestions and ordering prerequisites. */
 export function referenceFindings(references: ReferenceResolution[]): DependencyFinding[] {
   const label: Record<ReferenceKind, string> = { group: "group", filter: "assignment filter", scopeTag: "scope tag", reusableSetting: "reusable setting" }
@@ -192,14 +125,14 @@ export function translate(
   type: IntuneType,
   source: Item,
   references: ReferenceResolution[],
-  options: { includeAssignments: boolean; dropUnsupportedExclusions: boolean; destinationSnapshot?: Item | null; acknowledgeRedacted?: boolean },
+  options: { includeAssignments: boolean; dropUnsupportedExclusions: boolean; destinationSnapshot?: Item | null; acknowledgeRedacted?: boolean; verifyScopeTags?: boolean },
 ): { body: Item | null; assignments: Item[] | null; findings: DependencyFinding[] } {
   const findings: DependencyFinding[] = []
   const usable = (kind: ReferenceKind, id: string): string | null => {
     // The built-in Default scope tag has the same ID in every tenant.
     if (kind === "scopeTag" && id === "0") return "0"
     const reference = references.find((entry) => entry.kind === kind && entry.sourceId.toLowerCase() === id.toLowerCase())
-    return reference && (reference.state === "portable" || reference.state === "mapped" || (kind !== "group" && reference.state === "mapped-unverified")) && reference.targetId && isGraphId(reference.targetId) ? reference.targetId : null
+    return reference && usableReference(reference) && reference.targetId && isGraphId(reference.targetId) ? reference.targetId : null
   }
   let unresolved = false
   const { assignments: _assignments, ...rest } = structuredClone(source)
@@ -211,7 +144,8 @@ export function translate(
   } else if (Array.isArray(body.roleScopeTagIds)) {
     body.roleScopeTagIds = [...new Set((body.roleScopeTagIds as Json[]).map((tag) => {
       const mapped = typeof tag === "string" ? usable("scopeTag", tag) : null
-      if (!mapped) {
+      if (!mapped && options.verifyScopeTags) unresolved = true
+      if (!mapped && !options.verifyScopeTags) {
         const reference = references.find((entry) => entry.kind === "scopeTag" && entry.sourceId === tag)
         findings.push({ code: "scope-tag-default", severity: "warning", message: `The source scope tag ${reference?.sourceName ? `"${reference.sourceName}"` : String(tag)} has no usable destination mapping. The new policy uses Default (0) for this tag.` })
       }

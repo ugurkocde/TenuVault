@@ -33,8 +33,17 @@ export class GraphSession {
     return items
   }
 
-  /** GET with bounded retries for throttling, transient status codes and network failures. */
-  async get<T = Record<string, unknown>>(url: string): Promise<T> {
+  /** Submit a batch of read requests to Graph. */
+  batchGet<T>(url: string, body: unknown): Promise<T> {
+    return this.read(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+  }
+
+  get<T = Record<string, unknown>>(url: string): Promise<T> {
+    return this.read(url)
+  }
+
+  /** Reads with bounded retries for throttling, transient status codes and network failures. */
+  private async read<T>(url: string, init?: RequestInit): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       this.network.signal.throwIfAborted()
       while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now(), this.network.signal)
@@ -48,7 +57,7 @@ export class GraphSession {
           if (this.throttleError) throw this.throttleError
           if (this.resumeAt > Date.now()) throw new GraphPauseError()
           attempted = true
-          response = await this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
+          response = await this.fetchImpl(url, { ...init, signal, headers: { ...init?.headers, Authorization: `Bearer ${token}` } })
           if (response.ok) {
             const result = await response.json().catch(error => {
               if (error instanceof SyntaxError) throw new SyntaxError("Microsoft Graph returned invalid JSON.")

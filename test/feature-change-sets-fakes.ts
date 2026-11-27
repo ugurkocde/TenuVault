@@ -180,10 +180,17 @@ export class FakeTenant {
     if (route === "deviceManagement/reusablePolicySettings") return { status: 200, body: { value: structuredClone(this.reusable) } }
     if (route === "groups") {
       if (this.groupsForbidden) return { status: 403, body: { error: { code: "Authorization_RequestDenied", message: "Insufficient privileges to complete the operation." } } }
-      const filter = new URLSearchParams(path.split("?")[1]).get("$filter") ?? ""
+      const filter = new URLSearchParams(query).get("$filter") ?? ""
       const id = /^id eq '([^']+)'$/.exec(filter)?.[1]
       const prefix = /^startswith\(displayName,'(.*)'\)$/.exec(filter)?.[1]?.replaceAll("''", "'").toLowerCase()
-      const value = [...this.groups.values()].filter(group => id ? group.id === id : prefix !== undefined && String(group.displayName).toLowerCase().startsWith(prefix))
+      const name = /^displayName eq '(.*)'$/.exec(filter)?.[1]?.replaceAll("''", "'").toLowerCase()
+      const value = [...this.groups.values()].filter((group) => {
+        if (id) return group.id === id
+        const displayName = String(group.displayName).toLowerCase()
+        if (prefix !== undefined) return displayName.startsWith(prefix)
+        if (name !== undefined) return displayName === name
+        return !filter
+      })
       return { status: 200, body: { value: structuredClone(value) } }
     }
     if (segments[0] === "groups" && segments.length === 2) {

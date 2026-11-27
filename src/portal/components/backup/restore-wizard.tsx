@@ -1,12 +1,16 @@
 "use client"
 
+import { GroupMappingEditor, type MappingObjects } from "@desktop/features/promotion/MappingEditor"
+import { rememberMappings, sessionMappings } from "@desktop/features/promotion/session-mappings"
+import type { Mapping } from "@desktop/features/promotion/api"
+import type { AssignmentReview } from "../../../shared/intune/restore-assignments"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
 import { moduleForFolder } from "../../../shared/services/modules"
 import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
-import { passwordResetWarning } from "../../../shared/intune/restore-plan"
+import { passwordResetWarning, restoreItemBlocker } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
 
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -58,6 +62,12 @@ interface CopyTarget {
   appId: string
   name: string
   domain?: string
+}
+
+interface TargetAssignmentReview {
+  tenantId: string
+  items: Array<AssignmentReview & { path: string }>
+  objects: MappingObjects
 }
 
 interface RestoreWizardProps {
@@ -259,6 +269,15 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const copying = copyTargets.length > 0
   const [mappingJson, setMappingJson] = useState("[]")
   const [mappingsConfirmed, setMappingsConfirmed] = useState(false)
+  const [assignmentMappings, setAssignmentMappings] = useState<Record<string, Mapping[]>>({})
+  const [skippedAssignments, setSkippedAssignments] = useState<Record<string, string[]>>({})
+  const [assignmentReviews, setAssignmentReviews] = useState<TargetAssignmentReview[] | null>(null)
+  const [assignmentReviewDirty, setAssignmentReviewDirty] = useState(true)
+  const sourceTenantId = tenant.credentials.tenantId.toLowerCase()
+  const mappingsFor = (targets: string[]) => Object.fromEntries(targets.map((id) => [id.toLowerCase(),
+    (assignmentMappings[id.toLowerCase()] ?? sessionMappings(sourceTenantId, id)).filter((mapping) => mapping.confirmed),
+  ]))
+  const skipsFor = (paths: string[]) => Object.fromEntries(paths.flatMap((path) => skippedAssignments[path]?.length ? [[path, skippedAssignments[path]]] : []))
 
   const [review, setReview] = useState<Record<string, LiveState> | null>(null)
   /** Counts review loads, so a load that a newer one or a reset replaced never writes its result. */
@@ -266,6 +285,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const clearReview = () => {
     reviewLoad.current++
     setReview(null)
+    setAssignmentReviews(null)
+    setAssignmentReviewDirty(true)
   }
   // A load still reading for the previous restore mode or copy targets stops writing once either changes.
   useEffect(() => {
@@ -293,6 +314,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<BackupValidation | null>(null)
   const [validationError, setValidationError] = useState("")
+  const validationGeneration = useRef(0)
+  const clearValidation = () => {
+    validationGeneration.current++
+    setValidation(null)
+    setValidationError("")
+  }
 
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<{ total: number; done: number; current: string | null; results: Outcome[] } | null>(null)
@@ -305,11 +332,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setMode("copy")
     setAssignments(false)
   }, [community])
-  // Copies to other tenants are always unassigned copies under the original names.
+  // Each new destination selection starts with unassigned copies.
   useEffect(() => {
     if (!copying) return
     setMode("copy")
     setAssignments(false)
+    setSkippedAssignments({})
     setMappingsConfirmed(false)
   }, [copying, copyTargets.join(",")])
 
@@ -329,8 +357,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setSelected(new Set())
     setShown({})
     clearReview()
-    setValidation(null)
-    setValidationError("")
+    clearValidation()
     const controller = new AbortController()
     const credentials = { ...tenant.credentials, storageAccountName: tenant.storageAccountName, subscriptionId: "local", resourceGroupName: "local", backupId }
     void (async () => {
@@ -436,13 +463,18 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const planFor = (path: string): Plan => {
     const item = itemByPath.get(path)
     const state = review?.[path]
-    const blocker = state?.blocker ?? item?.blocker
-    if (copying) return blocker ? "cannot" : "copy"
-    if (mode === "copy") return blocker ? "cannot" : "create"
-    if (state?.replaceBlocker ?? item?.replaceBlocker) return "cannot"
+    const blocker = restoreItemBlocker(copying ? "copy" : mode, {
+      blocker: state?.blocker ?? item?.blocker, replaceBlocker: state?.replaceBlocker ?? item?.replaceBlocker, live: state?.live,
+    })
+    if (blocker) return "cannot"
+    if (copying) return "copy"
+    if (mode === "copy") return "create"
     if (!state?.live || state.live === "error") return "unchecked"
-    if (state.live === "missing") return blocker ? "cannot" : "recreate"
-    if (state.live === "same" || (state.assignmentsOnly && !assignments)) return "skip"
+    if (state.live === "missing") return "recreate"
+    const targeting = assignmentReviews?.[0]?.items.find((entry) => entry.path === path)
+    const changedTargeting = assignments && (targeting?.assignments.some((entry) => entry.skipped)
+      || targeting?.references.some((entry) => entry.targetId && entry.targetId.toLowerCase() !== entry.sourceId.toLowerCase()))
+    if (!changedTargeting && (state.live === "same" || (state.assignmentsOnly && !assignments))) return "skip"
     return "overwrite"
   }
   const selectedPaths = [...selected]
@@ -456,25 +488,41 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const load = reviewLoad.current
     const current = () => load === reviewLoad.current
     setReviewError("")
+    clearValidation()
     setConfirmed(false)
-    // Copies never touch the existing items, so the tenant is only read when replacing in place.
-    if (copying || mode === "copy") {
-      setReview(Object.fromEntries(selectedPaths.map((path) => [path, { blocker: itemByPath.get(path)?.blocker, snapshot: itemByPath.get(path)?.snapshot }])))
-      return
-    }
     try {
-      // The route reads at most PREVIEW_CHUNK items per request, so a large selection is read in parts.
       const live: Array<{ path: string } & LiveState> = []
-      for (let start = 0; start < selectedPaths.length; start += PREVIEW_CHUNK) {
-        const preview = await post<{ items: Array<{ path: string } & LiveState> }>("/api/restore-preview", {
-          ...tenant.credentials,
-          storageAccountName: tenant.storageAccountName,
-          backupId,
-          paths: selectedPaths.slice(start, start + PREVIEW_CHUNK),
-          live: true,
-        })
-        if (!current()) return
-        live.push(...preview.items)
+      if (copying || mode === "copy") {
+        live.push(...selectedPaths.map((path) => ({ path, blocker: itemByPath.get(path)?.blocker, snapshot: itemByPath.get(path)?.snapshot })))
+      } else {
+        for (let start = 0; start < selectedPaths.length; start += PREVIEW_CHUNK) {
+          const preview = await post<{ items: Array<{ path: string } & LiveState> }>("/api/restore-preview", {
+            ...tenant.credentials,
+            storageAccountName: tenant.storageAccountName,
+            backupId,
+            paths: selectedPaths.slice(start, start + PREVIEW_CHUNK),
+            live: true,
+          })
+          if (!current()) return
+          live.push(...preview.items)
+        }
+      }
+      if (assignments) {
+        const paths = live.filter((item) => !restoreItemBlocker(copying ? "copy" : mode, item)).map((item) => item.path)
+        const targets = copyCandidates.filter((target) => copyTargets.includes(target.tenantId))
+        if (paths.length) {
+          const result = await post<{ targets: TargetAssignmentReview[] }>("/api/restore-backup", {
+            ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId,
+            action: "assignment-review", assignments: true, mode: copying ? "copy" : mode,
+            restoreType: "selective", selectedPolicies: paths.map((path) => ({ path })),
+            assignmentMappings: mappingsFor(copying ? copyTargets : [sourceTenantId]),
+            skippedAssignments: copying ? undefined : skipsFor(paths),
+            targetTenants: copying ? targets.map(({ tenantId, appId }) => ({ tenantId, appId })) : undefined,
+          })
+          if (!current()) return
+          setAssignmentReviews(result.targets)
+        } else setAssignmentReviews([])
+        setAssignmentReviewDirty(false)
       }
       setReview(Object.fromEntries(live.map((item) => [item.path, item])))
     } catch (error) {
@@ -489,16 +537,23 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const runValidation = async () => {
     if (!backupId) return
     setValidating(true)
-    setValidation(null)
-    setValidationError("")
+    clearValidation()
+    const generation = validationGeneration.current
     try {
       const report = await post<BackupValidation>("/api/restore-validate", {
         ...tenant.credentials,
         storageAccountName: tenant.storageAccountName,
         backupId,
+        ...(assignments ? {
+          liveAssignmentTargets: true,
+          assignmentMappings: mappingsFor(copying ? copyTargets : [sourceTenantId]),
+          skippedAssignments: copying ? undefined : skipsFor(selectedPaths),
+          targetTenants: copying ? copyCandidates.filter((target) => copyTargets.includes(target.tenantId)).map(({ tenantId, appId }) => ({ tenantId, appId })) : undefined,
+        } : {}),
       })
-      setValidation(report)
+      if (generation === validationGeneration.current) setValidation(report)
     } catch (error) {
+      if (generation !== validationGeneration.current) return
       showPlanError(error)
       setValidationError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -549,17 +604,22 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           : []
         if (copying && !targets.length) throw new Error("The original target tenant is no longer connected.")
         attempted.push(batch)
+        const selectedPolicies = batch.paths.map((path) => ({
+          path, repairToken: previous.find((item) => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken,
+        }))
         const data = await post<{ success: boolean; jobId?: string; message: string; details?: { restoredCount: number; unchangedCount?: number; results: Outcome[] } }>("/api/restore-backup", {
           ...tenant.credentials,
           storageAccountName: tenant.storageAccountName,
           backupId,
           restoreType: "selective",
-          selectedPolicies: batch.paths.map((path) => ({ path, repairToken: previous.find((item) => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken })),
+          selectedPolicies,
           dependencyMappings,
           confirmMappings: mappingsConfirmed,
           justification: copying ? undefined : justification.trim() || undefined,
           mode: copying ? "copy" : mode,
-          assignments: copying ? false : assignments,
+          assignments,
+          assignmentMappings: assignments ? mappingsFor(copying ? targets.map((target) => target.tenantId) : [sourceTenantId]) : undefined,
+          skippedAssignments: assignments && !copying ? skipsFor(selectedPolicies.filter((item) => !item.repairToken).map((item) => item.path)) : undefined,
           progressId: id,
           retryOf: batch.retryOf,
           ...(copying
@@ -910,14 +970,14 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             {mode === "replace" && (
               <p className="text-sm text-amber-800">Restore assignments applies to every selected item. For Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions, and Intune roles, turn it off and reconcile assignments in Intune. Restore assignments for supported types in a separate selection.</p>
             )}
-            <label className={cn("flex items-start gap-3 rounded-2xl border border-gray-200 p-5", community || copying ? "cursor-not-allowed opacity-60" : "cursor-pointer")}>
-              <input type="checkbox" className="mt-1" checked={assignments} disabled={community || copying} onChange={(event) => setAssignments(event.target.checked)} />
+            <label className={cn("flex items-start gap-3 rounded-2xl border border-gray-200 p-5", community ? "cursor-not-allowed opacity-60" : "cursor-pointer")}>
+              <input type="checkbox" className="mt-1" checked={assignments} disabled={community} onChange={(event) => setAssignments(event.target.checked)} />
               <span>
                 <span className="flex items-center gap-2 font-medium text-gray-900">
                   Restore assignments{community && <PlanBadge feature="restoreAssignments" />}
                 </span>
                 <span className="mt-1 block text-sm text-gray-500">
-                  Assign restored items to the same groups and filters as in the backup. Without this, {mode === "copy" ? "copies are created unassigned" : "current assignments stay as they are"}.
+                  Review the groups, filters and scope tags used by restored items. With this option off, {mode === "copy" ? "copies are created unassigned" : "current assignments stay as they are"}.
                 </span>
               </span>
             </label>
@@ -928,7 +988,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             <p className="flex items-center gap-2 font-medium text-gray-900">
               Copy to other tenants instead{!canCopyToTenants && <PlanBadge feature="bulkActions" />}
             </p>
-            <p className="mt-1 text-sm text-gray-500">Leave all unchecked to restore to {tenant.name}. Copies in other tenants keep their original names, get the Default scope tag and no assignments.</p>
+            <p className="mt-1 text-sm text-gray-500">Leave all unchecked to restore to {tenant.name}. Copies in other tenants keep their original names. Turn on Restore assignments to review tenant-specific mappings. Unassigned copies use the Default scope tag.</p>
             {canCopyToTenants &&
               (copyCandidates.length ? (
                 <div className="mt-4 max-h-56 space-y-2 overflow-auto" role="group" aria-label="Tenants to copy to">
@@ -1020,9 +1080,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     const item = itemByPath.get(path)
                     const state = review[path]
                     const reason = plan === "cannot" ? (copying || mode === "copy" || state?.live === "missing" ? state?.blocker ?? item?.blocker : state?.replaceBlocker ?? item?.replaceBlocker) : plan === "unchecked" ? state?.error : undefined
-                    const assignmentWarning = assignments && (plan === "create" || plan === "recreate") && item ? typeForFolder(item.folder)?.assignmentWarning : undefined
+                    const assignmentWarning = assignments && (plan === "create" || plan === "recreate" || plan === "copy") && item ? typeForFolder(item.folder)?.assignmentWarning : undefined
                     // Overwrites keep or replace live assignments; copies and recreated items reach devices only with assignments.
-                    const reachesDevices = plan === "overwrite" || plan === "unchecked" || (assignments && (plan === "create" || plan === "recreate"))
+                    const reachesDevices = plan === "overwrite" || plan === "unchecked" || (assignments && (plan === "create" || plan === "recreate" || plan === "copy"))
                     const passwordWarning = reachesDevices ? passwordResetWarning(state?.snapshot ?? item?.snapshot) : undefined
                     return (
                       <li key={path} className="flex items-start justify-between gap-4 px-4 py-3 text-sm">
@@ -1070,6 +1130,50 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </>
           )}
 
+          {assignments && assignmentReviews?.map((target) => {
+            const destination = copyCandidates.find((entry) => entry.tenantId.toLowerCase() === target.tenantId)
+            const mappingTenant = copying ? destination && { name: destination.name, credentials: destination } : tenant
+            const editable = target.items.flatMap((item) => item.references)
+              .filter((reference) => reference.state !== "portable" && (copying || reference.state !== "mapped" || reference.targetId?.toLowerCase() !== reference.sourceId.toLowerCase()))
+            const problemItems = target.items.filter((item) => item.errors.length || item.assignments.length || item.warnings.length)
+            return <section key={target.tenantId} className="mt-5 space-y-3 rounded-2xl border border-gray-200 p-4">
+              <h3 className="text-sm font-medium text-gray-900">Assignment references in {mappingTenant?.name ?? target.tenantId}</h3>
+              {editable.length > 0 && mappingTenant && <GroupMappingEditor tenant={mappingTenant} references={editable} objects={target.objects}
+                mappings={assignmentMappings[target.tenantId] ?? sessionMappings(sourceTenantId, target.tenantId)}
+                onRecheck={() => void loadReview()}
+                onChange={(next) => {
+                  setAssignmentMappings((previous) => ({ ...previous, [target.tenantId]: next }))
+                  rememberMappings(sourceTenantId, target.tenantId, next)
+                  setAssignmentReviewDirty(true)
+                  clearValidation()
+                }} />}
+              {!editable.length && !problemItems.length && <p className="text-sm text-gray-600">Assignment references are ready.</p>}
+              {problemItems.map((item) => <div key={item.path} className="space-y-2 text-sm">
+                <p className="font-medium text-gray-900">{itemByPath.get(item.path)?.name ?? item.path}</p>
+                {item.errors.map((error) => <p key={error} className="text-red-700">{error}</p>)}
+                {item.warnings.map((warning) => <p key={warning} className="text-amber-800">{warning}</p>)}
+                {!copying && mode === "replace" && item.allAssignmentsSkipped && review?.[item.path]?.live !== "missing" &&
+                  <p className="text-gray-700">All backup assignments are skipped. The current assignments will be kept.</p>}
+                {!copying && item.assignments.map((row) => {
+                  const names = row.references.map((ref) => ref.sourceName ?? ref.sourceId).join(", ")
+                  return <label key={row.key} className="flex items-start gap-2 text-gray-700">
+                    <input type="checkbox" className="mt-1" checked={skippedAssignments[item.path]?.includes(row.key) ?? false}
+                      onChange={(event) => {
+                        const checked = event.target.checked
+                        setSkippedAssignments((previous) => ({ ...previous, [item.path]: checked
+                          ? [...(previous[item.path] ?? []), row.key]
+                          : (previous[item.path] ?? []).filter((key) => key !== row.key) }))
+                        setAssignmentReviewDirty(true)
+                        clearValidation()
+                      }} />
+                    Skip assignment {row.index + 1} ({row.label}){names ? ` (${names})` : ""}
+                  </label>
+                })}
+              </div>)}
+            </section>
+          })}
+          {assignments && (assignmentReviewDirty || reviewError) && <Button className="mt-3" variant="outline" onClick={() => void loadReview()} disabled={!review && !reviewError}>Check assignment references</Button>}
+
           {usesApproval && <label className="mt-5 block rounded-xl border bg-white p-4 text-sm">Justification
             <textarea className="mt-2 block w-full rounded border p-2" name="justification" autoComplete="off" maxLength={700} required value={justification} onChange={event => setJustification(event.target.value)} aria-describedby="approval-help" />
             <span id="approval-help" className="mt-2 block text-gray-500">Protected items are sent to Intune for approval by a second admin.</span>
@@ -1080,7 +1184,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               {community && <PlanBadge feature="fullRestore" />}
             </p>
             <p className="mt-1 text-sm text-gray-500">
-              Reads the whole backup back and checks every item: manifest completeness, decryptability, policy payloads and assignment references. Nothing is written to {tenant.name}, to Microsoft Graph or to a change set.
+              Reads the whole backup back and checks every item: manifest completeness, decryptability, policy payloads and live assignment references. This check makes no tenant changes.
             </p>
             {community && (
               <UpgradeNote feature="fullRestore" message="Validating a whole backup is included in TenuVault Pro and MSP. Community restores one item at a time as an unassigned copy." className="mt-3" />
@@ -1130,7 +1234,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               </Button>
               <Button
                 className="bg-coral-600 text-white hover:bg-coral-700"
-                disabled={!review || actionable.length === 0 || (changesTenant && !confirmed) || (usesApproval && !justification.trim())}
+                disabled={!review || actionable.length === 0 || (assignments && (assignmentReviewDirty || assignmentReviews?.some((target) => target.items.some((item) => item.errors.length)))) || (changesTenant && !confirmed) || (usesApproval && !justification.trim())}
                 onClick={() => void run(actionable)}
               >
                 <RefreshCw className="h-4 w-4" /> Restore {actionable.length} item{actionable.length === 1 ? "" : "s"}

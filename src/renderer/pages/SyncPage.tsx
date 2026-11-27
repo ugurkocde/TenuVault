@@ -1,3 +1,6 @@
+import { RemoteMappingEditor } from "../features/promotion/MappingEditor"
+import { rememberMappings, sessionMappings } from "../features/promotion/session-mappings"
+import type { Mapping } from "../features/promotion/api"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Loader2, Undo2, XCircle } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -16,6 +19,9 @@ import {
   listSyncRuns,
   MAX_SYNC_POLICIES,
   planSync,
+  syncTargetObjects,
+  syncTargetGroups,
+  syncTargetGroupCounts,
   previewSyncTarget,
   retrySyncTarget,
   syncPolicies,
@@ -88,6 +94,9 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const [planError, setPlanError] = useState<string | null>(null)
   const [backup, setBackup] = useState<SyncBackup>("new")
   const [ack, setAck] = useState(false)
+  const [includeAssignments, setIncludeAssignments] = useState(false)
+  const [mappings, setMappings] = useState<Record<string, Mapping[]>>({})
+  const [mappingsDirty, setMappingsDirty] = useState(false)
   // Requests of this screen, keyed `${runId}:${promotionId}`, so a pending apply or a late error
   // of one run never shows in another run.
   const [active, setActive] = useState<ReadonlySet<string>>(new Set())
@@ -221,9 +230,11 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     setStep(3)
     try {
       const items = Object.values(chosen)
-      const planned = await planSync(source, { title: `Copy ${plural(items.length, "policy", "policies")} from ${source.name}`.slice(0, 200), targets, items: items.map(({ folder: type, sourceId: id }) => ({ folder: type, sourceId: id })), acknowledgeRedacted })
+      const assignmentsByTarget = Object.fromEntries(targets.map((id) => [id, (mappings[id] ?? sessionMappings(sourceId, id)).filter((mapping) => mapping.confirmed)]))
+      const planned = await planSync(source, { title: `Copy ${plural(items.length, "policy", "policies")} from ${source.name}`.slice(0, 200), targets, items: items.map(({ folder: type, sourceId: id }) => ({ folder: type, sourceId: id })), acknowledgeRedacted, includeAssignments, mappings: assignmentsByTarget })
       void runs.refetch()
       if (!current()) return
+      setMappingsDirty(false)
       setRunId(planned.run.id)
       const detail = await fetchRun(planned.run.id)
       if (!current()) return
@@ -261,6 +272,16 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       })))
       setTargets(detail.run.targets.map((target) => target.targetTenantId))
       setAck(detail.run.options.acknowledgeRedacted)
+      setIncludeAssignments(detail.run.options.includeAssignments === true)
+      setMappings(Object.fromEntries(detail.targets.map((target) => {
+        const resolutions = target.promotion?.items.flatMap((item) => item.references ?? []) ?? []
+        const remembered = new Map(sessionMappings(sourceId, target.targetTenantId).map((mapping) => [`${mapping.kind}:${mapping.sourceId.toLowerCase()}`, mapping]))
+        for (const { kind, sourceId, targetId, state } of resolutions) {
+          if (state === "mapped" && targetId) remembered.set(`${kind}:${sourceId.toLowerCase()}`, { kind, sourceId, targetId, confirmed: true })
+        }
+        return [target.targetTenantId, [...remembered.values()]]
+      })))
+      setMappingsDirty(false)
       setRunId(id)
       await checkTargets(detail, current)
     } catch (error) {
@@ -362,6 +383,9 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     setNotes({})
     setErrors({})
     setAck(false)
+    setIncludeAssignments(false)
+    setMappings({})
+    setMappingsDirty(false)
     setPlanError(null)
     setDiscarding({ busy: false, error: null })
     refreshStatus()
@@ -389,7 +413,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
         <ChooseSettings
           sources={sources}
           sourceId={sourceId}
-          onSource={(id) => { setSourceId(id.toLowerCase()); setChosen({}); setTargets([]) }}
+          onSource={(id) => { setSourceId(id.toLowerCase()); setChosen({}); setTargets([]); setMappings({}); setMappingsDirty(false); setIncludeAssignments(false) }}
           folder={folder}
           onFolder={setFolder}
           policies={policies.data?.source ?? []}
@@ -415,6 +439,8 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           onBack={() => setStep(1)}
           onNext={() => { setAck(false); void review(false) }}
           planning={planning}
+          includeAssignments={includeAssignments}
+          onAssignments={setIncludeAssignments}
         />
       )}
 
@@ -435,6 +461,30 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
             // Secrets block a plan until they are acknowledged, so the acknowledgement plans again.
             if (checked && run.data?.run.options.acknowledgeRedacted !== true) void review(true)
           }}
+          mappingsDirty={mappingsDirty}
+          mappingPanel={includeAssignments ? (target) => {
+            const id = target.targetTenantId
+            const destination = tenantOf(id)
+            const references = target.promotion?.items.flatMap((item) => item.references ?? []) ?? []
+            if (!destination || !references.some((reference) => reference.state !== "portable")) return null
+            return <div className="space-y-3 border-t border-gray-200 px-4 py-3">
+              <h3 className="text-sm font-medium text-gray-900">Assignment and scope tag mappings</h3>
+              <fieldset disabled={planning || pending(runId)}>
+                <RemoteMappingEditor tenant={destination} source={`sync:${sourceId}`} references={references}
+                  loadObjects={(kind) => syncTargetObjects(source, id, kind)}
+                  search={(query) => syncTargetGroups(source, id, query)}
+                  counts={(ids) => syncTargetGroupCounts(source, id, ids)}
+                  onRecheck={() => setMappingsDirty(true)}
+                  mappings={mappings[id] ?? sessionMappings(sourceId, id)}
+                  onChange={(next) => {
+                    setMappings((previous) => ({ ...previous, [id]: next }))
+                    rememberMappings(sourceId, id, next)
+                    setMappingsDirty(true)
+                  }} />
+              </fieldset>
+              <button type="button" disabled={planning || pending(runId) || !mappingsDirty} className="text-sm font-medium text-blue-700 underline disabled:text-gray-500" onClick={() => void review(ack)}>Review updated mappings</button>
+            </div>
+          } : undefined}
           onBack={() => { abandonPlan(); setStep(2) }}
           onApprove={approveAndSync}
           busy={pending(runId)}

@@ -1,0 +1,318 @@
+import { GROUP_CHECK_GUIDANCE, GROUP_CHECK_REQUIRED } from "../src/shared/group-access"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { POST } from "../src/portal/app/api/restore-backup/route"
+import { NextRequest } from "../src/main/api/next-server-shim"
+import { resolveRestoreAssignments } from "../src/shared/intune/restore-assignments"
+import { buildRestorePlan, buildUpdatePlan } from "../src/shared/intune/restore-plan"
+import { typeForFolder, type Item } from "../src/shared/intune/registry"
+import { readGroupStates, type GroupState } from "../src/shared/intune/group-reads"
+import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
+import type { Mapping } from "../src/shared/intune/reference-mapping"
+
+const oldGroup = "11111111-2222-4333-8444-555555555555"
+const newGroup = "11111111-2222-4333-8444-555555555556"
+const oldFilter = "22222222-2222-4333-8444-555555555555"
+const newFilter = "22222222-2222-4333-8444-555555555556"
+const legacyScopeTagAssignment = { displayName: "Pilot", members: [oldGroup], scopeMembers: [newGroup] }
+const legacyScopeTagWarning = "This scope tag's assignment is stored in an older format and is not restored. Assign it in Intune."
+const type = typeForFolder("ConfigurationPolicies")!
+const snapshot: Item = {
+  id: "policy-id",
+  name: "Contoso Defender Pilot",
+  roleScopeTagIds: ["3", "0"],
+  settings: [],
+  assignments: [
+    { target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: oldGroup, deviceAndAppManagementAssignmentFilterType: "exclude", deviceAndAppManagementAssignmentFilterId: oldFilter } },
+    { source: "policySets", target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: "ignored" } },
+  ],
+}
+const options = {
+  sameTenant: true,
+  mappings: [] as Mapping[],
+  skipped: new Set<string>(),
+  sourceNames: { group: new Map([[oldGroup, "Windows pilot"]]) },
+  groupStates: new Map<string, GroupState>([[oldGroup, { state: "missing", name: null }], [newGroup, { state: "found", name: "Windows pilot" }]]),
+  targetObjects: { filter: new Map([[newFilter, "Corporate Windows"]]), scopeTag: new Map([["7", "IT"]]) },
+}
+const mappings: Mapping[] = [
+  { kind: "group", sourceId: oldGroup, targetId: newGroup, confirmed: true },
+  { kind: "filter", sourceId: oldFilter, targetId: newFilter, confirmed: true },
+  { kind: "scopeTag", sourceId: "3", targetId: "7", confirmed: true },
+]
+
+describe("Restore assignment planning", () => {
+  it("keeps name matches and unconfirmed mappings out of the restore payload", () => {
+    const result = resolveRestoreAssignments(type, snapshot, { ...options, mappings: mappings.map((mapping) => ({ ...mapping, confirmed: false })) })
+    expect(result.review.references).toContainEqual(expect.objectContaining({
+      kind: "group", sourceId: oldGroup, state: "rejected", targetId: oldGroup,
+    }))
+    expect(result.review.errors).toHaveLength(2)
+    expect(result.snapshot).toEqual(snapshot)
+  })
+
+  it.each([true, false])("builds a restore with confirmed live objects (same tenant: %s)", (sameTenant) => {
+    const result = resolveRestoreAssignments(type, snapshot, { ...options, sameTenant, mappings })
+    expect(result.review.errors).toEqual([])
+    const plan = buildRestorePlan(type, result.snapshot, { includeAssignments: true })
+    expect(plan.create.body.roleScopeTagIds).toEqual(["7", "0"])
+    expect(plan.assignments[0]?.body).toEqual({
+      assignments: [{ target: { "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget", groupId: newGroup, deviceAndAppManagementAssignmentFilterType: "exclude", deviceAndAppManagementAssignmentFilterId: newFilter } }],
+    })
+    expect(snapshot.roleScopeTagIds).toEqual(["3", "0"])
+  })
+
+  it("preserves live assignments when every direct backup assignment is skipped", async () => {
+    const result = resolveRestoreAssignments(type, snapshot, { ...options, skipped: new Set(["0"]), mappings: [mappings[2]!] })
+    expect(result.review.errors).toEqual([])
+    expect(result.review.assignments).toMatchObject([{ key: "0", skipped: true }])
+    expect(result.review.allAssignmentsSkipped).toBe(true)
+    const graph = vi.fn<GraphCall>(async (method, path): ReturnType<GraphCall> => {
+      if (method !== "GET") return { status: 204, body: {} }
+      if (path.split("?")[0] === "deviceManagement/configurationPolicies/policy-id") return { status: 200, body: { ...snapshot, name: "Current", description: "Changed" } }
+      return { status: 200, body: { value: [] } }
+    })
+    const restorer = new Restorer(graph, { mode: "replace", assignments: true })
+    const restored = await restorer.restore("backup/ConfigurationPolicies/policy.json", snapshot, {
+      snapshot: result.snapshot, mappings: [mappings[2]!], skipped: 1, allAssignmentsSkipped: result.review.allAssignmentsSkipped,
+    })
+    expect(restored).toMatchObject({ success: true, action: "updated", warnings: expect.arrayContaining(["All backup assignments were skipped. Existing assignments were kept."]) })
+    expect(graph.mock.calls.filter(([method]) => method !== "GET").map(([method, path]) => [method, path]))
+      .toEqual([["PUT", "deviceManagement/configurationPolicies/policy-id"]])
+    expect(resolveRestoreAssignments(type, snapshot, { ...options, sameTenant: false, skipped: new Set(["0"]), mappings: [mappings[2]!] }).review.errors).toHaveLength(1)
+  })
+
+  it("warns when same-tenant restore has to use the original group ID", () => {
+    const unreadable = resolveRestoreAssignments(type, snapshot, { ...options, mappings: mappings.slice(1), groupStates: new Map() })
+    expect(unreadable.review.errors).toEqual([])
+    expect(unreadable.review.warnings).toEqual([expect.stringContaining(GROUP_CHECK_GUIDANCE)])
+    expect(buildRestorePlan(type, unreadable.snapshot, { includeAssignments: true }).assignments[0]?.body)
+      .toMatchObject({ assignments: [{ target: { groupId: oldGroup } }] })
+  })
+
+  it.each([true, false])("blocks a confirmed replacement that cannot be read (same tenant: %s)", (sameTenant) => {
+    const unreadable = resolveRestoreAssignments(type, snapshot, { ...options, sameTenant, mappings, groupStates: new Map() })
+    expect(unreadable.review.errors).toEqual([GROUP_CHECK_REQUIRED])
+    expect(unreadable.review.warnings).toEqual([])
+    expect(unreadable.review.assignments).toMatchObject([{ blocked: true }])
+  })
+
+  it("requires a confirmed mapping even if the source group ID exists in the destination", () => {
+    const idCollision = resolveRestoreAssignments(type, snapshot, { ...options, sameTenant: false, groupStates: new Map([[oldGroup, { state: "found", name: "Other group" }]]) })
+    expect(idCollision.review.references).toContainEqual(expect.objectContaining({ kind: "group", state: "missing", targetId: null }))
+  })
+
+  it("retains All devices and All users assignments across tenants without group reads", () => {
+    const assignments = ["allDevicesAssignmentTarget", "allLicensedUsersAssignmentTarget"].map((target) => ({ target: { "@odata.type": `#microsoft.graph.${target}` } }))
+    const result = resolveRestoreAssignments(type, { ...snapshot, assignments, roleScopeTagIds: ["0"] }, { ...options, sameTenant: false, groupStates: new Map() })
+    expect(result.review.errors).toEqual([])
+    expect(result.review.references).toMatchObject([{ kind: "scopeTag", state: "portable" }])
+    expect(buildRestorePlan(type, result.snapshot, { includeAssignments: true }).assignments[0]?.body).toEqual({ assignments })
+  })
+
+  it.each([true, false])("writes only the mapped scope tag group target (same tenant: %s)", async (sameTenant) => {
+    const scopeTag = typeForFolder("ScopeTags")!
+    const original: Item = { id: "3", displayName: "IT", assignments: [
+      { target: { "@odata.type": "#microsoft.graph.scopeTagGroupAssignmentTarget", entraObjectId: oldGroup, targetType: "device" } },
+      legacyScopeTagAssignment,
+    ] }
+    const result = resolveRestoreAssignments(scopeTag, original, { ...options, sameTenant, mappings })
+    expect(result.review.errors).toEqual([])
+    expect(result.review.warnings).toEqual([legacyScopeTagWarning])
+    expect(result.review.references).toMatchObject([{ sourceId: oldGroup, targetId: newGroup }])
+    expect(result.review.allAssignmentsSkipped).toBe(false)
+    const graph = vi.fn<GraphCall>(async (_method, path): ReturnType<GraphCall> => path.endsWith("/assign")
+      ? { status: 200, body: { value: [] } }
+      : { status: 201, body: { id: "8" } })
+    const restorer = new Restorer(graph, { mode: "copy", assignments: true, crossTenant: !sameTenant })
+    const restored = await restorer.restore("backup/ScopeTags/tag.json", original, {
+      snapshot: result.snapshot, mappings, skipped: 0, allAssignmentsSkipped: result.review.allAssignmentsSkipped, warnings: result.review.warnings,
+    })
+    expect(restored).toMatchObject({ success: true, action: "created", warnings: [legacyScopeTagWarning] })
+    expect(graph.mock.calls.map(([method, path, body]) => [method, path, body])).toEqual([
+      ["POST", "deviceManagement/roleScopeTags", { displayName: "[Restored] IT" }],
+      ["POST", "deviceManagement/roleScopeTags/8/assign", { assignments: [
+        { target: { "@odata.type": "#microsoft.graph.scopeTagGroupAssignmentTarget", entraObjectId: newGroup, targetType: "device" } },
+      ] }],
+    ])
+  })
+
+  it("omits legacy scope tag rows from plans built without assignment review", () => {
+    const scopeTag = typeForFolder("ScopeTags")!
+    const original: Item = { id: "3", displayName: "IT", assignments: [legacyScopeTagAssignment] }
+    expect(buildRestorePlan(scopeTag, original, { includeAssignments: true }).assignments).toEqual([])
+    expect(buildUpdatePlan(scopeTag, original, "3", { includeAssignments: true }).map((step) => step.kind)).toEqual(["content"])
+  })
+})
+
+afterEach(() => vi.unstubAllGlobals())
+
+it("keeps same-run scope tag IDs alongside explicit mappings to existing tags", async () => {
+  const backupId = "backup-fixture"
+  const tenantId = "33333333-2222-4333-8444-555555555555"
+  const scopeTags = "/beta/deviceManagement/roleScopeTags"
+  const policies = "/beta/deviceManagement/configurationPolicies"
+  const writes: Array<{ path: string; body: Item }> = []
+  vi.stubGlobal("fetch", async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(input)
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      if (url.pathname.endsWith("metadata.json")) return Response.json({ TenantId: tenantId, Status: "Success" })
+      if (url.pathname.endsWith("tag.json")) return Response.json({ id: "3", displayName: "IT" })
+      return Response.json({ ...snapshot, assignments: [], roleScopeTagIds: ["3", "4", "0"] })
+    }
+    if (init?.method === "POST") {
+      writes.push({ path: url.pathname, body: JSON.parse(String(init.body)) })
+      return Response.json({ id: url.pathname === scopeTags ? "8" : "copied-policy" }, { status: 201 })
+    }
+    if (url.pathname === scopeTags) return Response.json({ value: [{ id: "3", displayName: "IT" }] })
+    return new Response(null, { status: 404 })
+  })
+  const response = await POST(new NextRequest("http://tenuvault.internal/api/restore-backup", {
+    method: "POST",
+    body: JSON.stringify({
+      backupId, tenantId, appId: "test", clientSecret: "test", storageAccountName: "test",
+      assignments: true, restoreType: "selective",
+      selectedPolicies: [`${backupId}/ConfigurationPolicies/policy.json`, `${backupId}/ScopeTags/tag.json`].map((path) => ({ path })),
+      assignmentMappings: { [tenantId]: [{ kind: "scopeTag", sourceId: "4", targetId: "3", confirmed: true }] },
+    }),
+  }))
+  expect(await response.json()).toMatchObject({ success: true, details: { restoredCount: 2 } })
+  expect(writes).toMatchObject([
+    { path: scopeTags },
+    { path: policies, body: { roleScopeTagIds: ["8", "3", "0"] } },
+  ])
+})
+
+it("shows the legacy scope tag warning in review and in the successful restore result", async () => {
+  const backupId = "backup-fixture"
+  const tenantId = "33333333-2222-4333-8444-555555555555"
+  const path = `${backupId}/ScopeTags/tag.json`
+  const calls: Array<{ path: string; method: string }> = []
+  vi.stubGlobal("fetch", async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(input)
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      if (url.pathname.endsWith("metadata.json")) return Response.json({ TenantId: tenantId, Status: "Success" })
+      return Response.json({ id: "3", displayName: "IT", assignments: [legacyScopeTagAssignment] })
+    }
+    calls.push({ path: url.pathname, method: init?.method ?? "GET" })
+    if (url.pathname === "/beta/deviceManagement/roleScopeTags" && init?.method === "POST") {
+      return Response.json({ id: "8" }, { status: 201 })
+    }
+    return new Response(null, { status: 404 })
+  })
+  const run = (action?: string) => POST(new NextRequest("http://tenuvault.internal/api/restore-backup", {
+    method: "POST",
+    body: JSON.stringify({
+      action, backupId, tenantId, appId: "test", clientSecret: "test", storageAccountName: "test",
+      assignments: true, restoreType: "selective", mode: "copy", selectedPolicies: [{ path }],
+    }),
+  }))
+  const review = await run("assignment-review")
+  expect(review.status).toBe(200)
+  expect(await review.json()).toMatchObject({ targets: [{ items: [{
+    path, references: [], errors: [], warnings: [legacyScopeTagWarning], allAssignmentsSkipped: true,
+  }] }] })
+  expect(calls).toEqual([])
+
+  const restored = await run()
+  expect(restored.status).toBe(200)
+  expect(await restored.json()).toMatchObject({ details: { results: [{
+    path, success: true, action: "created", warnings: [legacyScopeTagWarning],
+  }] } })
+  expect(calls).toEqual([{ method: "POST", path: "/beta/deviceManagement/roleScopeTags" }])
+})
+
+it("blocks the entire restore when the second policy has a missing reference, with no Graph writes", async () => {
+  const backupId = "backup-fixture"
+  const tenantId = "33333333-2222-4333-8444-555555555555"
+  const calls: Array<{ path: string; method: string }> = []
+  vi.stubGlobal("fetch", async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(input)
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      if (url.pathname.endsWith("metadata.json")) return Response.json({ TenantId: tenantId, Status: "Success" })
+      if (url.pathname.endsWith("first.json")) return Response.json({ ...snapshot, assignments: [], roleScopeTagIds: ["0"] })
+      if (url.pathname.endsWith("second.json")) return Response.json({ ...snapshot, roleScopeTagIds: ["0"] })
+    }
+    if (url.hostname === "graph.microsoft.com") {
+      calls.push({ path: url.pathname, method: init?.method ?? "GET" })
+      if (url.pathname.startsWith("/beta/groups/")) return Response.json({}, { status: 404 })
+      return Response.json({ value: [] })
+    }
+    return new Response(null, { status: 404 })
+  })
+  const response = await POST(new NextRequest("http://tenuvault.internal/api/restore-backup", {
+    method: "POST",
+    body: JSON.stringify({
+      backupId, tenantId, appId: "test", clientSecret: "test", storageAccountName: "test",
+      assignments: true, restoreType: "selective",
+      selectedPolicies: ["first", "second"].map((name) => ({ path: `${backupId}/ConfigurationPolicies/${name}.json` })),
+    }),
+  }))
+  expect(response.status).toBe(409)
+  expect(calls).toEqual([
+    { method: "GET", path: `/beta/groups/${oldGroup}` },
+    { method: "GET", path: "/beta/deviceManagement/assignmentFilters" },
+  ])
+})
+
+it("warns and writes the original group ID when the same-tenant restore gets a 403", async () => {
+  const backupId = "backup-fixture"
+  const tenantId = "33333333-2222-4333-8444-555555555555"
+  const stored: Item = {
+    id: "policy-id", name: "Example", roleScopeTagIds: ["0"], settings: [],
+    assignments: [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: oldGroup } }],
+  }
+  const writes: Array<{ path: string; body: unknown }> = []
+  vi.stubGlobal("fetch", async (input: URL | string, init?: RequestInit) => {
+    const url = new URL(input)
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      if (url.pathname.endsWith("metadata.json")) return Response.json({ TenantId: tenantId, Status: "Success" })
+      if (url.pathname.endsWith("app.json")) return Response.json({
+        id: "app-id", displayName: "Installer", "@odata.type": "#microsoft.graph.windowsUniversalAppX",
+        assignments: [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: newGroup } }],
+      })
+      return Response.json(stored)
+    }
+    if (url.pathname === `/beta/groups/${oldGroup}`) return Response.json({}, { status: 403 })
+    if (url.pathname.startsWith("/beta/groups/")) return Response.json({}, { status: 404 })
+    if (init?.method === "POST") {
+      writes.push({ path: url.pathname, body: JSON.parse(String(init.body)) })
+      return Response.json({ id: "restored" }, { status: 201 })
+    }
+    return new Response(null, { status: 404 })
+  })
+  const response = await POST(new NextRequest("http://tenuvault.internal/api/restore-backup", {
+    method: "POST",
+    body: JSON.stringify({
+      backupId, tenantId, appId: "test", clientSecret: "test", storageAccountName: "test",
+      assignments: true, restoreType: "selective",
+      selectedPolicies: [{ path: `${backupId}/ConfigurationPolicies/policy.json` }, { path: `${backupId}/Apps/app.json` }],
+    }),
+  }))
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ details: { results: expect.arrayContaining([
+    expect.objectContaining({ success: true, warnings: [expect.stringContaining(oldGroup)] }),
+    expect.objectContaining({ path: `${backupId}/Apps/app.json`, action: "skipped" }),
+  ]) } })
+  expect(writes).toContainEqual({ path: "/beta/deviceManagement/configurationPolicies/restored/assign", body: { assignments: stored.assignments } })
+})
+
+it("batches referenced groups in groups of twenty and handles their individual statuses", async () => {
+  const ids = Array.from({ length: 21 }, (_, index) => `11111111-2222-4333-8444-${String(index).padStart(12, "0")}`)
+  const graph = vi.fn<GraphCall>(async (_method, _path, body) => {
+    const requests = body?.requests as Array<{ id: string; method: string; url: string }>
+    return { status: 200, body: { responses: requests.map(({ id, url }) => {
+      const groupId = url.split("/")[2]?.split("?")[0]
+      return { id, status: groupId === ids[0] ? 404 : groupId === ids[1] ? 403 : 200, body: { id: groupId ?? "", displayName: "Pilot", securityEnabled: true, groupTypes: [] } }
+    }).reverse() } }
+  })
+  const states = await readGroupStates(graph, [...ids, ids[0]!])
+  expect(graph.mock.calls.map(([method, path, body]) => [method, path, (body?.requests as Item[] | undefined)?.length]))
+    .toEqual([["POST", "$batch", 20], ["POST", "$batch", 1]])
+  expect(states.get(ids[0]!)).toEqual({ state: "missing", name: null })
+  expect(states.get(ids[1]!)).toEqual({ state: "unknown", name: null })
+  expect(states.get(ids[20]!)).toEqual({ state: "found", name: "Pilot" })
+})
