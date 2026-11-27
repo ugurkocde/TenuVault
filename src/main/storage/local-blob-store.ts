@@ -193,9 +193,16 @@ export interface ExpectedReplacement {
   blobs: Record<string, string>
 }
 export class BlobReplacementChangedError extends Error {
-  constructor(readonly prefix: string, message?: string) {
+  constructor(readonly prefix: string, message?: string, readonly restoredEtag?: string) {
     super(message ?? `Replacement backup ${prefix} changed before cleanup completed`)
     this.name = "BlobReplacementChangedError"
+  }
+}
+
+class QuarantineRestoreConflictError extends Error {
+  constructor(readonly held: string, readonly live: string) {
+    super(`Could not restore ${held} to ${live} because the live path already exists.`)
+    this.name = "QuarantineRestoreConflictError"
   }
 }
 
@@ -497,6 +504,20 @@ const protectedPrefixesByDir = new Map<string, Map<string, number>>()
 const lockProtectedEntries = new Map<string, Array<{ dir: string; prefix: string }>>()
 /** Reclaim gate ids this process created but could not release, so the next acquire can reclaim them safely. */
 const leakedReclaimGates = new Set<string>()
+const guardRegisteredListeners = new Set<(dir: string, id: string) => void>()
+
+/** Test hook: resolves once a retention lock registers its protected-prefix guard for `dir`. */
+export function waitForLocalRetentionGuardRegistration(dir: string): Promise<string> {
+  const key = resolve(dir)
+  return new Promise(resolvePromise => {
+    const listener = (registeredDir: string, id: string) => {
+      if (registeredDir !== key) return
+      guardRegisteredListeners.delete(listener)
+      resolvePromise(id)
+    }
+    guardRegisteredListeners.add(listener)
+  })
+}
 
 interface InFlightPut {
   name: string
@@ -1100,7 +1121,7 @@ export class LocalBlobStore {
               needsRecovery = false
               renamed = false
             } catch (error) {
-              throw new BlobQuarantinedError(`A different file was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
+              throw new BlobQuarantinedError(`A different file was kept in ${held} (live path ${path}). Move it back only after checking the live file.`, { cause: error })
             }
             throw new BlobConditionNotMetError(name)
           }
@@ -1108,14 +1129,15 @@ export class LocalBlobStore {
             const changed = await this.findChangedReplacement(account, container, options.expectedReplacements, quarantine, dir, entries)
             if (changed) {
               this.index.delete(dir)
+              let restoredEtag: string | undefined
               try {
-                await this.restoreQuarantinedFile(held, path, dir)
+                restoredEtag = await this.restoreQuarantinedFile(held, path, dir)
                 needsRecovery = false
                 renamed = false
               } catch (error) {
-                throw new BlobQuarantinedError(`Replacement backup ${changed} changed during deletion and ${name} was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
+                throw new BlobQuarantinedError(`Replacement backup ${changed} changed during deletion and ${name} was kept in ${held} (live path ${path}). Move it back only after checking the live file.`, { cause: error })
               }
-              throw new BlobReplacementChangedError(changed)
+              throw new BlobReplacementChangedError(changed, undefined, restoredEtag)
             }
           }
           await rm(held)
@@ -1245,7 +1267,8 @@ export class LocalBlobStore {
 
   private registerLockProtectedPrefixes(account: string, container: string, dir: string, id: string, prefixes: string[] | undefined): Array<{ dir: string; prefix: string }> {
     if (!prefixes?.length) return []
-    const key = `${resolve(dir)}\0${id}`
+    const resolvedDir = resolve(dir)
+    const key = `${resolvedDir}\0${id}`
     const entries: Array<{ dir: string; prefix: string }> = []
     for (const prefix of prefixes) {
       const targetContainer = (container === BACKUP_CONTAINER || container === LARGE_BACKUP_CONTAINER)
@@ -1254,6 +1277,7 @@ export class LocalBlobStore {
       entries.push(addProtectedPrefix(this.dir(account, targetContainer), prefix))
     }
     lockProtectedEntries.set(key, entries)
+    for (const listener of guardRegisteredListeners) listener(resolvedDir, id)
     return entries
   }
 
@@ -1507,9 +1531,10 @@ export class LocalBlobStore {
 
   /**
    * Creates the reclaim gate file `<lock>.reclaim` exclusively, serializing stale-lock reclaimers
-   * across processes. Returns null when a live reclaimer already holds the gate. A gate left by a
-   * dead same-host process is reclaimed with the same aside-and-verify rule as the lock itself;
-   * a foreign or unobservable gate holder throws the manual warning naming the gate path.
+   * across processes. Never auto-reclaims a gate created by another process (whether live or dead):
+   * a live gate throws LeaseAlreadyPresent with its holderId/gatePath, and a dead, foreign, or
+   * unreadable gate throws the named manual warning so no live gate can ever be moved. Only a gate
+   * leaked by this exact process (recorded in `leakedReclaimGates`) may be removed here.
    */
   private async acquireReclaimGate(lockPath: string, signal?: AbortSignal): Promise<{ gatePath: string; id: string } | null> {
     const gatePath = `${lockPath}.reclaim`
@@ -1557,16 +1582,29 @@ export class LocalBlobStore {
         const isOwnLeakedGate = gateState.lock.host === hostname()
           && gateState.lock.pid === process.pid
           && leakedReclaimGates.has(leakedKey)
-        if (!isOwnLeakedGate && (await this.assessLockHolder(gatePath, gateState.lock)) === "live") {
+        if (isOwnLeakedGate) {
+          // Claim removal synchronously so no second caller in this process can also touch this gate.
+          leakedReclaimGates.delete(leakedKey)
+          signal?.throwIfAborted()
+          try {
+            await this.reclaimLockAside(gatePath, movedRaw => parseRetentionLock(movedRaw)?.id === gateId)
+          } catch (error) {
+            leakedReclaimGates.add(leakedKey)
+            throw error
+          }
+          continue
+        }
+        if ((await this.assessLockHolder(gatePath, gateState.lock)) === "live") {
           throw new BlobLeaseConflictError("Another TenuVault instance is currently reclaiming the retention lock on this backup folder.", {
             code: "LeaseAlreadyPresent",
             lockPath: gatePath,
             holderId: gateId,
           })
         }
-        signal?.throwIfAborted()
-        await this.reclaimLockAside(gatePath, movedRaw => parseRetentionLock(movedRaw)?.id === gateId)
-        if (isOwnLeakedGate) leakedReclaimGates.delete(leakedKey)
+        throw new BlobLeaseConflictError(manualLockWarning(gatePath, "a leftover reclaim gate is present"), {
+          code: "RetentionLockManualIntervention",
+          lockPath: gatePath,
+        })
       }
       return null
     } finally {
@@ -1608,10 +1646,12 @@ export class LocalBlobStore {
   }
 
   /**
-   * Removes a lock already judged stale, serialized by the reclaim gate. Invariant: a stale lock S
-   * is only ever removed by a reclaimer holding the gate (its owner is dead), so while we hold the
-   * gate and still see exactly S, S cannot be replaced before our rename. A live lock is therefore
-   * never moved aside. If the lock under the gate is no longer S, it is treated as held.
+   * Removes a lock already judged stale, serialized by an unstealable reclaim gate.
+   * Invariant: the reclaim gate is never auto-reclaimed by another process or caller, so only
+   * the current gate holder can enter this section. A stale lock S has a dead owner (or expired
+   * legacy timestamp), so S can only be removed by the gate holder. Re-reading lockPath while
+   * holding the gate and observing exactly S therefore guarantees S cannot be replaced before
+   * reclaimLockAside renames it; no live lock can ever be moved.
    */
   private async reclaimUnderGate(
     lockPath: string,
@@ -1932,24 +1972,27 @@ export class LocalBlobStore {
    * Uses a hard link where supported, resuming cleanly if a prior crash left both names linked to
    * the same file. On volumes without hard links (for example exFAT), creates the live file
    * exclusively ("wx"), writes and fsyncs the full bytes, syncs the directory, and removes the
-   * held copy; if an earlier copy-recovery crashed after syncing identical encrypted bytes, it
-   * removes the held copy and continues.
+   * held copy. If the live path already exists with identical encrypted bytes, removes the held
+   * copy; for any other occupied live path (including 0-byte or partial files), never overwrites
+   * live because .tvb names are path-addressed and cross-process writers can target the same path.
+   * Returns the restored file's ETag only when bound to the exact file just restored.
    */
-  private async restoreQuarantinedFile(held: string, live: string, dir: string): Promise<void> {
+  private async restoreQuarantinedFile(held: string, live: string, dir: string): Promise<string | undefined> {
+    const heldInfo = await lstat(held, { bigint: true })
     if (this.hardLinks) {
       try {
         await link(held, live)
         if (process.platform !== "win32") await syncDirectory(dir)
         await rm(held)
-        return
+        return await boundRestoredEtag(live, heldInfo)
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code ?? ""
         if (code === "EEXIST") {
           if (await isSameFile(held, live)) {
             await rm(held)
-            return
+            return await boundRestoredEtag(live, heldInfo)
           }
-          throw error
+          throw new QuarantineRestoreConflictError(held, live)
         }
         if (!NO_HARD_LINKS.has(code)) throw error
         this.hardLinks = false
@@ -1961,43 +2004,33 @@ export class LocalBlobStore {
       handle = await open(live, "wx", 0o600)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        if (await isSameFile(held, live) || await isIdenticalFileCopy(held, live)) {
+        if (await isSameFile(held, live)) {
           await rm(held)
-          return
+          return await boundRestoredEtag(live, heldInfo)
         }
-        if (await isRegularPartialCopy(live, data)) {
-          const tmp = `${live}.${randomBytes(8).toString("hex")}.recover.tmp`
-          try {
-            const tmpHandle = await open(tmp, "wx", 0o600)
-            try {
-              await tmpHandle.writeFile(data)
-              await tmpHandle.sync()
-            } finally {
-              await tmpHandle.close()
-            }
-            await rename(tmp, live)
-            if (process.platform !== "win32") await syncDirectory(dir)
-          } catch (replaceError) {
-            await rm(tmp, { force: true }).catch(() => undefined)
-            throw replaceError
-          }
+        const identicalInfo = await identicalLiveCopyInfo(live, data)
+        if (identicalInfo) {
           await rm(held)
-          return
+          return await boundRestoredEtag(live, identicalInfo)
         }
+        throw new QuarantineRestoreConflictError(held, live)
       }
       throw error
     }
+    let writtenInfo: BigIntStats
     try {
       await handle.writeFile(data)
       await handle.sync()
+      writtenInfo = await handle.stat({ bigint: true })
     } catch (error) {
       await handle.close().catch(() => undefined)
-      await rm(live, { force: true }).catch(() => undefined)
       throw error
     }
     await handle.close()
     if (process.platform !== "win32") await syncDirectory(dir)
     await rm(held)
+    if (writtenInfo.size !== BigInt(data.length)) return undefined
+    return await boundRestoredEtag(live, writtenInfo)
   }
 
   private async recoverRetired(dir: string, account: string, container: string, names: string[]): Promise<DamagedFile[]> {
@@ -2032,6 +2065,7 @@ export class LocalBlobStore {
     for (const { folder, file, since } of held) {
       const path = join(dir, folder, file)
       let backup: string | null = null
+      let conflictReason: string | undefined
       try {
         const info = await lstat(path)
         if (info.isFile() && /^[a-f0-9]+\.tvb$/i.test(file)) {
@@ -2048,8 +2082,11 @@ export class LocalBlobStore {
         }
       } catch (error) {
         if (isMissing(error)) continue
+        if (error instanceof QuarantineRestoreConflictError) {
+          conflictReason = `a file was kept at ${error.held} after interrupted cleanup because ${error.live} already exists. Close TenuVault and follow the backup storage recovery instructions`
+        }
       }
-      report(`${folder}/${file}`, "a file was kept after interrupted cleanup. Close TenuVault and follow the backup storage recovery instructions", backup)
+      report(`${folder}/${file}`, conflictReason ?? "a file was kept after interrupted cleanup. Close TenuVault and follow the backup storage recovery instructions", backup)
     }
     return damage
   }
@@ -2352,29 +2389,40 @@ async function isSameFile(a: string, b: string): Promise<boolean> {
   }
 }
 
-async function isIdenticalFileCopy(a: string, b: string): Promise<boolean> {
+/** Returns the live path's current ETag only if it still refers to the exact restored file identity. */
+async function boundRestoredEtag(live: string, expected: BigIntStats): Promise<string | undefined> {
   try {
-    const [infoA, infoB] = await Promise.all([lstat(a, { bigint: true }), lstat(b, { bigint: true })])
-    if (!infoA.isFile() || !infoB.isFile() || infoA.size === 0n || infoA.size !== infoB.size) return false
-    const [bytesA, bytesB] = await Promise.all([readFile(a), readFile(b)])
-    return bytesA.equals(bytesB)
+    const info = await lstat(live, { bigint: true })
+    if (!info.isFile() || info.ino === 0n) return undefined
+    if (info.dev !== expected.dev || info.ino !== expected.ino || info.size !== expected.size || info.mtimeNs !== expected.mtimeNs) {
+      return undefined
+    }
+    return `"${fileStamp(info)}"`
   } catch {
-    return false
+    return undefined
   }
 }
 
-/** Whether `live` is a regular, non-linked file that is 0 bytes or a strict byte prefix of `heldData`. */
-async function isRegularPartialCopy(live: string, heldData: Buffer): Promise<boolean> {
-  if (heldData.length === 0) return false
+/** Verifies `live` is a regular file with exact byte-for-byte identical contents to `expectedData`, bound to one open handle. */
+async function identicalLiveCopyInfo(live: string, expectedData: Buffer): Promise<BigIntStats | null> {
+  if (expectedData.length === 0) return null
+  let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
-    const info = await lstat(live, { bigint: true })
-    if (!info.isFile() || info.nlink > 1n) return false
-    if (info.size === 0n) return true
-    if (info.size >= BigInt(heldData.length)) return false
-    const liveBytes = await readFile(live)
-    return liveBytes.length === Number(info.size) && heldData.subarray(0, liveBytes.length).equals(liveBytes)
+    const linkInfo = await lstat(live, { bigint: true })
+    if (!linkInfo.isFile() || linkInfo.size !== BigInt(expectedData.length)) return null
+    handle = await open(live, "r")
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile() || before.ino === 0n || before.dev !== linkInfo.dev || before.ino !== linkInfo.ino || before.size !== BigInt(expectedData.length)) {
+      return null
+    }
+    const bytes = await handle.readFile()
+    const after = await handle.stat({ bigint: true })
+    if (fileStamp(before) !== fileStamp(after)) return null
+    return bytes.equals(expectedData) ? after : null
   } catch {
-    return false
+    return null
+  } finally {
+    await handle?.close().catch(() => undefined)
   }
 }
 

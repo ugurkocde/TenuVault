@@ -8,7 +8,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { BlobLeaseConflictError, BlobLeaseUnsupportedError, LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { BlobLeaseConflictError, BlobLeaseUnsupportedError, LocalBlobStore, type ProcessInfoReader } from "../src/main/storage/local-blob-store"
 import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -824,14 +824,17 @@ describe("Item 4: owner-and-process local retention lock and container scoping",
     await storeB.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedDead)
 
     // 3. Same host + alive PID with different processStart of the same kind (PID reuse) -> reclaimed.
-    const currentStart = String(written.processStart)
-    const differentStart = currentStart.startsWith("proc:")
-      ? `${currentStart.slice(0, currentStart.lastIndexOf(":") + 1)}${currentStart.endsWith(":0") ? "1" : "0"}`
-      : `${currentStart.split(":")[0]}:different-process-start`
-    writeFileSync(lockPath, JSON.stringify({ id: "reused-pid", host: hostname(), pid: process.pid, processStart: differentStart, app: "TenuVault" }))
-    const reclaimedReuse = await storeA.acquireRetentionLock(account, BACKUP_CONTAINER)
+    // Inject a process reader with complete, comparable tokens (including boot ID) so the test
+    // does not depend on host /proc/sys/kernel/random/boot_id availability.
+    const reuseReader: ProcessInfoReader = {
+      isPidAlive: pid => pid === process.pid,
+      readProcessStart: async pid => (pid === process.pid ? "proc:boot-id-1:2000" : "gone"),
+    }
+    const storeReuse = new LocalBlobStore(root, [MASTER], undefined, undefined, reuseReader)
+    writeFileSync(lockPath, JSON.stringify({ id: "reused-pid", host: hostname(), pid: process.pid, processStart: "proc:boot-id-1:1000", app: "TenuVault" }))
+    const reclaimedReuse = await storeReuse.acquireRetentionLock(account, BACKUP_CONTAINER)
     expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedReuse)
-    await storeA.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedReuse)
+    await storeReuse.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedReuse)
 
     // 4. Foreign host lock -> never reclaimed; clear warning names lockPath and instructs admin.
     writeFileSync(lockPath, JSON.stringify({ id: "remote-lock", host: "other-workstation.local", pid: exited.pid!, processStart: "old-start", app: "TenuVault" }))

@@ -1754,14 +1754,9 @@ export class BackupEngine {
       && !(error instanceof TokenError)
       && !(error instanceof RetentionClockError)
       && !(error instanceof RequestTimeoutError)
-    if (state.newest && state.newest !== latestPrefix) {
-      if (state.newest !== state.latest) delete state.reviews[state.newest]
-      delete state.newest
-      if (state.newestCompanion) {
-        delete state.reviews[state.newestCompanion]
-        delete state.newestCompanion
-      }
-    }
+    const hasSavedReview = (prefix: string | undefined) => Boolean(
+      prefix && (Object.keys(state.reviews[prefix]?.files ?? {}).length > 0 || state.reviews[prefix]?.complete !== undefined),
+    )
     const resumedLatest = limits && state.latest && state.latest !== latestPrefix
       ? ordered.find(backup => backup.prefix === state.latest && backup.time >= cutoff)
       : undefined
@@ -1769,9 +1764,23 @@ export class BackupEngine {
     let anchorPrefix = resumedLatest && (Object.keys(resumedProgress?.files ?? {}).length > 0 || resumedProgress?.complete !== undefined)
       ? resumedLatest.prefix
       : latestPrefix
+    const resumedNewest = limits && state.newest && state.newest !== latestPrefix && state.newest !== anchorPrefix
+      && (hasSavedReview(state.newest) || hasSavedReview(state.newestCompanion))
+      ? ordered.find(backup => backup.prefix === state.newest && backup.time >= cutoff)
+      : undefined
+    if (state.newest && state.newest !== latestPrefix && !resumedNewest) {
+      if (state.newest !== state.latest) delete state.reviews[state.newest]
+      delete state.newest
+      if (state.newestCompanion) {
+        delete state.reviews[state.newestCompanion]
+        delete state.newestCompanion
+      }
+    }
     let anchorManifest: Record<string, unknown> | null = null
     let anchorClaim: OwnershipFile | undefined
     let anchorCompanionManifest: Record<string, unknown> | null | undefined
+    let newestTarget: string | undefined
+    let newestTargetCompanion: string | undefined
     let unreadableAnchor: { prefix: string; error: unknown } | undefined
     if (anchorPrefix !== latestPrefix) {
       let claim: OwnershipFile | undefined
@@ -1874,7 +1883,12 @@ export class BackupEngine {
           anchorCompanionManifest = writtenCompanion
           if (!anchorManifest) throw new Error("The latest backup has no readable manifest")
           if (limits) {
-            if (state.newest !== latestPrefix) delete state.reviews[latestPrefix]
+            if (state.newest && state.newest !== latestPrefix) {
+              delete state.reviews[state.newest]
+              if (state.newestCompanion) delete state.reviews[state.newestCompanion]
+            } else if (state.newest !== latestPrefix) {
+              delete state.reviews[latestPrefix]
+            }
             delete state.newest
             const fallbackCompanion = anchorManifest.CompanionBackup
             if (typeof fallbackCompanion === "string" && isLargeBackup(fallbackCompanion)) {
@@ -1889,40 +1903,100 @@ export class BackupEngine {
         }
       }
       if (anchorPrefix !== latestPrefix) {
-        // The anchor is a resumed older backup, but no deletion may run while the newest
-        // backup is incomplete: verify its listed payloads with the same checks before
-        // any DELETE. A mismatch (or a budget stop) throws here, before the plan phase,
-        // so nothing is deleted; receipts for both backups are kept for the next run.
-        const newestManifest = written ?? await metered().readJson(`${current}/metadata.json`)
-        if (!newestManifest) throw new Error("The latest backup has no readable manifest")
-        const newestProgress = limits ? review(latestPrefix) : undefined
-        const companionId = newestManifest.CompanionBackup
-        const newestCompanionPrefix = typeof companionId === "string" && isLargeBackup(companionId) && writtenCompanion ? `${companionId}/` : undefined
-        const newestCompanionProgress = limits && newestCompanionPrefix ? review(newestCompanionPrefix) : undefined
-        const persistNewest = () => {
-          const hasNewest = Boolean(newestProgress && (Object.keys(newestProgress.files).length > 0 || newestProgress.complete !== undefined))
-          if (hasNewest) state.newest = latestPrefix
-          else {
-            if (newestProgress) delete state.reviews[latestPrefix]
-            if (state.newest === latestPrefix) delete state.newest
+        // The anchor is a resumed older backup, so verify a newer committed backup in full before
+        // any DELETE. Continue an in-progress committed newest backup across scheduled runs so
+        // bounded verification finishes instead of restarting on every newly written folder.
+        const verifyNewestTarget = async (
+          targetPrefix: string,
+          targetManifest: Record<string, unknown>,
+          targetClaim: OwnershipFile | undefined,
+          targetCompanionManifest: Record<string, unknown> | null | undefined,
+        ) => {
+          const newestProgress = limits ? review(targetPrefix) : undefined
+          const companionId = targetManifest.CompanionBackup
+          const targetCompanionPrefix = typeof companionId === "string" && isLargeBackup(companionId) && targetCompanionManifest ? `${companionId}/` : undefined
+          const targetCompanionProgress = limits && targetCompanionPrefix ? review(targetCompanionPrefix) : undefined
+          const persistNewest = () => {
+            const hasNewest = Boolean(newestProgress && (Object.keys(newestProgress.files).length > 0 || newestProgress.complete !== undefined))
+            if (hasNewest) state.newest = targetPrefix
+            else {
+              if (newestProgress) delete state.reviews[targetPrefix]
+              if (state.newest === targetPrefix) delete state.newest
+            }
+            const hasCompanion = Boolean(targetCompanionProgress && (Object.keys(targetCompanionProgress.files).length > 0 || targetCompanionProgress.complete !== undefined))
+            if (hasCompanion && targetCompanionPrefix) state.newestCompanion = targetCompanionPrefix
+            else {
+              if (targetCompanionPrefix && targetCompanionProgress) delete state.reviews[targetCompanionPrefix]
+              if (state.newestCompanion === targetCompanionPrefix) delete state.newestCompanion
+            }
           }
-          const hasCompanion = Boolean(newestCompanionProgress && (Object.keys(newestCompanionProgress.files).length > 0 || newestCompanionProgress.complete !== undefined))
-          if (hasCompanion && newestCompanionPrefix) state.newestCompanion = newestCompanionPrefix
-          else {
-            if (newestCompanionPrefix && newestCompanionProgress) delete state.reviews[newestCompanionPrefix]
-            if (state.newestCompanion === newestCompanionPrefix) delete state.newestCompanion
+          try {
+            await verifyHalf(metered(), targetPrefix, targetManifest, undefined, targetClaim, newestProgress, keyFingerprint)
+            if (targetCompanionPrefix && targetCompanionManifest) {
+              await verifyHalf(metered(), targetCompanionPrefix, targetCompanionManifest, undefined, undefined, targetCompanionProgress, keyFingerprint)
+            }
+            newestTarget = targetPrefix
+            newestTargetCompanion = targetCompanionPrefix
+            persistNewest()
+          } catch (error) {
+            persistNewest()
+            saveProgress()
+            throw error
           }
         }
-        try {
-          await verifyHalf(metered(), latestPrefix, newestManifest, undefined, undefined, newestProgress, keyFingerprint)
-          if (newestCompanionPrefix && writtenCompanion) {
-            await verifyHalf(metered(), newestCompanionPrefix, writtenCompanion, undefined, undefined, newestCompanionProgress, keyFingerprint)
+        const verifyLatestNow = async () => {
+          const newestManifest = written ?? await metered().readJson(`${current}/metadata.json`)
+          if (!newestManifest) throw new Error("The latest backup has no readable manifest")
+          await verifyNewestTarget(latestPrefix, newestManifest, undefined, writtenCompanion)
+        }
+        if (resumedNewest) {
+          const clearResumedNewest = () => {
+            delete state.reviews[resumedNewest.prefix]
+            if (state.newest === resumedNewest.prefix) delete state.newest
+            if (state.newestCompanion) {
+              delete state.reviews[state.newestCompanion]
+              delete state.newestCompanion
+            }
+            saveProgress()
           }
-          persistNewest()
-        } catch (error) {
-          persistNewest()
-          saveProgress()
-          throw error
+          let resumedClaim: OwnershipFile | undefined
+          const resolved = await resolveBackupOwnership(async file => {
+            const read = await readFile(metered(), `${resumedNewest.prefix}${file}`)
+            if (file === BACKUP_OWNER_FILE) resumedClaim = read
+            return read
+          }, tenant)
+          let resumedCompanionManifest: Record<string, unknown> | null | undefined
+          let resumedManifest = resolved.manifest.kind === "found" && resolved.owner.kind === "owned"
+            ? resolved.manifest.metadata
+            : null
+          if (resumedManifest) {
+            const companionId = resumedManifest.CompanionBackup
+            if (typeof companionId === "string" && isLargeBackup(companionId)) {
+              const companionRead = await readFile(metered(), `${companionId}/metadata.json`)
+              if (companionRead.kind === "found" && companionRead.value && typeof companionRead.value === "object" && !Array.isArray(companionRead.value)) {
+                resumedCompanionManifest = companionRead.value as Record<string, unknown>
+              } else if (companionRead.kind === "unreadable") {
+                resumedManifest = null
+              }
+            }
+          }
+          if (!resumedManifest) {
+            clearResumedNewest()
+            await verifyLatestNow()
+          } else {
+            try {
+              await verifyNewestTarget(resumedNewest.prefix, resumedManifest, resumedClaim, resumedCompanionManifest)
+            } catch (error) {
+              if (isAnchorUnreadable(error)) {
+                clearResumedNewest()
+                await verifyLatestNow()
+              } else {
+                throw error
+              }
+            }
+          }
+        } else {
+          await verifyLatestNow()
         }
       } else if (state.newest === latestPrefix) {
         delete state.newest
@@ -2004,6 +2078,8 @@ export class BackupEngine {
       if (remnants.deleted || remnants.kept || remnants.unowned) this.write(job, `Remnant cleanup: deleted ${remnants.deleted} halves (${remnants.deletedBytes} bytes); kept ${remnants.kept} owned halves (${remnants.keptBytes} bytes) for recovery or storage protection; kept ${remnants.unowned} unverified halves (${remnants.unownedBytes} bytes) for manual review. Recovery grace is ${REMNANT_RECOVERY_DAYS} days after the ${days}-day retention period.`, remnants.unowned ? "warning" : "info")
     }
     const protectedPrefixes = new Set<string>([latestPrefix, anchorPrefix])
+    if (newestTarget) protectedPrefixes.add(newestTarget)
+    if (newestTargetCompanion) protectedPrefixes.add(newestTargetCompanion)
     if (latestCompanionPrefix) protectedPrefixes.add(latestCompanionPrefix)
     if (typeof written?.CompanionBackup === "string" && isBackupName(written.CompanionBackup)) {
       protectedPrefixes.add(`${written.CompanionBackup}/`)
@@ -2386,7 +2462,7 @@ export class BackupEngine {
     }
     for (const [index, backup] of backups.entries()) {
       if (replacementChangedDuringRun) break
-      if (unreadable.has(index) || backup.prefix === anchorPrefix) continue
+      if (unreadable.has(index) || backup.prefix === anchorPrefix || backup.prefix === newestTarget) continue
       if (unreadableAnchor && backup.prefix === unreadableAnchor.prefix) {
         keptForReview(backup.prefix, unreadableAnchor.error)
         continue
@@ -2668,7 +2744,14 @@ export class BackupEngine {
           const remove = async (name: string) => {
             if (leaseManager) await leaseManager.ensureFresh()
             if (localStorage) await verifyReplacements(unit.replacements)
-            await unit.writer.delete(name, verified.get(name)!, localLocks.get(backupContainer(name)), expectedReplacements)
+            try {
+              await unit.writer.delete(name, verified.get(name)!, localLocks.get(backupContainer(name)), expectedReplacements)
+            } catch (error) {
+              if (error instanceof ReplacementChangedError && error.restoredEtag && Object.hasOwn(journal.remaining, name)) {
+                journal.remaining[name] = error.restoredEtag
+              }
+              throw error
+            }
             deleted++
             delete journal.remaining[name]
             journal.deleted.push(name)

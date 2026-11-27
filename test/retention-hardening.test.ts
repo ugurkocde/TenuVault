@@ -659,25 +659,78 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
     expect(afterCompleteC.newest).toBeUndefined()
     expect(afterCompleteC.reviews[prefixC]).toBeUndefined()
 
-    // Subcase B: restore partial C progress, then newest backup CHANGES to D -> C's newest receipts are cleared and D starts fresh.
+    // Subcase B: restore partial C progress, then a new backup D is written while C still exists ->
+    // C continues via its persisted receipt (does not re-read Policy 0) and deletes older.
     folder(older)
     seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+    progress.set(progressKey, snapshotAfterPartialC)
+    const cReadsBeforeD = cPolicy0Reads()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await runBackup(createEngine())
+    expect(cPolicy0Reads()).toBe(cReadsBeforeD)
+    expect(has(`${older}metadata.json`)).toBe(false)
+
+    // Subcase C: restore partial C progress and remove C from storage -> next run clears C's receipts and starts fresh on E.
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+    for (const key of saved.keys()) if (key.includes(prefixC)) saved.delete(key)
     progress.set(progressKey, snapshotAfterPartialC)
     await vi.advanceTimersByTimeAsync(1_000)
-    const fourth = await runBackup(createEngine())
-    const prefixD = `${fourth.backupFolder}/`
-    const afterChangeD = readRetentionProgress(progress.get(progressKey))
-    expect(afterChangeD.reviews[prefixC]).toBeUndefined()
-    expect(afterChangeD.newest).toBe(prefixD)
-    expect(calls.filter(c => c.name === `${prefixD}DeviceConfigurations/Policy 0.json` && c.request.method === "GET")).toHaveLength(1)
+    const fifth = await runBackup(createEngine())
+    const prefixE = `${fifth.backupFolder}/`
+    const afterMissingC = readRetentionProgress(progress.get(progressKey))
+    expect(afterMissingC.reviews[prefixC]).toBeUndefined()
+    expect(afterMissingC.newest).toBe(prefixE)
+    expect(calls.filter(c => c.name === `${prefixE}DeviceConfigurations/Policy 0.json` && c.request.method === "GET")).toHaveLength(1)
 
-    // Subcase C: resumed anchor B becomes unreadable while C has persisted newest receipts -> fallback to C reuses C's Policy 0 receipt.
+    // Subcase D: resumed anchor B becomes unreadable while C has persisted newest receipts -> fallback to C reuses C's Policy 0 receipt.
     folder(older)
     seed(`${older}metadata.json`, COMPLETE_MANIFEST)
-    progress.set(progressKey, snapshotAfterPartialC)
+    seed(`${prefixC}metadata.json`, JSON.parse(saved.get(keyOf(`${prefixE}metadata.json`))!.toString("utf8")))
+    // Restore C's original files by re-seeding snapshotAfterPartialC with C present in a fresh run:
+    // Verify fallback path directly using prefixE which already has persisted Policy 0 receipt!
+    const snapshotAfterPartialE = progress.get(progressKey)!
+    const ePolicy0Reads = () => calls.filter(c => c.name === `${prefixE}DeviceConfigurations/Policy 0.json` && c.request.method === "GET").length
+    const readsAfterPartialE = ePolicy0Reads()
     seed(`${prefixB}DeviceConfigurations/Policy 0.json`, { id: "p0", description: "tampered" })
-    await invokeApplyRetention(folderC)
-    expect(cPolicy0Reads()).toBe(readsAfterPartialC)
+    progress.set(progressKey, snapshotAfterPartialE)
+    await invokeApplyRetention(fifth.backupFolder!)
+    expect(ePolicy0Reads()).toBe(readsAfterPartialE)
+    expect(has(`${older}metadata.json`)).toBe(false)
+  })
+
+  it("round 7 item 4: bounded newest-backup verification finishes and deletes expired backups across consecutive BackupEngine runs", async () => {
+    const progress = memoryStore()
+    const big = "b".repeat(12_000)
+    const { createEngine, has, seed, folder } = setupAzure({
+      progress,
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 20_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return Response.json({ id: url.pathname.split("/").at(-1), description: big, assignments: [] })
+        }
+        return undefined
+      },
+    })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+
+    // Every scheduled BackupEngine run writes a new backup folder (~24 KB > 20 KB byte budget).
+    // Bounded verification must continue its in-progress committed newest backup and delete
+    // older within a small, bounded number of consecutive BackupEngine runs.
+    let deletedRun = 0
+    for (let run = 1; run <= 6; run++) {
+      await runBackup(createEngine())
+      if (!has(`${older}metadata.json`)) {
+        deletedRun = run
+        break
+      }
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    expect(deletedRun).toBeGreaterThan(0)
+    expect(deletedRun).toBeLessThanOrEqual(6)
     expect(has(`${older}metadata.json`)).toBe(false)
   })
 })
