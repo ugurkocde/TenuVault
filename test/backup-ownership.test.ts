@@ -1,11 +1,28 @@
+import { createHash } from "node:crypto"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
+import type { RetentionLimits } from "../src/main/backup/retention-budget"
+import {
+  MAX_FRESH_BINDING_LENGTH,
+  MAX_FRESH_COVER_LENGTH,
+  MAX_FRESH_COVERS,
+  MAX_FRESH_FILE_NAME_LENGTH,
+  MAX_FRESH_FILES,
+  MAX_FRESH_PREFIX_LENGTH,
+  MAX_FRESH_RECEIPT_LENGTH,
+  MAX_FRESH_REPLACEMENTS,
+  readRetentionProgress,
+  type RetentionProgressStore,
+} from "../src/main/backup/retention-progress"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { NextRequest } from "next/server"
-import { BackupEngine } from "../src/main/backup/engine"
-import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azure-seal"
+import { BlobWriter } from "../src/main/backup/blob-writer"
+import { applyRetention } from "../src/main/backup/retention"
+import { BackupEngine, JOB_DEADLINE_MS } from "../src/main/backup/engine"
+import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { sealLegacyAzure } from "./legacy-seal"
-import { endlessBody } from "./helpers"
+import { endlessBody, withBackupServerTime } from "./helpers"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { reviewArchive } from "../src/main/backup/archive"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
@@ -25,10 +42,19 @@ const request = {
 }
 const owner = { Source: "TenuVault Desktop", TenantId: TENANT }
 
-function setup(options: { retention?: number; count?: number; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
+const oldItem = { id: "old" }
+const indexed = { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(oldItem), sha256: createHash("sha256").update(JSON.stringify(oldItem)).digest("hex") } }
+
+function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; serverTime?: () => Date | null; progress?: RetentionProgressStore; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
   vi.useFakeTimers()
   vi.setSystemTime(now)
   const saved = new Map<string, Buffer>()
+  const keyring = [master]
+  const etag = (name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+  const withDate = (response: Response) => {
+    const serverTime = options.serverTime ? options.serverTime() : new Date()
+    return serverTime ? withBackupServerTime(response, serverTime) : response
+  }
   const calls: Array<{ name: string; request: Request }> = []
   const wireFetch: typeof fetch = async (input, init) => {
     const sent = new Request(input, init), url = new URL(sent.url)
@@ -37,30 +63,37 @@ function setup(options: { retention?: number; count?: number; override?: (url: U
     const overridden = options.override?.(url, sent)
     if (overridden) return overridden
     if (url.hostname === "graph.microsoft.com") {
-      return url.pathname.endsWith("/deviceConfigurations")
+      return withDate(url.pathname.endsWith("/deviceConfigurations")
         ? Response.json({ value: Array.from({ length: options.count ?? 0 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
-        : Response.json({ id: url.pathname.split("/").at(-1) })
+        : Response.json({ id: url.pathname.split("/").at(-1) }))
     }
     if (url.searchParams.get("comp") === "list") {
       const names = [...saved.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
       const entries = url.searchParams.has("delimiter")
         ? [...new Set(names.map(name => `${name.split("/")[0]}/`))].map(name => `<BlobPrefix><Name>${name}</Name></BlobPrefix>`)
-        : names.map(name => `<Blob><Name>${name}</Name></Blob>`)
+        : names.map(name => `<Blob><Name>${name}</Name><Properties><Etag>${etag(name)}</Etag></Properties></Blob>`)
       return new Response(`<Blobs>${entries.join("")}</Blobs>`)
     }
     if (sent.method === "PUT") {
       if (!url.search) saved.set(name, Buffer.from(await sent.arrayBuffer()))
-      return new Response(null, { status: 201 })
+      return withDate(new Response(null, { status: 201 }))
     }
     if (sent.method === "DELETE") {
+      if (saved.has(name) && sent.headers.get("if-match") !== etag(name)) return new Response(null, { status: 412 })
       saved.delete(name)
       return new Response(null, { status: 202 })
     }
-    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404 })
+    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: saved.has(name) ? { etag: etag(name) } : undefined })
   }
   registerStorageToken("token", TENANT)
-  const fetch = legacyAzureReader(wireFetch, () => [master])
-  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30 })
+  const fetch = legacyAzureReader(wireFetch, () => keyring)
+  const progressData = new Map<string, string>()
+  const progress: RetentionProgressStore = options.progress ?? {
+    get: key => progressData.get(key) ?? null,
+    set: (key, value) => { progressData.set(key, value) },
+    delete: key => { progressData.delete(key) },
+  }
+  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, retentionProgress: progress, recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keyring) })
   /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
   function seed(name: string, value: unknown, sealed = false, key = master) {
     const body = Buffer.from(typeof value === "string" ? value : JSON.stringify(value))
@@ -70,7 +103,7 @@ function setup(options: { retention?: number; count?: number; override?: (url: U
     seed(`${prefix}DeviceConfigurations/Old.json`, { id: "old" }, sealed)
     if (marker !== null) seed(`${prefix}${BACKUP_OWNER_FILE}`, marker, sealed)
   }
-  return { engine, fetch, saved, calls, seed, folder }
+  return { engine, fetch, saved, calls, seed, folder, keyring, progress, progressData }
 }
 
 async function complete(engine: BackupEngine) {
@@ -142,14 +175,14 @@ describe("backup folder ownership", () => {
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
   })
 
-  it("removes a failed backup past the retention period, manifest first and ownership last", async () => {
+  it("removes a failed backup past the retention period, payload first and ownership last", async () => {
     const { engine, saved, calls, seed, folder } = setup()
     const expired = "backup-2026-08-01-020000/"
     folder(expired)
-    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Failed", Failures: 0, Scope: { Excluded: [] }, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 } })
+    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Failed", Failures: 0, Scope: { Excluded: [] }, Items: indexed, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 } })
     await complete(engine)
     expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
-    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`, `${expired}${BACKUP_OWNER_FILE}`])
+    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}DeviceConfigurations/Old.json`, `${expired}metadata.json`, `${expired}${BACKUP_OWNER_FILE}`])
   })
 
   it.each([old, "backup-2026-08-01-020000/"])("leaves manifestless folder %s untouched with valid same-tenant ownership", async prefix => {
@@ -162,7 +195,7 @@ describe("backup folder ownership", () => {
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
     expect(saved.has(`${prefix}metadata.json`)).toBe(false)
     // Retention reads the marker of a folder without a manifest to know who uses the container, and changes nothing.
-    expect(calls.filter(call => call.name.startsWith(prefix)).map(call => [call.request.method, call.name])).toEqual([["GET", `${prefix}metadata.json`], ["GET", `${prefix}${BACKUP_OWNER_FILE}`]])
+    if (prefix !== old) expect(calls.filter(call => call.name.startsWith(prefix)).map(call => [call.request.method, call.name])).toEqual([["GET", `${prefix}metadata.json`], ["GET", `${prefix}${BACKUP_OWNER_FILE}`]])
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
   })
@@ -186,21 +219,24 @@ describe("backup folder ownership", () => {
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
   })
 
-  it("ages out plain and openable legacy backups in a mixed container but never one no key opens", async () => {
+  it("keeps an older backup sealed with another key and still removes independently verified owned backups", async () => {
     const { engine, saved, seed, folder } = setup()
-    const plain = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/", unopenable = "backup-2026-08-03-020000/"
-    const manifest = { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } }
+    const plain = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/", unopenable = "backup-2026-08-03-020000/", untagged = "backup-2026-08-04-020000/"
+    const manifest = { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } }
     folder(plain)
     seed(`${plain}metadata.json`, manifest)
     folder(legacy, owner, true)
     seed(`${legacy}metadata.json`, manifest, true)
     folder(unopenable, owner, true)
     seed(`${unopenable}metadata.json`, manifest, true, Buffer.alloc(32, 9))
-    const kept = [...saved.entries()].filter(([name]) => name.startsWith(unopenable))
+    folder(untagged, null)
+    seed(`${untagged}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
+    const kept = [...saved.entries()].filter(([name]) => name.startsWith(unopenable) || name.startsWith(untagged))
     const job = await complete(engine)
-    expect([...saved.keys()].some(name => name.startsWith(plain) || name.startsWith(legacy))).toBe(false)
     for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
-    expect(job.log.join("\n")).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. It was left in place.`)
+    expect([...saved.keys()].some(name => name.startsWith(plain))).toBe(false)
+    expect([...saved.keys()].some(name => name.startsWith(legacy))).toBe(false)
+    expect(job.log.join("\n")).toContain(LEGACY_SEALED_MESSAGE)
   })
 
   it("never deletes another tenant's untagged backup when a damaged manifest sits in the container", async () => {
@@ -209,21 +245,20 @@ describe("backup folder ownership", () => {
     folder(damaged)
     saved.set(`${damaged}metadata.json`, Buffer.from("{ not json"))
     folder(theirs, { ...owner, TenantId: OTHER })
-    seed(`${theirs}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${theirs}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     const original = new Map(saved)
     const job = await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
-    expect(job.log.join("\n")).toContain("Could not read the metadata of 1 older backup: metadata.json is not valid JSON. It was left in place.")
+    expect(job.log.join("\n")).toContain("metadata.json could not be verified for retention")
   })
 
   it("places an expired untagged backup by its ownership marker", async () => {
     const { engine, saved, seed, folder } = setup()
-    const ours = "backup-2026-08-01-020000/", theirs = "backup-2026-08-02-020000/", damagedMarker = "backup-2026-08-03-020000/"
-    for (const prefix of [ours, theirs, damagedMarker]) seed(`${prefix}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    const ours = "backup-2026-08-01-020000/", theirs = "backup-2026-08-02-020000/"
+    for (const prefix of [ours, theirs]) seed(`${prefix}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     folder(ours)
     folder(theirs, { ...owner, TenantId: OTHER })
-    folder(damagedMarker, { Source: "TenuVault Desktop" })
-    const kept = [...saved.entries()].filter(([name]) => name.startsWith(theirs) || name.startsWith(damagedMarker))
+    const kept = [...saved.entries()].filter(([name]) => name.startsWith(theirs))
     await complete(engine)
     expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
     for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
@@ -235,7 +270,7 @@ describe("backup folder ownership", () => {
     // Tenant B's run stopped before its manifest; tenant B's legacy backup records no tenant and has no marker.
     folder(abandoned, { ...owner, TenantId: OTHER })
     folder(legacy, null)
-    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${legacy}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     const original = new Map(saved)
     await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
@@ -246,7 +281,7 @@ describe("backup folder ownership", () => {
     const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
     folder(abandoned, "{ damaged")
     folder(legacy, null)
-    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${legacy}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     const original = new Map(saved)
     await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
@@ -257,22 +292,25 @@ describe("backup folder ownership", () => {
     const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
     folder(abandoned)
     folder(legacy, null)
-    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${legacy}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     await complete(engine)
     expect([...saved.keys()].some((name) => name.startsWith(legacy))).toBe(false)
     expect(saved.has(`${abandoned}${BACKUP_OWNER_FILE}`)).toBe(true)
   })
 
-  it("keeps an untagged backup whose marker is oversized, reads it only to the cap, and continues", async () => {
+  it("keeps an untagged backup whose marker is oversized, reads it only to the cap, protects untagged backups, and cleans up verified owned candidates", async () => {
     const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
-    const oversized = "backup-2026-08-01-020000/", ours = "backup-2026-08-02-020000/"
+    const oversized = "backup-2026-08-01-020000/", ours = "backup-2026-08-02-020000/", untagged = "backup-2026-08-03-020000/"
     const { engine, saved, seed, folder } = setup({ override: (url, sent) => sent.method === "GET" && url.pathname.endsWith(`${oversized}${BACKUP_OWNER_FILE}`) ? new Response(big.body) : undefined })
-    seed(`${oversized}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${oversized}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     folder(oversized)
-    seed(`${ours}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${ours}metadata.json`, { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     folder(ours)
+    seed(`${untagged}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
+    folder(untagged, null)
     const job = await complete(engine)
     expect(saved.has(`${oversized}metadata.json`)).toBe(true)
+    expect(saved.has(`${untagged}metadata.json`)).toBe(true)
     expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
     expect(job.log.join("\n")).toContain("is larger than the 32 MiB TenuVault reads")
     expect(big.pulled()).toBeLessThan(40)
@@ -284,12 +322,12 @@ describe("backup folder ownership", () => {
     } })
     const expired = "backup-2026-08-01-020000/"
     folder(expired)
-    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     const first = await complete(engine)
-    expect(first.log.join("\n")).toContain("protected by the storage account's immutability policy or legal hold")
-    expect(saved.has(`${expired}metadata.json`)).toBe(false)
+    expect(first.log.join("\n")).toContain("storage immutability or a legal hold refused deletion")
+    expect(saved.has(`${expired}metadata.json`)).toBe(true)
     expect(saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(true)
-    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`])
+    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}DeviceConfigurations/Old.json`])
     await vi.advanceTimersByTimeAsync(1000)
     await complete(engine)
     expect(saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(true)
@@ -301,9 +339,9 @@ describe("backup folder ownership", () => {
     const { engine, calls, seed, folder } = setup()
     const expired = "backup-2026-08-01-020000/"
     folder(expired)
-    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    seed(`${expired}metadata.json`, { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     await complete(engine)
-    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}metadata.json`, `${expired}DeviceConfigurations/Old.json`, `${expired}${BACKUP_OWNER_FILE}`])
+    expect(calls.filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([`${expired}DeviceConfigurations/Old.json`, `${expired}metadata.json`, `${expired}${BACKUP_OWNER_FILE}`])
   })
 
   it("leaves manifestless folders untouched when retention is disabled", async () => {
@@ -331,5 +369,1655 @@ describe("backup folder ownership", () => {
     expect(zip.file("metadata.json")).not.toBeNull()
     expect(zip.file("DeviceConfigurations/Policy 0.json")).not.toBeNull()
     expect(await reviewArchive(raw)).toMatchObject({ tenantId: TENANT, backupId: job.backupFolder, count: 1 })
+  })
+})
+
+describe("retention verification", () => {
+  const expired = "backup-2026-08-01-020000/"
+  const newerExpired = "backup-2026-08-02-020000/"
+  const manifest = { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } }
+
+  it.each(["missing", "policy ID", "snapshot hash", "sha256", "unlisted", "wrong key"])(
+    "keeps the failing candidate and untagged backups when verification detects %s while removing independently verified owned candidates", async fault => {
+      const { engine, saved, calls, seed, folder } = setup()
+      const untagged = "backup-2026-08-03-020000/"
+      folder(untagged, null)
+      seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+      folder(newerExpired)
+      seed(newerExpired + "metadata.json", manifest)
+      folder(expired)
+      const policy = expired + "DeviceConfigurations/Old.json"
+      const item = { ...indexed["DeviceConfigurations/old"] }
+      if (fault === "snapshot hash") item.hash = "mismatch"
+      if (fault === "sha256") item.sha256 = "mismatch"
+      if (fault === "missing") saved.delete(policy)
+      if (fault === "policy ID") {
+        const wrongPolicy = { id: "different" }
+        seed(policy, wrongPolicy)
+        item.hash = snapshotHash(wrongPolicy)
+        item.sha256 = createHash("sha256").update(JSON.stringify(wrongPolicy)).digest("hex")
+      }
+      if (fault === "unlisted") seed(expired + "DeviceConfigurations/Unlisted.json", { id: "unlisted" })
+      if (fault === "wrong key") seed(policy, oldItem, true, Buffer.alloc(32, 9))
+      seed(expired + "metadata.json", { ...manifest, Items: { "DeviceConfigurations/old": item } })
+      const job = await complete(engine)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      expect(saved.has(untagged + "metadata.json")).toBe(true)
+      expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+      expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(expired))).toBe(false)
+      expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(untagged))).toBe(false)
+      expect(job.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("could not be verified") }))
+    },
+  )
+
+  it("does not skip an unverified backup on the next run", async () => {
+    const { engine, saved, calls, seed, folder } = setup()
+    folder(newerExpired)
+    saved.delete(newerExpired + "DeviceConfigurations/Old.json")
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(newerExpired))).toBe(false)
+  })
+
+  it("keeps expired legacy backups with readable metadata but no item list", async () => {
+    const { engine, calls, seed, folder } = setup()
+    folder(expired)
+    seed(expired + "metadata.json", { TenantId: TENANT, Status: "Success" })
+    const job = await complete(engine)
+    expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+    expect(job.log.join("\n")).toContain("no manifest item list")
+  })
+
+  it("keeps older backups when the newly written backup cannot be read back", async () => {
+    const { engine, saved, seed, folder } = setup({ count: 1, override: (url, request) =>
+      request.method === "GET" && url.pathname.endsWith("/Policy%200.json") ? new Response(null, { status: 404 }) : undefined })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const job = await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(job.results?.notices).toContainEqual(expect.objectContaining({ level: "warning" }))
+  })
+
+  it("keeps the Azure manifest on a conditional payload refusal and continues with older candidates", async () => {
+    const payload = newerExpired + "DeviceConfigurations/Old.json"
+    const { engine, saved, seed, folder, calls } = setup({ override: (url, request) =>
+      request.method === "DELETE" && url.pathname.endsWith(payload) ? new Response(null, { status: 412 }) : undefined })
+    for (const prefix of [expired, newerExpired]) {
+      folder(prefix)
+      seed(prefix + "metadata.json", manifest)
+    }
+    const job = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    const deletes = calls.filter(call => call.request.method === "DELETE")
+    expect(deletes.map(call => call.name)).toEqual([payload, expired + "DeviceConfigurations/Old.json", expired + "metadata.json", expired + BACKUP_OWNER_FILE])
+    expect(deletes.every(call => call.request.headers.get("if-match")?.startsWith('"'))).toBe(true)
+    expect(job.log.join("\n")).toContain("changed before it could be deleted")
+  })
+
+  it("continues with the next candidate after reaching the run candidate limit", async () => {
+    const { engine, saved, seed, folder } = setup({ limits: { candidates: 1, requests: 100, bytes: 100_000 } })
+    for (const prefix of [expired, newerExpired]) {
+      folder(prefix)
+      seed(prefix + "metadata.json", manifest)
+    }
+    await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+  })
+
+  it.each([false, true])("resumes verification within the byte budget, bound to the recovery keyring (changed: %s)", async changeKey => {
+    const { engine, saved, calls, seed, folder, keyring } = setup({ limits: { candidates: 32, requests: 100, bytes: 110_000 } })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    folder(newerExpired)
+    const first = { id: "old", description: "a".repeat(70_000) }
+    const second = { id: "second", description: "b".repeat(70_000) }
+    const firstName = newerExpired + "DeviceConfigurations/Old.json"
+    seed(firstName, first, true)
+    seed(newerExpired + "DeviceConfigurations/Second.json", second)
+    seed(newerExpired + "metadata.json", { ...manifest, Items: {
+      "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(first) },
+      "DeviceConfigurations/second": { file: "Second.json", hash: snapshotHash(second) },
+    } })
+    const job = await complete(engine)
+    expect(job.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    if (changeKey) keyring.splice(0, 1, Buffer.alloc(32, 9))
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(changeKey)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.filter(call => call.name === firstName && call.request.method === "GET")).toHaveLength(changeKey ? 2 : 1)
+  })
+
+  it("escalates repeated deferrals when deletes cannot fit within the run request budget", async () => {
+    const { engine, saved, calls, seed, folder } = setup({ limits: { candidates: 32, requests: 12, bytes: 100_000 } })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    let job = await complete(engine)
+    expect(job.log.join("\n")).toContain("reached its storage budget")
+    expect(job.log.join("\n")).not.toContain("repeatedly deferred")
+    for (let run = 0; run < 4 && !job.log.join("\n").includes("repeatedly deferred"); run++) {
+      await vi.advanceTimersByTimeAsync(1_000)
+      job = await complete(engine)
+    }
+    expect(job.log.join("\n")).toContain("repeatedly deferred")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+  })
+
+  it.each([false, true])("resumes verification of a newest backup over the byte budget across runs, bound to the recovery keyring (changed: %s)", async changeKey => {
+    const big = "x".repeat(70_000)
+    const { engine, saved, calls, seed, folder, keyring } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: (url) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const firstJob = await complete(engine)
+    const firstPolicy = `${firstJob.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(firstJob.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+    if (changeKey) keyring.splice(0, 1, Buffer.alloc(32, 9))
+    await vi.advanceTimersByTimeAsync(1_000)
+    const secondJob = await complete(engine)
+    // The resumed anchor finishes from its receipts (or re-reads after a key change), but the
+    // newest backup must also be payload-verified before any delete (4721701675) and that check
+    // cannot finish within the remaining byte budget, so deletion is deferred this run.
+    expect(secondJob.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(changeKey ? 2 : 1)
+  })
+
+  it("resumes newest backup verification after a job deadline and re-verifies if a verified file changes", async () => {
+    const big = "y".repeat(20_000)
+    let hitDeadline = true
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 200_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (hitDeadline && req.method === "GET" && url.pathname.endsWith("/Policy%201.json")) {
+          hitDeadline = false
+          vi.advanceTimersByTime(JOB_DEADLINE_MS)
+          return new Promise(() => {})
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const firstJob = await complete(engine)
+    const firstPolicy = `${firstJob.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(firstJob.log.join("\n")).toContain("Retention was interrupted")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+    // Tampering with the already-verified file changes its ETag and must invalidate the saved receipt.
+    // The run detects the tamper, falls back to freshly verifying the new newest backup, and deletes expired.
+    const original = saved.get(firstPolicy)!
+    seed(firstPolicy, { id: "p0", description: "tampered" })
+    await vi.advanceTimersByTimeAsync(1_000)
+    const tamperedJob = await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(2)
+    expect(tamperedJob.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("hash does not match") }))
+    // Restoring the original bytes makes the receipt match again on the next run without re-reading firstPolicy.
+    const anotherExpired = "backup-2026-07-15-020000/"
+    folder(anotherExpired)
+    seed(anotherExpired + "metadata.json", manifest)
+    saved.set(firstPolicy, original)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(anotherExpired + "metadata.json")).toBe(false)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(2)
+  })
+
+  it("keeps non-resumed newest-backup receipts when the candidate phase hits the byte budget", async () => {
+    const big = "z".repeat(70_000)
+    const expiredBig = { id: "old", description: "w".repeat(70_000) }
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 1,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "DeviceConfigurations/Old.json", expiredBig)
+    seed(expired + "metadata.json", {
+      ...manifest,
+      Items: { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(expiredBig) } },
+    })
+    const firstJob = await complete(engine)
+    const firstPolicy = `${firstJob.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(firstJob.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const secondJob = await complete(engine)
+    // The anchor's receipts are kept (its payload is not re-read), but verifying the newest
+    // backup before any delete (4721701675) leaves no budget for the candidate, so the
+    // expired backup is kept this run instead of being deleted.
+    expect(secondJob.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+  })
+
+  it("binds newest-backup receipts to the exact folder prefix and starts fresh for a different newest backup", async () => {
+    const big = "r".repeat(70_000)
+    const { engine, saved, calls, seed, folder, progressData } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const firstJob = await complete(engine)
+    const key = `${TENANT}/contoso`
+    const savedProgress = JSON.parse(progressData.get(key)!) as { latest?: string; reviews: Record<string, { files: Record<string, string>; attempts: number }> }
+    const firstPrefix = `${firstJob.backupFolder}/`
+    expect(savedProgress.latest).toBe(firstPrefix)
+    const firstReceipt = savedProgress.reviews[firstPrefix]!.files["DeviceConfigurations/Policy 0.json"]!
+    expect(firstReceipt).toBeTruthy()
+    // Remove the old anchor and pre-seed its receipt under the next newest folder name (same content & ETag).
+    for (const name of saved.keys()) if (name.startsWith(firstPrefix)) saved.delete(name)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const nextPrefix = "backup-2026-10-12-120001/"
+    progressData.set(key, JSON.stringify({
+      latest: firstPrefix,
+      latestAttempts: 2,
+      reviews: { [nextPrefix]: { files: { "DeviceConfigurations/Policy 0.json": firstReceipt }, attempts: 0 } },
+    }))
+    const secondJob = await complete(engine)
+    expect(`${secondJob.backupFolder}/`).toBe(nextPrefix)
+    // Receipt from the old folder must not match the new folder, so Policy 0.json is read fresh.
+    expect(calls.filter(call => call.name === `${nextPrefix}DeviceConfigurations/Policy 0.json` && call.request.method === "GET")).toHaveLength(1)
+    // latestAttempts was reset when switching away from the gone anchor, so no 3-attempt warning yet.
+    expect(secondJob.log.join("\n")).not.toContain("repeatedly reached its budget")
+  })
+
+  it("falls back in the same run to freshly verify the newest backup when a resumed anchor is unreadable, and refuses deletion if the fallback also fails", async () => {
+    const big = "q".repeat(20_000)
+    let hitBudget = true
+    let failFallback = false
+    let firstPrefix = ""
+    const { engine, saved, calls, seed, folder, progressData } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 200_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (hitBudget && req.method === "GET" && url.pathname.endsWith("/Policy%201.json")) {
+          hitBudget = false
+          vi.advanceTimersByTime(JOB_DEADLINE_MS)
+          return new Promise(() => {})
+        }
+        if (failFallback && req.method === "GET" && firstPrefix && !url.pathname.includes(firstPrefix) && url.pathname.endsWith("/Policy%200.json")) {
+          return new Response(null, { status: 404 })
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const firstJob = await complete(engine)
+    firstPrefix = `${firstJob.backupFolder}/`
+    // Corrupt the resumed anchor and position cursor at firstPrefix so candidate loop reviews expired directly.
+    seed(`${firstPrefix}DeviceConfigurations/Policy 0.json`, { id: "p0", description: "tampered" })
+    const key = `${TENANT}/contoso`
+    const stored = JSON.parse(progressData.get(key)!) as Record<string, unknown>
+    progressData.set(key, JSON.stringify({ ...stored, cursor: firstPrefix }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    // First test: when the fallback newest backup ALSO fails verification, nothing is deleted.
+    failFallback = true
+    const failedFallback = await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(failedFallback.results?.notices).toContainEqual(expect.objectContaining({ level: "warning" }))
+
+    // Re-seed resumed anchor progress and test successful fallback to a healthy newest backup in the same run.
+    progressData.set(key, JSON.stringify({ ...stored, cursor: firstPrefix }))
+    failFallback = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const recovered = await complete(engine)
+    const fallbackPolicy = `${recovered.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(calls.some(call => call.name === fallbackPolicy && call.request.method === "GET")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+  })
+
+  it("4721701675: deletes nothing when the newest backup fails payload verification while a resumed older backup is the anchor", async () => {
+    const big = "s".repeat(20_000)
+    let hitBudget = true
+    let tamperNewest = false
+    let firstPrefix = ""
+    const { engine, saved, calls, seed, folder, progressData } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 200_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (hitBudget && req.method === "GET" && url.pathname.endsWith("/Policy%201.json")) {
+          hitBudget = false
+          vi.advanceTimersByTime(JOB_DEADLINE_MS)
+          return new Promise(() => {})
+        }
+        // The newest backup's payload cannot be read back (the resumed anchor's payloads can).
+        if (tamperNewest && req.method === "GET" && firstPrefix && !url.pathname.includes(firstPrefix) && url.pathname.endsWith("/Policy%200.json")) {
+          return new Response(null, { status: 404 })
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    // First run creates backup B and stops during its verification, leaving B as the resumed
+    // anchor with a receipt for Policy 0.
+    const firstJob = await complete(engine)
+    firstPrefix = `${firstJob.backupFolder}/`
+    const key = `${TENANT}/contoso`
+    const stored = JSON.parse(progressData.get(key)!) as Record<string, unknown>
+    expect((stored as { latest?: string }).latest).toBe(firstPrefix)
+    const anchorPolicyReads = () => calls.filter(call => call.name === `${firstPrefix}DeviceConfigurations/Policy 0.json` && call.request.method === "GET").length
+    expect(anchorPolicyReads()).toBe(1)
+    progressData.set(key, JSON.stringify({ ...stored, cursor: firstPrefix }))
+
+    // Second run creates newest backup C. B is the anchor and verifies from its receipt, but
+    // C's payloads fail verification, so the expired candidate must not be deleted.
+    tamperNewest = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    const secondJob = await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(secondJob.results?.notices).toContainEqual(expect.objectContaining({ level: "warning" }))
+    // B's receipts were kept: its Policy 0 payload was not re-read.
+    expect(anchorPolicyReads()).toBe(1)
+
+    // With C healthy again, the next run deletes the expired candidate (retention is not
+    // silently disabled forever), still without re-reading B's receipted payload.
+    progressData.set(key, JSON.stringify({ ...stored, cursor: firstPrefix }))
+    tamperNewest = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(anchorPolicyReads()).toBe(1)
+  })
+
+  it("P3: persists newest-backup receipts across runs from a resumed anchor, reuses them on anchor fallback, and starts fresh when the newest backup changes", async () => {
+    const big = "p".repeat(70_000)
+    const { engine, fetch, saved, calls, seed, folder, keyring, progress, progressData } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+
+    // Run 1: backup B hits byte budget after Policy 0 -> B becomes the resumed anchor.
+    const jobB = await complete(engine)
+    const prefixB = `${jobB.backupFolder}/`
+    const key = `${TENANT}/contoso`
+    const runRetentionFor = async (currentFolder: string) => {
+      const written = JSON.parse(saved.get(`${currentFolder}/metadata.json`)!.toString("utf8")) as Record<string, unknown>
+      const writer = new BlobWriter(fetch, "contoso", async () => "token")
+      return applyRetention({
+        storage: writer,
+        tenant: TENANT,
+        account: "contoso",
+        current: currentFolder,
+        written,
+        days: 30,
+        now: Date.now(),
+        limits: { candidates: 32, requests: 100, bytes: 110_000 },
+        progress,
+        keyFingerprint: legacyRecoveryFingerprint(keyring),
+        beforeDelete: () => {},
+        notice: () => {},
+      })
+    }
+
+    // Run 2: backup C is created; B finishes Policy 1 from budget, C cannot finish yet.
+    await vi.advanceTimersByTimeAsync(1_000)
+    const jobC = await complete(engine)
+    const folderC = jobC.backupFolder!
+    const prefixC = `${folderC}/`
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+
+    // Run 3 (same newest backup C): B uses 0 bytes (cached), C verifies Policy 0 and defers on Policy 1.
+    await expect(runRetentionFor(folderC)).rejects.toThrow("reached its storage budget")
+    const afterPartialC = readRetentionProgress(progressData.get(key))
+    expect(afterPartialC.latest).toBe(prefixB)
+    expect(afterPartialC.newest).toBe(prefixC)
+    expect(afterPartialC.reviews[prefixC]?.files["DeviceConfigurations/Policy 0.json"]).toBeTruthy()
+    const cPolicy0Reads = () => calls.filter(c => c.name === `${prefixC}DeviceConfigurations/Policy 0.json` && c.request.method === "GET").length
+    const readsAfterPartialC = cPolicy0Reads()
+    expect(readsAfterPartialC).toBeGreaterThanOrEqual(1)
+
+    // Subcase A: resumed anchor B becomes unreadable -> fallback to C must REUSE C's persisted Policy 0 receipt!
+    const snapshotAfterPartialC = progressData.get(key)!
+    const origBPolicy0 = saved.get(`${prefixB}DeviceConfigurations/Policy 0.json`)!
+    seed(`${prefixB}DeviceConfigurations/Policy 0.json`, { id: "p0", description: "tampered" })
+    await runRetentionFor(folderC)
+    expect(cPolicy0Reads()).toBe(readsAfterPartialC)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+
+    // Subcase B: restore B, expired, and partial C progress -> Run 4 with SAME C finishes via receipts and cleans up state.newest.
+    saved.set(`${prefixB}DeviceConfigurations/Policy 0.json`, origBPolicy0)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    progressData.set(key, snapshotAfterPartialC)
+    await runRetentionFor(folderC)
+    expect(cPolicy0Reads()).toBe(readsAfterPartialC)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    const afterCompleteC = readRetentionProgress(progressData.get(key))
+    expect(afterCompleteC.newest).toBeUndefined()
+    expect(afterCompleteC.reviews[prefixC]).toBeUndefined()
+
+    // Subcase C: restore partial C progress, then a new backup D is written while C still exists ->
+    // C continues via its persisted receipt (does not re-read Policy 0) instead of restarting on D.
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    progressData.set(key, snapshotAfterPartialC)
+    const cReadsBeforeD = cPolicy0Reads()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(cPolicy0Reads()).toBe(cReadsBeforeD)
+
+    // Subcase D: restore partial C progress and remove C from storage -> next run clears C's receipts and starts fresh on E.
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    for (const name of saved.keys()) if (name.startsWith(prefixC)) saved.delete(name)
+    progressData.set(key, snapshotAfterPartialC)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const jobE = await complete(engine)
+    const prefixE = `${jobE.backupFolder}/`
+    const afterMissingC = readRetentionProgress(progressData.get(key))
+    expect(afterMissingC.reviews[prefixC]).toBeUndefined()
+    expect(afterMissingC.newest).toBe(prefixE)
+    expect(calls.filter(c => c.name === `${prefixE}DeviceConfigurations/Policy 0.json` && c.request.method === "GET")).toHaveLength(1)
+  })
+
+  it("round 7 item 4: bounded newest-backup verification finishes and deletes expired backups across consecutive BackupEngine runs", async () => {
+    const big = "b".repeat(70_000)
+    const { engine, saved, seed, folder } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+
+    // Every scheduled BackupEngine run writes a new backup folder (~140 KB > 110 KB byte budget).
+    // Bounded verification must continue its in-progress committed newest backup and delete
+    // expired within a small, bounded number of consecutive BackupEngine runs (no applyRetention calls).
+    let deletedRun = 0
+    for (let run = 1; run <= 8; run++) {
+      await complete(engine)
+      if (!saved.has(expired + "metadata.json")) {
+        deletedRun = run
+        break
+      }
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    expect(deletedRun).toBeGreaterThan(0)
+    expect(deletedRun).toBeLessThanOrEqual(8)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+  })
+
+  it("keeps an unreadable candidate, cleans up other owned candidates immediately, and escalates to a persistent warning after 3 consecutive failures", async () => {
+    const { engine, saved, calls, seed, folder } = setup()
+    folder(newerExpired)
+    saved.delete(newerExpired + "DeviceConfigurations/Old.json")
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    // Attempt 1 keeps the unreadable candidate with a warning and deletes the verified owned candidate.
+    const first = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(newerExpired))).toBe(false)
+    expect(first.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(newerExpired),
+    }))
+    expect(first.log.join("\n")).not.toContain("consecutive failed attempts")
+    // Attempt 2 keeps the unreadable candidate without escalating yet.
+    await vi.advanceTimersByTimeAsync(1_000)
+    const second = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(second.log.join("\n")).not.toContain("consecutive failed attempts")
+    // Attempt 3 escalates to the persistent 3-attempt warning.
+    await vi.advanceTimersByTimeAsync(1_000)
+    const third = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(third.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining("3 consecutive failed attempts"),
+    }))
+    // The persistent warning continues on later runs while the unreadable candidate remains, and newer expiries still clean up.
+    const anotherExpired = "backup-2026-07-15-020000/"
+    folder(anotherExpired)
+    seed(anotherExpired + "metadata.json", manifest)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const fourth = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(anotherExpired + "metadata.json")).toBe(false)
+    expect(fourth.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining("consecutive failed attempts"),
+    }))
+    // Once repaired, the warning clears and the candidate ages out normally.
+    seed(newerExpired + "DeviceConfigurations/Old.json", oldItem)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const fifth = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(fifth.results?.notices?.some(notice => notice.level === "warning" && notice.message.includes(newerExpired))).toBe(false)
+  })
+
+  it("keeps untagged backups and deletes only verified owned backups when a damaged manifest sits in discovery", async () => {
+    const { engine, saved, calls, seed, folder } = setup()
+    const damaged = "backup-2026-08-03-020000/"
+    const untagged = "backup-2026-08-02-020000/"
+    folder(damaged)
+    saved.set(damaged + "metadata.json", Buffer.from("{ not json"))
+    folder(untagged, null)
+    seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const first = await complete(engine)
+    expect(saved.has(damaged + "metadata.json")).toBe(true)
+    expect(saved.has(untagged + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(damaged))).toBe(false)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(untagged))).toBe(false)
+    expect(first.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(damaged),
+    }))
+  })
+
+  it("drops an earlier untagged candidate from the delete plan if a later candidate fails verification", async () => {
+    const { engine, saved, calls, seed, folder } = setup()
+    const untagged = "backup-2026-08-03-020000/"
+    folder(untagged, null)
+    seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+    folder(newerExpired)
+    saved.delete(newerExpired + "DeviceConfigurations/Old.json")
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const first = await complete(engine)
+    expect(saved.has(untagged + "metadata.json")).toBe(true)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(untagged))).toBe(false)
+    expect(first.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(newerExpired),
+    }))
+  })
+
+  it("does not count transient storage errors toward the 3 unreadable candidate failures", async () => {
+    let failWithServerError = false
+    const { engine, saved, seed, folder } = setup({
+      override: (url, req) => {
+        if (failWithServerError && req.method === "GET" && url.pathname.endsWith(`${newerExpired}metadata.json`)) {
+          return new Response("server error", { status: 500 })
+        }
+      },
+    })
+    folder(newerExpired)
+    saved.delete(newerExpired + "DeviceConfigurations/Old.json")
+    seed(newerExpired + "metadata.json", manifest)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const run = await complete(engine)
+      expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+      expect(run.log.join("\n")).not.toContain("consecutive failed attempts")
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    // A transient 500 must not count as the 3rd unreadable failure and must stop the run.
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    failWithServerError = true
+    const transientJob = engine.start(request)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await engine.waitForJob(transientJob)
+    expect(transientJob.status).toBe("Completed")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(transientJob.log.join("\n")).not.toContain("consecutive failed attempts")
+    // Once storage answers again, the 3rd unreadable verification failure emits the persistent warning and cleans up expired.
+    failWithServerError = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const fourth = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(fourth.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining("3 consecutive failed attempts"),
+    }))
+  })
+
+  it("persists discovery progress when candidate metadata reads exhaust the byte budget and continues after the last discovered candidate", async () => {
+    const c0 = "backup-2026-08-03-020000/"
+    const c1 = "backup-2026-08-02-020000/"
+    const c2 = "backup-2026-08-01-020000/"
+    const padded = { ...manifest, Notes: "m".repeat(42_000) }
+    const { engine, saved, calls, seed, folder } = setup({ limits: { candidates: 32, requests: 100, bytes: 100_000 } })
+    for (const prefix of [c0, c1, c2]) {
+      folder(prefix)
+      seed(prefix + "metadata.json", padded)
+    }
+    // Run 1 discovers c0 and c1 (~85 KB) then hits the byte budget reading c2's metadata.
+    const first = await complete(engine)
+    expect(first.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(c0 + "metadata.json")).toBe(true)
+    expect(saved.has(c1 + "metadata.json")).toBe(true)
+    expect(saved.has(c2 + "metadata.json")).toBe(true)
+    const beforeRun2 = calls.length
+    // Run 2 continues after c1 (starts directly at c2 without re-reading c0 or c1) and deletes c2.
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    const run2Reads = calls.slice(beforeRun2).filter(call => call.request.method === "GET").map(call => call.name)
+    expect(run2Reads.some(name => name.startsWith(c0) || name.startsWith(c1))).toBe(false)
+    expect(saved.has(c2 + "metadata.json")).toBe(false)
+    // Run 3 wraps around and deletes c0 and c1 now that c2 is gone.
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(c0 + "metadata.json")).toBe(false)
+    expect(saved.has(c1 + "metadata.json")).toBe(false)
+  })
+
+  it("re-checks replacement file identities immediately before each candidate's deletes and stops on any mismatch", async () => {
+    let newestPrefix = ""
+    let tamperOn: "before-first" | "before-second" = "before-first"
+    let tampered = false
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 1,
+      override: (url, req) => {
+        if (req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+          const match = /\/(backup-[^/]+\/)/.exec(url.pathname)
+          if (match) newestPrefix = match[1]!
+        }
+        // Trigger tamper right before the first candidate's delete (when the last candidate finishes verification)
+        // or during the first candidate's delete (before the second candidate's deletes start).
+        if (!tampered && newestPrefix && tamperOn === "before-first"
+          && req.method === "GET" && url.pathname.endsWith(`${expired}DeviceConfigurations/Old.json`)) {
+          tampered = true
+          seed(`${newestPrefix}DeviceConfigurations/Policy 0.json`, { id: "p0", modified: true })
+        }
+        if (!tampered && newestPrefix && tamperOn === "before-second"
+          && req.method === "DELETE" && url.pathname.endsWith(`${newerExpired}${BACKUP_OWNER_FILE}`)) {
+          tampered = true
+          seed(`${newestPrefix}DeviceConfigurations/Policy 0.json`, { id: "p0", modified: true })
+        }
+      },
+    })
+    folder(newerExpired)
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+
+    // Case 1: replacement changes before the first delete -> keeps both candidates.
+    const first = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+    expect(first.log.join("\n")).toContain("changed before deletion")
+
+    // Case 2: replacement changes between candidate 1 and candidate 2 -> stops before candidate 2.
+    tamperOn = "before-second"
+    tampered = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const second = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(second.log.join("\n")).toContain("changed before deletion")
+  })
+
+  it.each(["key", "clock"] as const)("runs the recovery-key and clock guard before each planned backup's deletes (%s)", async change => {
+    let triggered = false
+    const { engine, saved, seed, folder, keyring } = setup({
+      serverTime: () => now,
+      override: (url, req) => {
+        if (!triggered && req.method === "DELETE" && url.pathname.endsWith(`${newerExpired}${BACKUP_OWNER_FILE}`)) {
+          triggered = true
+          if (change === "key") keyring.splice(0, 1, Buffer.alloc(32, 9))
+          else vi.setSystemTime(new Date(now.getTime() - 2 * 3_600_000))
+        }
+      },
+    })
+    folder(newerExpired)
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const job = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(job.log.join("\n")).toContain(change === "key" ? "recovery key changed" : "differs from Microsoft's time")
+  })
+
+  it("does not advance the cursor past planned deletes that never started when interrupted", async () => {
+    const c0 = "backup-2026-08-03-020000/"
+    const c1 = "backup-2026-08-02-020000/"
+    const c2 = "backup-2026-08-01-020000/"
+    let cancelBeforeFirstDelete = true
+    let activeJobId = ""
+    let engineRef!: BackupEngine
+    const { engine, saved, seed, folder } = setup({
+      limits: { candidates: 2, requests: 100, bytes: 100_000 },
+      override: (url, req) => {
+        if (cancelBeforeFirstDelete && req.method === "DELETE" && url.pathname.includes(c0)) {
+          cancelBeforeFirstDelete = false
+          engineRef.cancel(activeJobId)
+          return new Promise(() => {})
+        }
+      },
+    })
+    engineRef = engine
+    for (const prefix of [c0, c1, c2]) {
+      folder(prefix)
+      seed(prefix + "metadata.json", manifest)
+    }
+    const first = engine.start(request)
+    activeJobId = first.id
+    await engine.waitForJob(first)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(first.status).toBe("Completed")
+    expect(first.log.join("\n")).toContain("Retention was interrupted")
+    expect(saved.has(c0 + "metadata.json")).toBe(true)
+    expect(saved.has(c1 + "metadata.json")).toBe(true)
+    expect(saved.has(c2 + "metadata.json")).toBe(true)
+    // Next run must reconsider c0 instead of skipping past the unstarted window to c2.
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(c0 + "metadata.json")).toBe(false)
+    expect(saved.has(c2 + "metadata.json")).toBe(true)
+  })
+
+  it("resumes a partially deleted Azure backup via the deletion journal after re-verifying coverage and preserves original ETags", async () => {
+    const itemA = { id: "a" }
+    const itemB = { id: "b" }
+    const twoItemManifest = {
+      TenantId: TENANT, Status: "Success", Scope: { Included: ["DeviceConfigurations"] },
+      Items: {
+        "DeviceConfigurations/a": { file: "A.json", hash: snapshotHash(itemA), sha256: createHash("sha256").update(JSON.stringify(itemA)).digest("hex") },
+        "DeviceConfigurations/b": { file: "B.json", hash: snapshotHash(itemB), sha256: createHash("sha256").update(JSON.stringify(itemB)).digest("hex") },
+      },
+    }
+    let blockB = true
+    const { engine, saved, calls, seed } = setup({
+      override: (url, req) => {
+        if (blockB && req.method === "DELETE" && url.pathname.endsWith(`${expired}DeviceConfigurations/B.json`)) {
+          return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+        }
+      },
+    })
+    seed(expired + "DeviceConfigurations/A.json", itemA)
+    seed(expired + "DeviceConfigurations/B.json", itemB)
+    seed(expired + BACKUP_OWNER_FILE, owner)
+    seed(expired + "metadata.json", twoItemManifest)
+
+    // Run 1 deletes A.json then is refused on B.json; journal records remaining files.
+    const first = await complete(engine)
+    expect(first.log.join("\n")).toContain("Kept the remaining files in backup")
+    expect(saved.has(expired + "DeviceConfigurations/A.json")).toBe(false)
+    expect(saved.has(expired + "DeviceConfigurations/B.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + BACKUP_OWNER_FILE)).toBe(true)
+
+    // If replacement coverage no longer covers DeviceConfigurations, remaining files stay kept.
+    blockB = false
+    for (const name of saved.keys()) if (name.startsWith(`${first.backupFolder}/`)) saved.delete(name)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const narrowed = engine.start({ ...request, scope: { excluded: INTUNE_TYPES.map(type => type.folder) } })
+    await engine.waitForJob(narrowed)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(saved.has(expired + "DeviceConfigurations/B.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+
+    // If a remaining file changed, its original ETag no longer matches so remaining files are kept.
+    const originalB = saved.get(expired + "DeviceConfigurations/B.json")!
+    seed(expired + "DeviceConfigurations/B.json", { id: "b", tampered: true })
+    await vi.advanceTimersByTimeAsync(1_000)
+    const modified = await complete(engine)
+    expect(modified.log.join("\n")).toContain("changed before it could be deleted")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    saved.set(expired + "DeviceConfigurations/B.json", originalB)
+
+    // Once coverage holds and remaining files match their original ETags, Run 4 deletes only the remaining files.
+    const beforeResume = calls.length
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
+    const resumedDeletes = calls.slice(beforeResume).filter(call => call.request.method === "DELETE").map(call => call.name)
+    expect(resumedDeletes).toEqual([
+      expired + "DeviceConfigurations/B.json",
+      expired + "metadata.json",
+      expired + BACKUP_OWNER_FILE,
+    ])
+  })
+
+  it("rejects and discards tampered deletion journals with emptied types, foreign ownership, ownership mismatch, or protected targets", async () => {
+    const key = `${TENANT}/contoso`
+    const etagOf = (saved: Map<string, Buffer>, name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+    const appItem = { id: "app1" }
+    const appManifest = {
+      TenantId: TENANT, Status: "Success", Scope: { Included: ["Apps"] },
+      Items: { "Apps/app1": { file: "App.json", hash: snapshotHash(appItem), sha256: createHash("sha256").update(JSON.stringify(appItem)).digest("hex") } },
+    }
+
+    // 1. Tampered journal with emptied types (both without noTypes and with forged noTypes: true) cannot delete an uncovered Apps backup.
+    for (const tampered of [
+      { prefix: expired, types: [], untagged: false },
+      { prefix: expired, types: [], noTypes: false, untagged: false },
+      { prefix: expired, types: [], noTypes: true, untagged: false },
+      { prefix: expired, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+    ]) {
+      const { engine, saved, calls, seed, progressData } = setup()
+      seed(expired + "Apps/App.json", appItem)
+      seed(expired + BACKUP_OWNER_FILE, owner)
+      seed(expired + "metadata.json", appManifest)
+      const remaining = Object.fromEntries([...saved.keys()].filter(name => name.startsWith(expired)).map(name => [name, etagOf(saved, name)]))
+      progressData.set(key, JSON.stringify({ reviews: {}, deletes: { [expired]: { ...tampered, remaining } } }))
+      await complete(engine)
+      expect(saved.has(expired + "Apps/App.json")).toBe(true)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+    }
+
+    // 2. Tampered journal pointing to another tenant's expired backup is rejected by ownership resolution and protects untagged backups too.
+    {
+      const theirs = "backup-2026-08-01-020000/"
+      const untagged = "backup-2026-08-02-020000/"
+      const { engine, saved, calls, seed, folder, progressData } = setup()
+      folder(theirs, { ...owner, TenantId: OTHER })
+      seed(theirs + "metadata.json", { ...manifest, TenantId: OTHER })
+      folder(untagged, null)
+      seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+      const remaining = Object.fromEntries([...saved.keys()].filter(name => name.startsWith(theirs)).map(name => [name, etagOf(saved, name)]))
+      progressData.set(key, JSON.stringify({
+        reviews: {},
+        deletes: { [theirs]: { prefix: theirs, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+      await complete(engine)
+      expect(saved.has(theirs + "metadata.json")).toBe(true)
+      expect(saved.has(untagged + "metadata.json")).toBe(true)
+      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+    }
+
+    // 3. Tampered journal claiming untagged: false for an actually untagged backup is discarded.
+    {
+      const untagged = "backup-2026-08-01-020000/"
+      const { engine, saved, calls, seed, folder, progressData } = setup()
+      folder(untagged, null)
+      seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+      const remaining = Object.fromEntries([...saved.keys()].filter(name => name.startsWith(untagged)).map(name => [name, etagOf(saved, name)]))
+      progressData.set(key, JSON.stringify({
+        reviews: {},
+        deletes: { [untagged]: { prefix: untagged, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+      await complete(engine)
+      expect(saved.has(untagged + "metadata.json")).toBe(true)
+      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+    }
+
+    // 4. Journals targeting the newest backup or the resumed anchor are discarded and never delete them.
+    {
+      const big = "p".repeat(70_000)
+      const { engine, saved, calls, seed, folder, progressData } = setup({
+        count: 2,
+        limits: { candidates: 32, requests: 100, bytes: 110_000 },
+        override: url => {
+          if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+            return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+          }
+        },
+      })
+      folder(expired)
+      seed(expired + "metadata.json", manifest)
+      const first = await complete(engine)
+      const anchor = `${first.backupFolder}/`
+      await vi.advanceTimersByTimeAsync(1_000)
+      const nextLatest = "backup-2026-10-12-120001/"
+      const stored = JSON.parse(progressData.get(key)!) as { latest?: string; reviews: Record<string, unknown> }
+      const anchorRemaining = Object.fromEntries([...saved.keys()].filter(name => name.startsWith(anchor)).map(name => [name, etagOf(saved, name)]))
+      progressData.set(key, JSON.stringify({
+        ...stored,
+        deletes: {
+          [anchor]: { prefix: anchor, remaining: anchorRemaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+          [nextLatest]: { prefix: nextLatest, remaining: { [nextLatest + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+        },
+      }))
+      const second = await complete(engine)
+      expect(`${second.backupFolder}/`).toBe(nextLatest)
+      expect(saved.has(anchor + "metadata.json")).toBe(true)
+      expect(saved.has(nextLatest + "metadata.json")).toBe(true)
+      expect(calls.some(call => call.request.method === "DELETE" && (call.name.startsWith(anchor) || call.name.startsWith(nextLatest)))).toBe(false)
+      // Both tampered journals were discarded. A journal for the expired candidate may remain
+      // because verifying the newest backup (4721701675) can exhaust the budget mid-cleanup.
+      const remainingDeletes = readRetentionProgress(progressData.get(key)).deletes
+      expect(remainingDeletes?.[anchor]).toBeUndefined()
+      expect(remainingDeletes?.[nextLatest]).toBeUndefined()
+    }
+  })
+
+  it.each([
+    { label: "manifestless with payload in remaining", withManifest: false, includePayloadInRemaining: true },
+    { label: "manifestless with payload omitted from remaining", withManifest: false, includePayloadInRemaining: false },
+    { label: "with manifest and unindexed payload in storage", withManifest: true, includePayloadInRemaining: false },
+  ])("discards an Azure deletion journal whose remaining payload sits outside journal.types ($label)", async ({ withManifest, includePayloadInRemaining }) => {
+    const key = `${TENANT}/contoso`
+    const etagOf = (saved: Map<string, Buffer>, name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+    const appItem = { id: "app1" }
+    const { engine, saved, calls, seed, progressData } = setup()
+    seed(expired + "Apps/App.json", appItem)
+    seed(expired + BACKUP_OWNER_FILE, owner)
+    if (withManifest) {
+      seed(expired + "metadata.json", {
+        TenantId: TENANT,
+        Status: "Success",
+        Scope: { Included: ["DeviceConfigurations"] },
+        Items: {},
+      })
+    }
+    const remaining = Object.fromEntries(
+      [...saved.keys()]
+        .filter(name => name.startsWith(expired) && (includePayloadInRemaining || !name.endsWith("Apps/App.json")))
+        .map(name => [name, etagOf(saved, name)]),
+    )
+    progressData.set(key, JSON.stringify({
+      reviews: {},
+      deletes: { [expired]: { prefix: expired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+    }))
+    await complete(engine)
+    expect(saved.has(expired + "Apps/App.json")).toBe(true)
+    expect(saved.has(expired + BACKUP_OWNER_FILE)).toBe(true)
+    expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+    expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+  })
+
+  it("resumes a genuinely typeless backup through the deletion journal with noTypes set", async () => {
+    let blockOwner = true
+    const { engine, saved, calls, seed, progressData } = setup({
+      override: (url, req) => {
+        if (blockOwner && req.method === "DELETE" && url.pathname.endsWith(`${expired}${BACKUP_OWNER_FILE}`)) {
+          return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+        }
+      },
+    })
+    seed(expired + BACKUP_OWNER_FILE, owner)
+    seed(expired + "metadata.json", { TenantId: TENANT, Status: "Success", Scope: { Included: [] }, Items: {}, ItemCounts: { TotalPolicies: 0 } })
+
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(saved.has(expired + BACKUP_OWNER_FILE)).toBe(true)
+    const journal = readRetentionProgress(progressData.get(`${TENANT}/contoso`)).deletes?.[expired]
+    expect(journal).toMatchObject({ prefix: expired, types: [], noTypes: true, untagged: false })
+
+    blockOwner = false
+    const beforeResume = calls.length
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
+    expect(calls.slice(beforeResume).filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([expired + BACKUP_OWNER_FILE])
+  })
+
+  it("uses HEAD for the replacement guard ETag fallback when listings omit ETags, falling back to GET only when HEAD is unsupported", async () => {
+    const big = "h".repeat(60_000)
+    let savedRef = new Map<string, Buffer>()
+    let rejectHead = false
+    const listWithoutEtags = (url: URL) => {
+      if (url.searchParams.get("comp") === "list" && !url.searchParams.has("delimiter")) {
+        const names = [...savedRef.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+        return new Response(`<Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs>`)
+      }
+    }
+
+    // With HEAD available and a tight byte budget (100 KB), a 60 KB replacement policy is checked via HEAD without a second GET.
+    const first = setup({
+      count: 1,
+      limits: { candidates: 32, requests: 100, bytes: 100_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (rejectHead && req.method === "HEAD") return new Response(null, { status: 405 })
+        return listWithoutEtags(url)
+      },
+    })
+    savedRef = first.saved
+    first.folder(expired)
+    first.seed(expired + "metadata.json", manifest)
+    const job1 = await complete(first.engine)
+    const policy1 = `${job1.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(first.saved.has(expired + "metadata.json")).toBe(false)
+    expect(first.calls.filter(call => call.request.method === "HEAD" && call.name === policy1)).toHaveLength(1)
+    expect(first.calls.filter(call => call.request.method === "GET" && call.name === policy1)).toHaveLength(1)
+
+    // When HEAD returns 405, readEtag probes HEAD once and falls back to GET for remaining replacement files.
+    rejectHead = true
+    const second = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 300_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: "small" }), new Date())
+        }
+        if (rejectHead && req.method === "HEAD") return new Response(null, { status: 405 })
+        return listWithoutEtags(url)
+      },
+    })
+    savedRef = second.saved
+    second.folder(expired)
+    second.seed(expired + "metadata.json", manifest)
+    await complete(second.engine)
+    expect(second.saved.has(expired + "metadata.json")).toBe(false)
+    expect(second.calls.filter(call => call.request.method === "HEAD")).toHaveLength(1)
+  })
+
+  it.each([false, true])("reserves request budget per replacement file before cleanup so the guard cannot exhaust the budget mid-run (journaled: %s)", async journaled => {
+    let savedRef = new Map<string, Buffer>()
+    const etagOf = (saved: Map<string, Buffer>, name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+    const listWithoutEtags = (url: URL) => {
+      if (url.searchParams.get("comp") === "list" && !url.searchParams.has("delimiter")) {
+        const names = [...savedRef.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+        return new Response(`<Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs>`)
+      }
+    }
+
+    // Anchor has 12 files (10 policies + metadata + owner). Under 68 requests (which only covers 1 + size,
+    // not HEAD + GET fallback + lease acquire), per-file reservation defers cleanly before cleanup.
+    const tight = setup({
+      count: 10,
+      limits: { candidates: 32, requests: 68, bytes: 200_000 },
+      override: url => listWithoutEtags(url),
+    })
+    savedRef = tight.saved
+    tight.folder(newerExpired)
+    tight.seed(newerExpired + "metadata.json", manifest)
+    tight.folder(expired)
+    tight.seed(expired + "metadata.json", manifest)
+    if (journaled) {
+      const remaining = Object.fromEntries([...tight.saved.keys()].filter(name => name.startsWith(newerExpired)).map(name => [name, etagOf(tight.saved, name)]))
+      tight.progressData.set(`${TENANT}/contoso`, JSON.stringify({
+        reviews: {},
+        deletes: { [newerExpired]: { prefix: newerExpired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+    }
+    const tightJob = await complete(tight.engine)
+    expect(tight.saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(tight.calls.filter(call => call.request.method === "HEAD")).toEqual([])
+    expect(tight.calls.filter(call => call.request.method === "DELETE")).toEqual([])
+    expect(tightJob.log.join("\n")).toContain(`Kept backup ${newerExpired} because retention reached its storage budget`)
+
+    // With budget for candidate 1 plus its full replacement guard (leases + list + HEAD + GET fallback = 140 requests),
+    // candidate 2 stops before stealing candidate 1's guard budget, and candidate 1's guard + deletes finish cleanly.
+    const sufficient = setup({
+      count: 10,
+      limits: { candidates: 32, requests: 140, bytes: 200_000 },
+      override: url => listWithoutEtags(url),
+    })
+    savedRef = sufficient.saved
+    sufficient.folder(newerExpired)
+    sufficient.seed(newerExpired + "metadata.json", manifest)
+    sufficient.folder(expired)
+    sufficient.seed(expired + "metadata.json", manifest)
+    if (journaled) {
+      const remaining = Object.fromEntries([...sufficient.saved.keys()].filter(name => name.startsWith(newerExpired)).map(name => [name, etagOf(sufficient.saved, name)]))
+      sufficient.progressData.set(`${TENANT}/contoso`, JSON.stringify({
+        reviews: {},
+        deletes: { [newerExpired]: { prefix: newerExpired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+    }
+    await complete(sufficient.engine)
+    expect(sufficient.saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(sufficient.calls.filter(call => call.request.method === "HEAD")).toHaveLength(12)
+  })
+
+  it.each([405, 501])("reads only the ETag header and cancels the body without reading it when HEAD returns %s", async headStatus => {
+    const big = "h".repeat(60_000)
+    let savedRef = new Map<string, Buffer>()
+    let fallbackPulls = 0
+    let fallbackCancelled = 0
+    let fallbackGets = 0
+    let seenPolicyGet = false
+    const etagOf = (name: string) => `"${createHash("sha256").update(savedRef.get(name)!).digest("hex")}"`
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 1,
+      limits: { candidates: 32, requests: 100, bytes: 100_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (url.searchParams.get("comp") === "list" && !url.searchParams.has("delimiter")) {
+          const names = [...savedRef.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+          return new Response(`<Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs>`)
+        }
+        if (req.method === "HEAD") return new Response(null, { status: headStatus })
+        const name = decodeURIComponent(url.pathname.slice("/intune-backups/".length))
+        if (req.method === "GET" && name.endsWith("/DeviceConfigurations/Policy 0.json")) {
+          if (!seenPolicyGet) {
+            seenPolicyGet = true
+            return undefined
+          }
+          fallbackGets++
+          const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+              fallbackPulls++
+              controller.enqueue(new Uint8Array(savedRef.get(name)!))
+              controller.close()
+            },
+            cancel() { fallbackCancelled++ },
+          }, { highWaterMark: 0 })
+          return new Response(body, { status: 200, headers: { etag: etagOf(name), "content-length": String(savedRef.get(name)!.byteLength) } })
+        }
+        return undefined
+      },
+    })
+    savedRef = saved
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.filter(call => call.request.method === "HEAD")).toHaveLength(1)
+    expect(fallbackGets).toBe(1)
+    expect(fallbackPulls).toBe(0)
+    expect(fallbackCancelled).toBe(1)
+  })
+
+  it("caches headEtagUnsupported when HEAD succeeds without an ETag and reserves HEAD plus GET fallback attempts", async () => {
+    let savedRef = new Map<string, Buffer>()
+    let headAttempts = 0
+    const listWithoutEtags = (url: URL) => {
+      if (url.searchParams.get("comp") === "list" && !url.searchParams.has("delimiter")) {
+        const names = [...savedRef.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+        return new Response(`<Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs>`)
+      }
+    }
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 3,
+      limits: { candidates: 32, requests: 200, bytes: 200_000 },
+      override: (url, req) => {
+        if (req.method === "HEAD") {
+          headAttempts++
+          return new Response(null, { status: 200 })
+        }
+        return listWithoutEtags(url)
+      },
+    })
+    savedRef = saved
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    // HEAD omitted ETag on the first replacement file, so subsequent files go directly to GET.
+    expect(headAttempts).toBe(1)
+    expect(calls.filter(call => call.request.method === "HEAD")).toHaveLength(1)
+  })
+
+  it("handles missing journaled remaining files on Azure by recording them and freshly re-verifying replacement coverage (crash and external deletion)", async () => {
+    const key = `${TENANT}/contoso`
+    const etagOf = (saved: Map<string, Buffer>, name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+    const itemA = { id: "a" }
+    const itemB = { id: "b" }
+    const twoItems = {
+      "DeviceConfigurations/a": { file: "A.json", hash: snapshotHash(itemA), sha256: createHash("sha256").update(JSON.stringify(itemA)).digest("hex") },
+      "DeviceConfigurations/b": { file: "B.json", hash: snapshotHash(itemB), sha256: createHash("sha256").update(JSON.stringify(itemB)).digest("hex") },
+    }
+    const twoManifest = { TenantId: TENANT, Status: "Success", Items: twoItems, Scope: { Included: ["DeviceConfigurations"] } }
+
+    // (a) Crash after our DELETE of A.json before journal update, with a healthy replacement:
+    // logs absent file, re-verifies replacement fresh (even when anchor used receipts), and cleans up remaining files.
+    {
+      const { engine, saved, calls, seed, progressData } = setup({ count: 1 })
+      seed(expired + "DeviceConfigurations/B.json", itemB)
+      seed(expired + BACKUP_OWNER_FILE, owner)
+      seed(expired + "metadata.json", twoManifest)
+      const remaining = {
+        [expired + "DeviceConfigurations/A.json"]: '"etag-a"',
+        [expired + "DeviceConfigurations/B.json"]: etagOf(saved, expired + "DeviceConfigurations/B.json"),
+        [expired + "metadata.json"]: etagOf(saved, expired + "metadata.json"),
+        [expired + BACKUP_OWNER_FILE]: etagOf(saved, expired + BACKUP_OWNER_FILE),
+      }
+      progressData.set(key, JSON.stringify({
+        reviews: {},
+        deletes: { [expired]: { prefix: expired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+      const job = await complete(engine)
+      const replacementPolicy = `${job.backupFolder}/DeviceConfigurations/Policy 0.json`
+      expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
+      expect(job.log.join("\n")).toContain("DeviceConfigurations/A.json")
+      expect(job.log.join("\n")).toContain("already absent")
+      // Replacement policy was read twice: once during anchor verification and once fresh for missing journal file.
+      expect(calls.filter(call => call.request.method === "GET" && call.name === replacementPolicy)).toHaveLength(2)
+    }
+
+    // (b) External deletion of A.json when replacement becomes corrupted before resume (or type uncovered):
+    // fresh re-verification fails, so journal (with absent recorded) and remaining files are kept with a warning.
+    {
+      let corruptReplacement = false
+      let newestPrefix = ""
+      const { engine, saved, calls, seed, progressData } = setup({
+        count: 1,
+        override: (url, req) => {
+          if (req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+            const match = /\/(backup-[^/]+\/)metadata\.json$/.exec(url.pathname)
+            if (match) newestPrefix = match[1]!
+          }
+          // After anchor verification passes, tamper with the replacement policy before journal resume lists expired.
+          if (!corruptReplacement && newestPrefix && req.method === "GET" && url.searchParams.get("comp") === "list" && url.searchParams.get("prefix") === expired) {
+            corruptReplacement = true
+            saved.set(`${newestPrefix}DeviceConfigurations/Policy 0.json`, Buffer.from(JSON.stringify({ id: "p0", tampered: true })))
+          }
+          return undefined
+        },
+      })
+      seed(expired + "DeviceConfigurations/B.json", itemB)
+      seed(expired + BACKUP_OWNER_FILE, owner)
+      seed(expired + "metadata.json", twoManifest)
+      const remaining = {
+        [expired + "DeviceConfigurations/A.json"]: '"etag-a"',
+        [expired + "DeviceConfigurations/B.json"]: etagOf(saved, expired + "DeviceConfigurations/B.json"),
+        [expired + "metadata.json"]: etagOf(saved, expired + "metadata.json"),
+        [expired + BACKUP_OWNER_FILE]: etagOf(saved, expired + BACKUP_OWNER_FILE),
+      }
+      progressData.set(key, JSON.stringify({
+        reviews: {},
+        deletes: { [expired]: { prefix: expired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+      const job = await complete(engine)
+      expect(corruptReplacement).toBe(true)
+      expect(saved.has(expired + "DeviceConfigurations/B.json")).toBe(true)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(job.log.join("\n")).toContain("DeviceConfigurations/A.json")
+      expect(job.log.join("\n")).toContain("replacement coverage could not be freshly verified")
+      const persistedJournal = readRetentionProgress(progressData.get(key)).deletes?.[expired]
+      expect(persistedJournal?.absent).toEqual([expired + "DeviceConfigurations/A.json"])
+    }
+  })
+
+  it("protects Azure replacement blobs with finite 60s leases during candidate deletes, blocks concurrent replacement writes, renews long leases, and always releases leases", async () => {
+    const activeLeases = new Map<string, string>()
+    const acquiredDurations: number[] = []
+    const renewed: string[] = []
+    const released: string[] = []
+    let rivalWriteStatus = 0
+    let rivalTried = false
+    let newestPrefix = ""
+    let slowDelete = false
+
+    const leaseHandler = (url: URL, req: Request): Response | Promise<Response> | undefined => {
+      const name = decodeURIComponent(url.pathname.slice("/intune-backups/".length))
+      if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+        const action = req.headers.get("x-ms-lease-action")
+        if (action === "acquire") {
+          return req.text().then(body => {
+            expect(body).toBe("")
+            const duration = Number(req.headers.get("x-ms-lease-duration"))
+            acquiredDurations.push(duration)
+            if (activeLeases.has(name)) return new Response(null, { status: 409, headers: { "x-ms-error-code": "LeaseAlreadyPresent" } })
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${activeLeases.size + 1}`
+            activeLeases.set(name, id)
+            return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+          })
+        }
+        const id = req.headers.get("x-ms-lease-id") ?? ""
+        if (activeLeases.get(name) !== id) return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+        if (action === "renew") {
+          renewed.push(name)
+          return new Response(null, { status: 200, headers: { "x-ms-lease-id": id } })
+        }
+        if (action === "release") {
+          activeLeases.delete(name)
+          released.push(name)
+          return new Response(null, { status: 200 })
+        }
+      }
+      if ((req.method === "PUT" || req.method === "DELETE") && !url.search && activeLeases.has(name)) {
+        if (req.headers.get("x-ms-lease-id") !== activeLeases.get(name)) {
+          return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMissing" } })
+        }
+      }
+      if (req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+        const match = /\/(backup-[^/]+\/)metadata\.json$/.exec(url.pathname)
+        if (match) newestPrefix = match[1]!
+      }
+      if (!rivalTried && req.method === "DELETE" && name.startsWith(expired)) {
+        rivalTried = true
+        const target = `${newestPrefix}DeviceConfigurations/Policy 0.json`
+        const res = leaseHandler(new URL(`${base}${target}`), new Request(`${base}${target}`, { method: "PUT", body: '{"tampered":true}' }))
+        rivalWriteStatus = res instanceof Response ? res.status : 200
+        if (slowDelete) {
+          return new Promise<Response>(resolve => setTimeout(() => {
+            first.saved.delete(name)
+            resolve(new Response(null, { status: 202 }))
+          }, 35_000))
+        }
+      }
+      return undefined
+    }
+
+    // 1. Concurrent writer is blocked by the 60s lease, deletes complete, and all leases are released.
+    const first = setup({ count: 1, override: leaseHandler })
+    first.folder(expired)
+    first.seed(expired + "metadata.json", manifest)
+    slowDelete = true
+    const jobPromise = complete(first.engine)
+    await vi.advanceTimersByTimeAsync(40_000)
+    await jobPromise
+    expect(rivalTried).toBe(true)
+    expect(rivalWriteStatus).toBe(412)
+    expect(acquiredDurations.length).toBe(3)
+    expect(acquiredDurations.every(d => d === 60)).toBe(true)
+    expect(renewed.length).toBeGreaterThanOrEqual(3)
+    expect(released.length).toBe(3)
+    expect(activeLeases.size).toBe(0)
+    expect(first.saved.has(expired + "metadata.json")).toBe(false)
+
+    // 2. Lease acquisition failure (409 conflict on 2nd blob, and 403 missing permission):
+    // skips deletes, keeps candidate, warns, and releases any leases already acquired.
+    for (const status of [409, 403]) {
+      activeLeases.clear()
+      released.length = 0
+      let acquires = 0
+      const failed = setup({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice("/intune-backups/".length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              acquires++
+              if (acquires === 2) return new Response(null, { status, headers: { "x-ms-error-code": status === 409 ? "LeaseAlreadyPresent" : "AuthorizationPermissionMismatch" } })
+              const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${acquires}`
+              activeLeases.set(name, id)
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+            }
+            if (action === "release") {
+              activeLeases.delete(name)
+              released.push(name)
+              return new Response(null, { status: 200 })
+            }
+          }
+          return undefined
+        },
+      })
+      failed.folder(expired)
+      failed.seed(expired + "metadata.json", manifest)
+      const job = await complete(failed.engine)
+      expect(failed.saved.has(expired + "metadata.json")).toBe(true)
+      expect(failed.calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(job.log.join("\n")).toContain("could not be leased")
+      expect(released).toHaveLength(1)
+      expect(activeLeases.size).toBe(0)
+    }
+  })
+})
+
+describe("retention server time", () => {
+  const expired = "backup-2026-08-01-020000/"
+  const manifest = { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } }
+
+  it.each([-2, 2])("skips retention on the first run when the clock differs by %s hours", async offset => {
+    const { engine, saved, seed, folder } = setup({ serverTime: () => now })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    vi.setSystemTime(new Date(now.getTime() + offset * 3_600_000))
+    const job = await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(job.log.join("\n")).toContain("differs from Microsoft's time by more than one hour")
+  })
+
+  it("runs retention with a correct clock after a weekend shutdown", async () => {
+    const { engine, saved, seed, folder } = setup()
+    await complete(engine)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    vi.setSystemTime(new Date(now.getTime() + 3 * 86_400_000))
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+  })
+
+  it("skips retention when offline or no trusted server time is available", async () => {
+    const { engine, saved, seed, folder, calls } = setup({ serverTime: () => null })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const job = await complete(engine)
+    expect(job.log.join("\n")).toContain("no server time was available")
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+  })
+
+  it("warns and does not delete when the backup cannot reach Microsoft", async () => {
+    const { engine, saved, seed, folder, calls } = setup({ serverTime: () => null, override: url => {
+      if (url.hostname === "graph.microsoft.com") throw new TypeError("Network unavailable")
+    } })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Failed")
+    expect(job.log.join("\n")).toContain("Retention was skipped because no server time was available")
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+  })
+
+  it("ignores future-dated backups, excludes them from replacement coverage, and calculates age from server time", async () => {
+    const future = "backup-2026-11-01-020000/"
+    const inside = "backup-2026-09-12-123000/"
+    const appsOnly = "backup-2026-07-01-020000/"
+    const appItem = { id: "app1" }
+    const appManifest = {
+      TenantId: TENANT, Status: "Success", Scope: { Included: ["Apps"] },
+      Items: { "Apps/app1": { file: "App.json", hash: snapshotHash(appItem), sha256: createHash("sha256").update(JSON.stringify(appItem)).digest("hex") } },
+    }
+    const { engine, saved, seed, folder, calls } = setup({ serverTime: () => now })
+    vi.setSystemTime(new Date(now.getTime() + 45 * 60_000))
+    for (const prefix of [expired, inside]) {
+      folder(prefix)
+      seed(prefix + "metadata.json", manifest)
+    }
+    for (const prefix of [future, appsOnly]) {
+      seed(prefix + "Apps/App.json", appItem)
+      seed(prefix + BACKUP_OWNER_FILE, owner)
+      seed(prefix + "metadata.json", appManifest)
+    }
+    const job = await complete(engine)
+    expect(saved.has(future + "metadata.json")).toBe(true)
+    expect(saved.has(appsOnly + "metadata.json")).toBe(true)
+    expect(saved.has(inside + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.some(call => call.name.startsWith(future))).toBe(false)
+    expect(job.log.join("\n")).toContain("excluded them from the review")
+  })
+})
+
+describe("retention progress and manifest validation", () => {
+  const expired = "backup-2026-08-01-020000/"
+  const manifest = { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } }
+
+  it("discards malformed persisted retention progress and recovers cleanly", async () => {
+    const invalidCases = [
+      JSON.stringify({ reviews: { [expired]: {} } }),
+      JSON.stringify({ cursor: 123, reviews: {} }),
+      JSON.stringify({ latest: 456, reviews: {} }),
+      JSON.stringify({ latestAttempts: -1, reviews: {} }),
+      JSON.stringify({ latestAttempts: 1.5, reviews: {} }),
+      JSON.stringify({ reviews: [] }),
+      JSON.stringify({ reviews: { [expired]: { attempts: "bad", files: {} } } }),
+      JSON.stringify({ reviews: { [expired]: { attempts: 0, files: [] } } }),
+      JSON.stringify({ reviews: { [expired]: { attempts: 0, files: { "a.json": 123 } } } }),
+      JSON.stringify({ reviews: { [expired]: { attempts: 0, files: {}, failures: -1 } } }),
+      JSON.stringify({ reviews: { [expired]: { attempts: 0, files: {}, reason: 123 } } }),
+      JSON.stringify({ reviews: {}, deletes: [] }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: [], types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: {}, types: [1], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: {}, types: ["DeviceConfigurations"], noTypes: false, untagged: "no" } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: "backup-2026-08-02-020000/", remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { ["backup-2026-08-02-020000/metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: "*" }, types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: '"etag"' }, types: [], untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: '"etag"' }, types: [], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: true, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "DeviceConfigurations/Old.json"]: '"etag"' }, types: [], noTypes: true, untagged: false } } }),
+    ]
+    for (const raw of invalidCases) {
+      expect(readRetentionProgress(raw)).toEqual({ reviews: {} })
+    }
+    const valid = {
+      cursor: expired,
+      latest: "backup-2026-10-12-120000/",
+      latestAttempts: 1,
+      reviews: { [expired]: { attempts: 1, files: { "DeviceConfigurations/Old.json": "abc" }, failures: 2, reason: "missing" } },
+      deletes: {
+        [expired]: {
+          prefix: expired,
+          remaining: { [expired + "metadata.json"]: '"etag"' },
+          types: ["DeviceConfigurations"],
+          noTypes: false,
+          untagged: false,
+          fresh: {
+            "backup-2026-10-12-120000/": {
+              binding: "a".repeat(64),
+              files: { "DeviceConfigurations/Policy.json": "b".repeat(64) },
+              done: false,
+              covers: ["DeviceConfigurations"],
+            },
+          },
+        },
+        "backup-2026-07-01-020000/": { prefix: "backup-2026-07-01-020000/", remaining: { "backup-2026-07-01-020000/metadata.json": '"etag"' }, types: [], noTypes: true, untagged: false },
+      },
+    }
+    expect(readRetentionProgress(JSON.stringify(valid))).toEqual(valid)
+
+    const withFresh = (fresh: Record<string, unknown>) => JSON.stringify({
+      reviews: {},
+      deletes: {
+        [expired]: {
+          prefix: expired,
+          remaining: { [expired + "metadata.json"]: '"etag"' },
+          types: ["DeviceConfigurations"],
+          noTypes: false,
+          untagged: false,
+          fresh,
+        },
+      },
+    })
+    const tooManyReplacements = Object.fromEntries(
+      Array.from({ length: MAX_FRESH_REPLACEMENTS + 1 }, (_, i) => [`backup-${i}/`, { binding: "ok", files: {} }]),
+    )
+    const tooManyFiles = Object.fromEntries(
+      Array.from({ length: MAX_FRESH_FILES + 1 }, (_, i) => [`DeviceConfigurations/p${i}.json`, "r"]),
+    )
+    const oversizedFreshCases = [
+      withFresh(tooManyReplacements),
+      withFresh({ [`${"p".repeat(MAX_FRESH_PREFIX_LENGTH)}/`]: { binding: "ok", files: {} } }),
+      withFresh({ "backup-1/": { binding: "b".repeat(MAX_FRESH_BINDING_LENGTH + 1), files: {} } }),
+      withFresh({ "backup-1/": { binding: "ok", files: tooManyFiles } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { [`${"f".repeat(MAX_FRESH_FILE_NAME_LENGTH + 1)}`]: "r" } } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { "DeviceConfigurations/a.json": "r".repeat(MAX_FRESH_RECEIPT_LENGTH + 1) } } }),
+      withFresh({ "backup-1/": { binding: "ok", files: { "DeviceConfigurations/a.json": "" } } }),
+      withFresh({ "backup-1/": { binding: "ok", files: {}, covers: Array.from({ length: MAX_FRESH_COVERS + 1 }, (_, i) => `T${i}`) } }),
+      withFresh({ "backup-1/": { binding: "ok", files: {}, covers: ["c".repeat(MAX_FRESH_COVER_LENGTH + 1)] } }),
+    ]
+    for (const raw of oversizedFreshCases) {
+      expect(readRetentionProgress(raw)).toEqual({ reviews: {} })
+    }
+
+    const { engine, saved, seed, folder, progressData } = setup()
+    progressData.set(`${TENANT}/contoso`, JSON.stringify({ reviews: { [expired]: {} } }))
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+  })
+
+  it("rejects inconsistent TotalPolicies and ItemCounts before granting replacement coverage, while allowing valid empty and inventory-only backups", async () => {
+    const appsExpired = "backup-2026-07-01-020000/"
+    const appsHolder = "backup-2026-09-25-020000/"
+    const appItem = { id: "app1" }
+    const appIndexed = { "Apps/app1": { file: "App.json", hash: snapshotHash(appItem), sha256: createHash("sha256").update(JSON.stringify(appItem)).digest("hex") } }
+    const appManifest = { TenantId: TENANT, Status: "Success", Scope: { Included: ["Apps"] }, Items: appIndexed, ItemCounts: { Apps: 1, TotalPolicies: 1 } }
+
+    // Contradictory TotalPolicies: 1 with empty Items must not grant coverage for Apps.
+    const { engine, saved, seed } = setup()
+    seed(appsExpired + "Apps/App.json", appItem)
+    seed(appsExpired + BACKUP_OWNER_FILE, owner)
+    seed(appsExpired + "metadata.json", appManifest)
+    seed(appsHolder + BACKUP_OWNER_FILE, owner)
+    seed(appsHolder + "metadata.json", {
+      TenantId: TENANT, Status: "Success", Failures: 0,
+      Scope: { Included: ["Apps"] }, Items: {}, ItemCounts: { Apps: 0, TotalPolicies: 1 },
+    })
+    const job = await complete(engine)
+    expect(saved.has(appsExpired + "metadata.json")).toBe(true)
+    expect(job.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("policy total") }))
+
+    // Nonzero folder count in Scope.Included with empty Items must also grant no coverage.
+    const second = setup()
+    second.seed(appsExpired + "Apps/App.json", appItem)
+    second.seed(appsExpired + BACKUP_OWNER_FILE, owner)
+    second.seed(appsExpired + "metadata.json", appManifest)
+    second.seed(appsHolder + BACKUP_OWNER_FILE, owner)
+    second.seed(appsHolder + "metadata.json", {
+      TenantId: TENANT, Status: "Success", Failures: 0,
+      Scope: { Included: ["Apps"] }, Items: {}, ItemCounts: { Apps: 1, TotalPolicies: 0 },
+    })
+    const secondJob = await complete(second.engine)
+    expect(second.saved.has(appsExpired + "metadata.json")).toBe(true)
+    expect(secondJob.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("recorded item count") }))
+
+    // Valid empty backup with TotalPolicies: 0 and inventory-only backup (AutopilotDevices excluded from TotalPolicies) still pass and grant coverage.
+    const third = setup()
+    const device = { id: "ap1" }
+    third.seed(appsExpired + "Apps/App.json", appItem)
+    third.seed(appsExpired + BACKUP_OWNER_FILE, owner)
+    third.seed(appsExpired + "metadata.json", appManifest)
+    third.seed(appsHolder + "AutopilotDevices/Device.json", device)
+    third.seed(appsHolder + BACKUP_OWNER_FILE, owner)
+    third.seed(appsHolder + "metadata.json", {
+      TenantId: TENANT, Status: "Success", Failures: 0,
+      Scope: { Included: ["Apps", "AutopilotDevices"] },
+      Items: { "AutopilotDevices/ap1": { file: "Device.json", hash: snapshotHash(device), sha256: createHash("sha256").update(JSON.stringify(device)).digest("hex") } },
+      ItemCounts: { Apps: 0, AutopilotDevices: 1, TotalPolicies: 0 },
+    })
+    await complete(third.engine)
+    expect(third.saved.has(appsExpired + "metadata.json")).toBe(false)
   })
 })

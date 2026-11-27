@@ -43,16 +43,30 @@ export class StorageError extends Error {}
  * Local storage refused because files in the backup folder are damaged: a backup that is
  * unavailable, or a delete while damage is present. The message says what and how to recover.
  */
-export class InventoryDamagedError extends StorageError {}
+export class InventoryDamagedError extends StorageError {
+  readonly recoveryConflict?: boolean
+  constructor(message: string, options?: { recoveryConflict?: boolean }) {
+    super(message)
+    this.recoveryConflict = options?.recoveryConflict
+  }
+}
 
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
 export async function storageFailure(response: Response, account: string): Promise<StorageError> {
   const code = response.headers.get("x-ms-error-code")
-  if (code === "InventoryIncomplete" || code === "BackupUnavailable") {
+  if (code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined"
+    || code === "LeaseAlreadyPresent" || code === "LeaseUnavailable" || code === "RetentionHardLinksUnsupported" || code === "RetentionLockLost"
+    || code === "RetentionLockManualIntervention" || code === "BackupProtectedByRetention") {
     const text = await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
-    const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
-    return new InventoryDamagedError(decoded)
+    if (message || code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined") {
+      const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
+      const recoveryConflict = code === "BackupUnavailable" && response.headers.get("x-tenuvault-recovery-conflict") === "1"
+      return code === "InventoryIncomplete" || code === "BackupUnavailable"
+        ? new InventoryDamagedError(decoded, recoveryConflict ? { recoveryConflict: true } : undefined)
+        : new StorageError(decoded)
+    }
+    return new StorageError(await storageError(new Response(text, { status: response.status, headers: response.headers }), account))
   }
   return new StorageError(await storageError(response, account))
 }
@@ -63,6 +77,9 @@ export class StorageUnreachableError extends StorageError {}
 
 export class RetryableStorageError extends Error {}
 export class RequestTimeoutError extends Error {}
+
+/** The verified blob changed before its conditional delete reached storage. */
+export class DeleteConditionError extends FetchApplicationError {}
 
 /** MSAL rethrows a token or discovery request that got no HTTP response with this code; it keeps only the original message. */
 const MSAL_NETWORK_ERROR = "network_error"

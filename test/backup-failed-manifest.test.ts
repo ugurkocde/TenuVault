@@ -1,3 +1,4 @@
+import { withBackupServerTime } from "./helpers"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, FAILED_MANIFEST_GRACE_MS } from "../src/main/backup/engine"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
@@ -36,16 +37,16 @@ function setup(options: { count?: number; retention?: number; getToken?: (saved:
       }
       const name = decodeURIComponent(url.pathname.slice(prefix.length))
       if (init.method === "PUT") {
-        if (url.search) return new Response(null, { status: 201 })
+        if (url.search) return withBackupServerTime(new Response(null, { status: 201 }))
         if ((init.headers as Record<string, string>)["if-none-match"] === "*" && saved.has(name)) return new Response(null, { status: 412, headers: { "x-ms-error-code": "BlobAlreadyExists" } })
         saved.set(name, String(init.body))
-        return new Response(null, { status: 201 })
+        return withBackupServerTime(new Response(null, { status: 201 }))
       }
       if (init.method === "DELETE") {
         saved.delete(name)
         return new Response(null, { status: 202 })
       }
-      return saved.has(name) ? new Response(saved.get(name)) : new Response(null, { status: 404 })
+      return saved.has(name) ? new Response(saved.get(name), { headers: { etag: '"v1"' } }) : new Response(null, { status: 404 })
     },
   })
   const manifestPuts = () => calls.filter(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))
@@ -205,16 +206,16 @@ describe("failed backup manifest", () => {
     const complete = "backup-2026-08-01-020000"
     const failed = "backup-2026-08-10-020000"
     // The older complete backup holds compliance policies, which the current scope leaves out.
-    saved.set(`${complete}/CompliancePolicies/Old.json`, "{}")
-    saved.set(`${complete}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
-    saved.set(`${failed}/CompliancePolicies/Newer.json`, "{}")
-    saved.set(`${failed}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: status, Failures: 0, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
+    saved.set(`${complete}/CompliancePolicies/Old.json`, '{"id":"old"}')
+    saved.set(`${complete}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success", Failures: 0, Items: { "CompliancePolicies/old": { file: "Old.json", sha256: "ae6f2a6b84cafddf9992152e4d8c8caea3061e42b3d1e37a4b704a9eead2534f" } }, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
+    saved.set(`${failed}/CompliancePolicies/Newer.json`, '{"id":"new"}')
+    saved.set(`${failed}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: status, Failures: 0, Items: { "CompliancePolicies/new": { file: "Newer.json", sha256: "0f9ff3552e20e4dd5c9f52f45cd60a60487ae4446420d0debf5dcc11c023b8af" } }, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(0)
     await engine.waitForJob(job)
     expect(job.status).toBe("Completed")
     expect(saved.has(`${complete}/metadata.json`)).toBe(true)
     expect(saved.has(`${complete}/CompliancePolicies/Old.json`)).toBe(true)
-    expect([...saved.keys()].some(name => name.startsWith(`${failed}/`))).toBe(false)
+    expect([...saved.keys()].some(name => name.startsWith(`${failed}/`))).toBe(true)
   })
 })

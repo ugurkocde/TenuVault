@@ -1,7 +1,10 @@
+import { execFile } from "node:child_process"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
-import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises"
+import { hostname } from "node:os"
+import { basename, dirname, join, resolve, win32 } from "node:path"
+import { promisify } from "node:util"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
 import { mapLimit } from "../../shared/map-limit"
@@ -51,6 +54,11 @@ const MAGIC_LENGTH = 4
 const IV = 12
 const TAG = 16
 const EXT = ".tvb"
+const RETIRED_PREFIX = ".retired-"
+const RETIRED_STAMP = ".quarantined"
+const RETENTION_LOCK_FILE = ".tenuvault-retention.lock"
+// Another app instance can be between the rename and delete. Let that operation settle first.
+const RETIRED_GRACE_MS = 60_000
 
 /** Detects encrypted local backup files. Returns null if an incomplete scan cannot rule them out. */
 export async function localBackupsExist(
@@ -66,6 +74,10 @@ export async function localBackupsExist(
       try {
         const files = await readDirectory(folder)
         if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
+        for (const file of files) {
+          if (file.isDirectory() && file.name.startsWith(RETIRED_PREFIX)
+            && (await readDirectory(join(folder, file.name))).some(held => held.name !== RETIRED_STAMP)) return true
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
           incomplete = true
@@ -151,13 +163,555 @@ export class BlobNotFoundError extends Error {}
 export class BlobAlreadyExistsError extends Error {}
 /** An If-Match ETag no longer matches the stored blob. */
 export class BlobConditionNotMetError extends Error {}
+export class BlobQuarantinedError extends BlobConditionNotMetError {}
+export class BlobDeleteInterruptedError extends Error {}
+export interface RetentionLockConflictDetails {
+  code?: "LeaseAlreadyPresent" | "RetentionLockManualIntervention"
+  lockPath?: string
+  holderId?: string
+}
+
+export class BlobLeaseConflictError extends Error {
+  readonly code?: "LeaseAlreadyPresent" | "RetentionLockManualIntervention"
+  readonly lockPath?: string
+  readonly holderId?: string
+  constructor(message: string, options?: ErrorOptions & RetentionLockConflictDetails) {
+    super(message, options)
+    this.code = options?.code
+    this.lockPath = options?.lockPath
+    this.holderId = options?.holderId
+  }
+}
+export type RetentionLockUnsupportedCode = "LeaseUnavailable" | "RetentionHardLinksUnsupported"
+
+export class BlobLeaseUnsupportedError extends Error {
+  readonly code?: RetentionLockUnsupportedCode
+  readonly lockPath?: string
+  constructor(message: string, options?: ErrorOptions & { code?: RetentionLockUnsupportedCode; lockPath?: string }) {
+    super(message, options)
+    this.code = options?.code
+    this.lockPath = options?.lockPath
+  }
+}
+
+export function hardLinksUnsupportedWarning(folderPath?: string, consecutiveRuns?: number): string {
+  const target = folderPath ? `backup folder ${folderPath}` : "this backup folder"
+  const prefix = consecutiveRuns !== undefined
+    ? `Retention skipped cleanup on ${consecutiveRuns} consecutive runs for ${target}`
+    : `Automatic cleanup was skipped for ${target}`
+  return `${prefix} because this backup folder location does not support hard links, so old backups cannot be cleaned up safely. Backups and restores keep working. Old backups stay in the folder until it is moved to a drive that supports hard links, such as a local NTFS, APFS or ext4 drive.`
+}
+export class BlobProtectedError extends Error {}
+export interface ExpectedReplacement {
+  prefix: string
+  blobs: Record<string, string>
+}
+export class BlobReplacementChangedError extends Error {
+  constructor(readonly prefix: string, message?: string, readonly restoredEtag?: string) {
+    super(message ?? `Replacement backup ${prefix} changed before deletion.`)
+    this.name = "BlobReplacementChangedError"
+  }
+}
+
+class QuarantineRestoreConflictError extends Error {
+  constructor(
+    readonly held: string,
+    readonly live: string,
+    readonly liveIsHeldPrefix = false,
+    readonly liveStamp?: string,
+    readonly heldStamp?: string,
+    readonly aside?: string,
+  ) {
+    super(`Could not restore ${held} to ${live} because the live path already exists.`)
+    this.name = "QuarantineRestoreConflictError"
+  }
+}
+
+class QuarantineRestoreInterruptedError extends Error {
+  constructor(
+    readonly held: string,
+    readonly live: string,
+    readonly liveExists: boolean,
+    readonly heldExists: boolean,
+  ) {
+    super(`Could not confirm restore of ${held} to ${live} after the held file disappeared.`)
+    this.name = "QuarantineRestoreInterruptedError"
+  }
+}
+
+class QuarantineRestoreUnsupportedError extends Error {
+  constructor(
+    readonly held: string,
+    readonly live: string,
+  ) {
+    super(`Could not restore ${held} to ${live} because this drive type does not support hard links.`)
+    this.name = "QuarantineRestoreUnsupportedError"
+  }
+}
+
+export interface RetentionLockRecord {
+  id: string
+  host: string
+  pid: number
+  processStart: string | number
+  app: "TenuVault"
+}
+
+interface LegacyRetentionLockRecord {
+  id: string
+  expiresAt: number
+  pid?: number
+  durationMs?: number
+}
+
+export interface ProcessInfoReader {
+  isPidAlive(pid: number): boolean
+  readProcessStart(pid: number): Promise<string | "gone" | null>
+}
+
+export type ExecFileRunner = (
+  file: string,
+  args: string[],
+  options: { timeout?: number; env?: NodeJS.ProcessEnv; windowsHide?: boolean },
+) => Promise<{ stdout: string }>
+
+const execFileAsync = promisify(execFile)
+const PROCESS_START_TIMEOUT_MS = 5_000
+const UNPARSEABLE_LOCK_REREAD_MS = 50
+const FALLBACK_PROCESS_START = Math.round(Date.now() - process.uptime() * 1000)
+const COMPARABLE_START_KINDS = new Set(["proc", "wmi", "ps"])
+const MONTHS: Record<string, number> = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+}
+let cachedBootId: string | null | undefined
+let cachedCurrentProcessStart: Promise<string | null> | undefined
+
+/** Extracts the comparable start-token kind ("proc", "wmi", or "ps"), or null for unknown/uncomparable tokens. */
+export function processStartKind(token: string | number): string | null {
+  if (typeof token !== "string") return null
+  const sep = token.indexOf(":")
+  if (sep <= 0 || sep === token.length - 1) return null
+  const kind = token.slice(0, sep)
+  return COMPARABLE_START_KINDS.has(kind) ? kind : null
+}
+
+function parseLinuxStartToken(token: string): { bootId: string | null; ticks: string } | null {
+  if (!token.startsWith("proc:")) return null
+  const rest = token.slice("proc:".length)
+  const sep = rest.lastIndexOf(":")
+  if (sep < 0) return /^\d+$/.test(rest) ? { bootId: null, ticks: rest } : null
+  const bootId = rest.slice(0, sep)
+  const ticks = rest.slice(sep + 1)
+  if (!bootId || !/^\d+$/.test(ticks)) return null
+  return { bootId, ticks }
+}
+
+/**
+ * Compares a recorded lock process-start token against an observed token for a live PID.
+ * Linux `proc:` tokens require boot-id evidence on both sides so `proc:<boot>:<ticks>` vs
+ * `proc:<ticks>` (when boot_id was unreadable) is treated as inconclusive rather than stale.
+ */
+export function compareProcessStart(recorded: string | number, observed: string): "same" | "different" | "incomparable" {
+  const observedKind = processStartKind(observed)
+  const recordedKind = processStartKind(recorded)
+  if (!observedKind || !recordedKind || observedKind !== recordedKind) return "incomparable"
+  const recordedText = recorded as string
+  if (recordedKind === "proc") {
+    const rec = parseLinuxStartToken(recordedText)
+    const obs = parseLinuxStartToken(observed)
+    if (!rec || !obs || !rec.bootId || !obs.bootId) return "incomparable"
+    return rec.bootId === obs.bootId && rec.ticks === obs.ticks ? "same" : "different"
+  }
+  return observed === recordedText ? "same" : "different"
+}
+
+/** Parses Linux `/proc/<pid>/stat` text into a `proc:` token, `"gone"` for dead/zombie processes, or null. */
+export function parseLinuxProcStat(statText: string, bootId: string | null): string | "gone" | null {
+  const closeParen = statText.lastIndexOf(")")
+  if (closeParen < 0) return null
+  const fields = statText.slice(closeParen + 1).trim().split(/\s+/)
+  const state = fields[0]
+  const startTicks = fields[19]
+  if (state === "Z" || state === "X") return "gone"
+  if (startTicks && /^\d+$/.test(startTicks)) {
+    return bootId ? `proc:${bootId}:${startTicks}` : `proc:${startTicks}`
+  }
+  return null
+}
+
+/** Parses `ps -o lstart=` output (with LC_ALL=C, TZ=UTC) into a `ps:<epoch-seconds>` token, or null. */
+export function parseDarwinPsStart(stdout: string): string | null {
+  const trimmed = stdout.trim()
+  if (!trimmed) return null
+  const match = /^[A-Z][a-z]{2}\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/.exec(trimmed)
+  if (!match) return null
+  const month = MONTHS[match[1]!]
+  if (month === undefined) return null
+  const day = Number(match[2])
+  const hour = Number(match[3])
+  const minute = Number(match[4])
+  const second = Number(match[5])
+  const year = Number(match[6])
+  const ms = Date.UTC(year, month, day, hour, minute, second)
+  if (!Number.isFinite(ms)) return null
+  return `ps:${Math.floor(ms / 1000)}`
+}
+
+/** Parses PowerShell Win32_Process CreationDate UTC ISO output into a `wmi:<iso>` token, or null. */
+export function parseWindowsCreationDate(stdout: string): string | null {
+  const trimmed = stdout.trim()
+  if (!trimmed) return null
+  const ms = Date.parse(trimmed)
+  if (!Number.isFinite(ms)) return null
+  return `wmi:${new Date(ms).toISOString()}`
+}
+
+async function linuxBootId(): Promise<string | null> {
+  if (cachedBootId !== undefined) return cachedBootId
+  try {
+    cachedBootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim() || null
+  } catch {
+    cachedBootId = null
+  }
+  return cachedBootId
+}
+
+function defaultIsPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH"
+  }
+}
+
+const defaultExecFile: ExecFileRunner = async (file, args, options) => {
+  const result = await execFileAsync(file, args, { ...options, encoding: "utf8" })
+  return { stdout: String(result.stdout ?? "") }
+}
+
+/**
+ * Builds a platform process-info reader that observes stable start tokens with explicit kinds:
+ * - linux: `proc:<bootId>:<ticks>` (or `proc:<ticks>`) from `/proc/<pid>/stat`
+ * - darwin: `ps:<epoch-seconds>` from `ps -o lstart= -p <pid>` with `LC_ALL=C` and `TZ=UTC`
+ * - win32: `wmi:<iso>` from PowerShell `Get-CimInstance Win32_Process` without a shell
+ */
+export function createProcessInfoReader(options: {
+  platform?: NodeJS.Platform
+  execFile?: ExecFileRunner
+  isPidAlive?: (pid: number) => boolean
+  readProcStat?: (pid: number) => Promise<string>
+  readBootId?: () => Promise<string | null>
+} = {}): ProcessInfoReader {
+  const platform = options.platform ?? process.platform
+  const runExec = options.execFile ?? defaultExecFile
+  const alive = options.isPidAlive ?? defaultIsPidAlive
+  const readStat = options.readProcStat ?? ((pid: number) => readFile(`/proc/${pid}/stat`, "utf8"))
+  const readBoot = options.readBootId ?? linuxBootId
+
+  return {
+    isPidAlive: alive,
+    async readProcessStart(pid: number): Promise<string | "gone" | null> {
+      if (!Number.isInteger(pid) || pid <= 0) return null
+      if (platform === "linux") {
+        try {
+          const statText = await readStat(pid)
+          const parsed = parseLinuxProcStat(statText, await readBoot())
+          return parsed
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code
+          if (code === "ENOENT" || code === "ESRCH") return "gone"
+          return null
+        }
+      }
+      if (platform === "darwin") {
+        try {
+          const { stdout } = await runExec("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+            env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+            timeout: PROCESS_START_TIMEOUT_MS,
+            windowsHide: true,
+          })
+          const parsed = parseDarwinPsStart(stdout)
+          if (parsed) return parsed
+          return alive(pid) ? null : "gone"
+        } catch (error) {
+          const killed = Boolean((error as { killed?: unknown; signal?: unknown } | null)?.killed || (error as { signal?: unknown } | null)?.signal)
+          if (killed) return null
+          return alive(pid) ? null : "gone"
+        }
+      }
+      if (platform === "win32") {
+        try {
+          const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p -and $p.CreationDate) { $p.CreationDate.ToUniversalTime().ToString('O') }`
+          const { stdout } = await runExec(windowsPowerShellPath(), ["-NoProfile", "-NonInteractive", "-Command", script], {
+            timeout: PROCESS_START_TIMEOUT_MS,
+            windowsHide: true,
+          })
+          const parsed = parseWindowsCreationDate(stdout)
+          if (parsed) return parsed
+          return alive(pid) ? null : "gone"
+        } catch (error) {
+          const killed = Boolean((error as { killed?: unknown; signal?: unknown } | null)?.killed || (error as { signal?: unknown } | null)?.signal)
+          if (killed) return null
+          return alive(pid) ? null : "gone"
+        }
+      }
+      return null
+    },
+  }
+}
+
+const defaultProcessInfoReader = createProcessInfoReader()
+
+async function defaultCurrentProcessStart(): Promise<string> {
+  if (!cachedCurrentProcessStart) {
+    cachedCurrentProcessStart = defaultProcessInfoReader.readProcessStart(process.pid).then(start =>
+      start && start !== "gone" ? start : null,
+    )
+  }
+  const observed = await cachedCurrentProcessStart
+  if (observed) return observed
+  cachedCurrentProcessStart = undefined
+  return `unknown:${FALLBACK_PROCESS_START}`
+}
+
+function parseRetentionLock(raw: string): RetentionLockRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<RetentionLockRecord> | null
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
+    if (typeof parsed.id !== "string" || !parsed.id) return null
+    if (typeof parsed.host !== "string" || !parsed.host) return null
+    if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0) return null
+    const validStart = (typeof parsed.processStart === "string" && parsed.processStart.length > 0)
+      || (typeof parsed.processStart === "number" && Number.isFinite(parsed.processStart))
+    if (!validStart) return null
+    if (parsed.app !== "TenuVault") return null
+    return {
+      id: parsed.id,
+      host: parsed.host,
+      pid: parsed.pid,
+      processStart: parsed.processStart!,
+      app: "TenuVault",
+    }
+  } catch {
+    return null
+  }
+}
+
+function parseLegacyRetentionLock(raw: string): LegacyRetentionLockRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<LegacyRetentionLockRecord & { app?: unknown; host?: unknown; processStart?: unknown }> | null
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
+    if (parsed.app !== undefined || parsed.host !== undefined || parsed.processStart !== undefined) return null
+    if (typeof parsed.id !== "string" || !parsed.id) return null
+    if (typeof parsed.expiresAt !== "number" || !Number.isFinite(parsed.expiresAt)) return null
+    if (parsed.pid !== undefined && (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0)) return null
+    if (parsed.durationMs !== undefined && (typeof parsed.durationMs !== "number" || !Number.isFinite(parsed.durationMs) || parsed.durationMs <= 0)) return null
+    return { id: parsed.id, expiresAt: parsed.expiresAt, pid: parsed.pid, durationMs: parsed.durationMs }
+  } catch {
+    return null
+  }
+}
+
+function manualLockWarning(lockPath: string, reason: string): string {
+  const label = lockPath.endsWith(".reclaim") ? "Retention reclaim gate file" : "Retention lock file"
+  return `${label} ${lockPath} (${reason}) was not reclaimed automatically. Stop any TenuVault process on this computer that uses this backup folder. Delete it only if no other computer is running TenuVault on this backup folder.`
+}
+
+function conflictResolutionMessage(live: string, held: string, liveIsHeldPrefix: boolean): string {
+  if (liveIsHeldPrefix) {
+    return `Close TenuVault on every computer that uses this backup folder. Then copy the backup folder somewhere safe, then delete the file at ${live}. TenuVault then restores it from ${held} on the next start.`
+  }
+  return `Keep both files (${live} and ${held}), do not delete either, and contact support with both paths.`
+}
+
+function conflictAsideNote(aside?: string): string {
+  return aside ? ` An unexpected file moved aside during cleanup was kept at ${aside}.` : ""
+}
+
+function conflictReasonText(live: string, held: string, liveIsHeldPrefix: boolean, aside?: string): string {
+  return `a file was kept at ${held} after interrupted cleanup because ${live} already exists.${conflictAsideNote(aside)} ${conflictResolutionMessage(live, held, liveIsHeldPrefix)}`
+}
+
+function waitMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason)
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal!.reason)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    timer.unref?.()
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+/**
+ * In-process write guard for replacement prefixes during local retention cleanup.
+ * Keyed by resolved container directory path -> Map<normalizedPrefix, refCount>, so every
+ * LocalBlobStore instance in this process observes the same protection.
+ *
+ * Cross-process residual assumption: TenuVault never writes into an existing backup folder
+ * (new backups use create-only new folders), and other TenuVault instances are excluded from
+ * concurrent retention by the per-container retention lock file.
+ */
+const protectedPrefixesByDir = new Map<string, Map<string, number>>()
+const lockProtectedEntries = new Map<string, Array<{ dir: string; prefix: string }>>()
+/** Reclaim gate ids this process created but could not release, so the next acquire can reclaim them safely. */
+const leakedReclaimGates = new Set<string>()
+const guardRegisteredListeners = new Set<(dir: string, id: string) => void>()
+
+/** Test hook: resolves once a retention lock registers its protected-prefix guard for `dir`. */
+export function waitForLocalRetentionGuardRegistration(dir: string): Promise<string> {
+  const key = resolve(dir)
+  return new Promise(resolvePromise => {
+    const listener = (registeredDir: string, id: string) => {
+      if (registeredDir !== key) return
+      guardRegisteredListeners.delete(listener)
+      resolvePromise(id)
+    }
+    guardRegisteredListeners.add(listener)
+  })
+}
+
+interface InFlightPut {
+  name: string
+  done: Promise<void>
+}
+const inFlightPutsByDir = new Map<string, Set<InFlightPut>>()
+
+function trackInFlightPut(dir: string, name: string): () => void {
+  const key = resolve(dir)
+  let resolveDone!: () => void
+  const done = new Promise<void>(resolvePromise => { resolveDone = resolvePromise })
+  const entry: InFlightPut = { name, done }
+  let set = inFlightPutsByDir.get(key)
+  if (!set) {
+    set = new Set()
+    inFlightPutsByDir.set(key, set)
+  }
+  set.add(entry)
+  let finished = false
+  return () => {
+    if (finished) return
+    finished = true
+    set?.delete(entry)
+    if (set && set.size === 0) inFlightPutsByDir.delete(key)
+    resolveDone()
+  }
+}
+
+async function waitForInFlightPuts(dir: string, prefixes: string[] | undefined, signal?: AbortSignal): Promise<void> {
+  if (!prefixes?.length) return
+  const key = resolve(dir)
+  const normalized = prefixes.map(normalizePrefix)
+  const matches = (name: string) => normalized.some(prefix => name.startsWith(prefix))
+  while (true) {
+    signal?.throwIfAborted()
+    const set = inFlightPutsByDir.get(key)
+    if (!set) return
+    const pending = [...set].filter(entry => matches(entry.name)).map(entry => entry.done)
+    if (pending.length === 0) return
+    const all = Promise.all(pending)
+    if (!signal) {
+      await all
+    } else {
+      let onAbort: () => void = () => undefined
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(signal.reason)
+        signal.addEventListener("abort", onAbort, { once: true })
+      })
+      try {
+        await Promise.race([all, aborted])
+      } finally {
+        signal.removeEventListener("abort", onAbort)
+      }
+    }
+  }
+}
+
+function normalizePrefix(prefix: string): string {
+  return prefix.endsWith("/") ? prefix : `${prefix}/`
+}
+
+function addProtectedPrefix(dir: string, prefix: string): { dir: string; prefix: string } {
+  const key = resolve(dir)
+  const normalized = normalizePrefix(prefix)
+  let prefixes = protectedPrefixesByDir.get(key)
+  if (!prefixes) {
+    prefixes = new Map()
+    protectedPrefixesByDir.set(key, prefixes)
+  }
+  prefixes.set(normalized, (prefixes.get(normalized) ?? 0) + 1)
+  return { dir: key, prefix: normalized }
+}
+
+function removeProtectedPrefix(entry: { dir: string; prefix: string }): void {
+  const prefixes = protectedPrefixesByDir.get(entry.dir)
+  if (!prefixes) return
+  const next = (prefixes.get(entry.prefix) ?? 0) - 1
+  if (next > 0) prefixes.set(entry.prefix, next)
+  else prefixes.delete(entry.prefix)
+  if (prefixes.size === 0) protectedPrefixesByDir.delete(entry.dir)
+}
+
+/**
+ * Releases any in-process write-guard entries registered for the given local retention lock id.
+ * Idempotent and infallible so callers can always clear guards in a finally block even when
+ * the storage release request fails, aborts, or times out.
+ */
+export function releaseLocalRetentionGuard(lockId: string): void {
+  const suffix = `\0${lockId}`
+  for (const [key, entries] of lockProtectedEntries) {
+    if (!key.endsWith(suffix)) continue
+    lockProtectedEntries.delete(key)
+    for (const entry of entries) removeProtectedPrefix(entry)
+  }
+}
+
+function isPrefixProtected(dir: string, name: string): boolean {
+  const prefixes = protectedPrefixesByDir.get(resolve(dir))
+  if (!prefixes || prefixes.size === 0) return false
+  for (const prefix of prefixes.keys()) {
+    if (name.startsWith(prefix)) return true
+  }
+  return false
+}
+
+function assertPrefixNotProtected(dir: string, name: string): void {
+  const prefixes = protectedPrefixesByDir.get(resolve(dir))
+  if (!prefixes || prefixes.size === 0) return
+  for (const prefix of prefixes.keys()) {
+    if (name.startsWith(prefix)) {
+      throw new BlobProtectedError(`Backup ${prefix} is protected by an active retention cleanup and cannot be modified.`)
+    }
+  }
+}
 
 export class IncompleteInventoryError extends Error {
   /** The backup folder that is unavailable, when the error is about one backup. */
   backup?: string
+  /** True when this backup is unavailable only due to a scoped recovery conflict (no other container damage). */
+  recoveryConflict?: boolean
   constructor(readonly unreadableFiles: number, message?: string) {
     super(message ?? `Backup inventory is incomplete: ${unreadableFiles} encrypted file(s) could not be read. Import the correct recovery keys or recover damaged files before continuing.`)
   }
+}
+
+/** Recovery conflict details for a held quarantine file that could not overwrite an occupied live path. */
+export interface RecoveryConflict {
+  held: string
+  live: string
+  liveFile: string
+  blobName: string
+  liveIsHeldPrefix: boolean
+  liveStamp?: string
+  heldStamp?: string
+  aside?: string
 }
 
 /** A file in the backup container that could not be used. */
@@ -171,6 +725,8 @@ export interface DamagedFile {
   code?: string
   /** The backup folder the file belongs to, or null when it cannot be traced. */
   backup: string | null
+  /** Present when this entry is a recovery conflict between a held file and an occupied live path. */
+  conflict?: RecoveryConflict
 }
 
 /** Damage found while reading the backup container's inventory. */
@@ -180,6 +736,10 @@ export interface InventoryDamage {
   unavailable: Map<string, string>
   /** Damaged files that could not be traced to a backup. */
   unattributed: number
+  /** True when the container also holds non-conflict damage (unreadable files, missing non-conflicted items, duplicates). */
+  hasNonConflictDamage?: boolean
+  /** True when this scan observed an interrupted quarantine restore after linking held to live. */
+  interruptedRestore?: boolean
 }
 
 const RECOVERY = "Import the recovery key it was made with, or restore the damaged files from a copy. Files that cannot be recovered can be removed from the backup folder."
@@ -336,11 +896,13 @@ export class LocalBlobStore {
    * @param root   Folder that holds the encrypted backups.
    * @param masterKeys Current master key first, then older keys that must stay readable.
    * @param writeFormat Format for new files and overwrites; see WRITE_FORMAT.
+   * @param processInfo Optional process-info reader override (for tests).
    */
   constructor(
     private readonly root: string,
     masterKeys: Buffer[],
     private readonly writeFormat: Version = WRITE_FORMAT,
+    private readonly processInfo?: ProcessInfoReader,
   ) {
     if (masterKeys.length === 0) throw new Error("A backup encryption key is required.")
     this.keyring = masterKeys.map(deriveKeys)
@@ -380,7 +942,7 @@ export class LocalBlobStore {
   async list(account: string, container: string, prefix = ""): Promise<StoredBlob[]> {
     const entries = await this.checkedEntries(account, container)
     const folder = backupFolderOf(prefix)
-    if (folder) this.assertAvailable(entries, folder)
+    if (folder) await this.assertAvailable(entries, folder)
     return [...entries.values()].filter((entry) => entry.name.startsWith(prefix))
       .map(({ file: _file, version: _version, stamp: _stamp, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
   }
@@ -388,7 +950,10 @@ export class LocalBlobStore {
   /** Damage in the container's current inventory; empty when there is none. */
   async damage(account: string, container: string): Promise<InventoryDamage> {
     const entries = await this.checkedEntries(account, container)
-    return this.damageOf.get(entries) ?? { files: [], unavailable: new Map(), unattributed: 0 }
+    const damage = this.damageOf.get(entries)
+    if (!damage) return { files: [], unavailable: new Map(), unattributed: 0 }
+    await revalidateDamageConflicts(damage)
+    return damage
   }
 
   /** Every file name a blob can have, for each key and format. Remembered, since each takes an HMAC per key. */
@@ -403,10 +968,37 @@ export class LocalBlobStore {
     return names
   }
 
-  private assertAvailable(entries: Map<string, Entry>, folder: string): void {
+  private isOnlyScopedConflicts(damage: InventoryDamage): boolean {
+    if (damage.unattributed > 0 || damage.hasNonConflictDamage) return false
+    const conflictEntries = damage.files.filter(file => file.conflict && file.backup && !file.conflict.aside)
+    if (conflictEntries.length === 0) return false
+    const conflictedBackups = new Set(conflictEntries.map(file => file.backup!))
+    const conflictedLiveFiles = new Map<string, string>()
+    for (const file of conflictEntries) conflictedLiveFiles.set(file.conflict!.liveFile, file.backup!)
+    for (const file of damage.files) {
+      if (file.conflict && file.backup && !file.conflict.aside) continue
+      if (file.backup && conflictedLiveFiles.get(file.file) === file.backup) continue
+      return false
+    }
+    for (const folder of damage.unavailable.keys()) {
+      if (!conflictedBackups.has(folder)) return false
+    }
+    return true
+  }
+
+  private async assertAvailable(entries: Map<string, Entry>, folder: string): Promise<void> {
     const damage = this.damageOf.get(entries)
-    const reason = damage?.unavailable.get(folder)
-    if (!damage || !reason) return
+    if (!damage || !damage.unavailable.has(folder)) return
+    await revalidateDamageConflicts(damage)
+    const reason = damage.unavailable.get(folder)
+    if (!reason) return
+    const folderConflicts = damage.files.filter(file => file.backup === folder && file.conflict)
+    if (folderConflicts.length > 0 && damage.files.every(file => file.backup !== folder || Boolean(file.conflict) || folderConflicts.some(c => c.conflict!.liveFile === file.file))) {
+      throw Object.assign(
+        new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason}`),
+        { backup: folder, recoveryConflict: this.isOnlyScopedConflicts(damage) },
+      )
+    }
     const files = damage.files.filter((file) => file.backup === folder).map((file) => file.file)
     const named = files.length ? ` Affected file${files.length === 1 ? "" : "s"} in the backup folder: ${files.slice(0, MAX_NAMED_FILES).join(", ")}${files.length > MAX_NAMED_FILES ? `, and ${files.length - MAX_NAMED_FILES} more` : ""}.` : ""
     throw Object.assign(new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason}${named} ${RECOVERY}`), { backup: folder })
@@ -424,7 +1016,7 @@ export class LocalBlobStore {
     let entries = this.dirty.has(dir) ? await this.checkedEntries(account, container) : await this.entries(account, container)
     let entry = entries.get(name)
     const folder = backupFolderOf(name)
-    if (folder) this.assertAvailable(entries, folder)
+    if (folder) await this.assertAvailable(entries, folder)
     if (!entry) throw this.missing(entries, name)
     // A selective read checks its own file. Listings still verify every cached header,
     // and directory changes or our own writes still validate the complete manifest.
@@ -434,11 +1026,26 @@ export class LocalBlobStore {
       this.changed(dir)
       this.index.delete(dir)
       entries = await this.checkedEntries(account, container)
-      if (folder) this.assertAvailable(entries, folder)
+      if (folder) await this.assertAvailable(entries, folder)
       entry = entries.get(name)
       if (!entry) throw this.missing(entries, name)
     }
-    const raw = await readFile(join(this.dir(account, container), entry.file))
+    return this.readBody(account, container, entry, entries)
+  }
+
+  private async readBody(account: string, container: string, entry: Entry, entries: Map<string, Entry>): Promise<{ blob: StoredBlob; data: Buffer }> {
+    const { name } = entry
+    const folder = backupFolderOf(name)
+    // Bind the bytes and ETag to the same open file, even when the live path is replaced.
+    const file = await open(join(this.dir(account, container), entry.file), "r")
+    let raw: Buffer
+    try {
+      if (fileStamp(await file.stat({ bigint: true })) !== entry.stamp) throw new BlobConditionNotMetError(name)
+      raw = await file.readFile()
+      if (fileStamp(await file.stat({ bigint: true })) !== entry.stamp) throw new BlobConditionNotMetError(name)
+    } finally {
+      await file.close()
+    }
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
     if (!version) throw new Error("Invalid backup header")
     const headerLength = raw.readUInt16BE(MAGIC_LENGTH)
@@ -453,7 +1060,7 @@ export class LocalBlobStore {
       const why = unreadable(error)
       const { reason } = why
       const damage = this.damageOf.get(entries)
-      if (damage && container === BACKUP_CONTAINER && !damage.files.some((file) => file.file === entry!.file)) {
+      if (damage && container === BACKUP_CONTAINER && !damage.files.some((file) => file.file === entry.file)) {
         damage.files.push(damagedFile(entry.file, why, folder))
         if (folder && !damage.unavailable.has(folder)) damage.unavailable.set(folder, `one of its files could not be read: ${reason}.`)
         this.damagedStamps.get(entries)?.set(entry.file, entry.stamp)
@@ -483,6 +1090,8 @@ export class LocalBlobStore {
   }
 
   private async putNow(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly: boolean, metadata: Record<string, string> | undefined, ifMatch: string | undefined): Promise<StoredBlob> {
+    const dir = this.dir(account, container)
+    assertPrefixNotProtected(dir, name)
     if (!(await this.containerExists(account, container))) throw new BlobNotFoundError(container)
     const entries = await this.entries(account, container)
     const current = this.keyring[0]!
@@ -492,7 +1101,7 @@ export class LocalBlobStore {
       // Compare with the file on disk, which is what a GET returns as the ETag.
       let tag: string | null = null
       if (existing) {
-        try { tag = `"${fileStamp(await stat(join(this.dir(account, container), existing.file), { bigint: true }))}"` } catch { /* Removed since listed. */ }
+        try { tag = `"${fileStamp(await stat(join(dir, existing.file), { bigint: true }))}"` } catch { /* Removed since listed. */ }
       }
       if (!tag || (ifMatch !== "*" && ifMatch !== tag)) throw new BlobConditionNotMetError(name)
     }
@@ -500,7 +1109,14 @@ export class LocalBlobStore {
     const version = this.writeFormat
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
     // A damaged file under the name this blob would get is kept for recovery, never written over.
-    if (!existing && this.damageOf.get(entries)?.files.some((damaged) => damaged.file === file)) {
+    const damage = !existing ? this.damageOf.get(entries) : undefined
+    const damagedMatch = damage?.files.find((damaged) => damaged.file === file || damaged.conflict?.liveFile === file)
+    if (damagedMatch) {
+      if (damagedMatch.conflict) {
+        if (damage) await revalidateDamageConflicts(damage)
+        const guidance = await resolveConflictGuidance(damagedMatch.conflict)
+        throw new IncompleteInventoryError(1, `${name} was not written because ${damagedMatch.conflict.live} has an unresolved recovery conflict with ${damagedMatch.conflict.held}.${conflictAsideNote(damagedMatch.conflict.aside)} ${guidance}`)
+      }
       throw new IncompleteInventoryError(1, `${name} was not written: the file it would replace (${file}) could not be read, and is kept for recovery. ${RECOVERY}`)
     }
     const created = existing?.created ?? new Date()
@@ -510,48 +1126,55 @@ export class LocalBlobStore {
     const length = Buffer.alloc(2)
     length.writeUInt16BE(header.length)
 
-    const dir = this.dir(account, container)
     return this.write(dir, async () => {
+      assertPrefixNotProtected(dir, name)
       const path = join(dir, file)
       const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
       let written: BigIntStats
+      let donePut: (() => void) | undefined
       try {
-        const handle = await open(tmp, "wx", 0o600)
         try {
-          await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
-          await handle.sync()
-          written = await handle.stat({ bigint: true })
+          const handle = await open(tmp, "wx", 0o600)
+          try {
+            await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
+            await handle.sync()
+            written = await handle.stat({ bigint: true })
+          } finally {
+            await handle.close()
+          }
+          donePut = trackInFlightPut(dir, name)
+          assertPrefixNotProtected(dir, name)
+          if (createOnly) await this.publishNew(tmp, path)
+          else await rename(tmp, path)
+          this.changed(dir)
+          if (process.platform !== "win32") await syncDirectory(dir)
+        } catch (error) {
+          if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
+            throw new BlobAlreadyExistsError(name)
+          }
+          throw error
         } finally {
-          await handle.close()
+          await rm(tmp, { force: true })
         }
-        if (createOnly) await this.publishNew(tmp, path)
-        else await rename(tmp, path)
-        this.changed(dir)
-        if (process.platform !== "win32") await syncDirectory(dir)
-      } catch (error) {
-        if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
-          throw new BlobAlreadyExistsError(name)
-        }
-        throw error
-      } finally {
-        await rm(tmp, { force: true })
-      }
 
-      const published = await stat(path, { bigint: true })
-      const sameFile = published.dev === written.dev && published.ino === written.ino && published.size === written.size && published.mtimeNs === written.mtimeNs
-      // Rename can change ctime. Use its final stamp only after verifying the written file's identity.
-      const info = sameFile ? published : written
-      const stamp = fileStamp(info)
-      const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
-      if (sameFile) this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
-      else {
-        // Keep the replacement's authenticated filename and metadata for the next mutation.
-        const replacement = await this.readEntry(dir, account, container, file)
-        if (replacement !== VANISHED && !(replacement instanceof Unreadable) && replacement.name === name) this.updateEntry(dir, entries, name, replacement)
-        else this.index.delete(dir)
-        this.changed(dir)
+        const published = await stat(path, { bigint: true })
+        const sameFile = published.dev === written.dev && published.ino === written.ino && published.size === written.size && published.mtimeNs === written.mtimeNs
+        // Rename can change ctime. Use its final stamp only after verifying the written file's identity.
+        const info = sameFile ? published : written
+        const stamp = fileStamp(info)
+        const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
+        if (sameFile) this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
+        else {
+          // Keep the replacement's authenticated filename and metadata for the next mutation.
+          const replacement = await this.readEntry(dir, account, container, file)
+          if (replacement !== VANISHED && !(replacement instanceof Unreadable) && replacement.name === name) this.updateEntry(dir, entries, name, replacement)
+          else this.index.delete(dir)
+          this.changed(dir)
+        }
+        return blob
+      } finally {
+        donePut?.()
       }
-      return blob
     })
   }
 
@@ -563,23 +1186,835 @@ export class LocalBlobStore {
    * of deletes. despiteDamage is for removing files the caller has just written itself, such as
    * an archive import that is rolled back.
    */
-  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean } = {}): Promise<void> {
+  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean; ifMatch?: string; retentionLockId?: string; expectedReplacements?: readonly ExpectedReplacement[] } = {}): Promise<void> {
     const dir = this.dir(account, container)
+    assertPrefixNotProtected(dir, name)
     // Every file is checked again at most every few seconds, so a file damaged in place is found
     // within a run of deletes without checking every file before each one.
     const fresh = Date.now() - (this.checkedAt.get(dir) ?? 0) > DELETE_RECHECK_MS
     const entries = fresh ? await this.checkedEntries(account, container) : await this.entries(account, container)
     const damage = this.damageOf.get(entries)
     if (!options.despiteDamage && damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
-      throw new IncompleteInventoryError(damage.files.length, `${describeDamage(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${RECOVERY}`)
+      await revalidateDamageConflicts(damage)
+      const onlyScopedConflicts = this.isOnlyScopedConflicts(damage)
+      if (onlyScopedConflicts) {
+        const conflictedBackups = new Set(damage.files.filter(file => file.conflict && file.backup).map(file => file.backup!))
+        const targetFolder = backupFolderOf(name)
+        const touchedBackup = (targetFolder && conflictedBackups.has(targetFolder))
+          ? targetFolder
+          : options.expectedReplacements?.map(rep => backupFolderOf(rep.prefix)).find((folder): folder is string => Boolean(folder && conflictedBackups.has(folder)))
+        if (touchedBackup) {
+          const conflict = damage.files.find(file => file.backup === touchedBackup && file.conflict)!.conflict!
+          const guidance = await resolveConflictGuidance(conflict)
+          throw new IncompleteInventoryError(
+            damage.files.length,
+            `Backup ${touchedBackup} has an unresolved recovery conflict after interrupted cleanup between ${conflict.live} and ${conflict.held}.${conflictAsideNote(conflict.aside)} Deletes that touch ${touchedBackup} are blocked until this is resolved. ${guidance}`,
+          )
+        }
+      } else {
+        const conflict = damage.files.find(file => file.conflict)?.conflict
+        const held = damage.files.find(file => file.file.startsWith(RETIRED_PREFIX))
+        const recovery = conflict
+          ? `A file was kept at ${conflict.held} after interrupted cleanup because ${conflict.live} already exists.${conflictAsideNote(conflict.aside)} ${await resolveConflictGuidance(conflict)}`
+          : held
+            ? `A file was kept in ${held.file} after interrupted cleanup. Follow the backup storage recovery instructions.`
+            : RECOVERY
+        throw new IncompleteInventoryError(damage.files.length, `${describeDamage(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${recovery}`)
+      }
     }
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
-    await this.write(dir, async () => {
-      await rm(join(dir, entry.file), { force: true })
-      this.changed(dir)
-      this.updateEntry(dir, entries, name)
+    if (!options.despiteDamage) {
+      // Retention verifies the full candidate over the storage bridge and binds each delete to that
+      // read. Direct deletes must also authenticate every body in the candidate before removing one.
+      const folder = backupFolderOf(name)
+      const candidate = !options.ifMatch && folder ? [...entries.values()].filter(blob => backupFolderOf(blob.name) === folder) : [entry]
+      for (const blob of candidate) await this.readBody(account, container, blob, entries)
+    }
+    let renamed = false
+    try {
+      await this.write(dir, async () => {
+        assertPrefixNotProtected(dir, name)
+        if (options.retentionLockId !== undefined) {
+          await this.assertRetentionLockHeld(dir, options.retentionLockId)
+          if (!this.hardLinks) {
+            throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+              code: "RetentionHardLinksUnsupported",
+              lockPath: dir,
+            })
+          }
+        }
+        const path = join(dir, entry.file)
+        const info = await lstat(path, { bigint: true }).catch(error => {
+          if (isMissing(error)) throw new BlobConditionNotMetError(name)
+          throw error
+        })
+        if (!info.isFile() || info.ino === 0n || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
+        const quarantine = await mkdtemp(join(dir, RETIRED_PREFIX))
+        const held = join(quarantine, entry.file)
+        const stamp = join(quarantine, RETIRED_STAMP)
+        let needsRecovery = false
+        try {
+          await writeFile(stamp, "", { flag: "wx" })
+          assertPrefixNotProtected(dir, name)
+          if (options.retentionLockId !== undefined) {
+            await this.assertRetentionLockHeld(dir, options.retentionLockId)
+            if (!this.hardLinks) {
+              throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+                code: "RetentionHardLinksUnsupported",
+                lockPath: dir,
+              })
+            }
+          }
+          await rename(path, held)
+          renamed = true
+          needsRecovery = true
+          this.changed(dir)
+          const moved = await lstat(held, { bigint: true })
+          // The rename can change ctime. Compare the attributes that survive it.
+          if (!moved.isFile() || moved.ino === 0n || moved.dev !== info.dev || moved.ino !== info.ino
+            || moved.size !== info.size || moved.mtimeNs !== info.mtimeNs) {
+            this.index.delete(dir)
+            try {
+              await this.restoreQuarantinedFile(held, path, dir)
+              needsRecovery = false
+              renamed = false
+            } catch (error) {
+              const guidance = error instanceof QuarantineRestoreConflictError
+                ? `${conflictAsideNote(error.aside).trimStart()}${error.aside ? " " : ""}${await resolveConflictGuidance(error)}`
+                : "Move it back only after checking the live file."
+              throw new BlobQuarantinedError(`A different file was kept in ${held} (live path ${path}). ${guidance}`, { cause: error })
+            }
+            throw new BlobConditionNotMetError(name)
+          }
+          if (options.expectedReplacements?.length) {
+            const changed = await this.findChangedReplacement(account, container, options.expectedReplacements, quarantine, dir, entries, options.retentionLockId)
+            if (changed) {
+              this.index.delete(dir)
+              let restoredEtag: string | undefined
+              try {
+                restoredEtag = await this.restoreQuarantinedFile(held, path, dir)
+                needsRecovery = false
+                renamed = false
+              } catch (error) {
+                const guidance = error instanceof QuarantineRestoreConflictError
+                  ? `${conflictAsideNote(error.aside).trimStart()}${error.aside ? " " : ""}${await resolveConflictGuidance(error)}`
+                  : "Move it back only after checking the live file."
+                throw new BlobQuarantinedError(`Replacement backup ${changed} changed during deletion and ${name} was kept in ${held} (live path ${path}). ${guidance}`, { cause: error })
+              }
+              throw new BlobReplacementChangedError(changed, undefined, restoredEtag)
+            }
+          }
+          const beforeRemove = await lstat(held, { bigint: true })
+          if (!beforeRemove.isFile() || beforeRemove.ino === 0n
+            || beforeRemove.dev !== moved.dev || beforeRemove.ino !== moved.ino
+            || beforeRemove.size !== moved.size || beforeRemove.mtimeNs !== moved.mtimeNs
+            || beforeRemove.nlink !== moved.nlink) {
+            this.index.delete(dir)
+            throw new Error(`Quarantined file ${held} changed before removal`)
+          }
+          const liveBefore = await lstat(path, { bigint: true }).catch(error => isMissing(error) ? null : undefined)
+          if (liveBefore !== null) {
+            this.index.delete(dir)
+            throw new Error(`Candidate file ${path} is present before removing ${held}`)
+          }
+          await rm(held)
+          needsRecovery = false
+          const liveAfter = await lstat(path, { bigint: true }).catch(error => isMissing(error) ? null : undefined)
+          if (liveAfter !== null) {
+            this.index.delete(dir)
+            this.changed(dir)
+            throw new Error(`Candidate file ${path} is still present after removing ${held}`)
+          }
+          this.updateEntry(dir, entries, name)
+        } finally {
+          if (!needsRecovery) {
+            await rm(stamp, { force: true }).catch(() => undefined)
+            await rmdir(quarantine).catch(() => undefined)
+          }
+        }
+      })
+    } catch (error) {
+      if (renamed && !(error instanceof BlobQuarantinedError)) {
+        throw new BlobDeleteInterruptedError(error instanceof Error ? error.message : String(error), { cause: error })
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Re-checks replacement expectations directly on disk after `rename(path, held)` and before
+   * `rm(held)`, ignoring our own active quarantine folder. Returns the first changed replacement
+   * prefix, or null when every expected replacement file matches and no extra/unreadable file
+   * appeared under any replacement prefix.
+   */
+  private async findChangedReplacement(
+    account: string,
+    container: string,
+    expectedReplacements: readonly ExpectedReplacement[],
+    currentQuarantine: string,
+    currentDir: string,
+    currentEntries: Map<string, Entry>,
+    retentionLockId?: string,
+  ): Promise<string | null> {
+    const repDir = this.dir(account, container)
+    const names = await this.names(repDir)
+    if (names.length === 0) return expectedReplacements[0]!.prefix
+    const prefixes = expectedReplacements.map(rep => rep.prefix)
+    const quarantineName = repDir === currentDir ? basename(currentQuarantine) : null
+    const unrelatedConflictLiveFiles = new Set<string>()
+    for (const folder of names) {
+      if (!folder.startsWith(RETIRED_PREFIX) || folder === quarantineName) continue
+      const retiredDir = join(repDir, folder)
+      const dirInfo = await lstat(retiredDir).catch(() => null)
+      if (!dirInfo?.isDirectory()) return expectedReplacements[0]!.prefix
+      const stampInfo = await lstat(join(retiredDir, RETIRED_STAMP)).catch(error => isMissing(error) ? null : undefined)
+      if (stampInfo === undefined) return expectedReplacements[0]!.prefix
+      const since = Math.max(dirInfo.mtimeMs, stampInfo ? (stampInfo.isFile() ? stampInfo.mtimeMs : Infinity) : 0)
+      if (Date.now() - since <= RETIRED_GRACE_MS) return expectedReplacements[0]!.prefix
+      const rawEntries = await readdir(retiredDir).catch(() => null)
+      if (!rawEntries) return expectedReplacements[0]!.prefix
+      const heldFiles = rawEntries.filter(file => file !== RETIRED_STAMP)
+      if (heldFiles.length === 0) {
+        if (retentionLockId !== undefined && repDir === currentDir && (await this.removeAgedEmptyQuarantine(retiredDir, retentionLockId, repDir))) {
+          continue
+        }
+        return expectedReplacements[0]!.prefix
+      }
+      for (const file of heldFiles) {
+        if (!/^[a-f0-9]+\.tvb$/i.test(file)) return expectedReplacements[0]!.prefix
+        const entry = await this.readEntry(retiredDir, account, container, file)
+        if (entry === VANISHED || entry instanceof Unreadable) return expectedReplacements[0]!.prefix
+        if (!backupFolderOf(entry.name) || prefixes.some(prefix => entry.name.startsWith(prefix))) {
+          return expectedReplacements[0]!.prefix
+        }
+        if (this.fileNames(account, container, entry.name).includes(file)) {
+          unrelatedConflictLiveFiles.add(file)
+        }
+      }
+    }
+    const filesOnDisk = new Set(names.filter(file => file.endsWith(EXT)))
+    const knownEntries = repDir === currentDir ? currentEntries : await this.entries(account, container)
+    const knownByFile = new Map<string, Entry>([...knownEntries.values()].map(entry => [entry.file, entry]))
+    const matchedFiles = new Set<string>()
+    for (const rep of expectedReplacements) {
+      const pairs = Object.entries(rep.blobs)
+      if (pairs.length === 0) return rep.prefix
+      for (const [blobName, expectedEtag] of pairs) {
+        const candidates = new Set<string>()
+        const knownFile = knownEntries.get(blobName)?.file
+        if (knownFile && filesOnDisk.has(knownFile)) candidates.add(knownFile)
+        for (const candidate of this.fileNames(account, container, blobName)) {
+          if (filesOnDisk.has(candidate)) candidates.add(candidate)
+        }
+        let matched: string | null = null
+        for (const candidate of candidates) {
+          if (matchedFiles.has(candidate)) continue
+          const info = await lstat(join(repDir, candidate), { bigint: true }).catch(() => null)
+          if (info && info.isFile() && info.ino !== 0n && `"${fileStamp(info)}"` === expectedEtag) {
+            matched = candidate
+            break
+          }
+        }
+        if (!matched) return rep.prefix
+        matchedFiles.add(matched)
+      }
+    }
+    const otherFiles = [...filesOnDisk].filter(file => !matchedFiles.has(file))
+    let extraChanged: string | null = null
+    await mapLimit(otherFiles, HEADER_CONCURRENCY, async file => {
+      if (extraChanged) return
+      const info = await lstat(join(repDir, file), { bigint: true }).catch(() => null)
+      if (!info) return
+      if (!info.isFile()) {
+        extraChanged ??= prefixes[0]!
+        return
+      }
+      const known = knownByFile.get(file)
+      if (known && fileStamp(info) === known.stamp) {
+        const hit = prefixes.find(prefix => known.name.startsWith(prefix))
+        if (hit) extraChanged ??= hit
+        return
+      }
+      const read = await this.readEntry(repDir, account, container, file)
+      if (read === VANISHED) return
+      if (read instanceof Unreadable) {
+        if (!unrelatedConflictLiveFiles.has(file)) extraChanged ??= prefixes[0]!
+        return
+      }
+      const hit = prefixes.find(prefix => read.name.startsWith(prefix))
+      if (hit) extraChanged ??= hit
     })
+    return extraChanged
+  }
+
+  /**
+   * Registers in-process write protection for the given prefixes in a container.
+   * Returns a release function that must be called in a finally block.
+   */
+  protectPrefixes(account: string, container: string, prefixes: string[]): () => void {
+    const dir = this.dir(account, container)
+    const entries = prefixes.map(prefix => addProtectedPrefix(dir, prefix))
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      for (const entry of entries) removeProtectedPrefix(entry)
+    }
+  }
+
+  private registerLockProtectedPrefixes(dir: string, id: string, prefixes: string[] | undefined): void {
+    if (!prefixes?.length) return
+    const resolvedDir = resolve(dir)
+    const key = `${resolvedDir}\0${id}`
+    const entries = prefixes.map(prefix => addProtectedPrefix(dir, prefix))
+    lockProtectedEntries.set(key, entries)
+    for (const listener of guardRegisteredListeners) listener(resolvedDir, id)
+  }
+
+  private releaseLockProtectedPrefixes(dir: string, id: string): void {
+    const key = `${resolve(dir)}\0${id}`
+    const entries = lockProtectedEntries.get(key)
+    if (!entries) return
+    lockProtectedEntries.delete(key)
+    for (const entry of entries) removeProtectedPrefix(entry)
+  }
+
+  private async assertRetentionLockHeld(dir: string, id: string): Promise<void> {
+    const lockPath = join(dir, RETENTION_LOCK_FILE)
+    let raw: string
+    try {
+      raw = await readFile(lockPath, "utf8")
+    } catch (error) {
+      throw new BlobLeaseConflictError(`The local retention lock ${lockPath} is no longer held.`, { cause: error })
+    }
+    const lock = parseRetentionLock(raw)
+    if (!lock || lock.id !== id) {
+      throw new BlobLeaseConflictError(`The local retention lock ${lockPath} is no longer held.`)
+    }
+  }
+
+  private async isRetentionLockHeld(dir: string, id: string): Promise<boolean> {
+    try {
+      await this.assertRetentionLockHeld(dir, id)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Under an active retention lock, removes an aged quarantine directory that contains only the
+   * stamp file (no held files), after re-confirming it is still aged and has no held files.
+   * Returns true only when the directory was removed or was already gone.
+   */
+  private async removeAgedEmptyQuarantine(retiredDir: string, retentionLockId: string, lockDir: string): Promise<boolean> {
+    const stampPath = join(retiredDir, RETIRED_STAMP)
+    const dirInfo = await lstat(retiredDir).catch(error => isMissing(error) ? null : undefined)
+    if (dirInfo === null) return true
+    if (!dirInfo || !dirInfo.isDirectory()) return false
+    const stampInfo = await lstat(stampPath).catch(error => isMissing(error) ? null : undefined)
+    if (stampInfo === undefined) return false
+    if (stampInfo && !stampInfo.isFile()) return false
+    const since = Math.max(dirInfo.mtimeMs, stampInfo ? stampInfo.mtimeMs : 0)
+    if (Date.now() - since <= RETIRED_GRACE_MS) return false
+    const entries = await readdir(retiredDir).catch(error => isMissing(error) ? null : undefined)
+    if (entries === null) return true
+    if (!entries || entries.some(file => file !== RETIRED_STAMP)) return false
+    if (!(await this.isRetentionLockHeld(lockDir, retentionLockId))) return false
+    // Re-list right before removing the stamp, so a delete that placed a held file meanwhile keeps its stamp.
+    const latest = await readdir(retiredDir).catch(error => isMissing(error) ? null : undefined)
+    if (latest === null) return true
+    if (!latest || latest.some(file => file !== RETIRED_STAMP)) return false
+    if (latest.includes(RETIRED_STAMP)) {
+      try {
+        await rm(stampPath)
+      } catch (error) {
+        if (!isMissing(error)) return false
+      }
+    }
+    try {
+      await rmdir(retiredDir)
+      return true
+    } catch (error) {
+      return isMissing(error)
+    }
+  }
+
+  private async ownProcessStart(): Promise<string> {
+    if (!this.processInfo) return defaultCurrentProcessStart()
+    const observed = await this.processInfo.readProcessStart(process.pid)
+    return observed && observed !== "gone" ? observed : `unknown:${FALLBACK_PROCESS_START}`
+  }
+
+  private isPidAlive(pid: number): boolean {
+    return (this.processInfo ?? defaultProcessInfoReader).isPidAlive(pid)
+  }
+
+  private readProcessStart(pid: number): Promise<string | "gone" | null> {
+    return (this.processInfo ?? defaultProcessInfoReader).readProcessStart(pid)
+  }
+
+  private async publishLockFile(tmpPath: string, lockPath: string, dir: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    if (!this.hardLinks) {
+      throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+        code: "RetentionHardLinksUnsupported",
+        lockPath: dir,
+      })
+    }
+    try {
+      await link(tmpPath, lockPath)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? ""
+      if (NO_HARD_LINKS.has(code)) {
+        this.hardLinks = false
+        throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+          code: "RetentionHardLinksUnsupported",
+          lockPath: dir,
+          cause: error,
+        })
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Acquires an owner-and-process cross-process retention lock file scoped to one container directory.
+   * Never expires while its holding process is alive; no time-based expiry or renewal.
+   */
+  async acquireRetentionLock(
+    account: string,
+    container: string,
+    proposedId?: string,
+    protectedPrefixes?: string[],
+    signal?: AbortSignal,
+    onTempFileCleanup?: (cleanup: () => Promise<void>) => Promise<void>,
+  ): Promise<string> {
+    signal?.throwIfAborted()
+    const dir = this.dir(account, container)
+    await mkdir(dir, { recursive: true, mode: 0o700 })
+    signal?.throwIfAborted()
+    // Re-probe hard link support on every retention run: publishing the lock is the probe, so a transient
+    // failure or a remounted folder does not disable cleanup until the app restarts.
+    this.hardLinks = true
+    const lockPath = join(dir, RETENTION_LOCK_FILE)
+    const id = proposedId || randomBytes(16).toString("hex")
+    const record: RetentionLockRecord = {
+      id,
+      host: hostname(),
+      pid: process.pid,
+      processStart: await this.ownProcessStart(),
+      app: "TenuVault",
+    }
+    signal?.throwIfAborted()
+    const tmpPath = join(dir, `${RETENTION_LOCK_FILE}.${randomBytes(8).toString("hex")}.tmp`)
+    try {
+      const handle = await open(tmpPath, "wx", 0o600)
+      try {
+        await handle.writeFile(JSON.stringify(record))
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+    } catch (error) {
+      await rm(tmpPath, { force: true }).catch(() => undefined)
+      const code = (error as NodeJS.ErrnoException).code
+      if (code && UNSUPPORTED_LOCK_ERRORS.has(code)) {
+        throw new BlobLeaseUnsupportedError(`The backup folder does not support the local retention lock (${code}).`, { cause: error })
+      }
+      throw error
+    }
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        signal?.throwIfAborted()
+        let published = false
+        try {
+          await this.publishLockFile(tmpPath, lockPath, dir, signal)
+          published = true
+          await rm(tmpPath, { force: true }).catch(() => undefined)
+          if (process.platform !== "win32") await syncDirectory(dir)
+          signal?.throwIfAborted()
+          this.registerLockProtectedPrefixes(dir, id, protectedPrefixes)
+          await waitForInFlightPuts(dir, protectedPrefixes, signal)
+          signal?.throwIfAborted()
+          return id
+        } catch (error) {
+          if (published) {
+            await this.releaseRetentionLock(account, container, id).catch(() => undefined)
+            this.releaseLockProtectedPrefixes(dir, id)
+            throw error
+          }
+          if (signal?.aborted) throw error
+          if (error instanceof BlobLeaseUnsupportedError) throw error
+          const code = (error as NodeJS.ErrnoException).code
+          if (code !== "EEXIST") {
+            if (code && UNSUPPORTED_LOCK_ERRORS.has(code)) {
+              throw new BlobLeaseUnsupportedError(`The backup folder does not support the local retention lock (${code}).`, { cause: error })
+            }
+            throw error
+          }
+          if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath, signal))) {
+            throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
+              code: "LeaseAlreadyPresent",
+              lockPath,
+            })
+          }
+        }
+      }
+      throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
+        code: "LeaseAlreadyPresent",
+        lockPath,
+      })
+    } finally {
+      const cleanup = () => rm(tmpPath, { force: true }).then(() => undefined, () => undefined)
+      // The test hook may only delay cleanup; a failing hook never masks the acquire result or skips cleanup.
+      if (onTempFileCleanup) await onTempFileCleanup(cleanup).catch(() => undefined)
+      await cleanup()
+    }
+  }
+
+  private async readRetentionLockState(lockPath: string): Promise<
+    | { kind: "missing" }
+    | { kind: "current"; lock: RetentionLockRecord }
+    | { kind: "legacy"; lock: LegacyRetentionLockRecord }
+    | { kind: "unparseable" }
+  > {
+    let raw: string
+    try {
+      const info = await lstat(lockPath, { bigint: true })
+      if (!info.isFile()) {
+        throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock path is not a regular file"), {
+          code: "RetentionLockManualIntervention",
+          lockPath,
+        })
+      }
+      raw = await readFile(lockPath, "utf8")
+    } catch (error) {
+      if (isMissing(error)) return { kind: "missing" }
+      if (error instanceof BlobLeaseConflictError) throw error
+      throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be read"), {
+        cause: error,
+        code: "RetentionLockManualIntervention",
+        lockPath,
+      })
+    }
+    const current = parseRetentionLock(raw)
+    if (current) return { kind: "current", lock: current }
+    const legacy = parseLegacyRetentionLock(raw)
+    if (legacy) return { kind: "legacy", lock: legacy }
+    return { kind: "unparseable" }
+  }
+
+  private async reclaimLockAside(lockPath: string, matches: (movedRaw: string) => boolean): Promise<boolean> {
+    const aside = `${lockPath}.${randomBytes(8).toString("hex")}.stale`
+    try {
+      await rename(lockPath, aside)
+    } catch (error) {
+      if (isMissing(error)) return true
+      throw error
+    }
+    const movedRaw = await readFile(aside, "utf8").catch(() => null)
+    if (movedRaw !== null && matches(movedRaw)) {
+      await rm(aside, { force: true })
+      return true
+    }
+    // The moved file did not match the stale lock we observed. Restore it by hard-link only if
+    // lockPath is still free; otherwise keep the aside file and never unlink an unverified lock.
+    try {
+      await link(aside, lockPath)
+      await rm(aside, { force: true }).catch(() => undefined)
+    } catch {
+      throw new BlobLeaseConflictError(
+        `A live retention lock changed while reclaiming ${lockPath}. The moved lock file was kept at ${aside} and was not deleted; retention stopped for this run.`,
+        { code: "RetentionLockManualIntervention", lockPath },
+      )
+    }
+    const movedLock = movedRaw === null ? null : parseRetentionLock(movedRaw)
+    throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
+      code: "LeaseAlreadyPresent",
+      lockPath,
+      ...(movedLock ? { holderId: movedLock.id } : {}),
+    })
+  }
+
+  /**
+   * Judges whether the recorded holder of a lock-shaped file is provably gone. Returns "live" only
+   * for a same-host process whose comparable start token matches. Anything unobservable throws the
+   * manual-intervention warning naming `path`, so the file is preserved.
+   */
+  private async assessLockHolder(path: string, lock: RetentionLockRecord): Promise<"stale" | "live"> {
+    if (lock.host !== hostname()) {
+      throw new BlobLeaseConflictError(manualLockWarning(path, `held by another computer (${lock.host})`), {
+        code: "RetentionLockManualIntervention",
+        lockPath: path,
+      })
+    }
+    if (!this.isPidAlive(lock.pid)) return "stale"
+    const observedStart = await this.readProcessStart(lock.pid)
+    if (observedStart === "gone") return "stale"
+    if (observedStart === null) {
+      throw new BlobLeaseConflictError(
+        manualLockWarning(path, `could not verify whether process ${lock.pid} is still the original holder`),
+        { code: "RetentionLockManualIntervention", lockPath: path },
+      )
+    }
+    const comparison = compareProcessStart(lock.processStart, observedStart)
+    if (comparison === "incomparable") {
+      throw new BlobLeaseConflictError(
+        manualLockWarning(path, `could not compare process start token for process ${lock.pid}`),
+        { code: "RetentionLockManualIntervention", lockPath: path },
+      )
+    }
+    return comparison === "different" ? "stale" : "live"
+  }
+
+  /**
+   * Creates the reclaim gate file `<lock>.reclaim` exclusively, serializing stale-lock reclaimers
+   * across processes. Never auto-reclaims a gate created by another process (whether live or dead):
+   * a live gate throws LeaseAlreadyPresent with its holderId/gatePath, and a dead, foreign, or
+   * unreadable gate throws the named manual warning so no live gate can ever be moved. Only a gate
+   * leaked by this exact process (recorded in `leakedReclaimGates`) may be removed here.
+   */
+  private async acquireReclaimGate(lockPath: string, signal?: AbortSignal): Promise<{ gatePath: string; id: string } | null> {
+    const gatePath = `${lockPath}.reclaim`
+    const id = randomBytes(16).toString("hex")
+    const record: RetentionLockRecord = {
+      id,
+      host: hostname(),
+      pid: process.pid,
+      processStart: await this.ownProcessStart(),
+      app: "TenuVault",
+    }
+    signal?.throwIfAborted()
+    const tmpPath = `${gatePath}.${randomBytes(8).toString("hex")}.tmp`
+    try {
+      const handle = await open(tmpPath, "wx", 0o600)
+      try {
+        await handle.writeFile(JSON.stringify(record))
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      for (let attempt = 0; attempt < 2; attempt++) {
+        signal?.throwIfAborted()
+        try {
+          await this.publishLockFile(tmpPath, gatePath, dirname(lockPath), signal)
+          return { gatePath, id }
+        } catch (error) {
+          if (signal?.aborted) throw error
+          if (error instanceof BlobLeaseUnsupportedError) throw error
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        }
+        let gateState = await this.readRetentionLockState(gatePath)
+        if (gateState.kind === "unparseable") {
+          await waitMs(UNPARSEABLE_LOCK_REREAD_MS, signal)
+          gateState = await this.readRetentionLockState(gatePath)
+        }
+        if (gateState.kind === "missing") continue
+        if (gateState.kind !== "current") {
+          throw new BlobLeaseConflictError(manualLockWarning(gatePath, "the reclaim gate file could not be parsed"), {
+            code: "RetentionLockManualIntervention",
+            lockPath: gatePath,
+          })
+        }
+        const gateId = gateState.lock.id
+        const leakedKey = `${resolve(gatePath)}\0${gateId}`
+        const isOwnLeakedGate = gateState.lock.host === hostname()
+          && gateState.lock.pid === process.pid
+          && leakedReclaimGates.has(leakedKey)
+        if (isOwnLeakedGate) {
+          // Check cancellation and claim removal synchronously so no second caller can touch this gate
+          // and an aborted caller never drops the leaked-gate record.
+          signal?.throwIfAborted()
+          leakedReclaimGates.delete(leakedKey)
+          try {
+            await this.reclaimLockAside(gatePath, movedRaw => parseRetentionLock(movedRaw)?.id === gateId)
+          } catch (error) {
+            leakedReclaimGates.add(leakedKey)
+            throw error
+          }
+          continue
+        }
+        if ((await this.assessLockHolder(gatePath, gateState.lock)) === "live") {
+          throw new BlobLeaseConflictError("Another TenuVault instance is currently reclaiming the retention lock on this backup folder.", {
+            code: "LeaseAlreadyPresent",
+            lockPath: gatePath,
+            holderId: gateId,
+          })
+        }
+        throw new BlobLeaseConflictError(manualLockWarning(gatePath, "a leftover reclaim gate is present"), {
+          code: "RetentionLockManualIntervention",
+          lockPath: gatePath,
+        })
+      }
+      return null
+    } finally {
+      await rm(tmpPath, { force: true }).catch(() => undefined)
+    }
+  }
+
+  /** Best-effort gate release: retries once, warns and records the leaked gate if release fails. */
+  private async releaseReclaimGate(gatePath: string, id: string): Promise<void> {
+    const leakedKey = `${resolve(gatePath)}\0${id}`
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const aside = `${gatePath}.${randomBytes(8).toString("hex")}.release`
+      try {
+        await rename(gatePath, aside)
+      } catch (error) {
+        if (isMissing(error)) {
+          leakedReclaimGates.delete(leakedKey)
+          return
+        }
+        if (attempt === 0) continue
+        leakedReclaimGates.add(leakedKey)
+        console.warn(`[backups] Could not release retention reclaim gate ${gatePath}; left in place.`, error)
+        return
+      }
+      const movedRaw = await readFile(aside, "utf8").catch(() => null)
+      if (movedRaw !== null && parseRetentionLock(movedRaw)?.id === id) {
+        leakedReclaimGates.delete(leakedKey)
+        await rm(aside, { force: true }).catch(() => undefined)
+        return
+      }
+      try {
+        await link(aside, gatePath)
+        await rm(aside, { force: true }).catch(() => undefined)
+      } catch {
+        console.warn(`[backups] Retention reclaim gate ${gatePath} changed during release; the moved gate file was kept at ${aside}.`)
+      }
+      return
+    }
+  }
+
+  /**
+   * Removes a lock already judged stale, serialized by an unstealable reclaim gate.
+   * Invariant: the reclaim gate is never auto-reclaimed by another process or caller, so only
+   * the current gate holder can enter this section. A stale lock S has a dead owner (or expired
+   * legacy timestamp), so S can only be removed by the gate holder. Re-reading lockPath while
+   * holding the gate and observing exactly S therefore guarantees S cannot be replaced before
+   * reclaimLockAside renames it; no live lock can ever be moved.
+   */
+  private async reclaimUnderGate(
+    lockPath: string,
+    isJudgedStale: (state: Awaited<ReturnType<LocalBlobStore["readRetentionLockState"]>>) => boolean,
+    matchesMoved: (movedRaw: string) => boolean,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const gate = await this.acquireReclaimGate(lockPath, signal)
+    if (!gate) return false
+    try {
+      signal?.throwIfAborted()
+      const state = await this.readRetentionLockState(lockPath)
+      if (state.kind === "missing") return true
+      if (!isJudgedStale(state)) return false
+      const gateState = await this.readRetentionLockState(gate.gatePath)
+      if (gateState.kind !== "current" || gateState.lock.id !== gate.id) return false
+      return await this.reclaimLockAside(lockPath, matchesMoved)
+    } finally {
+      await this.releaseReclaimGate(gate.gatePath, gate.id)
+    }
+  }
+
+  private async reclaimStaleRetentionLock(lockPath: string, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted()
+    let state = await this.readRetentionLockState(lockPath)
+    if (state.kind === "unparseable") {
+      await waitMs(UNPARSEABLE_LOCK_REREAD_MS, signal)
+      state = await this.readRetentionLockState(lockPath)
+    }
+    signal?.throwIfAborted()
+    if (state.kind === "missing") return true
+    if (state.kind === "unparseable") {
+      throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be parsed"), {
+        code: "RetentionLockManualIntervention",
+        lockPath,
+      })
+    }
+    if (state.kind === "legacy") {
+      const legacy = state.lock
+      if (legacy.expiresAt > Date.now()) {
+        throw new BlobLeaseConflictError(
+          manualLockWarning(lockPath, "a legacy retention lock from an earlier version has not expired"),
+          { code: "RetentionLockManualIntervention", lockPath },
+        )
+      }
+      signal?.throwIfAborted()
+      return this.reclaimUnderGate(
+        lockPath,
+        current => current.kind === "legacy" && current.lock.id === legacy.id && current.lock.expiresAt === legacy.expiresAt,
+        movedRaw => {
+          const moved = parseLegacyRetentionLock(movedRaw)
+          return moved?.id === legacy.id && moved.expiresAt === legacy.expiresAt
+        },
+        signal,
+      )
+    }
+    const { lock } = state
+    const assessment = await this.assessLockHolder(lockPath, lock)
+    signal?.throwIfAborted()
+    if (assessment === "live") {
+      throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
+        code: "LeaseAlreadyPresent",
+        lockPath,
+        holderId: lock.id,
+      })
+    }
+    return this.reclaimUnderGate(
+      lockPath,
+      current => current.kind === "current" && current.lock.id === lock.id,
+      movedRaw => parseRetentionLock(movedRaw)?.id === lock.id,
+      signal,
+    )
+  }
+
+  async releaseRetentionLock(account: string, container: string, id: string): Promise<{ warning?: string }> {
+    const dir = this.dir(account, container)
+    const lockPath = join(dir, RETENTION_LOCK_FILE)
+    try {
+      let raw: string
+      try {
+        raw = await readFile(lockPath, "utf8")
+      } catch (error) {
+        if (isMissing(error)) return {}
+        const warning = `Could not read local retention lock ${lockPath} during release; left in place.`
+        console.warn(`[backups] ${warning}`, error)
+        return { warning }
+      }
+      const parsed = parseRetentionLock(raw)
+      if (!parsed || parsed.id !== id) {
+        const warning = `Local retention lock ${lockPath} no longer belongs to this instance; left untouched.`
+        console.warn(`[backups] ${warning}`)
+        return { warning }
+      }
+      const aside = `${lockPath}.${randomBytes(8).toString("hex")}.release`
+      try {
+        await rename(lockPath, aside)
+      } catch (error) {
+        if (isMissing(error)) return {}
+        throw error
+      }
+      const movedRaw = await readFile(aside, "utf8").catch(() => null)
+      const moved = movedRaw === null ? null : parseRetentionLock(movedRaw)
+      if (moved?.id === id) {
+        await rm(aside, { force: true })
+        return {}
+      }
+      try {
+        await link(aside, lockPath)
+        await rm(aside, { force: true }).catch(() => undefined)
+        const warning = `Local retention lock ${lockPath} changed during release and was restored.`
+        console.warn(`[backups] ${warning}`)
+        return { warning }
+      } catch {
+        const warning = `Local retention lock ${lockPath} changed during release; the unverified lock file was kept at ${aside} and was not deleted.`
+        console.warn(`[backups] ${warning}`)
+        return { warning }
+      }
+    } finally {
+      this.releaseLockProtectedPrefixes(dir, id)
+    }
   }
 
   /**
@@ -704,18 +2139,21 @@ export class LocalBlobStore {
       if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
       check.started = true
       try {
+        const cachedBefore = this.index.get(dir)
         let entries = await this.entries(account, container)
-        const files = new Set(await this.files(dir))
+        const rebuilt = cachedBefore === undefined || cachedBefore !== this.index.get(dir)
+        const names = await this.names(dir)
+        const files = new Set(names.filter(file => file.endsWith(EXT)))
         // Directory stamps can be coarse on a shared folder, so always reconcile names.
         // Damaged files count too, so a file that is repaired, replaced or removed is read again.
         const damaged = this.damagedStamps.get(entries) ?? new Map<string, string>()
         const known = new Map<string, string>([...damaged, ...[...entries.values()].map((entry): [string, string] => [entry.file, entry.stamp])])
         const sameFiles = files.size === known.size && [...known.keys()].every(file => files.has(file))
-        const unchanged = !this.dirty.has(dir) && sameFiles && (await mapLimit([...known], HEADER_CONCURRENCY, async ([file, stamp]) => {
+        const unchanged = !names.some(file => file.startsWith(RETIRED_PREFIX) || file.endsWith(".partial")) && !this.dirty.has(dir) && sameFiles && (await mapLimit([...known], HEADER_CONCURRENCY, async ([file, stamp]) => {
           try { return fileStamp(await stat(join(dir, file), { bigint: true })) === stamp } catch { return false }
         })).every(Boolean)
         if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
-        if (!unchanged) {
+        if (!unchanged && !(rebuilt && this.damageOf.get(entries)?.interruptedRestore)) {
           this.index.delete(dir)
           entries = await this.entries(account, container, entries)
         }
@@ -764,13 +2202,185 @@ export class LocalBlobStore {
     this.dirty.add(dir)
   }
 
-  private async files(dir: string): Promise<string[]> {
+  private async names(dir: string): Promise<string[]> {
     try {
-      return (await readdir(dir)).filter((f) => f.endsWith(EXT))
+      return await readdir(dir)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
       throw error
     }
+  }
+
+  /**
+   * Restores a quarantined file to its live path without ever overwriting an occupied live name.
+   * Uses a hard link where supported, resuming cleanly if a prior crash left both names linked to
+   * the same file or with identical encrypted bytes. On volumes without hard links (for example
+   * exFAT), never creates a new copy at live: an identical live file reconciles by removing held,
+   * any different occupied live path uses keep-both conflict handling, and an absent live path
+   * keeps held in place and reports that the drive does not support hard-link restore.
+   * Returns the restored file's ETag only when bound to the exact file just restored.
+   */
+  private async resolveOccupiedLiveOnRestore(
+    held: string,
+    live: string,
+    heldInfo: BigIntStats,
+    allowPrefixDeleteHint = true,
+  ): Promise<string | undefined> {
+    if (await isSameFile(held, live)) {
+      await removeHeldAfterRestore(held, live)
+      return await boundRestoredEtag(live, heldInfo)
+    }
+    const identical = await identicalLiveHeldInfo(live, held)
+    if (identical) {
+      await removeHeldAfterRestore(held, live)
+      return await boundRestoredEtag(live, identical.liveInfo)
+    }
+    const prefix = allowPrefixDeleteHint ? await liveHeldPrefixInfo(live, held) : null
+    throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
+  }
+
+  private async restoreQuarantinedFile(
+    held: string,
+    live: string,
+    dir: string,
+  ): Promise<string | undefined> {
+    const heldInfo = await lstat(held, { bigint: true })
+    if (this.hardLinks) {
+      let linked = false
+      try {
+        await link(held, live)
+        linked = true
+        if (process.platform !== "win32") await syncDirectory(dir)
+        await removeHeldAfterRestore(held, live)
+        return await boundRestoredEtag(live, heldInfo)
+      } catch (error) {
+        if (linked) throw error
+        const code = (error as NodeJS.ErrnoException).code ?? ""
+        if (code === "EEXIST") {
+          return await this.resolveOccupiedLiveOnRestore(held, live, heldInfo, true)
+        }
+        if (!NO_HARD_LINKS.has(code)) throw error
+        this.hardLinks = false
+      }
+    }
+    const liveInfo = await lstat(live, { bigint: true }).catch(error => isMissing(error) ? null : undefined)
+    if (liveInfo !== null) {
+      return await this.resolveOccupiedLiveOnRestore(held, live, heldInfo, false)
+    }
+    throw new QuarantineRestoreUnsupportedError(held, live)
+  }
+
+  private async recoverRetired(dir: string, account: string, container: string, names: string[]): Promise<DamagedFile[]> {
+    const held: Array<{ folder: string; file: string; since: number }> = []
+    const damage: DamagedFile[] = []
+    const report = (file: string, reason: string, backup: string | null = null, conflict?: RecoveryConflict) => {
+      // Inventory details also travel in HTTP headers. Only expose names the store would create.
+      const safeName = /^(?:\.retired-[a-z0-9]+(?:\/[0-9a-f]{1,64}\.tvb)?|[0-9a-f]{1,64}\.tvb\.[0-9a-f]{1,32}\.partial)$/i.test(file) ? file : RETIRED_PREFIX
+      damage.push({ file: safeName, reason, kind: "damaged", backup, ...(conflict ? { conflict } : {}) })
+    }
+    const partialFilesByLive = new Map<string, string[]>()
+    for (const name of names) {
+      const match = /^([a-f0-9]+\.tvb)\.[a-f0-9]+\.partial$/i.exec(name)
+      if (!match) continue
+      const liveFile = match[1]!
+      const list = partialFilesByLive.get(liveFile) ?? []
+      list.push(name)
+      partialFilesByLive.set(liveFile, list)
+    }
+    const matchedPartials = new Set<string>()
+    for (const folder of names.filter(name => name.startsWith(RETIRED_PREFIX))) {
+      try {
+        const path = join(dir, folder)
+        if (!(await lstat(path)).isDirectory()) {
+          report(folder, "the interrupted cleanup folder could not be opened")
+          continue
+        }
+        const files = await readdir(path)
+        // Directory mtime also covers older quarantines and a delayed rename after a stamp write.
+        const stamp = await lstat(join(path, RETIRED_STAMP)).catch(error => {
+          if (!isMissing(error)) throw error
+        })
+        const directoryTime = (await lstat(path)).mtimeMs
+        const since = Math.max(directoryTime, stamp ? (stamp.isFile() ? stamp.mtimeMs : Infinity) : 0)
+        for (const file of files) if (file !== RETIRED_STAMP) held.push({ folder, file, since })
+      } catch (error) {
+        if (!isMissing(error)) report(folder, "the interrupted cleanup folder could not be read")
+      }
+    }
+    const counts = new Map<string, number>()
+    for (const { file } of held) counts.set(file, (counts.get(file) ?? 0) + 1)
+    for (const { folder, file, since } of held) {
+      const path = join(dir, folder, file)
+      let backup: string | null = null
+      let blobName: string | undefined
+      let conflictReason: string | undefined
+      let conflict: RecoveryConflict | undefined
+      try {
+        const info = await lstat(path)
+        if (info.isFile() && /^[a-f0-9]+\.tvb$/i.test(file)) {
+          const entry = await this.readEntry(join(dir, folder), account, container, file)
+          if (entry !== VANISHED && !(entry instanceof Unreadable)) {
+            backup = backupFolderOf(entry.name)
+            blobName = entry.name
+            if (counts.get(file) === 1 && Date.now() - since > RETIRED_GRACE_MS && !isPrefixProtected(dir, entry.name)) {
+              const existingPartial = partialFilesByLive.get(file)?.[0]
+              if (existingPartial) {
+                matchedPartials.add(existingPartial)
+                const asidePath = join(dir, existingPartial)
+                const livePath = join(dir, file)
+                conflictReason = conflictReasonText(livePath, path, false, asidePath)
+                conflict = { held: path, live: livePath, liveFile: file, blobName, liveIsHeldPrefix: false, aside: asidePath }
+              } else {
+                await this.restoreQuarantinedFile(path, join(dir, file), dir)
+                await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
+                await rmdir(join(dir, folder)).catch(() => undefined)
+                continue
+              }
+            }
+          }
+        }
+      } catch (error) {
+        if (isMissing(error)) continue
+        if (error instanceof QuarantineRestoreInterruptedError) {
+          conflictReason = error.liveExists
+            ? `restoring ${path} to ${join(dir, file)} was interrupted when the held file disappeared while the live file was present`
+            : `restoring ${path} to ${join(dir, file)} was interrupted when the held file disappeared`
+        } else if (error instanceof QuarantineRestoreUnsupportedError) {
+          conflictReason = `a file was kept at ${error.held} after interrupted cleanup (live path ${error.live}) because this drive type does not support hard links. Keep ${error.held} and move the backup folder to an NTFS, APFS or ext4 drive so TenuVault can restore it safely, or contact support.`
+        } else if (error instanceof QuarantineRestoreConflictError) {
+          const existingPartial = partialFilesByLive.get(file)?.[0]
+          const aside = error.aside ?? (existingPartial ? join(dir, existingPartial) : undefined)
+          if (existingPartial) matchedPartials.add(existingPartial)
+          const liveIsHeldPrefix = aside ? false : await isConflictPrefixStillValid(error)
+          conflictReason = conflictReasonText(error.live, error.held, liveIsHeldPrefix, aside)
+          if (blobName) {
+            conflict = {
+              held: error.held,
+              live: error.live,
+              liveFile: file,
+              blobName,
+              liveIsHeldPrefix,
+              ...(liveIsHeldPrefix && error.liveStamp ? { liveStamp: error.liveStamp } : {}),
+              ...(liveIsHeldPrefix && error.heldStamp ? { heldStamp: error.heldStamp } : {}),
+              ...(aside ? { aside } : {}),
+            }
+          }
+        }
+      }
+      report(`${folder}/${file}`, conflictReason ?? "a file was kept after interrupted cleanup. Close TenuVault and follow the backup storage recovery instructions", backup, conflict)
+    }
+    for (const [liveFile, partialNames] of partialFilesByLive) {
+      for (const partialName of partialNames) {
+        if (matchedPartials.has(partialName)) continue
+        const asidePath = join(dir, partialName)
+        const livePath = join(dir, liveFile)
+        report(
+          partialName,
+          `an unexpected file moved aside during interrupted cleanup was kept at ${asidePath} (live path ${livePath}). Keep both files (${livePath} and ${asidePath}), do not delete either, and contact support with both paths.`,
+        )
+      }
+    }
+    return damage
   }
 
   /**
@@ -824,7 +2434,9 @@ export class LocalBlobStore {
 
   private async readIndex(dir: string, account: string, container: string, previous?: Map<string, Entry> | Promise<Map<string, Entry>>): Promise<Map<string, Entry>> {
     const entries = new Map<string, Entry>()
-    const files = await this.files(dir)
+    const names = await this.names(dir)
+    const retired = await this.recoverRetired(dir, account, container, names)
+    const files = (names.some(name => name.startsWith(RETIRED_PREFIX)) ? await this.names(dir) : names).filter(file => file.endsWith(EXT))
     const cached = await Promise.resolve(previous).catch(() => undefined)
     const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
@@ -862,14 +2474,31 @@ export class LocalBlobStore {
     }
     // Other containers fail closed, as the backup container did before damage could be traced.
     if (container !== BACKUP_CONTAINER) {
-      const count = unreadableFiles.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
+      const count = retired.length + unreadableFiles.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
       if (count) throw new IncompleteInventoryError(count)
       return entries
     }
 
-    const damage: InventoryDamage = { files: [], unavailable: new Map(), unattributed: 0 }
+    const damage: InventoryDamage = {
+      files: retired,
+      unavailable: new Map(),
+      unattributed: retired.filter(file => file.backup === null).length,
+      ...(retired.some(file => file.reason.includes("was interrupted when the held file disappeared")) ? { interruptedRestore: true } : {}),
+    }
     const unavailable = (folder: string, reason: string) => { if (!damage.unavailable.has(folder)) damage.unavailable.set(folder, reason) }
+    const conflictedBlobNames = new Set<string>()
+    const conflictedLiveByFile = new Map<string, string>()
+    for (const file of retired) {
+      if (file.backup) unavailable(file.backup, file.reason.endsWith(".") ? file.reason : `${file.reason}.`)
+      if (file.conflict && file.backup && !file.conflict.aside) {
+        conflictedBlobNames.add(file.conflict.blobName)
+        conflictedLiveByFile.set(file.conflict.liveFile, file.backup)
+      } else {
+        damage.hasNonConflictDamage = true
+      }
+    }
     for (const [name, claimed] of claims) {
+      damage.hasNonConflictDamage = true
       const folder = backupFolderOf(name)
       for (const file of claimed) damage.files.push({ file, reason: DUPLICATE_REASON, kind: "duplicate", backup: folder })
       if (folder) unavailable(folder, "two files hold the same backup item.")
@@ -897,17 +2526,20 @@ export class LocalBlobStore {
       } catch (error) {
         // A manifest removed since the listing no longer describes a backup.
         if (isMissing(error)) { entries.delete(entry.name); continue }
+        damage.hasNonConflictDamage = true
         damage.files.push(damagedFile(entry.file, unreadable(error), folder))
         unavailable(folder, "its manifest (metadata.json) could not be read.")
         continue
       }
       if (metadata?.Items === undefined) { legacy.add(folder); continue } // Legacy backups have no inventory manifest.
       if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) {
+        damage.hasNonConflictDamage = true
         unavailable(folder, "its manifest (metadata.json) is not valid.")
         continue
       }
       const prefix = `${folder}/`
       let missing = 0
+      let nonConflictMissing = 0
       let valid = true
       for (const [key, item] of Object.entries(metadata.Items)) {
         const type = key.split("/")[0]
@@ -915,11 +2547,18 @@ export class LocalBlobStore {
         if (!type || typeof file !== "string" || !file || file.includes("/") || file.includes("\\")) { valid = false; break }
         const name = `${prefix}${type}/${file}`
         traced.set(name, folder)
-        if (!entries.has(name)) missing++
+        if (!entries.has(name)) {
+          missing++
+          if (!conflictedBlobNames.has(name)) nonConflictMissing++
+        }
       }
-      if (!valid) unavailable(folder, "its manifest (metadata.json) is not valid.")
-      else if (missing) unavailable(folder, `${missing} file${missing === 1 ? "" : "s"} listed in its manifest ${missing === 1 ? "is" : "are"} missing or damaged.`)
-      else withManifest.add(folder)
+      if (!valid) {
+        damage.hasNonConflictDamage = true
+        unavailable(folder, "its manifest (metadata.json) is not valid.")
+      } else if (missing) {
+        if (nonConflictMissing > 0) damage.hasNonConflictDamage = true
+        unavailable(folder, `${missing} file${missing === 1 ? "" : "s"} listed in its manifest ${missing === 1 ? "is" : "are"} missing or damaged.`)
+      } else withManifest.add(folder)
     }
 
     if (unreadableFiles.length) {
@@ -928,8 +2567,9 @@ export class LocalBlobStore {
         for (const file of this.fileNames(account, container, name)) byFileName.set(file, folder)
       }
       for (const { file, why } of unreadableFiles) {
-        const folder = byFileName.get(file) ?? null
+        const folder = byFileName.get(file) ?? conflictedLiveByFile.get(file) ?? null
         damage.files.push(damagedFile(file, why, folder))
+        if (!folder || conflictedLiveByFile.get(file) !== folder) damage.hasNonConflictDamage = true
         if (folder) unavailable(folder, `one of its files could not be read: ${why.reason}.`)
         else damage.unattributed++
       }
@@ -953,11 +2593,13 @@ export class LocalBlobStore {
         forgotten = true
         continue
       }
+      damage.hasNonConflictDamage = true
       const folder = backupFolderOf(entry.name)
       if (!damage.files.some((damaged) => damaged.file === file)) damage.files.push(damagedFile(file, rememberedUnreadable(record), folder))
       if (folder) unavailable(folder, `one of its files could not be read: ${reason}.`)
     }
     if (forgotten) await this.writeBodyDamage(dir, remembered).catch(() => undefined)
+    await revalidateDamageConflicts(damage)
     this.damageOf.set(entries, damage)
     this.damagedStamps.set(entries, new Map(damage.files.map(({ file }) => [file, before.get(file) ?? "missing"])))
     return entries
@@ -1011,7 +2653,16 @@ interface BodyDamage {
 }
 
 /** Errors of a file system that has no hard links. */
+/** Absolute path to Windows PowerShell, so the process-start reader never resolves powershell.exe through PATH. */
+function windowsPowerShellPath(): string {
+  const root = process.env.SystemRoot || process.env.windir || "C:\\Windows"
+  return win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+}
+
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])
+
+/** Errors of a file system or folder that does not support exclusive lock files. */
+const UNSUPPORTED_LOCK_ERRORS = new Set(["EOPNOTSUPP", "ENOTSUP", "ENOSYS", "EPERM", "EACCES", "EROFS", "EINVAL"])
 
 /** Derived file names remembered at most, so a very large folder does not grow the cache without bound. */
 const FILE_NAME_CACHE_LIMIT = 200_000
@@ -1033,7 +2684,199 @@ function safeSegment(value: string): string {
   return safe
 }
 
+async function isSameFile(a: string, b: string): Promise<boolean> {
+  try {
+    const [infoA, infoB] = await Promise.all([lstat(a, { bigint: true }), lstat(b, { bigint: true })])
+    return infoA.isFile() && infoB.isFile() && infoA.ino !== 0n && infoA.dev === infoB.dev && infoA.ino === infoB.ino
+  } catch {
+    return false
+  }
+}
+
+/** Returns the live path's current ETag only if it still refers to the exact restored file identity. */
+async function boundRestoredEtag(live: string, expected: BigIntStats): Promise<string | undefined> {
+  try {
+    const info = await lstat(live, { bigint: true })
+    if (!info.isFile() || info.ino === 0n) return undefined
+    if (info.dev !== expected.dev || info.ino !== expected.ino || info.size !== expected.size || info.mtimeNs !== expected.mtimeNs) {
+      return undefined
+    }
+    return `"${fileStamp(info)}"`
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Removes `held` after `live` was linked or copied from it. If `rm(held)` returns ENOENT,
+ * re-checks both paths and never treats the restore as complete.
+ */
+async function removeHeldAfterRestore(held: string, live: string): Promise<void> {
+  try {
+    await rm(held)
+  } catch (error) {
+    if (!isMissing(error)) throw error
+    const [liveNow, heldNow] = await Promise.all([
+      lstat(live, { bigint: true }).catch(() => null),
+      lstat(held, { bigint: true }).catch(() => null),
+    ])
+    if (liveNow && heldNow) {
+      const prefix = await liveHeldPrefixInfo(live, held)
+      throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
+    }
+    throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), Boolean(heldNow))
+  }
+}
+
+/**
+ * Verifies `live` and `held` are regular files with exact byte-for-byte identical contents,
+ * bound to open file handles and re-checked unchanged at both paths after the reads.
+ */
+async function identicalLiveHeldInfo(live: string, held: string): Promise<{ liveInfo: BigIntStats; heldStamp: string } | null> {
+  let heldHandle: Awaited<ReturnType<typeof open>> | undefined
+  let liveHandle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    const heldLink = await lstat(held, { bigint: true })
+    if (!heldLink.isFile() || heldLink.ino === 0n || heldLink.size === 0n) return null
+    const liveLink = await lstat(live, { bigint: true })
+    if (!liveLink.isFile() || liveLink.ino === 0n || liveLink.size !== heldLink.size) return null
+
+    heldHandle = await open(held, "r")
+    const heldBefore = await heldHandle.stat({ bigint: true })
+    if (!heldBefore.isFile() || heldBefore.ino === 0n
+      || heldBefore.dev !== heldLink.dev || heldBefore.ino !== heldLink.ino
+      || heldBefore.size !== heldLink.size) {
+      return null
+    }
+    const heldBytes = await heldHandle.readFile()
+    const heldAfter = await heldHandle.stat({ bigint: true })
+    if (fileStamp(heldBefore) !== fileStamp(heldAfter) || heldBytes.length !== Number(heldBefore.size) || heldBytes.length === 0) {
+      return null
+    }
+
+    liveHandle = await open(live, "r")
+    const liveBefore = await liveHandle.stat({ bigint: true })
+    if (!liveBefore.isFile() || liveBefore.ino === 0n
+      || liveBefore.dev !== liveLink.dev || liveBefore.ino !== liveLink.ino
+      || liveBefore.size !== BigInt(heldBytes.length)) {
+      return null
+    }
+    const liveBytes = await liveHandle.readFile()
+    const liveAfter = await liveHandle.stat({ bigint: true })
+    if (fileStamp(liveBefore) !== fileStamp(liveAfter) || liveBytes.length !== heldBytes.length) {
+      return null
+    }
+    if (!liveBytes.equals(heldBytes)) return null
+
+    const [livePathAfter, heldPathAfter] = await Promise.all([
+      lstat(live, { bigint: true }),
+      lstat(held, { bigint: true }),
+    ])
+    if (!livePathAfter.isFile() || fileStamp(livePathAfter) !== fileStamp(liveAfter)) return null
+    if (!heldPathAfter.isFile() || fileStamp(heldPathAfter) !== fileStamp(heldAfter)) return null
+    return { liveInfo: livePathAfter, heldStamp: fileStamp(heldAfter) }
+  } catch {
+    return null
+  } finally {
+    await liveHandle?.close().catch(() => undefined)
+    await heldHandle?.close().catch(() => undefined)
+  }
+}
+
+/**
+ * Verifies `live` is a regular file strictly smaller than `held` whose bytes equal `held`'s
+ * leading bytes, bound to open file handles and re-checked unchanged after the reads.
+ */
+async function liveHeldPrefixInfo(live: string, held: string): Promise<{ liveStamp: string; heldStamp: string } | null> {
+  let heldHandle: Awaited<ReturnType<typeof open>> | undefined
+  let liveHandle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    const heldLink = await lstat(held, { bigint: true })
+    if (!heldLink.isFile() || heldLink.ino === 0n || heldLink.size === 0n) return null
+    heldHandle = await open(held, "r")
+    const heldBefore = await heldHandle.stat({ bigint: true })
+    if (!heldBefore.isFile() || heldBefore.ino === 0n
+      || heldBefore.dev !== heldLink.dev || heldBefore.ino !== heldLink.ino
+      || heldBefore.size !== heldLink.size) {
+      return null
+    }
+    const heldBytes = await heldHandle.readFile()
+    const heldAfter = await heldHandle.stat({ bigint: true })
+    if (fileStamp(heldBefore) !== fileStamp(heldAfter) || heldBytes.length !== Number(heldBefore.size) || heldBytes.length === 0) {
+      return null
+    }
+    const heldStamp = fileStamp(heldAfter)
+
+    const liveLink = await lstat(live, { bigint: true })
+    if (!liveLink.isFile() || liveLink.ino === 0n || liveLink.size >= BigInt(heldBytes.length)) return null
+    liveHandle = await open(live, "r")
+    const liveBefore = await liveHandle.stat({ bigint: true })
+    if (!liveBefore.isFile() || liveBefore.ino === 0n
+      || liveBefore.dev !== liveLink.dev || liveBefore.ino !== liveLink.ino
+      || liveBefore.size !== liveLink.size || liveBefore.size >= BigInt(heldBytes.length)) {
+      return null
+    }
+    const liveBytes = await liveHandle.readFile()
+    const liveAfter = await liveHandle.stat({ bigint: true })
+    if (fileStamp(liveBefore) !== fileStamp(liveAfter) || liveBytes.length !== Number(liveBefore.size)) {
+      return null
+    }
+    const [livePathAfter, heldPathAfter] = await Promise.all([
+      lstat(live, { bigint: true }),
+      lstat(held, { bigint: true }),
+    ])
+    if (!livePathAfter.isFile() || fileStamp(livePathAfter) !== fileStamp(liveAfter)) return null
+    if (!heldPathAfter.isFile() || fileStamp(heldPathAfter) !== heldStamp) return null
+    if (!liveBytes.equals(heldBytes.subarray(0, liveBytes.length))) return null
+    return { liveStamp: fileStamp(liveAfter), heldStamp }
+  } catch {
+    return null
+  } finally {
+    await liveHandle?.close().catch(() => undefined)
+    await heldHandle?.close().catch(() => undefined)
+  }
+}
+
+/** Re-checks stored conflict stamps before emitting a delete instruction for `live`. */
+async function isConflictPrefixStillValid(
+  conflict: Pick<RecoveryConflict, "live" | "held" | "liveIsHeldPrefix" | "liveStamp" | "heldStamp">,
+): Promise<boolean> {
+  if (!conflict.liveIsHeldPrefix || !conflict.liveStamp || !conflict.heldStamp) return false
+  try {
+    const [liveInfo, heldInfo] = await Promise.all([
+      lstat(conflict.live, { bigint: true }),
+      lstat(conflict.held, { bigint: true }),
+    ])
+    return liveInfo.isFile() && heldInfo.isFile()
+      && fileStamp(liveInfo) === conflict.liveStamp
+      && fileStamp(heldInfo) === conflict.heldStamp
+  } catch {
+    return false
+  }
+}
+
+async function resolveConflictGuidance(
+  conflict: Pick<RecoveryConflict, "live" | "held" | "liveIsHeldPrefix" | "liveStamp" | "heldStamp">,
+): Promise<string> {
+  return conflictResolutionMessage(conflict.live, conflict.held, await isConflictPrefixStillValid(conflict))
+}
+
+async function revalidateDamageConflicts(damage: InventoryDamage): Promise<void> {
+  for (const file of damage.files) {
+    const conflict = file.conflict
+    if (!conflict || !conflict.liveIsHeldPrefix) continue
+    if (await isConflictPrefixStillValid(conflict)) continue
+    conflict.liveIsHeldPrefix = false
+    delete conflict.liveStamp
+    delete conflict.heldStamp
+    file.reason = conflictReasonText(conflict.live, conflict.held, false, conflict.aside)
+    if (file.backup && damage.unavailable.get(file.backup)?.startsWith(`a file was kept at ${conflict.held} after interrupted cleanup`)) {
+      damage.unavailable.set(file.backup, file.reason)
+    }
+  }
+}
+
 /** BigInt stats keep the full inode and nanosecond times, so a replaced file never shares a stamp with the old one. */
 function fileStamp(info: BigIntStats): string {
-  return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 }

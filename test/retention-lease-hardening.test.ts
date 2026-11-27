@@ -1,0 +1,1345 @@
+import { spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { hostname, tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { BackupEngine } from "../src/main/backup/engine"
+import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
+import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
+import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
+import { BlobLeaseConflictError, BlobLeaseUnsupportedError, LocalBlobStore, type ProcessInfoReader } from "../src/main/storage/local-blob-store"
+import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
+import { INTUNE_TYPES } from "../src/shared/intune/registry"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
+import { withBackupServerTime } from "./helpers"
+
+const TENANT = "11111111-1111-1111-1111-111111111111"
+const OTHER_TENANT = "22222222-2222-2222-2222-222222222222"
+const MASTER = Buffer.alloc(32, 4)
+const NOW = new Date("2026-10-12T12:00:00Z")
+const OWNER = { Source: "TenuVault Desktop", TenantId: TENANT }
+const OLD_ITEM = { id: "old" }
+const SECOND_ITEM = { id: "second" }
+const sha256 = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
+const ONE_ITEM_MANIFEST = {
+  TenantId: TENANT,
+  Status: "Success",
+  Failures: 0,
+  Scope: { Included: ["DeviceConfigurations"] },
+  Items: {
+    "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(OLD_ITEM), sha256: sha256(OLD_ITEM) },
+  },
+  ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 },
+}
+const TWO_ITEM_MANIFEST = {
+  TenantId: TENANT,
+  Status: "Success",
+  Failures: 0,
+  Scope: { Included: ["DeviceConfigurations"] },
+  Items: {
+    "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(OLD_ITEM), sha256: sha256(OLD_ITEM) },
+    "DeviceConfigurations/second": { file: "Second.json", hash: snapshotHash(SECOND_ITEM), sha256: sha256(SECOND_ITEM) },
+  },
+  ItemCounts: { DeviceConfigurations: 2, TotalPolicies: 2 },
+}
+const REQUEST = {
+  tenantId: TENANT,
+  clientId: "client",
+  storageAccountName: "contoso",
+  scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) },
+}
+
+function memoryStore(): RetentionProgressStore {
+  const data = new Map<string, string>()
+  return {
+    get: key => data.get(key) ?? null,
+    set: (key, value) => { data.set(key, value) },
+    delete: key => { data.delete(key) },
+  }
+}
+
+function setupAzure(options: {
+  count?: number
+  progress?: RetentionProgressStore
+  limits?: { candidates: number; requests: number; bytes: number }
+  payloadPadding?: string
+  override?: (url: URL, request: Request, init?: RequestInit) => Response | Promise<Response> | undefined
+} = {}) {
+  vi.useFakeTimers()
+  vi.setSystemTime(NOW)
+  const saved = new Map<string, Buffer>()
+  const keyring = [MASTER]
+  const etag = (name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+  const withDate = (response: Response) => withBackupServerTime(response, new Date())
+  const calls: Array<{ name: string; request: Request }> = []
+  const wireFetch: typeof fetch = async (input, init) => {
+    const sent = new Request(input, init)
+    const url = new URL(sent.url)
+    const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+    calls.push({ name, request: sent })
+    const overridden = options.override?.(url, sent, init)
+    if (overridden) return overridden
+    if (url.hostname === "graph.microsoft.com") {
+      return withDate(url.pathname.endsWith("/deviceConfigurations")
+        ? Response.json({ value: Array.from({ length: options.count ?? 1 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}`, ...(options.payloadPadding ? { padding: options.payloadPadding } : {}) })) })
+        : Response.json({ id: url.pathname.split("/").at(-1), ...(options.payloadPadding ? { padding: options.payloadPadding } : {}) }))
+    }
+    if (url.searchParams.get("comp") === "list") {
+      const prefix = url.searchParams.get("prefix") ?? ""
+      const names = [...saved.keys()].filter(entry => entry.startsWith(prefix))
+      const entries = url.searchParams.has("delimiter")
+        ? [...new Set(names.map(entry => `${entry.split("/")[0]}/`))].map(entry => `<BlobPrefix><Name>${entry}</Name></BlobPrefix>`)
+        : names.map(entry => `<Blob><Name>${entry}</Name><Properties><Etag>${etag(entry)}</Etag></Properties></Blob>`)
+      return new Response(`<Blobs>${entries.join("")}</Blobs>`)
+    }
+    if (sent.method === "PUT") {
+      if (!url.search) saved.set(name, Buffer.from(await sent.arrayBuffer()))
+      return withDate(new Response(null, { status: 201 }))
+    }
+    if (sent.method === "DELETE") {
+      if (saved.has(name) && sent.headers.get("if-match") !== etag(name)) return new Response(null, { status: 412 })
+      saved.delete(name)
+      return new Response(null, { status: 202 })
+    }
+    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), {
+      status: saved.has(name) ? 200 : 404,
+      headers: saved.has(name) ? { etag: etag(name) } : undefined,
+    })
+  }
+  registerStorageToken("token", TENANT)
+  const fetch = legacyAzureReader(wireFetch, () => keyring)
+  const progress = options.progress ?? memoryStore()
+  const createEngine = () => new BackupEngine({
+    fetch,
+    getToken: async () => { registerStorageToken("token", TENANT); return "token" },
+    retentionDays: () => 30,
+    retentionLimits: options.limits,
+    retentionProgress: progress,
+    recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keyring),
+  })
+  const seed = (name: string, value: unknown) => {
+    saved.set(name, Buffer.from(typeof value === "string" ? value : JSON.stringify(value)))
+  }
+  const seedExpired = (prefix: string, twoItems = false) => {
+    seed(`${prefix}DeviceConfigurations/Old.json`, OLD_ITEM)
+    if (twoItems) seed(`${prefix}DeviceConfigurations/Second.json`, SECOND_ITEM)
+    seed(`${prefix}${BACKUP_OWNER_FILE}`, OWNER)
+    seed(`${prefix}metadata.json`, twoItems ? TWO_ITEM_MANIFEST : ONE_ITEM_MANIFEST)
+  }
+  return { createEngine, engine: createEngine(), saved, calls, seed, seedExpired, progress, keyring }
+}
+
+async function runJob(engine: BackupEngine) {
+  const job = engine.start(REQUEST)
+  await engine.waitForJob(job)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(job.status, job.log.join("\n")).toBe("Completed")
+  return job
+}
+
+const tempRoots: string[] = []
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+
+describe("Item 1: retention lease renewal and expiry safety", () => {
+  it("tracks each lease expiry from acquire time so slow acquisition renews early leases before they lapse", async () => {
+    const expired = "backup-2026-08-01-020000/"
+    const active = new Map<string, { id: string; expiresAt: number }>()
+    const renewed: Array<{ name: string; at: number }> = []
+    let expiredSeenDuringDelete = false
+    let acquireCount = 0
+
+    const ctx = setupAzure({
+      count: 1,
+      override: (url, req) => {
+        const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") {
+            const idx = ++acquireCount
+            const delay = idx === 1 ? 0 : 25_000
+            const durationMs = Number(req.headers.get("x-ms-lease-duration") ?? "60") * 1000
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${idx}`
+            // Server records lease start when the request arrives (before slow response returns).
+            const acquiredAt = Date.now()
+            return new Promise<Response>(resolve => setTimeout(() => {
+              active.set(name, { id, expiresAt: acquiredAt + durationMs })
+              resolve(new Response(null, { status: 201, headers: { "x-ms-lease-id": id } }))
+            }, delay))
+          }
+          const held = active.get(name)
+          const id = req.headers.get("x-ms-lease-id") ?? ""
+          if (!held || held.id !== id || held.expiresAt <= Date.now()) {
+            return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+          }
+          if (action === "renew") {
+            held.expiresAt = Date.now() + 60_000
+            renewed.push({ name, at: Date.now() })
+            return new Response(null, { status: 200, headers: { "x-ms-lease-id": id } })
+          }
+          if (action === "release") {
+            active.delete(name)
+            return new Response(null, { status: 200 })
+          }
+        }
+        if (req.method === "DELETE" && name.startsWith(expired)) {
+          return new Promise<Response>(resolve => setTimeout(() => {
+            const nowMs = Date.now()
+            for (const lease of active.values()) {
+              if (lease.expiresAt <= nowMs) expiredSeenDuringDelete = true
+            }
+            ctx.saved.delete(name)
+            resolve(new Response(null, { status: 202 }))
+          }, 15_000))
+        }
+        return undefined
+      },
+    })
+
+    ctx.seedExpired(expired)
+    const startMs = Date.now()
+    const done = runJob(ctx.engine)
+    await vi.advanceTimersByTimeAsync(120_000)
+    await done
+
+    expect(expiredSeenDuringDelete).toBe(false)
+    expect(renewed.some(entry => entry.at - startMs < 60_000)).toBe(true)
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(false)
+    expect(active.size).toBe(0)
+  })
+
+  it("reschedules the renewal chain when the timer overlaps an in-flight ensureFresh renewal", async () => {
+    const expired = "backup-2026-08-01-020000/"
+    const active = new Map<string, { id: string; expiresAt: number }>()
+    let renewCount = 0
+    let deleteCount = 0
+    let expiredSeenDuringDelete = false
+
+    const ctx = setupAzure({
+      count: 1,
+      override: (url, req) => {
+        const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") {
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${active.size + 1}`
+            active.set(name, { id, expiresAt: Date.now() + 60_000 })
+            return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+          }
+          const held = active.get(name)
+          const id = req.headers.get("x-ms-lease-id") ?? ""
+          if (!held || held.id !== id || held.expiresAt <= Date.now()) {
+            return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+          }
+          if (action === "renew") {
+            renewCount++
+            const started = Date.now()
+            // First renewal pass takes 5s so the scheduled timer fires while it is in flight.
+            const delay = renewCount <= 3 ? 5_000 : 100
+            return new Promise<Response>(resolve => setTimeout(() => {
+              held.expiresAt = started + 60_000
+              resolve(new Response(null, { status: 200, headers: { "x-ms-lease-id": id } }))
+            }, delay))
+          }
+          if (action === "release") {
+            active.delete(name)
+            return new Response(null, { status: 200 })
+          }
+        }
+        if (req.method === "DELETE" && name.startsWith(expired)) {
+          deleteCount++
+          if (deleteCount === 1) {
+            // Advance 29.9s via timer, then nudge system clock +200ms so ensureFresh starts
+            // renewal just 100ms before the scheduled background timer fires.
+            return new Promise<Response>(resolve => setTimeout(() => {
+              vi.setSystemTime(Date.now() + 200)
+              ctx.saved.delete(name)
+              resolve(new Response(null, { status: 202 }))
+            }, 29_900))
+          }
+          if (deleteCount === 2) {
+            // Long second delete (65s): leases survive only if the background timer chain rescheduled.
+            return new Promise<Response>(resolve => setTimeout(() => {
+              const nowMs = Date.now()
+              for (const lease of active.values()) {
+                if (lease.expiresAt <= nowMs) expiredSeenDuringDelete = true
+              }
+              ctx.saved.delete(name)
+              resolve(new Response(null, { status: 202 }))
+            }, 65_000))
+          }
+        }
+        return undefined
+      },
+    })
+
+    ctx.seedExpired(expired, true)
+    const done = runJob(ctx.engine)
+    await vi.advanceTimersByTimeAsync(150_000)
+    await done
+
+    expect(expiredSeenDuringDelete).toBe(false)
+    expect(renewCount).toBeGreaterThanOrEqual(6)
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(false)
+  })
+
+  it("renews leases in expiry order with bounded parallelism capped at 8", async () => {
+    const expired = "backup-2026-08-01-020000/"
+    const active = new Map<string, { id: string; expiresAt: number }>()
+    const acquireOrder: string[] = []
+    const renewStartOrder: string[] = []
+    let inFlightRenews = 0
+    let maxInFlightRenews = 0
+    let deleteCount = 0
+
+    const ctx = setupAzure({
+      count: 10,
+      override: (url, req) => {
+        const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") {
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${active.size + 1}`
+            const acquiredAt = Date.now()
+            acquireOrder.push(name)
+            // Stagger each acquire by 100ms so expiry order is strictly increasing.
+            return new Promise<Response>(resolve => setTimeout(() => {
+              active.set(name, { id, expiresAt: acquiredAt + 60_000 })
+              resolve(new Response(null, { status: 201, headers: { "x-ms-lease-id": id } }))
+            }, 100))
+          }
+          const held = active.get(name)
+          const id = req.headers.get("x-ms-lease-id") ?? ""
+          if (!held || held.id !== id) return new Response(null, { status: 412 })
+          if (action === "renew") {
+            renewStartOrder.push(name)
+            inFlightRenews++
+            maxInFlightRenews = Math.max(maxInFlightRenews, inFlightRenews)
+            const started = Date.now()
+            return new Promise<Response>(resolve => setTimeout(() => {
+              inFlightRenews--
+              held.expiresAt = started + 60_000
+              resolve(new Response(null, { status: 200, headers: { "x-ms-lease-id": id } }))
+            }, 500))
+          }
+          if (action === "release") {
+            active.delete(name)
+            return new Response(null, { status: 200 })
+          }
+        }
+        if (req.method === "DELETE" && name.startsWith(expired)) {
+          deleteCount++
+          if (deleteCount === 1) {
+            return new Promise<Response>(resolve => setTimeout(() => {
+              ctx.saved.delete(name)
+              resolve(new Response(null, { status: 202 }))
+            }, 35_000))
+          }
+        }
+        return undefined
+      },
+    })
+
+    ctx.seedExpired(expired)
+    const done = runJob(ctx.engine)
+    await vi.advanceTimersByTimeAsync(60_000)
+    await done
+
+    expect(acquireOrder.length).toBe(12)
+    expect(maxInFlightRenews).toBe(8)
+    expect(renewStartOrder.slice(0, acquireOrder.length)).toEqual(acquireOrder)
+  })
+
+  it("stops the candidate, keeps remaining files, and warns when renewal fails", async () => {
+    const expired = "backup-2026-08-01-020000/"
+
+    // (a) Renewal fails during slow acquisition -> stops before first DELETE, leaves no journal.
+    {
+      const active = new Map<string, string>()
+      const deleted: string[] = []
+      let acquireCount = 0
+      const ctx = setupAzure({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              const idx = ++acquireCount
+              const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${idx}`
+              return new Promise<Response>(resolve => setTimeout(() => {
+                active.set(name, id)
+                resolve(new Response(null, { status: 201, headers: { "x-ms-lease-id": id } }))
+              }, idx === 1 ? 0 : 35_000))
+            }
+            if (action === "renew") {
+              return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+            }
+            if (action === "release") {
+              active.delete(name)
+              return new Response(null, { status: 200 })
+            }
+          }
+          if (req.method === "DELETE" && name.startsWith(expired)) deleted.push(name)
+          return undefined
+        },
+      })
+      ctx.seedExpired(expired)
+      const done = runJob(ctx.engine)
+      await vi.advanceTimersByTimeAsync(90_000)
+      const job = await done
+      expect(deleted).toHaveLength(0)
+      expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+      expect(job.log.join("\n")).toContain("replacement protection could not be renewed")
+    }
+
+    // (b) Renewal fails mid-delete -> stops before second DELETE, keeping remaining files.
+    {
+      const active = new Map<string, string>()
+      const deleted: string[] = []
+      let deleteCount = 0
+      const ctx = setupAzure({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${active.size + 1}`
+              active.set(name, id)
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+            }
+            if (action === "renew") {
+              return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+            }
+            if (action === "release") {
+              active.delete(name)
+              return new Response(null, { status: 200 })
+            }
+          }
+          if (req.method === "DELETE" && name.startsWith(expired)) {
+            deleteCount++
+            if (deleteCount === 1) {
+              return new Promise<Response>(resolve => setTimeout(() => {
+                deleted.push(name)
+                ctx.saved.delete(name)
+                resolve(new Response(null, { status: 202 }))
+              }, 35_000))
+            }
+            deleted.push(name)
+          }
+          return undefined
+        },
+      })
+      ctx.seedExpired(expired, true)
+      const done = runJob(ctx.engine)
+      await vi.advanceTimersByTimeAsync(50_000)
+      const job = await done
+      expect(deleted).toHaveLength(1)
+      expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+      expect(job.log.join("\n")).toContain("replacement protection could not be renewed")
+    }
+  })
+
+  it("stops before DELETE when a lease is within the 10s safety margin and cannot be confirmed renewed", async () => {
+    const expired = "backup-2026-08-01-020000/"
+    const active = new Map<string, string>()
+    let deleteDispatched = 0
+    let acquireIndex = 0
+
+    const ctx = setupAzure({
+      count: 1,
+      override: (url, req) => {
+        const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") {
+            const idx = ++acquireIndex
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${idx}`
+            // Make acquire take 52s so lease starts with only 8s left (inside 10s safety margin).
+            return new Promise<Response>(resolve => setTimeout(() => {
+              active.set(name, id)
+              resolve(new Response(null, { status: 201, headers: { "x-ms-lease-id": id } }))
+            }, idx === 1 ? 52_000 : 0))
+          }
+          if (action === "renew") {
+            // Even though server returns 200 OK, renewal took 52s so only 8s remain (< 10s safety margin).
+            return new Promise<Response>(resolve => setTimeout(() => {
+              resolve(new Response(null, { status: 200, headers: { "x-ms-lease-id": req.headers.get("x-ms-lease-id") ?? "" } }))
+            }, 52_000))
+          }
+          if (action === "release") {
+            active.delete(name)
+            return new Response(null, { status: 200 })
+          }
+        }
+        if (req.method === "DELETE" && name.startsWith(expired)) {
+          deleteDispatched++
+        }
+        return undefined
+      },
+    })
+
+    ctx.seedExpired(expired)
+    const done = runJob(ctx.engine)
+    await vi.advanceTimersByTimeAsync(180_000)
+    const job = await done
+
+    expect(deleteDispatched).toBe(0)
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+    expect(ctx.saved.has(`${expired}DeviceConfigurations/Old.json`)).toBe(true)
+    expect(job.log.join("\n")).toContain("replacement protection could not be renewed")
+  })
+})
+
+describe("Item 2: bounded lease cleanup", () => {
+  it("aborts in-flight renewals immediately on cleanup and enforces one 30s total deadline", async () => {
+    const expired = "backup-2026-08-01-020000/"
+    let renewAborted = false
+    let cleanupStartedAt: number | undefined
+    let cleanupFinishedAt: number | undefined
+    let releaseCalls = 0
+    let deleteCount = 0
+
+    const ctx = setupAzure({
+      count: 18,
+      override: (url, req) => {
+        const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") {
+            const id = req.headers.get("x-ms-proposed-lease-id") || "lease"
+            return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+          }
+          if (action === "renew") {
+            // Hang until aborted; never finishes on its own.
+            return new Promise<Response>((_resolve, reject) => {
+              req.signal.addEventListener("abort", () => {
+                renewAborted = true
+                cleanupStartedAt ??= Date.now()
+                reject(req.signal.reason ?? new Error("aborted"))
+              }, { once: true })
+            })
+          }
+          if (action === "release") {
+            releaseCalls++
+            // Hanging release that ignores AbortSignal.
+            return new Promise<Response>(() => undefined)
+          }
+        }
+        if (req.method === "DELETE" && name.startsWith(expired)) {
+          deleteCount++
+          if (deleteCount === 1) {
+            // Finish at 31s so background renewal started at 30s is in flight when cleanup begins.
+            return new Promise<Response>(resolve => setTimeout(() => {
+              resolve(new Response(null, { status: 412 }))
+            }, 31_000))
+          }
+        }
+        return undefined
+      },
+    })
+
+    ctx.seedExpired(expired)
+    let finished = false
+    const job = ctx.engine.start(REQUEST)
+    const done = ctx.engine.waitForJob(job).then(() => {
+      finished = true
+      cleanupFinishedAt = Date.now()
+    })
+    // 31s for delete + 30s shared cleanup deadline = 61s total (nowhere near 3x90s + 3x15s = 315s).
+    await vi.advanceTimersByTimeAsync(65_000)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(finished).toBe(true)
+    await done
+    expect(job.status, job.log.join("\n")).toBe("Completed")
+
+    expect(renewAborted).toBe(true)
+    expect(releaseCalls).toBeGreaterThan(0)
+    expect(cleanupStartedAt).toBeDefined()
+    expect(cleanupFinishedAt).toBeDefined()
+    expect(cleanupFinishedAt! - cleanupStartedAt!).toBeLessThanOrEqual(30_000)
+  })
+
+  it("releases leases in parallel capped at 8 and still attempts release for locally expired leases", async () => {
+    const expired = "backup-2026-08-01-020000/"
+    // Part A: 12 leases released in parallel capped at 8.
+    {
+      let inFlightReleases = 0
+      let maxInFlightReleases = 0
+      let releaseCount = 0
+      const ctx = setupAzure({
+        count: 10,
+        override: (url, req) => {
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+            }
+            if (action === "release") {
+              releaseCount++
+              inFlightReleases++
+              maxInFlightReleases = Math.max(maxInFlightReleases, inFlightReleases)
+              return new Promise<Response>(resolve => setTimeout(() => {
+                inFlightReleases--
+                resolve(new Response(null, { status: 200 }))
+              }, 1_000))
+            }
+          }
+          return undefined
+        },
+      })
+      ctx.seedExpired(expired)
+      const done = runJob(ctx.engine)
+      await vi.advanceTimersByTimeAsync(5_000)
+      await done
+      expect(releaseCount).toBe(12)
+      expect(maxInFlightReleases).toBe(8)
+    }
+
+    // Part B: Leases already past local expiry are still released (Azure may still hold them).
+    {
+      const releasedIds: string[] = []
+      const acquiredIds: string[] = []
+      const ctx = setupAzure({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${acquiredIds.length + 1}`
+              acquiredIds.push(id)
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+            }
+            if (action === "renew") {
+              return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+            }
+            if (action === "release") {
+              releasedIds.push(req.headers.get("x-ms-lease-id") ?? "")
+              return new Response(null, { status: 200 })
+            }
+          }
+          if (req.method === "DELETE" && name.startsWith(expired)) {
+            // Finishes at 65s when all 60s leases have already passed their local expiresAt.
+            return new Promise<Response>(resolve => setTimeout(() => {
+              resolve(new Response(null, { status: 412 }))
+            }, 65_000))
+          }
+          return undefined
+        },
+      })
+      ctx.seedExpired(expired)
+      const done = runJob(ctx.engine)
+      await vi.advanceTimersByTimeAsync(70_000)
+      await done
+      expect(acquiredIds.length).toBe(3)
+      expect(releasedIds.sort()).toEqual([...acquiredIds].sort())
+    }
+  })
+})
+
+describe("Item 3: permanent lease or local lock unavailability warnings", () => {
+  it("shows a clear Azure RBAC setup warning after 3 consecutive runs with the same 403 and resets once leases work", async () => {
+    const progress = memoryStore()
+    let leaseStatus: number | null = 403
+    const ctx = setupAzure({
+      count: 1,
+      progress,
+      override: (_url, req) => {
+        if (req.method === "PUT" && new URL(req.url).searchParams.get("comp") === "lease" && req.headers.get("x-ms-lease-action") === "acquire") {
+          if (leaseStatus === 403) {
+            return new Response(null, { status: 403, headers: { "x-ms-error-code": "AuthorizationPermissionMismatch" } })
+          }
+          if (leaseStatus === 409) {
+            return new Response(null, { status: 409, headers: { "x-ms-error-code": "LeaseAlreadyPresent" } })
+          }
+          return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+        }
+        return undefined
+      },
+    })
+    ctx.seedExpired("backup-2026-08-01-020000/")
+    ctx.seedExpired("backup-2026-08-02-020000/")
+
+    const run1 = await runJob(ctx.createEngine())
+    expect(run1.log.join("\n")).not.toContain("Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write")
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    const run2 = await runJob(ctx.createEngine())
+    expect(run2.log.join("\n")).not.toContain("Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write")
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    const run3 = await runJob(ctx.createEngine())
+    const log3 = run3.log.join("\n")
+    expect(log3).toContain("3 consecutive runs")
+    expect(log3).toContain("Storage Blob Data Contributor")
+    expect(log3).toContain("Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write")
+
+    // Once leases work, expired backups are removed and the consecutive counter resets.
+    leaseStatus = null
+    await vi.advanceTimersByTimeAsync(1_000)
+    await runJob(ctx.createEngine())
+    expect(ctx.saved.has("backup-2026-08-01-020000/metadata.json")).toBe(false)
+    expect(readRetentionProgress(progress.get(`${TENANT}/contoso`)).leaseFailures).toBeUndefined()
+  })
+
+  it("does not trigger the permanent 403 warning when runs alternate with a different error", async () => {
+    const progress = memoryStore()
+    let leaseStatus = 403
+    const ctx = setupAzure({
+      count: 1,
+      progress,
+      override: (_url, req) => {
+        if (req.method === "PUT" && new URL(req.url).searchParams.get("comp") === "lease" && req.headers.get("x-ms-lease-action") === "acquire") {
+          return new Response(null, {
+            status: leaseStatus,
+            headers: { "x-ms-error-code": leaseStatus === 403 ? "AuthorizationPermissionMismatch" : "LeaseAlreadyPresent" },
+          })
+        }
+        return undefined
+      },
+    })
+    ctx.seedExpired("backup-2026-08-01-020000/")
+
+    await runJob(ctx.createEngine())
+    expect(readRetentionProgress(progress.get(`${TENANT}/contoso`)).leaseFailures).toEqual({ key: "azure:403:AuthorizationPermissionMismatch", count: 1 })
+    leaseStatus = 409
+    await vi.advanceTimersByTimeAsync(1_000)
+    await runJob(ctx.createEngine())
+    expect(readRetentionProgress(progress.get(`${TENANT}/contoso`)).leaseFailures).toBeUndefined()
+    leaseStatus = 403
+    await vi.advanceTimersByTimeAsync(1_000)
+    const run3 = await runJob(ctx.createEngine())
+    expect(run3.log.join("\n")).not.toContain("Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write")
+    expect(readRetentionProgress(progress.get(`${TENANT}/contoso`)).leaseFailures).toEqual({ key: "azure:403:AuthorizationPermissionMismatch", count: 1 })
+  })
+
+  it.each([
+    ["an unsupported folder", true],
+    ["a lock held by another instance", false],
+  ])("warns about the local folder after 3 consecutive runs only for %s", async (_name, unsupported) => {
+    const root = mkdtempSync(join(tmpdir(), "tv-local-lock-perm-")); tempRoots.push(root)
+    const account = localStorageAccountName(TENANT)
+    const store = new LocalBlobStore(root, [MASTER])
+    const progress = memoryStore()
+    await store.createContainer(account, BACKUP_CONTAINER)
+    const oldPrefix = "backup-2026-08-01-020000/"
+    await store.put(account, BACKUP_CONTAINER, `${oldPrefix}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(account, BACKUP_CONTAINER, `${oldPrefix}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(account, BACKUP_CONTAINER, `${oldPrefix}metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+
+    let failLock = true
+    const originalAcquire = store.acquireRetentionLock.bind(store)
+    vi.spyOn(store, "acquireRetentionLock").mockImplementation(async (...args) => {
+      if (failLock) {
+        throw unsupported
+          ? new BlobLeaseUnsupportedError("The backup folder does not support the local retention lock (EOPNOTSUPP).")
+          : new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
+      }
+      return originalAcquire(...args)
+    })
+
+    let clock = new Date(NOW.getTime())
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, req)
+      return withBackupServerTime(Response.json({ value: [] }), clock)
+    }
+    const runLocal = async () => {
+      const engine = new BackupEngine({
+        fetch: fetchImpl,
+        getToken: async () => "token",
+        retentionDays: () => 30,
+        retentionProgress: progress,
+        now: () => clock,
+      })
+      const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: REQUEST.scope })
+      await engine.waitForJob(job)
+      expect(job.status).toBe("Completed")
+      clock = new Date(clock.getTime() + 2_000)
+      return job
+    }
+
+    const run1 = await runLocal()
+    expect(run1.log.join("\n")).not.toContain("3 consecutive runs")
+    const run2 = await runLocal()
+    expect(run2.log.join("\n")).not.toContain("3 consecutive runs")
+    const run3 = await runLocal()
+    const log3 = run3.log.join("\n")
+    if (unsupported) {
+      expect(log3).toContain("3 consecutive runs")
+      expect(log3).toContain("does not support the local retention lock")
+    } else {
+      expect(log3).not.toContain("does not support the local retention lock")
+    }
+
+    failLock = false
+    await runLocal()
+    expect(await store.list(account, BACKUP_CONTAINER, oldPrefix)).toEqual([])
+    expect(readRetentionProgress(progress.get(`${TENANT}/${account}`)).leaseFailures).toBeUndefined()
+  })
+})
+
+describe("Item 4: owner-and-process local retention lock and container scoping", () => {
+  it("never expires by time while holder lives, reclaims only same-host dead or reused PIDs, and skips foreign/unreadable locks with clear warnings", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-lock-owner-")); tempRoots.push(root)
+    const account = localStorageAccountName(TENANT)
+    const storeA = new LocalBlobStore(root, [MASTER])
+    const storeB = new LocalBlobStore(root, [MASTER])
+    await storeA.createContainer(account, BACKUP_CONTAINER)
+    const lockPath = join(root, account, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+
+    // 1. Acquired lock holds { id, host, pid, processStart, app: "TenuVault" } and never expires by mtime.
+    const liveId = await storeA.acquireRetentionLock(account, BACKUP_CONTAINER)
+    const written = JSON.parse(readFileSync(lockPath, "utf8"))
+    expect(written).toMatchObject({ id: liveId, host: hostname(), pid: process.pid, app: "TenuVault" })
+    expect(written.processStart).toBeDefined()
+    expect(written.expiresAt).toBeUndefined()
+    expect(written.durationMs).toBeUndefined()
+    const hoursAgo = (Date.now() - 10 * 3_600_000) / 1000
+    utimesSync(lockPath, hoursAgo, hoursAgo)
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
+    // Local container lease does not accept renew.
+    const renewResp = await handleLocalBlobRequest(storeA, new Request(`https://${account}.blob.core.windows.net/${BACKUP_CONTAINER}?restype=container&comp=lease`, {
+      method: "PUT",
+      headers: { "x-ms-lease-action": "renew", "x-ms-lease-id": liveId },
+    }))
+    expect(renewResp.status).toBe(400)
+    await storeA.releaseRetentionLock(account, BACKUP_CONTAINER, liveId)
+    expect(existsSync(lockPath)).toBe(false)
+
+    // 2. Same host + dead PID (real exited child process) -> reclaimed.
+    const exited = spawnSync(process.execPath, ["-e", ""])
+    expect(exited.pid).toBeGreaterThan(0)
+    writeFileSync(lockPath, JSON.stringify({ id: "dead-pid", host: hostname(), pid: exited.pid!, processStart: "old-start", app: "TenuVault" }))
+    const reclaimedDead = await storeB.acquireRetentionLock(account, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedDead)
+    await storeB.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedDead)
+
+    // 3. Same host + alive PID with different processStart of the same kind (PID reuse) -> reclaimed.
+    // Inject a process reader with complete, comparable tokens (including boot ID) so the test
+    // does not depend on host /proc/sys/kernel/random/boot_id availability.
+    const reuseReader: ProcessInfoReader = {
+      isPidAlive: pid => pid === process.pid,
+      readProcessStart: async pid => (pid === process.pid ? "proc:boot-id-1:2000" : "gone"),
+    }
+    const storeReuse = new LocalBlobStore(root, [MASTER], undefined, reuseReader)
+    writeFileSync(lockPath, JSON.stringify({ id: "reused-pid", host: hostname(), pid: process.pid, processStart: "proc:boot-id-1:1000", app: "TenuVault" }))
+    const reclaimedReuse = await storeReuse.acquireRetentionLock(account, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedReuse)
+    await storeReuse.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedReuse)
+
+    // 4. Foreign host lock -> never reclaimed; clear warning names lockPath and instructs admin.
+    writeFileSync(lockPath, JSON.stringify({ id: "remote-lock", host: "other-workstation.local", pid: exited.pid!, processStart: "old-start", app: "TenuVault" }))
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toThrow(lockPath)
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toThrow(/no other computer is running TenuVault/i)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe("remote-lock")
+
+    // 5. Corrupt/unreadable lock -> never reclaimed; clear warning names lockPath and instructs admin.
+    writeFileSync(lockPath, "{not-valid-json")
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toThrow(lockPath)
+    await expect(storeB.acquireRetentionLock(account, BACKUP_CONTAINER)).rejects.toThrow(/no other computer is running TenuVault/i)
+    expect(readFileSync(lockPath, "utf8")).toBe("{not-valid-json")
+
+    // Backups and restores remain unaffected while foreign/corrupt lock is present.
+    await storeA.put(account, BACKUP_CONTAINER, "backup-2026-10-12-120000/metadata.json", Buffer.from('{"ok":true}'), "application/json")
+    const restored = await storeA.get(account, BACKUP_CONTAINER, "backup-2026-10-12-120000/metadata.json")
+    expect(restored.data.toString()).toBe('{"ok":true}')
+  })
+
+  it("scopes retention locks per container directory rather than the whole root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-lock-scope-")); tempRoots.push(root)
+    const accountA = localStorageAccountName(TENANT)
+    const accountB = localStorageAccountName(OTHER_TENANT)
+    const storeA = new LocalBlobStore(root, [MASTER])
+    const storeB = new LocalBlobStore(root, [MASTER])
+    await storeA.createContainer(accountA, BACKUP_CONTAINER)
+    await storeA.createContainer(accountA, "other-container")
+    await storeB.createContainer(accountB, BACKUP_CONTAINER)
+
+    const lockA = await storeA.acquireRetentionLock(accountA, BACKUP_CONTAINER)
+    expect(existsSync(join(root, ".tenuvault-retention.lock"))).toBe(false)
+    expect(existsSync(join(root, accountA, BACKUP_CONTAINER, ".tenuvault-retention.lock"))).toBe(true)
+
+    // Same root, different tenant account and different container are not blocked.
+    const lockB = await storeB.acquireRetentionLock(accountB, BACKUP_CONTAINER)
+    const lockOtherContainer = await storeB.acquireRetentionLock(accountA, "other-container")
+    // Same account + same container is still blocked.
+    await expect(storeB.acquireRetentionLock(accountA, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
+
+    await storeA.releaseRetentionLock(accountA, BACKUP_CONTAINER, lockA)
+    await storeB.releaseRetentionLock(accountB, BACKUP_CONTAINER, lockB)
+    await storeB.releaseRetentionLock(accountA, "other-container", lockOtherContainer)
+  })
+})
+
+describe("Round 3 findings: version-tied replacement coverage and outer-loop stopCleanup exit", () => {
+  it("4721002106: stops cleanup and keeps planned backups when journal resume observes a newer replacement version", async () => {
+    const progress = memoryStore()
+    const replacementP = "backup-2026-10-01-120000/"
+    const candidateX = "backup-2026-08-02-120000/"
+    const candidateY = "backup-2026-08-01-120000/"
+    const complianceItem = { id: "comp-1" }
+    const deviceItem = { id: "dev-1" }
+    const manifestBoth = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["DeviceConfigurations", "CompliancePolicies"] },
+      Items: {
+        "DeviceConfigurations/dev-1": { file: "Dev.json", hash: snapshotHash(deviceItem), sha256: sha256(deviceItem) },
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(complianceItem), sha256: sha256(complianceItem) },
+      },
+      ItemCounts: { DeviceConfigurations: 1, CompliancePolicies: 1, TotalPolicies: 2 },
+    }
+    const manifestCompOnly = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["CompliancePolicies"] },
+      Items: {
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(complianceItem), sha256: sha256(complianceItem) },
+      },
+      ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+    }
+    const manifestY = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["CompliancePolicies"] },
+      Items: {
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(complianceItem), sha256: sha256(complianceItem) },
+      },
+      ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+    }
+
+    // (a) Replacement P changes to a valid CompliancePolicies-only version before Y's journal resume check:
+    // neither X (which relied on P covering DeviceConfigurations) nor Y may be deleted.
+    {
+      let mutatedP = false
+      const deletes: string[] = []
+      const ctx = setupAzure({
+        count: 0,
+        progress,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+            return new Response(null, { status: 200 })
+          }
+          if (req.method === "GET" && url.searchParams.get("comp") === "list" && url.searchParams.get("prefix") === candidateY && !mutatedP) {
+            // Mutate replacement P right when journaled candidate Y begins listing (after P and X were reviewed).
+            mutatedP = true
+            ctx.saved.delete(`${replacementP}DeviceConfigurations/Dev.json`)
+            ctx.seed(`${replacementP}metadata.json`, manifestCompOnly)
+          }
+          if (req.method === "DELETE") deletes.push(name)
+          return undefined
+        },
+      })
+      // Anchor covers neither DeviceConfigurations nor CompliancePolicies (exclude both in current backup).
+      const reqNoTypes = {
+        tenantId: TENANT,
+        clientId: "client",
+        storageAccountName: "contoso",
+        scope: { excluded: INTUNE_TYPES.map(type => type.folder) },
+      }
+      // Seed P (within retention, covers both DeviceConfigurations and CompliancePolicies).
+      ctx.seed(`${replacementP}DeviceConfigurations/Dev.json`, deviceItem)
+      ctx.seed(`${replacementP}CompliancePolicies/Comp.json`, complianceItem)
+      ctx.seed(`${replacementP}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${replacementP}metadata.json`, manifestBoth)
+      // Seed expired X (DeviceConfigurations only).
+      ctx.seedExpired(candidateX)
+      // Seed expired journaled Y (CompliancePolicies, with one already-absent file to trigger fresh replacement re-verify).
+      ctx.seed(`${candidateY}CompliancePolicies/Comp.json`, complianceItem)
+      ctx.seed(`${candidateY}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${candidateY}metadata.json`, manifestY)
+      const compEtag = `"${createHash("sha256").update(ctx.saved.get(`${candidateY}CompliancePolicies/Comp.json`)!).digest("hex")}"`
+      const ownerEtag = `"${createHash("sha256").update(ctx.saved.get(`${candidateY}${BACKUP_OWNER_FILE}`)!).digest("hex")}"`
+      const metaEtag = `"${createHash("sha256").update(ctx.saved.get(`${candidateY}metadata.json`)!).digest("hex")}"`
+      progress.set(`${TENANT}/contoso`, JSON.stringify({
+        reviews: {},
+        deletes: {
+          [candidateY]: {
+            prefix: candidateY,
+            remaining: {
+              [`${candidateY}CompliancePolicies/Absent.json`]: '"missing-etag"',
+              [`${candidateY}CompliancePolicies/Comp.json`]: compEtag,
+              [`${candidateY}metadata.json`]: metaEtag,
+              [`${candidateY}${BACKUP_OWNER_FILE}`]: ownerEtag,
+            },
+            types: ["CompliancePolicies"],
+            noTypes: false,
+            untagged: false,
+          },
+        },
+      }))
+
+      const job = ctx.engine.start(reqNoTypes)
+      await ctx.engine.waitForJob(job)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(job.status, job.log.join("\n")).toBe("Completed")
+      expect(mutatedP).toBe(true)
+      expect(deletes).toEqual([])
+      expect(ctx.saved.has(`${candidateX}metadata.json`)).toBe(true)
+      expect(ctx.saved.has(`${candidateY}metadata.json`)).toBe(true)
+      expect(job.log.join("\n")).toContain("changed during retention")
+    }
+
+    // (b) When replacement P is unchanged, both X and Y proceed and are deleted.
+    {
+      const freshProgress = memoryStore()
+      const ctx = setupAzure({
+        count: 0,
+        progress: freshProgress,
+        override: (url, req) => {
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+            return new Response(null, { status: 200 })
+          }
+          return undefined
+        },
+      })
+      const reqNoTypes = {
+        tenantId: TENANT,
+        clientId: "client",
+        storageAccountName: "contoso",
+        scope: { excluded: INTUNE_TYPES.map(type => type.folder) },
+      }
+      ctx.seed(`${replacementP}DeviceConfigurations/Dev.json`, deviceItem)
+      ctx.seed(`${replacementP}CompliancePolicies/Comp.json`, complianceItem)
+      ctx.seed(`${replacementP}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${replacementP}metadata.json`, manifestBoth)
+      ctx.seedExpired(candidateX)
+      ctx.seed(`${candidateY}CompliancePolicies/Comp.json`, complianceItem)
+      ctx.seed(`${candidateY}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${candidateY}metadata.json`, manifestY)
+      const compEtag = `"${createHash("sha256").update(ctx.saved.get(`${candidateY}CompliancePolicies/Comp.json`)!).digest("hex")}"`
+      const ownerEtag = `"${createHash("sha256").update(ctx.saved.get(`${candidateY}${BACKUP_OWNER_FILE}`)!).digest("hex")}"`
+      const metaEtag = `"${createHash("sha256").update(ctx.saved.get(`${candidateY}metadata.json`)!).digest("hex")}"`
+      freshProgress.set(`${TENANT}/contoso`, JSON.stringify({
+        reviews: {},
+        deletes: {
+          [candidateY]: {
+            prefix: candidateY,
+            remaining: {
+              [`${candidateY}CompliancePolicies/Absent.json`]: '"missing-etag"',
+              [`${candidateY}CompliancePolicies/Comp.json`]: compEtag,
+              [`${candidateY}metadata.json`]: metaEtag,
+              [`${candidateY}${BACKUP_OWNER_FILE}`]: ownerEtag,
+            },
+            types: ["CompliancePolicies"],
+            noTypes: false,
+            untagged: false,
+          },
+        },
+      }))
+
+      const job = ctx.engine.start(reqNoTypes)
+      await ctx.engine.waitForJob(job)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(job.status, job.log.join("\n")).toBe("Completed")
+      expect(ctx.saved.has(`${candidateX}metadata.json`)).toBe(false)
+      expect(ctx.saved.has(`${candidateY}metadata.json`)).toBe(false)
+    }
+  })
+
+  it("4721002120: exits the outer plan loop on stopCleanup, while keeping continue for candidate-local lease refusal", async () => {
+    const repComp = "backup-2026-10-01-120000/"
+    const candidate1 = "backup-2026-08-02-120000/"
+    const candidate2 = "backup-2026-08-01-120000/"
+    const compItem = { id: "comp-1" }
+    const compManifest = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["CompliancePolicies"] },
+      Items: {
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(compItem), sha256: sha256(compItem) },
+      },
+      ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+    }
+
+    // (a) Candidate 1's replacement (repComp) changes before deletion -> stopCleanup exits outer loop so
+    // candidate 2 (whose replacement is the intact anchor backup) issues NO DELETEs.
+    {
+      let mutatedRepComp = false
+      const deletes: string[] = []
+      const released: string[] = []
+      const ctx = setupAzure({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              if (!mutatedRepComp && name.startsWith(repComp)) {
+                mutatedRepComp = true
+                ctx.seed(`${repComp}CompliancePolicies/Comp.json`, { id: "comp-1", mutated: true })
+              }
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+            }
+            if (action === "release") {
+              released.push(name)
+              return new Response(null, { status: 200 })
+            }
+            return new Response(null, { status: 200 })
+          }
+          if (req.method === "DELETE") deletes.push(name)
+          return undefined
+        },
+      })
+      // repComp covers CompliancePolicies (distinct from anchor which covers DeviceConfigurations).
+      ctx.seed(`${repComp}CompliancePolicies/Comp.json`, compItem)
+      ctx.seed(`${repComp}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${repComp}metadata.json`, compManifest)
+      // candidate1 relies on repComp (CompliancePolicies).
+      ctx.seed(`${candidate1}CompliancePolicies/Comp.json`, compItem)
+      ctx.seed(`${candidate1}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${candidate1}metadata.json`, compManifest)
+      // candidate2 relies on anchor (DeviceConfigurations).
+      ctx.seedExpired(candidate2)
+
+      const job = await runJob(ctx.engine)
+      expect(mutatedRepComp).toBe(true)
+      expect(deletes).toEqual([])
+      expect(released.length).toBeGreaterThan(0)
+      expect(ctx.saved.has(`${candidate1}metadata.json`)).toBe(true)
+      expect(ctx.saved.has(`${candidate2}metadata.json`)).toBe(true)
+      expect(job.log.join("\n")).toContain("changed before deletion")
+    }
+
+    // (b) Candidate-local lease acquisition refusal (409 on repComp) still allows candidate 2 (different replacement) to proceed.
+    {
+      const deletes: string[] = []
+      const ctx = setupAzure({
+        count: 1,
+        override: (url, req) => {
+          const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              if (name.startsWith(repComp)) {
+                return new Response(null, { status: 409, headers: { "x-ms-error-code": "LeaseAlreadyPresent" } })
+              }
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+            }
+            return new Response(null, { status: 200 })
+          }
+          if (req.method === "DELETE") deletes.push(name)
+          return undefined
+        },
+      })
+      ctx.seed(`${repComp}CompliancePolicies/Comp.json`, compItem)
+      ctx.seed(`${repComp}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${repComp}metadata.json`, compManifest)
+      ctx.seed(`${candidate1}CompliancePolicies/Comp.json`, compItem)
+      ctx.seed(`${candidate1}${BACKUP_OWNER_FILE}`, OWNER)
+      ctx.seed(`${candidate1}metadata.json`, compManifest)
+      ctx.seedExpired(candidate2)
+
+      const job = await runJob(ctx.engine)
+      expect(ctx.saved.has(`${candidate1}metadata.json`)).toBe(true)
+      expect(ctx.saved.has(`${candidate2}metadata.json`)).toBe(false)
+      expect(deletes.some(name => name.startsWith(candidate2))).toBe(true)
+      expect(job.log.join("\n")).toContain("could not be leased before deletion")
+    }
+  })
+})
+
+describe("Round 10 findings: checkpointed fresh verification for deletion journals", () => {
+  it("4723063805: checkpoints fresh verification across consecutive 110 KB budgeted runs for two 70 KB payloads, keeps remaining files until complete, and resets on change", async () => {
+    const progress = memoryStore()
+    const expired = "backup-2026-08-01-020000/"
+    const padding = "x".repeat(70_000)
+    const leases = new Map<string, string>()
+
+    const ctx = setupAzure({
+      count: 2,
+      payloadPadding: padding,
+      progress,
+      limits: { candidates: 32, requests: 200, bytes: 110_000 },
+      override: (url, req) => {
+        const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") {
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${leases.size + 1}`
+            leases.set(name, id)
+            return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+          }
+          if (action === "release") leases.delete(name)
+          return new Response(null, { status: 200 })
+        }
+        return undefined
+      },
+    })
+
+    // Seed expired backup with a deletion journal whose one recorded file is already absent.
+    ctx.seedExpired(expired)
+    const etagOf = (name: string) => `"${createHash("sha256").update(ctx.saved.get(name)!).digest("hex")}"`
+    const progressKey = `${TENANT}/contoso`
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletes: {
+        [expired]: {
+          prefix: expired,
+          remaining: {
+            [`${expired}DeviceConfigurations/Absent.json`]: '"absent-etag"',
+            [`${expired}DeviceConfigurations/Old.json`]: etagOf(`${expired}DeviceConfigurations/Old.json`),
+            [`${expired}metadata.json`]: etagOf(`${expired}metadata.json`),
+            [`${expired}${BACKUP_OWNER_FILE}`]: etagOf(`${expired}${BACKUP_OWNER_FILE}`),
+          },
+          types: ["DeviceConfigurations"],
+          noTypes: false,
+          untagged: false,
+        },
+      },
+    }))
+
+    // Consecutive budgeted runs (110 KB per run, two 70 KB payloads per backup):
+    // anchor verification completes first via ordinary receipts, then fresh verification
+    // checkpoints payload 1 in journal.fresh (separate from state.reviews), keeps expired
+    // files until fresh verification finishes, and completes cleanup on the following run.
+    let sawPartialFreshCheckpoint = false
+    let sawDoneFreshWithClearedFiles = false
+    const origSet = progress.set.bind(progress)
+    progress.set = (key, value) => {
+      origSet(key, value)
+      if (key !== progressKey) return
+      const savedFresh = readRetentionProgress(value).deletes?.[expired]?.fresh
+      if (!savedFresh) return
+      for (const entry of Object.values(savedFresh)) {
+        if (entry.done) {
+          expect(entry.files).toEqual({})
+          sawDoneFreshWithClearedFiles = true
+        }
+      }
+    }
+    for (let run = 0; run < 8; run++) {
+      if (run > 0) vi.setSystemTime(new Date(NOW.getTime() + run * 60_000))
+      await runJob(ctx.createEngine())
+      const state = readRetentionProgress(progress.get(progressKey))
+      const journal = state.deletes?.[expired]
+      if (journal?.fresh) {
+        const entries = Object.values(journal.fresh)
+        if (entries.some(entry => !entry.done && Object.keys(entry.files).length === 1)) {
+          sawPartialFreshCheckpoint = true
+          // Remaining files must still be intact while fresh verification is incomplete.
+          expect(ctx.saved.has(`${expired}DeviceConfigurations/Old.json`)).toBe(true)
+          expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+          expect(ctx.saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(true)
+        }
+      }
+      if (!ctx.saved.has(`${expired}metadata.json`)) break
+    }
+
+    expect(sawPartialFreshCheckpoint).toBe(true)
+    expect(sawDoneFreshWithClearedFiles).toBe(true)
+    expect(ctx.saved.has(`${expired}DeviceConfigurations/Old.json`)).toBe(false)
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(false)
+    expect(ctx.saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(false)
+    expect(readRetentionProgress(progress.get(progressKey)).deletes).toBeUndefined()
+  })
+
+  it("4723063805: resets persisted fresh verification progress when keyring fingerprint, replacement identity, or manifest changes", async () => {
+    const progress = memoryStore()
+    const expired = "backup-2026-08-01-020000/"
+    const padding = "y".repeat(70_000)
+    const ctx = setupAzure({
+      count: 2,
+      payloadPadding: padding,
+      progress,
+      limits: { candidates: 32, requests: 200, bytes: 110_000 },
+      override: (url, req) => {
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+          return new Response(null, { status: 200 })
+        }
+        return undefined
+      },
+    })
+    ctx.seedExpired(expired)
+    const etagOf = (name: string) => `"${createHash("sha256").update(ctx.saved.get(name)!).digest("hex")}"`
+    const progressKey = `${TENANT}/contoso`
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletes: {
+        [expired]: {
+          prefix: expired,
+          remaining: {
+            [`${expired}DeviceConfigurations/Absent.json`]: '"absent-etag"',
+            [`${expired}DeviceConfigurations/Old.json`]: etagOf(`${expired}DeviceConfigurations/Old.json`),
+            [`${expired}metadata.json`]: etagOf(`${expired}metadata.json`),
+            [`${expired}${BACKUP_OWNER_FILE}`]: etagOf(`${expired}${BACKUP_OWNER_FILE}`),
+          },
+          types: ["DeviceConfigurations"],
+          noTypes: false,
+          untagged: false,
+        },
+      },
+    }))
+
+    // Advance runs until fresh verification checkpoints payload 1 of the anchor replacement.
+    let anchorPrefix = ""
+    let bindingBefore = ""
+    let firstPayload = ""
+    let step = 0
+    for (; step < 8; step++) {
+      if (step > 0) vi.setSystemTime(new Date(NOW.getTime() + step * 60_000))
+      await runJob(ctx.createEngine())
+      const state = readRetentionProgress(progress.get(progressKey))
+      const freshMap = state.deletes?.[expired]?.fresh
+      if (freshMap) {
+        const hit = Object.entries(freshMap).find(([, entry]) => !entry.done && Object.keys(entry.files).length === 1)
+        if (hit) {
+          anchorPrefix = hit[0]
+          bindingBefore = hit[1].binding
+          firstPayload = Object.keys(hit[1].files)[0]!
+          break
+        }
+      }
+    }
+    expect(bindingBefore).not.toBe("")
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+
+    // Rotate keyring fingerprint: once anchor/newest re-verify under the new keyring, the fresh
+    // verification binding must reset (so firstPayload is re-read and expired stays on disk
+    // during the reset run rather than finishing immediately from the stale checkpoint).
+    ctx.keyring.unshift(Buffer.alloc(32, 9))
+    let sawResetCheckpoint = false
+    for (let extra = 1; extra <= 8; extra++) {
+      const callsBefore = ctx.calls.length
+      vi.setSystemTime(new Date(NOW.getTime() + (step + extra) * 60_000))
+      await runJob(ctx.createEngine())
+      const freshAfterKey = readRetentionProgress(progress.get(progressKey)).deletes?.[expired]?.fresh?.[anchorPrefix]
+      if (freshAfterKey && freshAfterKey.binding !== bindingBefore && !freshAfterKey.done) {
+        sawResetCheckpoint = true
+        const reReadFirst = ctx.calls.slice(callsBefore).filter(c => c.request.method === "GET" && c.name === `${anchorPrefix}${firstPayload}`)
+        expect(reReadFirst.length).toBeGreaterThanOrEqual(1)
+        expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+        break
+      }
+    }
+    expect(sawResetCheckpoint).toBe(true)
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+
+    // Continue consecutive runs under the new keyring until cleanup completes.
+    for (let extra = 9; extra <= 16; extra++) {
+      vi.setSystemTime(new Date(NOW.getTime() + (step + extra) * 60_000))
+      await runJob(ctx.createEngine())
+      if (!ctx.saved.has(`${expired}metadata.json`)) break
+    }
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(false)
+  })
+})

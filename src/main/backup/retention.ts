@@ -1,0 +1,1145 @@
+import { BACKUP_OWNER_FILE } from "../../shared/constants"
+import { parseBackupName } from "../../shared/intune/backup-names"
+import { typeForFolder } from "../../shared/intune/registry"
+import { resolveBackupOwnership } from "../../shared/backup-ownership"
+import { FetchApplicationError, FetchPreconditionError } from "../api/network-error"
+import { isLocalAccount } from "../storage/blob-emulator"
+import { releaseLocalRetentionGuard } from "../storage/local-blob-store"
+import { BlobLeaseError, ReplacementChangedError, wasDeleteConfirmedUnchanged, type BlobWriter, type ExpectedReplacement, type RetentionBlob } from "./blob-writer"
+import { createRetentionLeaseManager, hardLinksUnsupportedWarning, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
+import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "./retention-budget"
+import { DAY_MS, HOUR_MS, RetentionClockError } from "./retention-clock"
+import { readRetentionProgress, retentionIdentity, type DeletionJournalEntry, type FreshVerificationProgress, type RetentionProgressStore } from "./retention-progress"
+import { RetentionVerificationError, checkOwner, manifestTypes, matchesJournalTypes, verifyBackup } from "./retention-verification"
+import { DeleteConditionError, InventoryDamagedError, ProtectedBlobError, StorageError } from "./request"
+
+const UNREADABLE_ATTEMPTS = 3
+
+function isCandidateUnreadable(error: unknown): boolean {
+  if (error instanceof RetentionVerificationError) return true
+  if (error instanceof InventoryDamagedError && error.recoveryConflict) return true
+  return error instanceof FetchApplicationError
+    && !(error instanceof RetentionBudgetError)
+    && !(error instanceof FetchPreconditionError)
+    && !(error instanceof DeleteConditionError)
+}
+
+function unreadableWarning(prefix: string, attempts: number, reason?: string): string {
+  const detail = reason ? `: ${reason.replace(/\.$/, "")}` : ""
+  return `Kept unreadable backup ${prefix} after ${attempts} consecutive failed attempts${detail}. Review it before removing it manually.`
+}
+
+function sameIdentities(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false
+  for (const [name, etag] of a) {
+    if (b.get(name) !== etag) return false
+  }
+  return true
+}
+
+async function verifyReplacementUnchanged(storage: BlobWriter, prefix: string, expected: Map<string, string>): Promise<boolean> {
+  const listing = await storage.list(prefix)
+  const seen = new Set(listing.blobs)
+  if (seen.size !== listing.blobs.length || seen.size !== expected.size) return false
+  for (const [path, etag] of expected) {
+    if (!seen.has(path)) return false
+    if (listing.etags.has(path)) {
+      if (listing.etags.get(path) !== etag) return false
+    } else {
+      const current = await storage.readEtag(path)
+      if (current !== etag) return false
+    }
+  }
+  return true
+}
+
+interface PlannedDeletion {
+  prefix: string
+  identities: Map<string, string>
+  types: Set<string>
+  noTypes: boolean
+  untagged: boolean
+  replacements: string[]
+  ownedReplacements: string[] | null
+  resumed: boolean
+}
+
+interface RetentionRun {
+  storage: BlobWriter
+  tenant: string
+  account: string
+  current: string
+  written: Record<string, unknown>
+  days: number
+  now: number
+  limits: RetentionLimits
+  progress: RetentionProgressStore
+  keyFingerprint?: string
+  beforeDelete: () => void
+  notice: (message: string, level: "info" | "warning") => void
+}
+
+/** Build the entire deletion plan before touching storage. Only authenticated candidates enter it. */
+export async function applyRetention(run: RetentionRun): Promise<boolean> {
+  const { current, written, days, now, limits, keyFingerprint, notice } = run
+  const local = isLocalAccount(run.account)
+  const tenant = run.tenant.toLowerCase()
+  const budget = new RetentionBudget(limits)
+  const storage = run.storage.withBudget(budget)
+  const { prefixes } = await storage.list("backup-", "/")
+  const cutoff = now - days * DAY_MS
+  const listed = [...new Set(prefixes)].sort().reverse().flatMap(prefix => {
+    if (prefix === `${current}/`) return []
+    const time = Date.parse(parseBackupName(prefix.slice(0, -1))?.timestamp ?? "")
+    return Number.isFinite(time) ? [{ prefix, time }] : []
+  })
+  const all = listed.filter(backup => backup.time <= now + HOUR_MS)
+  if (all.length !== listed.length) notice("Retention kept future-dated backups and excluded them from the review.", "warning")
+
+  const key = `${tenant}/${run.account}`
+  const rawProgress = run.progress.get(key)
+  const state = readRetentionProgress(rawProgress)
+  if (rawProgress && !state.cursor && !state.latest && !state.newest && !state.latestAttempts && !state.leaseFailures && !Object.keys(state.reviews).length && !state.deletes) {
+    run.progress.delete(key)
+  }
+  const latestPrefix = `${current}/`
+  const older = all.filter(backup => backup.prefix < latestPrefix)
+  const previous = state.cursor ? older.findIndex(backup => backup.prefix < state.cursor!) : 0
+  const start = Math.max(0, previous)
+  const candidates = older.slice(start, start + limits.candidates)
+  const existing = new Set([latestPrefix, ...older.map(backup => backup.prefix)])
+  const save = () => {
+    for (const prefix of Object.keys(state.reviews)) if (!existing.has(prefix)) delete state.reviews[prefix]
+    if (state.latest && !existing.has(state.latest)) delete state.latest
+    if (state.newest && !existing.has(state.newest)) delete state.newest
+    if (state.deletes) {
+      for (const prefix of Object.keys(state.deletes)) if (!existing.has(prefix)) delete state.deletes[prefix]
+      if (!Object.keys(state.deletes).length) delete state.deletes
+    }
+    if (!state.cursor && !state.latest && !state.newest && !state.latestAttempts && !state.leaseFailures && !Object.keys(state.reviews).length && !state.deletes) run.progress.delete(key)
+    else run.progress.set(key, JSON.stringify(state))
+  }
+  const advance = (prefix: string | undefined) => {
+    state.cursor = prefix && older.some(backup => backup.prefix < prefix) ? prefix : undefined
+    save()
+  }
+  let invalidJournal = false
+  const discardJournal = (prefix: string, reason?: string) => {
+    if (!state.deletes || !Object.hasOwn(state.deletes, prefix)) return
+    delete state.deletes[prefix]
+    if (!Object.keys(state.deletes).length) delete state.deletes
+    save()
+    if (reason) {
+      invalidJournal = true
+      notice(reason, "warning")
+    }
+  }
+  discardJournal(latestPrefix, `Discarded an invalid deletion journal for protected backup ${latestPrefix}.`)
+
+  if (!candidates.length || !older.some(backup => backup.time < cutoff)) {
+    let warned = all.length !== listed.length || invalidJournal
+    for (const backup of older) {
+      const review = state.reviews[backup.prefix]
+      if ((review?.failures ?? 0) >= UNREADABLE_ATTEMPTS) {
+        warned = true
+        notice(unreadableWarning(backup.prefix, review!.failures!, review!.reason), "warning")
+      }
+    }
+    return warned
+  }
+  const owner = BACKUP_OWNER_FILE
+  const resumedLatest = state.latest && state.latest !== latestPrefix
+    ? older.find(backup => backup.prefix === state.latest && backup.time >= cutoff)
+    : undefined
+  let anchorPrefix = resumedLatest && Object.keys(state.reviews[resumedLatest.prefix]?.files ?? {}).length > 0
+    ? resumedLatest.prefix
+    : latestPrefix
+  if (state.latest && state.latest !== anchorPrefix) {
+    delete state.latest
+    delete state.latestAttempts
+  }
+  const resumedNewest = state.newest
+    && state.newest !== latestPrefix
+    && state.newest !== anchorPrefix
+    && Object.keys(state.reviews[state.newest]?.files ?? {}).length > 0
+    ? older.find(backup => backup.prefix === state.newest && backup.time >= cutoff)
+    : undefined
+  if (state.newest && state.newest !== latestPrefix && !resumedNewest) {
+    if (state.newest !== state.latest) delete state.reviews[state.newest]
+    delete state.newest
+  }
+  let latestProgress = state.reviews[anchorPrefix] ??= { files: {}, attempts: 0 }
+  // Discard protected-target journals before verification too, so a budget stop during
+  // verification cannot leave a tampered journal for the anchor behind.
+  discardJournal(anchorPrefix, `Discarded an invalid deletion journal for protected backup ${anchorPrefix}.`)
+  let beforeLatestFiles = Object.keys(latestProgress.files).length
+  let anchorVerified: Awaited<ReturnType<typeof verifyBackup>>
+  let newestTarget: string | undefined
+  let newestVerified: Awaited<ReturnType<typeof verifyBackup>> | undefined
+  let unreadableAnchor: { prefix: string; error: unknown } | undefined
+  try {
+    const currentTime = Date.parse(parseBackupName(current)?.timestamp ?? "")
+    if (currentTime > now + HOUR_MS) throw new RetentionClockError("the newest backup is future-dated")
+    const manifest = await storage.readForRetention(latestPrefix + "metadata.json")
+    if (JSON.stringify(manifest.value) !== JSON.stringify(written)) throw new Error("the newest backup's stored manifest differs from what was written")
+    const claim = await storage.readForRetention(latestPrefix + owner)
+    checkOwner(claim, written, tenant, latestPrefix)
+    const verifyCommitted = async (prefixToVerify: string, progress: typeof latestProgress) => {
+      if (prefixToVerify === latestPrefix) {
+        const roots = new Map([["metadata.json", manifest], [owner, claim]])
+        return verifyBackup(storage, latestPrefix, written, roots, await storage.list(latestPrefix), keyFingerprint, progress)
+      }
+      const targetManifest = await storage.readForRetention(prefixToVerify + "metadata.json")
+      const targetMetadata = targetManifest.value as Record<string, unknown>
+      if (typeof targetMetadata.TenantId !== "string" || targetMetadata.TenantId.toLowerCase() !== tenant) {
+        throw new RetentionVerificationError(`${prefixToVerify}metadata.json does not match the backup's ownership.`)
+      }
+      const targetClaim = await storage.readForRetention(prefixToVerify + owner)
+      checkOwner(targetClaim, targetMetadata, tenant, prefixToVerify)
+      const targetRoots = new Map([["metadata.json", targetManifest], [owner, targetClaim]])
+      return verifyBackup(storage, prefixToVerify, targetMetadata, targetRoots, await storage.list(prefixToVerify), keyFingerprint, progress)
+    }
+    try {
+      anchorVerified = await verifyCommitted(anchorPrefix, latestProgress)
+    } catch (error) {
+      if (anchorPrefix !== latestPrefix && isCandidateUnreadable(error)) {
+        unreadableAnchor = { prefix: anchorPrefix, error }
+        delete state.latest
+        delete state.latestAttempts
+        anchorPrefix = latestPrefix
+        const preservedNewest = state.newest === latestPrefix ? state.reviews[latestPrefix] : undefined
+        if (state.newest && state.newest !== latestPrefix) delete state.reviews[state.newest]
+        delete state.newest
+        latestProgress = preservedNewest ?? (state.reviews[latestPrefix] = { files: {}, attempts: 0 })
+        beforeLatestFiles = Object.keys(latestProgress.files).length
+        save()
+        anchorVerified = await verifyCommitted(anchorPrefix, latestProgress)
+      } else {
+        throw error
+      }
+    }
+    if (anchorPrefix !== latestPrefix) {
+      // The anchor is a resumed older backup, so verify a newer committed backup in full before
+      // any DELETE. Continue an in-progress committed newest backup across scheduled runs so
+      // bounded verification finishes instead of restarting on every newly written folder.
+      let targetPrefix = resumedNewest ? resumedNewest.prefix : latestPrefix
+      discardJournal(targetPrefix, `Discarded an invalid deletion journal for protected backup ${targetPrefix}.`)
+      let newestProgress = state.reviews[targetPrefix] ??= { files: {}, attempts: 0 }
+      const persistNewest = () => {
+        if (Object.keys(newestProgress.files).length > 0) state.newest = targetPrefix
+        else {
+          delete state.reviews[targetPrefix]
+          if (state.newest === targetPrefix) delete state.newest
+        }
+      }
+      try {
+        newestVerified = await verifyCommitted(targetPrefix, newestProgress)
+        newestTarget = targetPrefix
+        persistNewest()
+      } catch (error) {
+        if (targetPrefix !== latestPrefix && isCandidateUnreadable(error)) {
+          delete state.reviews[targetPrefix]
+          if (state.newest === targetPrefix) delete state.newest
+          targetPrefix = latestPrefix
+          newestProgress = state.reviews[latestPrefix] ??= { files: {}, attempts: 0 }
+          save()
+          try {
+            newestVerified = await verifyCommitted(targetPrefix, newestProgress)
+            newestTarget = targetPrefix
+            persistNewest()
+          } catch (fallbackError) {
+            persistNewest()
+            save()
+            throw fallbackError
+          }
+        } else {
+          persistNewest()
+          save()
+          throw error
+        }
+      }
+    } else if (state.newest === latestPrefix) {
+      delete state.newest
+    }
+    delete state.latestAttempts
+    if (Object.keys(latestProgress.files).length > 0) {
+      state.latest = anchorPrefix
+      save()
+    } else {
+      if (state.latest === anchorPrefix) delete state.latest
+      delete state.reviews[anchorPrefix]
+    }
+  } catch (error) {
+    const madeLatestProgress = Object.keys(latestProgress.files).length > beforeLatestFiles
+    if (error instanceof RetentionBudgetError) {
+      state.latestAttempts = (state.latestAttempts ?? 0) + 1
+      if (Object.keys(latestProgress.files).length > 0) state.latest = anchorPrefix
+      else delete state.reviews[anchorPrefix]
+      save()
+      if (state.latestAttempts >= 3) notice("Retention repeatedly reached its budget while verifying the newest backup. Review storage size and the backup log.", "warning")
+    } else if (madeLatestProgress) {
+      state.latest = anchorPrefix
+      save()
+    } else if (!Object.keys(latestProgress.files).length) {
+      delete state.reviews[anchorPrefix]
+      if (state.latest === anchorPrefix) {
+        delete state.latest
+        save()
+      }
+    }
+    throw error
+  }
+
+  discardJournal(anchorPrefix, `Discarded an invalid deletion journal for protected backup ${anchorPrefix}.`)
+  if (newestTarget) discardJournal(newestTarget, `Discarded an invalid deletion journal for protected backup ${newestTarget}.`)
+  if (unreadableAnchor) discardJournal(unreadableAnchor.prefix, `Discarded an invalid deletion journal for unreadable backup ${unreadableAnchor.prefix}.`)
+
+  const replacementIdentities = new Map<string, Map<string, string>>([[anchorPrefix, anchorVerified.identities]])
+  if (newestTarget && newestVerified) replacementIdentities.set(newestTarget, newestVerified.identities)
+  const guardRequests = (prefixes: string[], deleteCount: number) => {
+    if (local) {
+      // Reserve container lock + initial guard (listing + HEAD/GET fallback) + per-delete listings.
+      return 1
+        + prefixes.reduce((sum, replacementPrefix) => sum + 1 + 2 * (replacementIdentities.get(replacementPrefix)?.size ?? 0), 0)
+        + Math.max(0, deleteCount - 1) * prefixes.length
+    }
+    // Reserve listing + HEAD + fallback GET + lease acquire per replacement identity.
+    return prefixes.reduce((sum, replacementPrefix) => sum + 1 + 3 * (replacementIdentities.get(replacementPrefix)?.size ?? 0), 0)
+  }
+  const verifyReplacementFresh = async (
+    replacementPrefix: string,
+    allowUntagged: boolean,
+    journal: DeletionJournalEntry,
+    onProgress: () => void,
+  ): Promise<{ identities: Map<string, string>; covers: Set<string> } | null> => {
+    const runWithFreshProgress = async (
+      manifestMetadata: Record<string, unknown>,
+      freshRoots: Map<string, RetentionBlob>,
+      listing: Awaited<ReturnType<BlobWriter["list"]>>,
+    ): Promise<{ identities: Map<string, string>; covers: Set<string> }> => {
+      const previousIdentities = replacementIdentities.get(replacementPrefix)
+      const sortedPrevious = previousIdentities ? [...previousIdentities.entries()].sort(([a], [b]) => a.localeCompare(b)) : null
+      const sortedListed = [...listing.blobs].sort().map(name => [name, listing.etags.get(name) ?? null])
+      const sortedRoots = [...freshRoots.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, file]) => [name, file.etag])
+      const binding = retentionIdentity([
+        "fresh-journal",
+        replacementPrefix,
+        sortedPrevious,
+        sortedListed,
+        sortedRoots,
+        manifestMetadata,
+        keyFingerprint ?? null,
+        [...(journal.absent ?? [])].sort(),
+      ])
+      const existingFresh = journal.fresh?.[replacementPrefix]
+      let resetFresh = false
+      let freshEntry: FreshVerificationProgress
+      if (existingFresh && existingFresh.binding === binding) {
+        freshEntry = existingFresh
+      } else {
+        freshEntry = { binding, files: {} }
+        if (existingFresh) {
+          journal.fresh![replacementPrefix] = freshEntry
+          resetFresh = true
+        }
+      }
+      const uniqueListed = new Set(listing.blobs)
+      const hasAllListedEtags = uniqueListed.size === listing.blobs.length
+        && listing.blobs.every(name => Boolean(listing.etags.get(name)))
+      if (freshEntry.done && freshEntry.covers && hasAllListedEtags) {
+        return {
+          identities: new Map(listing.blobs.map(name => [name, listing.etags.get(name)!])),
+          covers: new Set(freshEntry.covers),
+        }
+      }
+      const freshProgress = { files: freshEntry.files, attempts: 0 }
+      const beforeFresh = Object.keys(freshProgress.files).length
+      try {
+        const verified = await verifyBackup(storage, replacementPrefix, manifestMetadata, freshRoots, listing, keyFingerprint, freshProgress)
+        freshEntry.done = true
+        freshEntry.files = {}
+        freshEntry.covers = [...verified.covers]
+        journal.fresh ??= {}
+        journal.fresh[replacementPrefix] = freshEntry
+        onProgress()
+        save()
+        return { identities: verified.identities, covers: verified.covers }
+      } catch (error) {
+        if (Object.keys(freshProgress.files).length > beforeFresh) {
+          journal.fresh ??= {}
+          journal.fresh[replacementPrefix] = freshEntry
+          onProgress()
+          save()
+        } else if (resetFresh) {
+          save()
+        }
+        throw error
+      }
+    }
+    try {
+      const freshRoots = new Map<string, RetentionBlob>()
+      if (replacementPrefix === latestPrefix) {
+        const manifest = await storage.readForRetention(latestPrefix + "metadata.json")
+        if (JSON.stringify(manifest.value) !== JSON.stringify(written)) return null
+        const claim = await storage.readForRetention(latestPrefix + owner)
+        checkOwner(claim, written, tenant, latestPrefix)
+        freshRoots.set("metadata.json", manifest)
+        freshRoots.set(owner, claim)
+        return await runWithFreshProgress(written, freshRoots, await storage.list(latestPrefix))
+      }
+      const { manifest, owner: ownership } = await resolveBackupOwnership(async name => {
+        const file = await storage.readForRetention(replacementPrefix + name, true)
+        if (!file) return { kind: "missing" }
+        freshRoots.set(name, file)
+        return { kind: "found", value: file.value }
+      }, tenant)
+      if (manifest.kind !== "found" || ownership.kind === "unreadable" || ownership.kind === "other") return null
+      if (ownership.kind === "untagged" && !allowUntagged) return null
+      const listing = await storage.list(replacementPrefix)
+      if (listing.blobs.includes(replacementPrefix + owner)) {
+        const claim = freshRoots.get(owner) ?? await storage.readForRetention(replacementPrefix + owner)
+        checkOwner(claim, manifest.metadata, tenant, replacementPrefix)
+        freshRoots.set(owner, claim)
+      }
+      return await runWithFreshProgress(manifest.metadata, freshRoots, listing)
+    } catch (error) {
+      if (error instanceof RetentionBudgetError || (error instanceof InventoryDamagedError && !error.recoveryConflict)) throw error
+      if (isCandidateUnreadable(error) || error instanceof StorageError) {
+        if (journal.fresh && Object.hasOwn(journal.fresh, replacementPrefix)) {
+          delete journal.fresh[replacementPrefix]
+          if (!Object.keys(journal.fresh).length) delete journal.fresh
+          save()
+        }
+        return null
+      }
+      throw error
+    }
+  }
+  const ownedProviders = new Map<string, string>()
+  const untaggedProviders = new Map<string, string>()
+  for (const folder of anchorVerified.covers) ownedProviders.set(folder, anchorPrefix)
+  if (newestTarget && newestVerified) {
+    for (const folder of newestVerified.covers) if (!ownedProviders.has(folder)) ownedProviders.set(folder, newestTarget)
+  }
+  const providersFor = (types: Set<string>, ownedOnly: boolean, allowEmpty = false): string[] | null => {
+    if (!types.size) return allowEmpty ? [anchorPrefix] : null
+    const providers = new Set<string>()
+    for (const folder of types) {
+      const provider = ownedProviders.get(folder) ?? (ownedOnly ? undefined : untaggedProviders.get(folder))
+      if (!provider) return null
+      providers.add(provider)
+    }
+    return [...providers]
+  }
+  const plan: PlannedDeletion[] = []
+  type DiscoveredCandidate =
+    | { backup: typeof candidates[number]; alreadyVerified: true }
+    | { backup: typeof candidates[number]; journal: DeletionJournalEntry; manifest: Record<string, unknown> | null; roots: Map<string, RetentionBlob> }
+    | { backup: typeof candidates[number]; metadata: Record<string, unknown>; roots: Map<string, RetentionBlob>; untagged: boolean }
+  const reviewed: DiscoveredCandidate[] = []
+  let shared = candidates.length !== listed.length || unreadableAnchor !== undefined
+  let warning = all.length !== listed.length || invalidJournal
+  if (unreadableAnchor && !candidates.some(backup => backup.prefix === unreadableAnchor!.prefix)) {
+    const reason = unreadableAnchor.error instanceof Error ? unreadableAnchor.error.message : String(unreadableAnchor.error)
+    warning = true
+    notice(`Kept backup ${unreadableAnchor.prefix} because it could not be verified: ${reason.replace(/\.$/, "")}.`, "warning")
+  }
+  let kept = 0
+  let unowned = 0
+  let visiting: string | undefined
+  let lastDiscovered: string | undefined
+  let discoveryBudgetPrefix: string | undefined
+  let lastCompleted: string | undefined
+  let madeProgress = false
+  let pendingCursor: string | undefined
+  let hasPendingCursor = false
+  let windowCompleted = false
+  let budgetHit = false
+  const unreadableThisRun = new Set<string>()
+  const handleUnreadable = (prefix: string, error: unknown): void => {
+    const progress = state.reviews[prefix] ??= { files: {}, attempts: 0 }
+    progress.failures = (progress.failures ?? 0) + 1
+    const reason = error instanceof Error ? error.message : String(error)
+    progress.reason = reason
+    shared = true
+    warning = true
+    unreadableThisRun.add(prefix)
+    const detail = reason.replace(/\.$/, "")
+    notice(
+      progress.failures >= UNREADABLE_ATTEMPTS
+        ? unreadableWarning(prefix, progress.failures, reason)
+        : `Kept backup ${prefix} because it could not be verified: ${detail}.`,
+      "warning",
+    )
+    for (let index = plan.length - 1; index >= 0; index--) {
+      const entry = plan[index]!
+      if (entry.untagged) {
+        plan.splice(index, 1)
+        unowned++
+      } else if (!entry.ownedReplacements) {
+        plan.splice(index, 1)
+        kept++
+      } else {
+        entry.replacements = entry.ownedReplacements
+      }
+    }
+  }
+  try {
+    for (const backup of candidates) {
+      const { prefix } = backup
+      if (prefix === anchorPrefix) continue
+      if (newestTarget && prefix === newestTarget) {
+        reviewed.push({ backup, alreadyVerified: true })
+        lastDiscovered = prefix
+        continue
+      }
+      visiting = prefix
+      if (unreadableAnchor && prefix === unreadableAnchor.prefix) {
+        handleUnreadable(prefix, unreadableAnchor.error)
+        lastDiscovered = prefix
+        continue
+      }
+      const journal = state.deletes?.[prefix]
+      if (journal) {
+        const remainingEntries = Object.entries(journal.remaining)
+        const journalTypes = new Set(journal.types)
+        const journalValid = prefix !== latestPrefix
+          && prefix !== anchorPrefix
+          && prefix !== newestTarget
+          && journal.prefix === prefix
+          && (journal.types.length === 0 ? journal.noTypes : !journal.noTypes)
+          && journal.types.every(entry => Boolean(typeForFolder(entry)))
+          && remainingEntries.every(([name, etag]) =>
+            name.startsWith(prefix) && name.length > prefix.length && etag.length > 0 && etag !== "*"
+            && matchesJournalTypes(prefix, name, journalTypes))
+          && (journal.absent ?? []).every(name =>
+            name.startsWith(prefix) && name.length > prefix.length
+            && matchesJournalTypes(prefix, name, journalTypes))
+        if (!journalValid) {
+          discardJournal(prefix, `Kept backup ${prefix} because its deletion journal failed validation and was discarded.`)
+          warning = true
+          lastDiscovered = prefix
+          continue
+        }
+        const roots = new Map<string, RetentionBlob>()
+        try {
+          const { manifest, owner: ownership } = await resolveBackupOwnership(async name => {
+            const file = await storage.readForRetention(prefix + name, true)
+            if (!file) return { kind: "missing" }
+            roots.set(name, file)
+            return { kind: "found", value: file.value }
+          }, tenant)
+          if (manifest.kind === "unreadable") throw new RetentionVerificationError(manifest.error instanceof Error ? manifest.error.message : String(manifest.error), { cause: manifest.error })
+          if (ownership.kind === "unreadable") throw new RetentionVerificationError(ownership.error instanceof Error ? ownership.error.message : String(ownership.error), { cause: ownership.error })
+          if (ownership.kind === "other") {
+            discardJournal(prefix)
+            delete state.reviews[prefix]
+            shared = true
+            if (backup.time < cutoff) unowned++
+            lastDiscovered = prefix
+            continue
+          }
+          const untagged = ownership.kind === "untagged"
+          if (untagged !== journal.untagged || (!local && untagged && manifest.kind !== "found")) {
+            discardJournal(prefix, `Kept backup ${prefix} because its deletion journal did not match its ownership and was discarded.`)
+            warning = true
+            lastDiscovered = prefix
+            continue
+          }
+          reviewed.push({ backup, journal, manifest: manifest.kind === "found" ? manifest.metadata : null, roots })
+          lastDiscovered = prefix
+          continue
+        } catch (error) {
+          if (error instanceof RetentionBudgetError) {
+            discoveryBudgetPrefix = prefix
+            shared = true
+            break
+          }
+          if (isCandidateUnreadable(error)) {
+            discardJournal(prefix)
+            handleUnreadable(prefix, error)
+            lastDiscovered = prefix
+            continue
+          }
+          throw error
+        }
+      }
+      const roots = new Map<string, RetentionBlob>()
+      try {
+        const { manifest, owner: ownership } = await resolveBackupOwnership(async name => {
+          const file = await storage.readForRetention(prefix + name, true)
+          if (!file) return { kind: "missing" }
+          roots.set(name, file)
+          return { kind: "found", value: file.value }
+        }, tenant)
+        if (manifest.kind === "unreadable") throw new RetentionVerificationError(manifest.error instanceof Error ? manifest.error.message : String(manifest.error), { cause: manifest.error })
+        if (ownership.kind === "unreadable") throw new RetentionVerificationError(ownership.error instanceof Error ? ownership.error.message : String(ownership.error), { cause: ownership.error })
+        if (ownership.kind === "other") {
+          delete state.reviews[prefix]
+          shared = true
+          if (backup.time < cutoff) unowned++
+          lastDiscovered = prefix
+          continue
+        }
+        if (manifest.kind !== "found" || manifest.metadata.Items === undefined) {
+          delete state.reviews[prefix]
+          if (manifest.kind === "found" && backup.time < cutoff) {
+            notice(`Kept backup ${prefix} because it has no manifest item list.`, "warning")
+            warning = true
+          }
+          lastDiscovered = prefix
+          continue
+        }
+        reviewed.push({ backup, metadata: manifest.metadata, roots, untagged: ownership.kind === "untagged" })
+        lastDiscovered = prefix
+      } catch (error) {
+        if (error instanceof RetentionBudgetError) {
+          discoveryBudgetPrefix = prefix
+          shared = true
+          break
+        }
+        if (isCandidateUnreadable(error)) {
+          handleUnreadable(prefix, error)
+          lastDiscovered = prefix
+          continue
+        }
+        throw error
+      }
+    }
+
+    if (discoveryBudgetPrefix && (budget.exhausted || !reviewed.length)) {
+      visiting = discoveryBudgetPrefix
+      throw new RetentionBudgetError()
+    }
+
+    let replacementChangedDuringRun: string | undefined
+    for (const item of reviewed) {
+      const { prefix, time } = item.backup
+      visiting = prefix
+      if ("alreadyVerified" in item) {
+        lastCompleted = prefix
+        continue
+      }
+      if ("journal" in item) {
+        const { journal, manifest, roots } = item
+        if (prefix === latestPrefix || prefix === anchorPrefix || prefix === newestTarget || journal.prefix !== prefix) {
+          discardJournal(prefix, `Kept backup ${prefix} because its deletion journal failed validation and was discarded.`)
+          warning = true
+          lastCompleted = prefix
+          continue
+        }
+        if (journal.untagged && shared) {
+          if (time < cutoff) unowned++
+          lastCompleted = prefix
+          continue
+        }
+        const journalTypes = new Set(journal.types)
+        if (manifest) {
+          const declaredTypes = manifestTypes(manifest, prefix)
+          if (!declaredTypes
+            || journal.noTypes !== (declaredTypes.size === 0)
+            || [...declaredTypes].some(folder => !journalTypes.has(folder))) {
+            discardJournal(prefix, `Kept backup ${prefix} because its deletion journal did not match its manifest and was discarded.`)
+            warning = true
+            lastCompleted = prefix
+            continue
+          }
+        }
+        const listing = await storage.list(prefix)
+        const listedSet = new Set(listing.blobs)
+        if (listedSet.size !== listing.blobs.length) {
+          warning = true
+          notice(`Kept the remaining files in backup ${prefix} because storage listed duplicate files.`, "warning")
+          lastCompleted = prefix
+          continue
+        }
+        if (!listedSet.size) {
+          discardJournal(prefix)
+          lastCompleted = prefix
+          continue
+        }
+        if (listing.blobs.some(name => !matchesJournalTypes(prefix, name, journalTypes))) {
+          discardJournal(prefix, `Kept backup ${prefix} because its remaining files did not match its deletion journal types and the journal was discarded.`)
+          warning = true
+          lastCompleted = prefix
+          continue
+        }
+        const missing = Object.keys(journal.remaining).filter(name => !listedSet.has(name))
+        const missingRel = missing.map(name => name.slice(prefix.length))
+        if (missing.length > 0) {
+          journal.absent = [...new Set([...(journal.absent ?? []), ...missing])]
+          save()
+          warning = true
+          notice(`Journaled files in backup ${prefix} were already absent (${missingRel.join(", ")}). Re-verifying replacement coverage before continuing.`, "warning")
+        }
+        const replacements = time < cutoff ? providersFor(journalTypes, shared, journal.noTypes) : null
+        if (!replacements) {
+          if (time < cutoff) kept++
+          warning = true
+          notice(
+            missing.length > 0
+              ? `Kept the remaining files in backup ${prefix} because replacement coverage is not verified after missing files (${missingRel.join(", ")}).`
+              : `Kept the remaining files in backup ${prefix} because replacement coverage is no longer verified.`,
+            "warning",
+          )
+          lastCompleted = prefix
+          continue
+        }
+        let ownedReplacements = providersFor(journalTypes, true, journal.noTypes)
+        if (missing.length > 0) {
+          const freshCovered = new Set<string>()
+          const freshOwnedCovered = new Set<string>()
+          let allFreshOk = true
+          const toVerify = [...new Set([...replacements, ...(ownedReplacements ?? [])])]
+          for (const replacementPrefix of toVerify) {
+            const allowUntagged = !shared && !(ownedReplacements?.includes(replacementPrefix))
+            const fresh = await verifyReplacementFresh(replacementPrefix, allowUntagged, journal, () => { madeProgress = true })
+            if (!fresh) {
+              if (replacements.includes(replacementPrefix)) allFreshOk = false
+              if (ownedReplacements?.includes(replacementPrefix)) ownedReplacements = null
+              continue
+            }
+            const previousIdentities = replacementIdentities.get(replacementPrefix)
+            if (previousIdentities && !sameIdentities(previousIdentities, fresh.identities)) {
+              if (journal.fresh && Object.hasOwn(journal.fresh, replacementPrefix)) {
+                delete journal.fresh[replacementPrefix]
+                if (!Object.keys(journal.fresh).length) delete journal.fresh
+                save()
+              }
+              replacementChangedDuringRun = replacementPrefix
+              break
+            }
+            if (!previousIdentities) replacementIdentities.set(replacementPrefix, fresh.identities)
+            if (replacements.includes(replacementPrefix)) {
+              for (const folder of fresh.covers) freshCovered.add(folder)
+            }
+            if (ownedReplacements?.includes(replacementPrefix)) {
+              for (const folder of fresh.covers) freshOwnedCovered.add(folder)
+            }
+          }
+          if (replacementChangedDuringRun) {
+            plan.length = 0
+            warning = true
+            notice(`Kept remaining backups because replacement backup ${replacementChangedDuringRun} changed during retention.`, "warning")
+            break
+          }
+          if (ownedReplacements && !journal.noTypes && ![...journalTypes].every(folder => freshOwnedCovered.has(folder))) {
+            ownedReplacements = null
+          }
+          const coveredFresh = allFreshOk && (journal.noTypes ? replacements.length > 0 : [...journalTypes].every(folder => freshCovered.has(folder)))
+          if (!coveredFresh) {
+            if (time < cutoff) kept++
+            warning = true
+            notice(`Kept the remaining files in backup ${prefix} because replacement coverage could not be freshly verified after missing files (${missingRel.join(", ")}).`, "warning")
+            lastCompleted = prefix
+            continue
+          }
+        }
+        if (manifest && listedSet.has(prefix + owner)) {
+          try {
+            const claim = roots.get(owner) ?? await storage.readForRetention(prefix + owner)
+            checkOwner(claim, manifest, tenant, prefix)
+            roots.set(owner, claim)
+          } catch (error) {
+            if (isCandidateUnreadable(error)) {
+              discardJournal(prefix)
+              handleUnreadable(prefix, error)
+              lastCompleted = prefix
+              continue
+            }
+            throw error
+          }
+        }
+        const unexpected = listing.blobs.find(name => !Object.hasOwn(journal.remaining, name))
+        if (unexpected) {
+          warning = true
+          notice(`Kept the remaining files in backup ${prefix} because ${unexpected.slice(prefix.length)} was not in the verified deletion plan.`, "warning")
+          lastCompleted = prefix
+          continue
+        }
+        const identities = new Map<string, string>()
+        let changedName: string | undefined
+        for (const name of listing.blobs) {
+          const expectedEtag = journal.remaining[name]!
+          const rootEtag = name.startsWith(prefix) ? roots.get(name.slice(prefix.length))?.etag : undefined
+          const observedEtag = listing.etags.get(name) ?? rootEtag
+          if (observedEtag !== undefined && observedEtag !== expectedEtag) {
+            changedName = name
+            break
+          }
+          identities.set(name, expectedEtag)
+        }
+        if (changedName) {
+          warning = true
+          notice(`Kept the remaining files in backup ${prefix} because ${changedName} changed before it could be deleted.`, "warning")
+          lastCompleted = prefix
+          continue
+        }
+        budget.reserveDeletes(identities.size + Math.max(guardRequests(replacements, identities.size), ownedReplacements ? guardRequests(ownedReplacements, identities.size) : 0))
+        plan.push({ prefix, identities, types: journalTypes, noTypes: journal.noTypes, untagged: journal.untagged, replacements, ownedReplacements, resumed: true })
+        lastCompleted = prefix
+        continue
+      }
+      const { metadata, roots, untagged } = item
+      if (untagged && shared) {
+        if (time < cutoff) unowned++
+        lastCompleted = prefix
+        continue
+      }
+      const progress = state.reviews[prefix] ??= { files: {}, attempts: 0 }
+      const beforeFiles = Object.keys(progress.files).length
+      try {
+        const listing = await storage.list(prefix)
+        if (listing.blobs.includes(prefix + owner)) {
+          const claim = roots.get(owner) ?? await storage.readForRetention(prefix + owner)
+          checkOwner(claim, metadata, tenant, prefix)
+          roots.set(owner, claim)
+        }
+        const verified = await verifyBackup(storage, prefix, metadata, roots, listing, keyFingerprint, progress)
+        const noTypes = verified.types.size === 0
+        const replacements = time < cutoff ? providersFor(verified.types, shared, noTypes) : null
+        if (replacements) {
+          const ownedReplacements = providersFor(verified.types, true, noTypes)
+          budget.reserveDeletes(verified.identities.size + Math.max(guardRequests(replacements, verified.identities.size), ownedReplacements ? guardRequests(ownedReplacements, verified.identities.size) : 0))
+          plan.push({ prefix, identities: verified.identities, types: verified.types, noTypes, untagged, replacements, ownedReplacements, resumed: false })
+        } else {
+          if (time < cutoff) kept++
+          // Only a backup that will remain on disk can supply coverage for an older candidate.
+          replacementIdentities.set(prefix, verified.identities)
+          const target = untagged ? untaggedProviders : ownedProviders
+          for (const folder of verified.covers) if (!target.has(folder)) target.set(folder, prefix)
+        }
+        delete state.reviews[prefix]
+        lastCompleted = prefix
+      } catch (error) {
+        if (Object.keys(progress.files).length > beforeFiles) madeProgress = true
+        if (isCandidateUnreadable(error)) {
+          handleUnreadable(prefix, error)
+          lastCompleted = prefix
+          continue
+        }
+        throw error
+      }
+    }
+    if (!replacementChangedDuringRun) {
+      if (discoveryBudgetPrefix) {
+        visiting = discoveryBudgetPrefix
+        lastCompleted = lastDiscovered
+        throw new RetentionBudgetError()
+      }
+      for (const backup of older) {
+        if (unreadableThisRun.has(backup.prefix)) continue
+        const review = state.reviews[backup.prefix]
+        if ((review?.failures ?? 0) >= UNREADABLE_ATTEMPTS) {
+          warning = true
+          notice(unreadableWarning(backup.prefix, review!.failures!, review!.reason), "warning")
+        }
+      }
+      pendingCursor = candidates.at(-1)?.prefix
+      hasPendingCursor = true
+      windowCompleted = true
+    }
+  } catch (error) {
+    if (!(error instanceof RetentionBudgetError)) {
+      if (visiting && !Object.keys(state.reviews[visiting]?.files ?? {}).length
+        && !state.reviews[visiting]?.attempts && !state.reviews[visiting]?.failures) {
+        delete state.reviews[visiting]
+      }
+      if (madeProgress || unreadableThisRun.size > 0) save()
+      if (error instanceof InventoryDamagedError) throw error
+      throw new Error(`${visiting ?? "A backup"} could not be verified. ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+    }
+    budgetHit = true
+    warning = true
+    if (visiting) {
+      const progress = state.reviews[visiting] ??= { files: {}, attempts: 0 }
+      progress.attempts++
+      notice(`Kept backup ${visiting} because retention reached its storage budget. It will be reconsidered.`, "warning")
+      if (progress.attempts >= 3) notice(`Retention repeatedly deferred backup ${visiting}. Review its storage size and the backup log.`, "warning")
+    }
+    if (lastCompleted) {
+      pendingCursor = lastCompleted
+      hasPendingCursor = true
+    } else if (discoveryBudgetPrefix && lastDiscovered && !madeProgress) {
+      pendingCursor = lastDiscovered
+      hasPendingCursor = true
+    } else if (madeProgress || visiting !== candidates[0]?.prefix) {
+      save()
+    } else {
+      pendingCursor = visiting
+      hasPendingCursor = true
+    }
+  }
+
+  if (plan.length > 0 && (madeProgress || unreadableThisRun.size > 0 || budgetHit)) save()
+
+  const checkReplacementsIntact = async (replacements: string[]): Promise<string | null> => {
+    return budget.withCleanup(async () => {
+      for (const replacementPrefix of replacements) {
+        const expected = replacementIdentities.get(replacementPrefix)
+        if (!expected || !(await verifyReplacementUnchanged(storage, replacementPrefix, expected))) {
+          return replacementPrefix
+        }
+      }
+      return null
+    })
+  }
+
+  let removed = 0
+  let completedPlan = true
+  let leaseAcquiredThisRun = false
+  let leaseFailureKeyThisRun: string | undefined
+  let leaseFailureErrorThisRun: BlobLeaseError | undefined
+  let hadLeaseAcquireFailure = false
+  for (const { prefix, identities, types, noTypes, untagged, replacements, resumed } of plan) {
+    if (prefix === latestPrefix || prefix === anchorPrefix || prefix === newestTarget) continue
+    run.beforeDelete()
+    const leaseManager = local ? undefined : createRetentionLeaseManager()
+    let localLockId: string | undefined
+    let stopCleanup = false
+    try {
+      if (local) {
+        try {
+          // Acquiring the local lock also registers the in-process write guard on `replacements`
+          // before the final identity check below; release happens in `finally`.
+          localLockId = await budget.withCleanup(() => storage.acquireContainerLease(replacements))
+          leaseAcquiredThisRun = true
+        } catch (error) {
+          if (!(error instanceof BlobLeaseError)) throw error
+          hadLeaseAcquireFailure = true
+          const failureKey = leaseFailureKey(true, error)
+          if (!leaseFailureKeyThisRun && failureKey) {
+            leaseFailureKeyThisRun = failureKey
+            leaseFailureErrorThisRun = error
+          }
+          warning = true
+          if (error.code !== "RetentionHardLinksUnsupported") {
+            const reason = error.message
+            notice(`Kept backup ${prefix} because the local retention lock could not be acquired: ${reason.replace(/\.$/, "")}.`, "warning")
+          }
+          completedPlan = false
+          break
+        }
+      } else {
+        const replacementBlobs = [...new Set(replacements.flatMap(replacementPrefix => [...(replacementIdentities.get(replacementPrefix)?.keys() ?? [])]))].sort()
+        if (replacements.some(replacementPrefix => !replacementIdentities.has(replacementPrefix))) {
+          warning = true
+          notice(`Kept remaining backups because replacement backup identities were unavailable before deletion.`, "warning")
+          completedPlan = false
+          break
+        }
+        try {
+          await budget.withCleanup(async () => {
+            for (const name of replacementBlobs) {
+              const startedAt = Date.now()
+              const leaseId = await storage.acquireLease(name, LEASE_DURATION_SECONDS)
+              leaseManager!.track({
+                leaseId,
+                expiresAt: startedAt + LEASE_DURATION_MS,
+                renew: signal => storage.renewLease(name, leaseId, signal),
+                release: signal => storage.releaseLease(name, leaseId, signal),
+              })
+            }
+          })
+          leaseAcquiredThisRun = true
+        } catch (error) {
+          if (!(error instanceof BlobLeaseError)) throw error
+          hadLeaseAcquireFailure = true
+          const failureKey = leaseFailureKey(false, error)
+          if (!leaseFailureKeyThisRun && failureKey) {
+            leaseFailureKeyThisRun = failureKey
+            leaseFailureErrorThisRun = error
+          }
+          warning = true
+          const reason = error.message
+          notice(`Kept backup ${prefix} because replacement backups could not be leased before deletion: ${reason.replace(/\.$/, "")}.`, "warning")
+          completedPlan = false
+          continue
+        }
+      }
+      if (leaseManager) {
+        try {
+          await leaseManager.ensureFresh()
+        } catch (error) {
+          if (!(error instanceof BlobLeaseError)) throw error
+          warning = true
+          notice(`Kept backup ${prefix} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
+          completedPlan = false
+          stopCleanup = true
+          break
+        }
+      }
+      // Under the Azure blob leases (or local retention lock + in-process write guard), verify every replacement is still intact.
+      const changedReplacement = await checkReplacementsIntact(replacements)
+      if (changedReplacement) {
+        warning = true
+        notice(`Kept remaining backups because replacement backup ${changedReplacement} changed before deletion.`, "warning")
+        completedPlan = false
+        stopCleanup = true
+        break
+      }
+      const manifest = prefix + "metadata.json"
+      const marker = prefix + owner
+      const payloads = [...identities.keys()].filter(name => name !== manifest && name !== marker)
+      // Local inventory flags a missing manifest entry as damage. Azure keeps the manifest
+      // until all conditional payload deletes succeed, and both keep ownership until the end.
+      const order = (local ? [manifest, ...payloads, marker] : [...payloads, manifest, marker]).filter(name => identities.has(name))
+      const remaining = Object.fromEntries(order.map(name => [name, identities.get(name)!]))
+      const priorAbsent = state.deletes?.[prefix]?.absent
+      state.deletes ??= {}
+      state.deletes[prefix] = {
+        prefix,
+        remaining,
+        types: [...types],
+        noTypes,
+        untagged,
+        ...(priorAbsent?.length ? { absent: priorAbsent } : {}),
+      }
+      save()
+      let deleted = 0
+      let currentName: string | undefined
+      const expectedReplacements: ExpectedReplacement[] | undefined = local
+        ? replacements.map(replacementPrefix => ({
+            prefix: replacementPrefix,
+            blobs: Object.fromEntries(replacementIdentities.get(replacementPrefix) ?? []),
+          }))
+        : undefined
+      try {
+        for (const name of order) {
+          currentName = name
+          const etag = identities.get(name)
+          if (etag) {
+            if (leaseManager) await leaseManager.ensureFresh()
+            if (local) {
+              const changedBeforeDelete = await checkReplacementsIntact(replacements)
+              if (changedBeforeDelete) {
+                if (!deleted && !resumed && state.deletes) {
+                  delete state.deletes[prefix]
+                  if (!Object.keys(state.deletes).length) delete state.deletes
+                }
+                save()
+                warning = true
+                notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because replacement backup ${changedBeforeDelete} changed before deletion.`, "warning")
+                completedPlan = false
+                stopCleanup = true
+                break
+              }
+            }
+            await storage.delete(name, etag, localLockId, expectedReplacements)
+            deleted++
+            delete remaining[name]
+            if (!Object.keys(remaining).length && state.deletes) {
+              delete state.deletes[prefix]
+              if (!Object.keys(state.deletes).length) delete state.deletes
+            }
+            save()
+          }
+        }
+        if (stopCleanup) break
+        if (state.deletes) {
+          delete state.deletes[prefix]
+          if (!Object.keys(state.deletes).length) delete state.deletes
+        }
+        removed++
+        advance(prefix)
+      } catch (error) {
+        if (error instanceof ReplacementChangedError && error.restoredEtag && currentName && Object.hasOwn(remaining, currentName)) {
+          remaining[currentName] = error.restoredEtag
+        }
+        if (!deleted && !resumed && (wasDeleteConfirmedUnchanged(error) || error instanceof BlobLeaseError || error instanceof ReplacementChangedError) && state.deletes) {
+          delete state.deletes[prefix]
+          if (!Object.keys(state.deletes).length) delete state.deletes
+        }
+        save()
+        if (error instanceof ReplacementChangedError) {
+          warning = true
+          notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${error.message.replace(/\.$/, "")}.`, "warning")
+          completedPlan = false
+          stopCleanup = true
+          break
+        }
+        if (error instanceof BlobLeaseError) {
+          warning = true
+          if (local && error.code === "RetentionHardLinksUnsupported") {
+            const failureKey = leaseFailureKey(true, error)
+            if (failureKey) {
+              leaseAcquiredThisRun = false
+              hadLeaseAcquireFailure = true
+              leaseFailureKeyThisRun = failureKey
+              leaseFailureErrorThisRun = error
+            }
+          } else {
+            const detail = local
+              ? `the local retention lock was lost: ${error.message.replace(/\.$/, "")}`
+              : `replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}`
+            notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${detail}.`, "warning")
+          }
+          completedPlan = false
+          stopCleanup = true
+          break
+        }
+        if (!(error instanceof DeleteConditionError) && !(error instanceof ProtectedBlobError)) throw error
+        warning = true
+        const reason = error instanceof ProtectedBlobError ? "storage immutability or a legal hold refused deletion" : error.message
+        notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${reason.replace(/\.$/, "")}.`, "warning")
+        advance(prefix)
+      }
+    } finally {
+      if (localLockId) {
+        try {
+          const releaseWarning = await storage.releaseContainerLease(localLockId).catch(() => {
+            warning = true
+            notice("The local retention lock could not be released. It stays on disk until TenuVault exits.", "warning")
+            return undefined
+          })
+          if (releaseWarning) {
+            warning = true
+            notice(releaseWarning, "warning")
+          }
+        } finally {
+          releaseLocalRetentionGuard(localLockId)
+        }
+      }
+      if (leaseManager) await leaseManager.cleanup()
+    }
+    if (stopCleanup) break
+  }
+  if (leaseAcquiredThisRun) {
+    if (state.leaseFailures) {
+      delete state.leaseFailures
+      save()
+    }
+  } else if (leaseFailureKeyThisRun) {
+    const count = state.leaseFailures?.key === leaseFailureKeyThisRun ? state.leaseFailures.count + 1 : 1
+    state.leaseFailures = { key: leaseFailureKeyThisRun, count }
+    save()
+    if (count >= PERMANENT_LEASE_FAILURE_RUNS) {
+      warning = true
+      notice(permanentLeaseFailureWarning(local, count, leaseFailureErrorThisRun), "warning")
+    } else if (local && leaseFailureErrorThisRun?.code === "RetentionHardLinksUnsupported") {
+      warning = true
+      notice(hardLinksUnsupportedWarning(leaseFailureErrorThisRun.lockPath), "warning")
+    }
+  } else if (hadLeaseAcquireFailure && state.leaseFailures) {
+    delete state.leaseFailures
+    save()
+  }
+  if (completedPlan && hasPendingCursor) {
+    const hasMore = Boolean(pendingCursor && older.some(backup => backup.prefix < pendingCursor!))
+    if (windowCompleted && !hasMore && !state.deletes) {
+      if (state.latest === anchorPrefix) {
+        delete state.latest
+        delete state.reviews[anchorPrefix]
+      }
+      if (state.newest) {
+        delete state.reviews[state.newest]
+        delete state.newest
+      }
+    }
+    advance(pendingCursor)
+  }
+  if (removed) notice(`Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
+  if (kept) notice(`Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
+  if (unowned) notice(`Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's.`, "info")
+  return warning
+}

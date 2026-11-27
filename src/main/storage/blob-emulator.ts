@@ -1,7 +1,8 @@
+import { authenticatedBackupRead } from "./authenticated-read"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobLeaseUnsupportedError, BlobProtectedError, BlobQuarantinedError, BlobReplacementChangedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type ExpectedReplacement, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -73,10 +74,10 @@ export function isLocalAccount(storageAccountName: string | undefined): boolean 
 const xml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
-function error(status: number, code: string, message: string): Response {
+function error(status: number, code: string, message: string, extraHeaders?: Record<string, string>): Response {
   return new Response(
     `<?xml version="1.0" encoding="utf-8"?><Error><Code>${code}</Code><Message>${xml(message)}</Message></Error>`,
-    { status, headers: { "content-type": "application/xml", "x-ms-error-code": code } },
+    { status, headers: { "content-type": "application/xml", "x-ms-error-code": code, ...extraHeaders } },
   )
 }
 
@@ -171,6 +172,39 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
 
     // Container level.
     if (!blobName && query.get("restype") === "container") {
+      if (method === "PUT" && query.get("comp") === "lease") {
+        if (!(await store.containerExists(account, container))) {
+          return error(404, "ContainerNotFound", "The specified container does not exist.")
+        }
+        const action = (request.headers.get("x-ms-lease-action") ?? "").toLowerCase()
+        if (action === "acquire") {
+          let protectedPrefixes: string[] | undefined
+          const rawPrefixes = request.headers.get("x-tenuvault-protected-prefixes")
+          if (rawPrefixes) {
+            try {
+              const parsed = JSON.parse(rawPrefixes) as unknown
+              if (Array.isArray(parsed) && parsed.every(entry => typeof entry === "string" && entry.length > 0)) {
+                protectedPrefixes = parsed
+              }
+            } catch {
+              return error(400, "InvalidHeaderValue", "Invalid protected prefixes header.")
+            }
+          }
+          const leaseId = await store.acquireRetentionLock(account, container, request.headers.get("x-ms-proposed-lease-id") ?? undefined, protectedPrefixes, request.signal)
+          if (request.signal?.aborted) {
+            await store.releaseRetentionLock(account, container, leaseId).catch(() => undefined)
+            throw request.signal.reason ?? new DOMException("The operation was aborted.", "AbortError")
+          }
+          return new Response(null, { status: 201, headers: { "x-ms-lease-id": leaseId } })
+        }
+        const leaseId = request.headers.get("x-ms-lease-id") ?? ""
+        if (!leaseId) return error(400, "MissingRequiredHeader", "x-ms-lease-id is required.")
+        if (action === "release") {
+          const { warning } = await store.releaseRetentionLock(account, container, leaseId)
+          return new Response(null, { status: 200, headers: warning ? { "x-tenuvault-lock-warning": encodeURIComponent(warning) } : undefined })
+        }
+        return error(400, "InvalidHeaderValue", `Unsupported lease action: ${action}`)
+      }
       if (method === "PUT") {
         return (await store.createContainer(account, container))
           ? new Response(null, { status: 201 })
@@ -219,26 +253,75 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
         // Stored metadata comes back the way Azure returns it, with the x-ms-meta- prefix.
         ...Object.fromEntries(Object.entries(blob.metadata ?? {}).map(([key, value]) => [`x-ms-meta-${key}`, value])),
       }
-      return new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers })
+      return authenticatedBackupRead(new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers }))
     }
     if (method === "DELETE") {
-      await store.delete(account, container, blobName)
+      let expectedReplacements: ExpectedReplacement[] | undefined
+      if (request.headers.get("x-tenuvault-expected-replacements") === "1") {
+        try {
+          const parsed = JSON.parse(await request.text()) as unknown
+          if (Array.isArray(parsed) && parsed.every(entry =>
+            entry && typeof entry === "object" && !Array.isArray(entry)
+            && typeof (entry as { prefix?: unknown }).prefix === "string"
+            && (entry as { prefix: string }).prefix.length > 0
+            && (entry as { blobs?: unknown }).blobs && typeof (entry as { blobs: unknown }).blobs === "object"
+            && !Array.isArray((entry as { blobs: unknown }).blobs)
+            && Object.values((entry as { blobs: Record<string, unknown> }).blobs).every(tag => typeof tag === "string" && tag.length > 0))) {
+            expectedReplacements = parsed as ExpectedReplacement[]
+          } else {
+            return error(400, "InvalidHeaderValue", "Invalid expected replacements payload.", { "x-tenuvault-delete-unchanged": "1" })
+          }
+        } catch {
+          return error(400, "InvalidHeaderValue", "Invalid expected replacements payload.", { "x-tenuvault-delete-unchanged": "1" })
+        }
+      }
+      await store.delete(account, container, blobName, {
+        ifMatch: request.headers.get("if-match") ?? undefined,
+        retentionLockId: request.headers.get("x-tenuvault-retention-lock-id") ?? undefined,
+        expectedReplacements,
+      })
       return new Response(null, { status: 202 })
     }
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)
   } catch (caught) {
-    if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.")
-    if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.")
+    const unchanged = method === "DELETE" && !(caught instanceof BlobQuarantinedError) && !(caught instanceof BlobDeleteInterruptedError)
+      ? { "x-tenuvault-delete-unchanged": "1" }
+      : undefined
+    if (caught instanceof BlobProtectedError) return error(409, "BackupProtectedByRetention", caught.message, unchanged)
+    if (caught instanceof BlobReplacementChangedError) {
+      const headers: Record<string, string> = { ...unchanged }
+      if (caught.restoredEtag) headers["x-tenuvault-restored-etag"] = caught.restoredEtag
+      return error(409, "ReplacementChanged", caught.message, Object.keys(headers).length ? headers : undefined)
+    }
+    if (caught instanceof BlobLeaseConflictError) {
+      if (method === "DELETE") return error(412, "RetentionLockLost", caught.message, unchanged)
+      const headers: Record<string, string> = {}
+      if (caught.lockPath) headers["x-tenuvault-lock-path"] = encodeURIComponent(caught.lockPath)
+      if (caught.holderId) headers["x-tenuvault-lock-holder"] = encodeURIComponent(caught.holderId)
+      return error(409, caught.code ?? "LeaseAlreadyPresent", caught.message, Object.keys(headers).length ? headers : undefined)
+    }
+    if (caught instanceof BlobLeaseUnsupportedError) {
+      const headers: Record<string, string> = { ...unchanged }
+      if (caught.lockPath) headers["x-tenuvault-lock-path"] = encodeURIComponent(caught.lockPath)
+      return error(409, caught.code ?? "LeaseUnavailable", caught.message, Object.keys(headers).length ? headers : undefined)
+    }
+    if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.", unchanged)
+    if (caught instanceof BlobQuarantinedError) return error(412, "BlobQuarantined", caught.message)
+    if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.", unchanged)
     // Damaged files: retrying cannot help, so this is not a 5xx that clients retry. BackupUnavailable
     // is about one backup; InventoryIncomplete covers the rest, such as a blob that may be in a file
     // that could not be traced, or a delete refused while damage is present.
-    if (caught instanceof IncompleteInventoryError) return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message)
+    if (caught instanceof IncompleteInventoryError) {
+      const headers: Record<string, string> = { ...unchanged }
+      if (caught.backup && caught.recoveryConflict) headers["x-tenuvault-recovery-conflict"] = "1"
+      return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message, Object.keys(headers).length ? headers : undefined)
+    }
     if (caught instanceof BlobNotFoundError) {
       return (await store.containerExists(account, container))
-        ? error(404, "BlobNotFound", "The specified blob does not exist.")
-        : error(404, "ContainerNotFound", "The specified container does not exist.")
+        ? error(404, "BlobNotFound", "The specified blob does not exist.", unchanged)
+        : error(404, "ContainerNotFound", "The specified container does not exist.", unchanged)
     }
     console.error("[backups] Local storage request failed:", caught)
-    return error(500, "InternalError", caught instanceof Error ? caught.message : String(caught))
+    return error(500, "InternalError", caught instanceof Error ? caught.message : String(caught), unchanged)
   }
 }

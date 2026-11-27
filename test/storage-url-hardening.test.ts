@@ -1,3 +1,4 @@
+import { withBackupServerTime } from "./helpers"
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -257,8 +258,7 @@ describe('pagination guards', () => {
         if (url.searchParams.get('comp') === 'list' && url.searchParams.get('prefix') === 'backup-') return new Response(listing(url.searchParams.get('marker') ?? ''))
         return handleLocalBlobRequest(store, request)
       }
-      if (graph) return graph(url)
-      return Response.json(url.pathname.split('/').length <= 4 ? { value: [] } : { id: 'x' })
+      return withBackupServerTime(graph?.(url) ?? Response.json(url.pathname.split('/').length <= 4 ? { value: [] } : { id: 'x' }), new Date('2026-09-24T12:00:00Z'))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => 'token', retentionDays: () => 30, now: () => new Date('2026-09-24T12:00:00Z') })
     const { id } = engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account })

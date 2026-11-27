@@ -20,7 +20,7 @@ export interface DamagedFileKinds {
 /** Container property header with the JSON of DamagedFileKinds. */
 export const DAMAGE_KINDS_HEADER = "x-tenuvault-unreadable-file-kinds"
 
-const FILE_NAME = /^[0-9a-f]{1,64}\.tvb$/i
+export const DAMAGED_FILE_NAME = /^(?:\.retired-[a-z0-9]+\/)?[0-9a-f]{1,64}\.tvb$/i
 const OS_CODE = /^E[A-Z]+$/
 
 /**
@@ -37,7 +37,7 @@ export function damagedFileKindsFrom(value: unknown, total?: number): DamagedFil
     if (count !== undefined && (typeof count !== "number" || !Number.isInteger(count) || count < 0)) return null
     result.counts[kind] = count ?? 0
     const listed = (names as Record<string, unknown>)[kind]
-    if (Array.isArray(listed)) result.names[kind] = listed.filter((name): name is string => typeof name === "string" && FILE_NAME.test(name))
+    if (Array.isArray(listed)) result.names[kind] = listed.filter((name): name is string => typeof name === "string" && DAMAGED_FILE_NAME.test(name))
   }
   const counted = DAMAGE_KINDS.reduce((sum, kind) => sum + result.counts[kind], 0)
   if (counted === 0 || (total !== undefined && counted !== total)) return null

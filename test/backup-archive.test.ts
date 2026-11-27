@@ -44,11 +44,13 @@ it('rejects an archive whose declared expansion exceeds the limit', async () => 
 it('attempts all rollback deletions and preserves the original write failure', async () => {
   let writes = 0
   const cleanup = vi.fn(async () => { throw new Error('cleanup failed') })
-  const store = { createContainer: async () => true, list: async () => [], put: async () => { if (++writes === 3) throw new Error('original failure') }, delete: cleanup } as unknown as LocalBlobStore
+  const store = { createContainer: async () => true, list: async () => [], put: async (_a: string, _c: string, name: string) => { if (++writes === 3) throw new Error('original failure'); return { name, etag: `"e${writes}"` } }, delete: cleanup } as unknown as LocalBlobStore
   const reviewed = await reviewArchive(await archive())
   reviewed.files.set('DeviceConfigurations/second.json', Buffer.from('{}'))
   await expect(importArchive(store, reviewed)).rejects.toThrow('original failure')
   expect(cleanup).toHaveBeenCalledTimes(2)
+  expect(cleanup).toHaveBeenNthCalledWith(1, expect.any(String), 'intune-backups', expect.any(String), { despiteDamage: true, ifMatch: '"e1"' })
+  expect(cleanup).toHaveBeenNthCalledWith(2, expect.any(String), 'intune-backups', expect.any(String), { despiteDamage: true, ifMatch: '"e2"' })
 })
 
 it('claims a license slot for the archive tenant only after the import is confirmed', async () => {

@@ -11,7 +11,7 @@ import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/back
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
 import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
 import { readJsonCapped } from "../../../../shared/capped-body"
-import { DAMAGE_KINDS_HEADER, damagedFileKindsFrom, type DamagedFileKinds } from "../../../../shared/damaged-files"
+import { DAMAGED_FILE_NAME, DAMAGE_KINDS_HEADER, damagedFileKindsFrom, type DamagedFileKinds } from "../../../../shared/damaged-files"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Helper function to format bytes to human readable format
@@ -319,7 +319,7 @@ export async function POST(request: NextRequest) {
     if (storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)) {
       const properties = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container`, { headers: storageHeaders(accessToken) }).catch(() => null)
       damagedFiles = Number(properties?.headers.get('x-tenuvault-unreadable-files') ?? 0) || 0
-      damagedFileNames = (properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => /^[0-9a-f]{1,64}\.tvb$/i.test(name))
+      damagedFileNames = (properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => DAMAGED_FILE_NAME.test(name))
       // Kinds that do not count exactly the unreadable files are left out; the page then says the reasons are not known.
       try { damagedKinds = damagedFileKindsFrom(JSON.parse(properties?.headers.get(DAMAGE_KINDS_HEADER) ?? 'null'), damagedFiles) } catch { damagedKinds = null }
     }

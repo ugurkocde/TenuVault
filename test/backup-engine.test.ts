@@ -1,3 +1,4 @@
+import { withBackupServerTime } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { disabledFolders } from "../src/shared/services/modules"
 import { randomBytes } from "node:crypto"
@@ -304,14 +305,14 @@ describe("retention", () => {
     const account = localStorageAccountName(TENANT)
     await store.createContainer(account, "intune-backups")
     for (const folder of ["backup-2026-08-01-020000", "backup-2026-09-20-020000"]) {
-      await store.put(account, "intune-backups", `${folder}/metadata.json`, Buffer.from("{}"), "application/json")
-      await store.put(account, "intune-backups", `${folder}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
+      await store.put(account, "intune-backups", `${folder}/metadata.json`, Buffer.from(JSON.stringify({ Items: { "CompliancePolicies/a": { file: "A.json" } } })), "application/json")
+      await store.put(account, "intune-backups", `${folder}/CompliancePolicies/A.json`, Buffer.from('{"id":"a"}'), "application/json")
     }
     const graph = fakeGraph()
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({
       fetch: fetchImpl,
@@ -333,9 +334,9 @@ describe("retention and storage protection", () => {
     const account = localStorageAccountName(TENANT)
     await store.createContainer(account, "intune-backups")
     const old = "backup-2026-08-01-020000"
-    await store.put(account, "intune-backups", `${old}/metadata.json`, Buffer.from(JSON.stringify({ Status: "Success", TenantId: TENANT })), "application/json")
-    await store.put(account, "intune-backups", `${old}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
-    await store.put(account, "intune-backups", `${old}/DeviceConfigurations/B.json`, Buffer.from("{}"), "application/json")
+    await store.put(account, "intune-backups", `${old}/metadata.json`, Buffer.from(JSON.stringify({ Status: "Success", TenantId: TENANT, Items: { "CompliancePolicies/a": { file: "A.json" }, "DeviceConfigurations/b": { file: "B.json" } } })), "application/json")
+    await store.put(account, "intune-backups", `${old}/CompliancePolicies/A.json`, Buffer.from('{"id":"a"}'), "application/json")
+    await store.put(account, "intune-backups", `${old}/DeviceConfigurations/B.json`, Buffer.from('{"id":"b"}'), "application/json")
     const graph = fakeGraph()
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
@@ -343,7 +344,7 @@ describe("retention and storage protection", () => {
       if (request.method === "DELETE" && decodeURIComponent(url.pathname).endsWith(`${old}/${protectedName}`)) {
         return new Response("<Error><Code>BlobImmutableDueToPolicy</Code></Error>", { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
       }
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
@@ -353,13 +354,13 @@ describe("retention and storage protection", () => {
 
   it("touches no policy file when the metadata of an old backup is protected", async () => {
     const { job, left, old } = await run("metadata.json")
-    expect(job.log.join("\n")).toContain("Kept 1 older backup protected")
+    expect(job.log.join("\n")).toContain("storage immutability or a legal hold refused deletion")
     expect(left).toEqual([`${old}/CompliancePolicies/A.json`, `${old}/DeviceConfigurations/B.json`, `${old}/metadata.json`])
   })
 
   it("removes the metadata first, so a partly deleted backup is not reported as complete", async () => {
     const { job, left, old } = await run("DeviceConfigurations/B.json")
-    expect(job.log.join("\n")).toContain("no longer offered as complete")
+    expect(job.log.join("\n")).toContain("Kept the remaining files in backup")
     expect(left).toEqual([`${old}/DeviceConfigurations/B.json`])
   })
 })
@@ -374,7 +375,7 @@ describe("retention after incomplete backups", () => {
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)

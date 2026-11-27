@@ -5,6 +5,7 @@ import { stoppedEarly } from "./backup-status"
 export type BackupItems = Record<string, {
   file: string
   hash: string
+  sha256?: string
   /**
    * For types whose assignments earlier versions could not read (assignmentsFormerlyExpanded): the hash
    * with `assignments: []`, as those versions recorded it.

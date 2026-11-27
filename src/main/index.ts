@@ -67,7 +67,7 @@ import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { folderToOpen, localInventoryProblem } from "./backup/local-inventory"
-import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
+import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
 import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
@@ -468,6 +468,12 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
+    recoveryKeyFingerprint: () => legacyRecoveryFingerprint(backupKeys.existingKeyring()),
+    retentionProgress: {
+      get: key => appStore.get(`backup.retention.${key}`),
+      set: (key, value) => appStore.set(`backup.retention.${key}`, value),
+      delete: key => appStore.delete(`backup.retention.${key}`),
+    },
     onStarted: (job, request, tokens) => {
       checkpointBackupAudit(auditSink, job, request, tokens, backupAuditActor(job.tenantId), app.getVersion())
     },
