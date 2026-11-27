@@ -99,3 +99,30 @@ it.each(['external', 'concurrent'] as const)('keeps the legacy physical filename
   expect(latest.created).toEqual(original.created)
   expect(await store.get(account, container, name)).toEqual({ blob: latest, data: finalBody })
 })
+
+it.each([false, true])("preserves a replacement moved into quarantine, occupied live path: %s", async occupied => {
+  const root = mkdtempSync(join(tmpdir(), "tv-retire-replacement-")); roots.push(root)
+  const store = new LocalBlobStore(root, [randomBytes(32)])
+  const account = "account", container = "intune-backups", name = "backup-one/Policies/A.json"
+  const dir = join(root, account, container)
+  await store.createContainer(account, container)
+  const first = await store.put(account, container, name, Buffer.from("{}"), "application/json")
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+  const live = join(dir, readdirSync(dir).find(file => file.endsWith(".tvb"))!)
+  const replacement = Buffer.from("replacement")
+  vi.mocked(fileSystem.rename).mockImplementationOnce(async (from, to) => {
+    await actual.rename(live, join(root, "original"))
+    await actual.writeFile(live, replacement)
+    await actual.rename(from, to)
+    if (occupied) await actual.writeFile(live, "new occupant")
+  })
+  await expect(store.delete(account, container, name, { ifMatch: first.etag })).rejects.toThrow(occupied ? "kept in" : name)
+  if (occupied) {
+    expect(readFileSync(live, "utf8")).toBe("new occupant")
+    const held = join(dir, readdirSync(dir).find(file => file.startsWith(".retired-"))!)
+    expect(readFileSync(join(held, readdirSync(held)[0]!))).toEqual(replacement)
+  } else {
+    expect(readFileSync(live)).toEqual(replacement)
+    expect(readdirSync(dir).some(file => file.startsWith(".retired-"))).toBe(false)
+  }
+})

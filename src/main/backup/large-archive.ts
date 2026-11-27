@@ -282,9 +282,14 @@ export async function importLargeArchive(store: LocalBlobStore, archive: Reviewe
     await Promise.all(pending)
     // Manifests were published last, so retiring our writes in reverse order takes them out
     // first. A replacement or a file published by another writer stays where it is.
+    const cleanup: string[] = []
     for (const [name, { container, etag }] of [...written].reverse()) {
-      await store.delete(account, container, name, { despiteDamage: true, ifMatch: etag }).catch(() => undefined)
+      try { await store.delete(account, container, name, { despiteDamage: true, ifMatch: etag }) }
+      catch (failure) {
+        if (failure instanceof Error && failure.message !== name) cleanup.push(failure.message)
+      }
     }
+    if (cleanup.length) throw new Error(`Archive import failed. ${cleanup.join(" ")}`, { cause: error })
     throw error
   }
 }

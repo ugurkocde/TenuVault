@@ -2,7 +2,7 @@ import { backupBlobName, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../..
 import { indexPath, largeIndexes } from "../../shared/large-backup"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
-import { link, lstat, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
@@ -598,9 +598,30 @@ export class LocalBlobStore {
       const path = join(dir, entry.file)
       const info = await lstat(path, { bigint: true })
       if (!info.isFile() || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
-      await rm(path, { force: true })
-      this.changed(dir)
-      this.updateEntry(dir, entries, name)
+      const quarantine = await mkdtemp(join(dir, ".retired-"))
+      const held = join(quarantine, entry.file)
+      try {
+        await rename(path, held)
+        this.changed(dir)
+        const moved = await lstat(held, { bigint: true })
+        // The rename advances ctime. Compare the attributes that survive it.
+        if (!moved.isFile() || moved.ino === 0n || moved.dev !== info.dev || moved.ino !== info.ino
+          || moved.size !== info.size || moved.mtimeNs !== info.mtimeNs) {
+          this.index.delete(dir)
+          try {
+            await link(held, path)
+            await rm(held)
+          } catch (error) {
+            throw new BlobConditionNotMetError(`A different file was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
+          }
+          throw new BlobConditionNotMetError(name)
+        }
+        await rm(held)
+        this.updateEntry(dir, entries, name)
+      } finally {
+        // rmdir never deletes a quarantined file that still needs recovery.
+        await rmdir(quarantine).catch(() => undefined)
+      }
     })
   }
 
