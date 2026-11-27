@@ -8,9 +8,9 @@ const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: 
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: state.refresh }) }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialWorkflowsConfigured: state.configured, trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
-import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges, TrialResume, TrialShortcuts, TrialStartedRow } from "../../src/renderer/components/TenantTrial"
+import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges, TrialResume, TrialShortcuts } from "../../src/renderer/components/TenantTrial"
 import { TrialReminderBanner } from "../../src/renderer/components/DesktopLayout"
-import { TrialOrKey } from "../../src/renderer/components/PlanChoice"
+import { PlanContext, TrialOrKey } from "../../src/renderer/components/PlanChoice"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let root: Root
 let container: HTMLDivElement
@@ -31,6 +31,13 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.clearAllMocks() })
 async function render(element: ReturnType<typeof createElement>) { await act(async () => root.render(createElement(MemoryRouter, null, element))) }
 async function click(text: string) { const button = [...container.querySelectorAll("button")].find(b => b.textContent === text); expect(button).toBeTruthy(); await act(async () => button!.click()) }
+async function enterContact(email: string) {
+  const input = container.querySelector<HTMLInputElement>('input[type="email"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, email)
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+}
 describe("tenant trial UI", () => {
   it.each(["Continue on Community", "Buy Pro"])("shows a rejecting %s action and refreshes without losing the error", async label => {
     tenant.entitled = false; tenant.trial = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString()
@@ -174,6 +181,7 @@ describe("tenant trial UI", () => {
     state.action.mockRejectedValueOnce(new Error("Contact action failed"))
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
     await render(createElement(TenantTrialCard, { tenant, allowUnknownContactRemoval: true }))
+    if (action === "save") await enterContact("tips@contoso.example")
     await click(action === "save" ? "Email me setup tips and a reminder before the trial ends" : "Remove the saved email address for this trial")
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Contact action failed")
     expect(state.refresh).toHaveBeenCalledTimes(1)
@@ -301,21 +309,29 @@ describe("tenant trial UI", () => {
     await click("Dismiss Pro trial message")
     expect(state.action).toHaveBeenCalledWith("tenant", "acknowledge")
   })
-  it("prefills contact without sending and submits only on click", async () => {
+  it("starts contact empty and sends only the address entered on click", async () => {
     await render(createElement(TenantTrialCard, { tenant, welcome: true }))
-    expect(container.querySelector("input")?.value).toBe("admin@contoso.example")
+    expect(container.querySelector("input")?.value).toBe("")
+    expect([...container.querySelectorAll("button")].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends")?.disabled).toBe(true)
+    await click("Email me setup tips and a reminder before the trial ends")
+    expect(state.action).not.toHaveBeenCalled()
+    await enterContact("tips@contoso.example")
     expect(state.action).not.toHaveBeenCalled()
     expect(container.textContent).not.toContain("Remove the saved email address for this trial")
     await click("Email me setup tips and a reminder before the trial ends")
-    expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", "admin@contoso.example")
+    expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", "tips@contoso.example")
     expect(container.textContent).toContain("Email address saved")
     await click("Remove the saved email address for this trial")
     expect(state.action).toHaveBeenLastCalledWith("tenant", "trial_contact", undefined)
     expect(container.textContent).not.toContain("Remove the saved email address for this trial")
   })
-  it("allows removing a saved contact", async () => {
+  it("allows editing and removing a saved contact", async () => {
     tenant.trialEmail = "admin@contoso.example"
     await render(createElement(TenantTrialCard, { tenant }))
+    expect(container.querySelector<HTMLInputElement>('input[type="email"]')?.value).toBe("admin@contoso.example")
+    await enterContact("tips@contoso.example")
+    await click("Email me setup tips and a reminder before the trial ends")
+    expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", "tips@contoso.example")
     await click("Remove the saved email address for this trial")
     expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", undefined)
   })
@@ -507,11 +523,11 @@ describe("shared trial actions", () => {
     expect(container.textContent).toContain("Questions,")
     expect(container.textContent).toContain("You can extend once, from")
   })
-  it("shows the trial in the setup as one row with the email and no decision", async () => {
-    await render(createElement(TrialStartedRow, { tenant, initialEmail: "admin@contoso.example" }))
+  it("leaves setup contact empty even when the sign-in name looks like an email", async () => {
+    await render(createElement(PlanContext, { tenantId: "tenant", username: "signin@contoso.onmicrosoft.com" }))
     expect(container.textContent).toContain(`Pro trial started: 5 days, until ${formatDate(tenant.trialEndsAt!)}`)
     expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, this tenant continues on Community Free by itself.")
-    expect((container.querySelector('input[type="email"]') as HTMLInputElement).value).toBe("admin@contoso.example")
+    expect((container.querySelector('input[type="email"]') as HTMLInputElement).value).toBe("")
     expect([...container.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Email me setup tips and a reminder before the trial ends"])
     expect(container.querySelectorAll("a[href^='/portal']")).toHaveLength(0)
     expect(state.action).not.toHaveBeenCalled()
