@@ -1711,7 +1711,7 @@ export class BackupEngine {
     let shared = unreadable.size > 0 || backups.length !== ordered.length || owners.some(entry => entry?.owner === "other")
     // Untagged backups can only be removed if the visible history gives no sign of a shared container.
     // A future date disqualifies a backup's contents as a replacement, but its tenant still matters.
-    if (!shared && owners.some(entry => entry?.owner === "untagged")) {
+    if (!shared && (owners.some(entry => entry?.owner === "untagged") || Object.values(state.deletions ?? {}).some(entry => entry.untagged !== false))) {
       for (const { prefix } of ignored) {
         const writer = metered()
         const { owner } = await resolveBackupOwnership(file => readFile(writer, prefix + file), tenant)
@@ -1899,6 +1899,7 @@ export class BackupEngine {
       prefixes: string[]
       remnant: boolean
       folders: string[]
+      untagged: boolean
       replacements: Array<{ prefix: string; blobs: Map<string, string> }>
       writer: BlobWriter
       resumed?: boolean
@@ -2122,7 +2123,12 @@ export class BackupEngine {
           : null
       }
 
+      let effectiveUntagged = false
       if (journal.remnant) {
+        if (journal.untagged === true) {
+          discardJournal(primaryPrefix, "remnant journal cannot be untagged")
+          return
+        }
         const record = halfRecords.get(primaryPrefix)
         if (record) {
           const claim = await readClaimRecord(primaryPrefix)
@@ -2137,6 +2143,10 @@ export class BackupEngine {
           }
         }
       } else if (companionPrefix !== undefined) {
+        if (journal.untagged === true) {
+          discardJournal(primaryPrefix, "untagged journal cannot span multiple prefixes")
+          return
+        }
         const companionId = companionPrefix.slice(0, -1)
         for (const [prefix, record] of halfRecords) {
           if (record.owner !== "this") {
@@ -2173,6 +2183,17 @@ export class BackupEngine {
         }
         if (await protectedTime(companionId, writer)) {
           kept++
+          return
+        }
+      } else {
+        const primaryRecord = halfRecords.get(primaryPrefix)
+        if (journal.untagged === false && primaryRecord && primaryRecord.owner !== "this") {
+          discardJournal(primaryPrefix, `${primaryPrefix} has no ownership record matching owned journal`)
+          return
+        }
+        effectiveUntagged = journal.untagged === true || primaryRecord?.owner === "untagged"
+        if (effectiveUntagged && shared) {
+          if (backupTime < cutoff) unowned++
           return
         }
       }
@@ -2226,6 +2247,7 @@ export class BackupEngine {
         prefixes: journal.prefixes,
         remnant: journal.remnant,
         folders: journal.folders,
+        untagged: effectiveUntagged,
         replacements: [...replacements],
         writer: deletion,
         resumed: true,
@@ -2298,6 +2320,7 @@ export class BackupEngine {
             prefixes: [backup.prefix],
             remnant: true,
             folders: [...verified.counts.keys()],
+            untagged: false,
             replacements: [...replacements],
             writer: deletion,
           })
@@ -2346,6 +2369,7 @@ export class BackupEngine {
               prefixes: other ? [backup.prefix, `${companionId}/`] : [backup.prefix],
               remnant: false,
               folders: payloadFolders,
+              untagged: entry.owner === "untagged",
               replacements: [...replacements],
               writer: deletion,
             })
@@ -2414,6 +2438,7 @@ export class BackupEngine {
               remnant: unit.remnant,
               folders: unit.folders,
               ...(unit.folders.length === 0 ? { emptyFolders: true } : {}),
+              untagged: unit.untagged,
               remaining: Object.fromEntries(verified),
               deleted: [],
             }

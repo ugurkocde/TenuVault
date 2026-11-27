@@ -1279,4 +1279,151 @@ describe("deletion journal tampering and binding guards", () => {
     const run2 = await runBackup(createEngine())
     expect(has(`${oldPrefix}${BACKUP_OWNER_FILE}`), run2.log.join("\n")).toBe(false)
   })
+
+  it("gates orphan untagged deletion journals on shared-container ownership and resumes once unshared", async () => {
+    const progress = memoryStore()
+    const progressKey = `${TENANT}/contoso/false`
+    const orphanPrefix = "backup-2026-08-01-020000/"
+    const otherTenantPrefix = "backup-2026-08-02-020000/"
+    const otherTenant = "22222222-2222-2222-2222-222222222222"
+    const { createEngine, has, saved, etags, keyOf, seed } = setupAzure({
+      progress,
+      override: (url, req) => {
+        // Omit orphanPrefix from delimiter discovery so it enters the orphan journal path.
+        if (req.method === "GET" && url.searchParams.get("comp") === "list" && url.searchParams.get("delimiter") === "/") {
+          const prefix = url.searchParams.get("prefix") ?? ""
+          const container = url.pathname.split("/")[1] ?? ""
+          const names = [...saved.keys()]
+            .filter(stored => stored.startsWith(`${container}/`))
+            .map(stored => stored.slice(container.length + 1))
+            .filter(stored => stored.startsWith(prefix) && !stored.startsWith(orphanPrefix))
+          const entries = [...new Set(names.map(stored => {
+            const rest = stored.slice(prefix.length)
+            const cut = rest.indexOf("/")
+            return cut >= 0 ? prefix + rest.slice(0, cut + 1) : stored
+          }))].map(stored => stored.endsWith("/")
+            ? `<BlobPrefix><Name>${stored}</Name></BlobPrefix>`
+            : `<Blob><Name>${stored}</Name><Properties><Etag>${etags.get(`${container}/${stored}`) ?? '"x"'}</Etag></Properties></Blob>`)
+          return new Response(`<Blobs>${entries.join("")}</Blobs>`)
+        }
+        return undefined
+      },
+    })
+    const untaggedManifest = {
+      Status: "Success",
+      Failures: 0,
+      Items: ITEMS,
+      ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 },
+      Scope: { Included: ["DeviceConfigurations"] },
+    }
+    seed(`${orphanPrefix}DeviceConfigurations/Old.json`, OLD_POLICY)
+    seed(`${orphanPrefix}metadata.json`, untaggedManifest)
+    seed(`${otherTenantPrefix}DeviceConfigurations/Old.json`, OLD_POLICY)
+    seed(`${otherTenantPrefix}${BACKUP_OWNER_FILE}`, { Source: "TenuVault Desktop", TenantId: otherTenant })
+    seed(`${otherTenantPrefix}metadata.json`, { ...COMPLETE_MANIFEST, TenantId: otherTenant })
+
+    const remaining: Record<string, string> = {
+      [`${orphanPrefix}DeviceConfigurations/Old.json`]: etags.get(keyOf(`${orphanPrefix}DeviceConfigurations/Old.json`))!,
+      [`${orphanPrefix}metadata.json`]: etags.get(keyOf(`${orphanPrefix}metadata.json`))!,
+    }
+    // An orphan journal falsely claiming untagged: false on an untagged folder is discarded.
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletions: {
+        [orphanPrefix]: {
+          prefixes: [orphanPrefix],
+          remnant: false,
+          folders: ["DeviceConfigurations"],
+          untagged: false,
+          remaining,
+          deleted: [],
+        },
+      },
+    }))
+    const spoofed = await runBackup(createEngine())
+    expect(has(`${orphanPrefix}metadata.json`), spoofed.log.join("\n")).toBe(true)
+    expect(has(`${orphanPrefix}DeviceConfigurations/Old.json`)).toBe(true)
+    expect(spoofed.log.join("\n")).toContain("Discarded deletion journal")
+
+    // A valid untagged orphan journal is kept while another tenant shares the container.
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletions: {
+        [orphanPrefix]: {
+          prefixes: [orphanPrefix],
+          remnant: false,
+          folders: ["DeviceConfigurations"],
+          untagged: true,
+          remaining,
+          deleted: [],
+        },
+      },
+    }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    const sharedRun = await runBackup(createEngine())
+    expect(has(`${orphanPrefix}metadata.json`), sharedRun.log.join("\n")).toBe(true)
+    expect(has(`${orphanPrefix}DeviceConfigurations/Old.json`)).toBe(true)
+    expect(sharedRun.log.join("\n")).toContain("not recorded as this tenant's")
+
+    // Once the container is no longer shared, the untagged orphan journal resumes and cleans up.
+    for (const key of Array.from(saved.keys())) {
+      if (key.includes(otherTenantPrefix)) saved.delete(key)
+    }
+    await vi.advanceTimersByTimeAsync(1_000)
+    const unsharedRun = await runBackup(createEngine())
+    expect(has(`${orphanPrefix}metadata.json`), unsharedRun.log.join("\n")).toBe(false)
+    expect(has(`${orphanPrefix}DeviceConfigurations/Old.json`)).toBe(false)
+  })
+
+  it("blocks resuming an untagged deletion journal when another tenant later appears in the container", async () => {
+    const progress = memoryStore()
+    const target = "backup-2026-08-01-020000/"
+    const otherTenantPrefix = "backup-2026-08-02-020000/"
+    const otherTenant = "22222222-2222-2222-2222-222222222222"
+    const secondPolicy = { id: "new" }
+    let failSecondDelete = true
+    const { createEngine, has, saved, seed } = setupAzure({
+      progress,
+      override: (url, req) => {
+        if (failSecondDelete && req.method === "DELETE" && url.pathname.endsWith(`${target}DeviceConfigurations/New.json`)) {
+          return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+        }
+        return undefined
+      },
+    })
+    seed(`${target}DeviceConfigurations/Old.json`, OLD_POLICY)
+    seed(`${target}DeviceConfigurations/New.json`, secondPolicy)
+    seed(`${target}metadata.json`, {
+      Status: "Success",
+      Failures: 0,
+      Items: { ...ITEMS, "DeviceConfigurations/new": { file: "New.json", sha256: sha256(secondPolicy) } },
+      ItemCounts: { DeviceConfigurations: 2, TotalPolicies: 2 },
+      Scope: { Included: ["DeviceConfigurations"] },
+    })
+
+    // Run 1 partially removes the untagged backup and records untagged: true in its journal.
+    const run1 = await runBackup(createEngine())
+    expect(has(`${target}DeviceConfigurations/Old.json`), run1.log.join("\n")).toBe(false)
+    expect(has(`${target}DeviceConfigurations/New.json`)).toBe(true)
+    expect(has(`${target}metadata.json`)).toBe(true)
+
+    // Another tenant's backup appears before Run 2, making the container shared.
+    failSecondDelete = false
+    seed(`${otherTenantPrefix}DeviceConfigurations/Old.json`, OLD_POLICY)
+    seed(`${otherTenantPrefix}${BACKUP_OWNER_FILE}`, { Source: "TenuVault Desktop", TenantId: otherTenant })
+    seed(`${otherTenantPrefix}metadata.json`, { ...COMPLETE_MANIFEST, TenantId: otherTenant })
+    await vi.advanceTimersByTimeAsync(1_000)
+    const run2 = await runBackup(createEngine())
+    expect(has(`${target}DeviceConfigurations/New.json`), run2.log.join("\n")).toBe(true)
+    expect(has(`${target}metadata.json`)).toBe(true)
+
+    // Once the other tenant's backup is gone, Run 3 resumes and finishes cleanup.
+    for (const key of Array.from(saved.keys())) {
+      if (key.includes(otherTenantPrefix)) saved.delete(key)
+    }
+    await vi.advanceTimersByTimeAsync(1_000)
+    const run3 = await runBackup(createEngine())
+    expect(has(`${target}DeviceConfigurations/New.json`), run3.log.join("\n")).toBe(false)
+    expect(has(`${target}metadata.json`)).toBe(false)
+  })
 })
