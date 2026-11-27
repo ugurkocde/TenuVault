@@ -556,6 +556,120 @@ describe("retention verification", () => {
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(2)
   })
 
+  it("keeps non-resumed newest-backup receipts when the candidate phase hits the byte budget", async () => {
+    const big = "z".repeat(70_000)
+    const expiredBig = { id: "old", description: "w".repeat(70_000) }
+    const { engine, saved, calls, seed, folder } = setup({
+      count: 1,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "DeviceConfigurations/Old.json", expiredBig)
+    seed(expired + "metadata.json", {
+      ...manifest,
+      Items: { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(expiredBig) } },
+    })
+    const firstJob = await complete(engine)
+    const firstPolicy = `${firstJob.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(firstJob.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
+  })
+
+  it("binds newest-backup receipts to the exact folder prefix and starts fresh for a different newest backup", async () => {
+    const big = "r".repeat(70_000)
+    const { engine, saved, calls, seed, folder, progressData } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 110_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const firstJob = await complete(engine)
+    const key = `${TENANT}/contoso`
+    const savedProgress = JSON.parse(progressData.get(key)!) as { latest?: string; reviews: Record<string, { files: Record<string, string>; attempts: number }> }
+    const firstPrefix = `${firstJob.backupFolder}/`
+    expect(savedProgress.latest).toBe(firstPrefix)
+    const firstReceipt = savedProgress.reviews[firstPrefix]!.files["DeviceConfigurations/Policy 0.json"]!
+    expect(firstReceipt).toBeTruthy()
+    // Remove the old anchor and pre-seed its receipt under the next newest folder name (same content & ETag).
+    for (const name of saved.keys()) if (name.startsWith(firstPrefix)) saved.delete(name)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const nextPrefix = "backup-2026-10-12-120001/"
+    progressData.set(key, JSON.stringify({
+      latest: firstPrefix,
+      latestAttempts: 2,
+      reviews: { [nextPrefix]: { files: { "DeviceConfigurations/Policy 0.json": firstReceipt }, attempts: 0 } },
+    }))
+    const secondJob = await complete(engine)
+    expect(`${secondJob.backupFolder}/`).toBe(nextPrefix)
+    // Receipt from the old folder must not match the new folder, so Policy 0.json is read fresh.
+    expect(calls.filter(call => call.name === `${nextPrefix}DeviceConfigurations/Policy 0.json` && call.request.method === "GET")).toHaveLength(1)
+    // latestAttempts was reset when switching away from the gone anchor, so no 3-attempt warning yet.
+    expect(secondJob.log.join("\n")).not.toContain("repeatedly reached its budget")
+  })
+
+  it("falls back in the same run to freshly verify the newest backup when a resumed anchor is unreadable, and refuses deletion if the fallback also fails", async () => {
+    const big = "q".repeat(20_000)
+    let hitBudget = true
+    let failFallback = false
+    let firstPrefix = ""
+    const { engine, saved, calls, seed, folder, progressData } = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 200_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (hitBudget && req.method === "GET" && url.pathname.endsWith("/Policy%201.json")) {
+          hitBudget = false
+          vi.advanceTimersByTime(JOB_DEADLINE_MS)
+          return new Promise(() => {})
+        }
+        if (failFallback && req.method === "GET" && firstPrefix && !url.pathname.includes(firstPrefix) && url.pathname.endsWith("/Policy%200.json")) {
+          return new Response(null, { status: 404 })
+        }
+      },
+    })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    const firstJob = await complete(engine)
+    firstPrefix = `${firstJob.backupFolder}/`
+    // Corrupt the resumed anchor and position cursor at firstPrefix so candidate loop reviews expired directly.
+    seed(`${firstPrefix}DeviceConfigurations/Policy 0.json`, { id: "p0", description: "tampered" })
+    const key = `${TENANT}/contoso`
+    const stored = JSON.parse(progressData.get(key)!) as Record<string, unknown>
+    progressData.set(key, JSON.stringify({ ...stored, cursor: firstPrefix }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    // First test: when the fallback newest backup ALSO fails verification, nothing is deleted.
+    failFallback = true
+    const failedFallback = await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(failedFallback.results?.notices).toContainEqual(expect.objectContaining({ level: "warning" }))
+
+    // Re-seed resumed anchor progress and test successful fallback to a healthy newest backup in the same run.
+    progressData.set(key, JSON.stringify({ ...stored, cursor: firstPrefix }))
+    failFallback = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const recovered = await complete(engine)
+    const fallbackPolicy = `${recovered.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(calls.some(call => call.name === fallbackPolicy && call.request.method === "GET")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+  })
+
   it("keeps an unreadable candidate after 3 consecutive failures with a persistent warning and cleans up other owned candidates", async () => {
     const { engine, saved, calls, seed, folder } = setup()
     folder(newerExpired)

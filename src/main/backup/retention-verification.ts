@@ -49,7 +49,7 @@ export async function verifyBackup(
     const path = prefix + name
     const listed = listing.etags.get(path)
     if (!remaining.has(path)) reject(name, "the expected file is missing")
-    const receipt = progress && listed && keyFingerprint ? retentionIdentity([key, entry, listed, keyFingerprint]) : undefined
+    const receipt = progress && listed && keyFingerprint ? retentionIdentity([prefix, key, entry, listed, keyFingerprint]) : undefined
     if (receipt && progress?.files[name] === receipt) {
       use(name, listed!)
     } else {

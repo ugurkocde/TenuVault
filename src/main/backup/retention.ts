@@ -91,13 +91,17 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   const resumedLatest = state.latest && state.latest !== latestPrefix
     ? older.find(backup => backup.prefix === state.latest && backup.time >= cutoff)
     : undefined
-  const anchorPrefix = resumedLatest && Object.keys(state.reviews[resumedLatest.prefix]?.files ?? {}).length > 0
+  let anchorPrefix = resumedLatest && Object.keys(state.reviews[resumedLatest.prefix]?.files ?? {}).length > 0
     ? resumedLatest.prefix
     : latestPrefix
-  if (state.latest && state.latest !== anchorPrefix) delete state.latest
-  const latestProgress = state.reviews[anchorPrefix] ??= { files: {}, attempts: 0 }
-  const beforeLatestFiles = Object.keys(latestProgress.files).length
+  if (state.latest && state.latest !== anchorPrefix) {
+    delete state.latest
+    delete state.latestAttempts
+  }
+  let latestProgress = state.reviews[anchorPrefix] ??= { files: {}, attempts: 0 }
+  let beforeLatestFiles = Object.keys(latestProgress.files).length
   let coverage: Set<string>
+  let unreadableAnchor: { prefix: string; error: unknown } | undefined
   try {
     const currentTime = Date.parse(parseBackupName(current)?.timestamp ?? "")
     if (currentTime > now + HOUR_MS) throw new RetentionClockError("the newest backup is future-dated")
@@ -105,10 +109,11 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     if (JSON.stringify(manifest.value) !== JSON.stringify(written)) throw new Error("the newest backup's stored manifest differs from what was written")
     const claim = await storage.readForRetention(latestPrefix + owner)
     checkOwner(claim, written, tenant, latestPrefix)
-    if (anchorPrefix === latestPrefix) {
-      const roots = new Map([["metadata.json", manifest], [owner, claim]])
-      coverage = (await verifyBackup(storage, latestPrefix, written, roots, await storage.list(latestPrefix), keyFingerprint, latestProgress)).covers
-    } else {
+    const verifyAnchor = async () => {
+      if (anchorPrefix === latestPrefix) {
+        const roots = new Map([["metadata.json", manifest], [owner, claim]])
+        return (await verifyBackup(storage, latestPrefix, written, roots, await storage.list(latestPrefix), keyFingerprint, latestProgress)).covers
+      }
       const anchorManifest = await storage.readForRetention(anchorPrefix + "metadata.json")
       const anchorMetadata = anchorManifest.value as Record<string, unknown>
       if (typeof anchorMetadata.TenantId !== "string" || anchorMetadata.TenantId.toLowerCase() !== tenant) {
@@ -117,10 +122,32 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       const anchorClaim = await storage.readForRetention(anchorPrefix + owner)
       checkOwner(anchorClaim, anchorMetadata, tenant, anchorPrefix)
       const anchorRoots = new Map([["metadata.json", anchorManifest], [owner, anchorClaim]])
-      coverage = (await verifyBackup(storage, anchorPrefix, anchorMetadata, anchorRoots, await storage.list(anchorPrefix), keyFingerprint, latestProgress)).covers
+      return (await verifyBackup(storage, anchorPrefix, anchorMetadata, anchorRoots, await storage.list(anchorPrefix), keyFingerprint, latestProgress)).covers
+    }
+    try {
+      coverage = await verifyAnchor()
+    } catch (error) {
+      if (anchorPrefix !== latestPrefix && isCandidateUnreadable(error)) {
+        unreadableAnchor = { prefix: anchorPrefix, error }
+        delete state.latest
+        delete state.latestAttempts
+        save()
+        anchorPrefix = latestPrefix
+        latestProgress = state.reviews[latestPrefix] = { files: {}, attempts: 0 }
+        beforeLatestFiles = 0
+        coverage = await verifyAnchor()
+      } else {
+        throw error
+      }
     }
     delete state.latestAttempts
-    if (state.latest !== anchorPrefix) delete state.reviews[anchorPrefix]
+    if (Object.keys(latestProgress.files).length > 0) {
+      state.latest = anchorPrefix
+      save()
+    } else {
+      if (state.latest === anchorPrefix) delete state.latest
+      delete state.reviews[anchorPrefix]
+    }
   } catch (error) {
     const madeLatestProgress = Object.keys(latestProgress.files).length > beforeLatestFiles
     if (error instanceof RetentionBudgetError) {
@@ -132,12 +159,9 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     } else if (madeLatestProgress) {
       state.latest = anchorPrefix
       save()
-    } else if (anchorPrefix !== latestPrefix && isCandidateUnreadable(error)) {
-      delete state.latest
-      save()
     } else if (!Object.keys(latestProgress.files).length) {
       delete state.reviews[anchorPrefix]
-      if (anchorPrefix !== latestPrefix && state.latest === anchorPrefix) {
+      if (state.latest === anchorPrefix) {
         delete state.latest
         save()
       }
@@ -151,8 +175,13 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     [...types].every(folder => ownedCoverage.has(folder) || (!ownedOnly && untaggedCoverage.has(folder)))
   const plan: Array<{ prefix: string; identities: Map<string, string>; untagged: boolean; coveredByOwned: boolean }> = []
   const reviewed: Array<{ backup: typeof candidates[number]; metadata: Record<string, unknown>; roots: Map<string, RetentionBlob>; untagged: boolean }> = []
-  let shared = candidates.length !== listed.length
+  let shared = candidates.length !== listed.length || unreadableAnchor !== undefined
   let warning = all.length !== listed.length
+  if (unreadableAnchor && !candidates.some(backup => backup.prefix === unreadableAnchor!.prefix)) {
+    const reason = unreadableAnchor.error instanceof Error ? unreadableAnchor.error.message : String(unreadableAnchor.error)
+    warning = true
+    notice(`Kept backup ${unreadableAnchor.prefix} because it could not be verified: ${reason.replace(/\.$/, "")}.`, "warning")
+  }
   let kept = 0
   let unowned = 0
   let visiting: string | undefined
@@ -189,6 +218,10 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       const { prefix } = backup
       if (prefix === anchorPrefix) continue
       visiting = prefix
+      if (unreadableAnchor && prefix === unreadableAnchor.prefix) {
+        if (handleUnreadable(prefix, unreadableAnchor.error)) continue
+        throw unreadableAnchor.error
+      }
       const roots = new Map<string, RetentionBlob>()
       try {
         const { manifest, owner: ownership } = await resolveBackupOwnership(async name => {
