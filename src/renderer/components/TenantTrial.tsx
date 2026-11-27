@@ -156,10 +156,10 @@ export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false
       <label className="flex w-full min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium">Optional email
         <Input type="email" className="font-normal" value={email} maxLength={254} onChange={event => setEmail(event.target.value)} />
       </label>
-      <Button variant="outline" className="h-auto min-h-10 max-w-full whitespace-normal text-left" disabled={busy || !email.trim()} onClick={() => void save(email.trim())}><Mail />Email me setup tips and a reminder before the trial ends</Button>
+      <Button variant="outline" className="h-auto min-h-10 max-w-full whitespace-normal text-left" disabled={busy || !email.trim()} onClick={() => void save(email.trim())}><Mail />Email me setup tips, trial reminders and how to keep Pro</Button>
     </div>
     {(saved || allowUnknownRemoval) && <Button variant="ghost" size="sm" className="h-auto px-0 text-gray-600 underline-offset-4 hover:bg-transparent hover:underline dark:hover:bg-transparent" disabled={busy} onClick={() => void save()}>Remove the saved email address for this trial</Button>}
-    <p className="text-xs text-gray-500">Your address is sent only when you press the button. <a className="underline underline-offset-2" href="https://www.tenuvault.com/privacy" target="_blank" rel="noreferrer">Privacy policy</a></p>
+    <p className="text-xs text-gray-500">Up to 5 emails, from now until a week after the trial ends, each with a link to buy Pro. You can unsubscribe in any email. Your address is sent only when you press the button. <a className="underline underline-offset-2" href="https://www.tenuvault.com/privacy" target="_blank" rel="noreferrer">Privacy policy</a></p>
     {(message || tenant.trialEmail) && <p role="status">{message || "Email address saved."}</p>}
     {error && <p role="alert">{error}</p>}
   </div>
