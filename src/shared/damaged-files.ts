@@ -20,7 +20,7 @@ export interface DamagedFileKinds {
 /** Container property header with the JSON of DamagedFileKinds. */
 export const DAMAGE_KINDS_HEADER = "x-tenuvault-unreadable-file-kinds"
 
-const FILE_NAME = /^[0-9a-f]{1,64}\.tvb$/i
+const FILE_NAME = /^(?:\.retired-[a-z0-9]+\/)?[0-9a-f]{1,64}\.tvb$/i
 const OS_CODE = /^E[A-Z]+$/
 
 /**

@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import * as fileSystem from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { LocalBlobStore } from '../src/main/storage/local-blob-store'
+import { LocalBlobStore, localBackupsExist } from '../src/main/storage/local-blob-store'
 
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
@@ -128,5 +128,40 @@ it.each([
   } else {
     expect(readFileSync(live)).toEqual(replacement)
     expect(readdirSync(dir).some(file => file.startsWith(".retired-"))).toBe(false)
+  }
+})
+
+it.each([false, true])("recovers interrupted cleanup without overwriting a live file (occupied: %s)", async occupied => {
+  const root = mkdtempSync(join(tmpdir(), "tv-retired-crash-")); roots.push(root)
+  const keys = [randomBytes(32)]
+  const account = "account", container = "intune-backups", name = "backup-one/Policies/A.json"
+  const dir = join(root, account, container)
+  const store = new LocalBlobStore(root, keys)
+  const body = Buffer.from('{"saved":true}')
+  await store.createContainer(account, container)
+  await store.put(account, container, name, body, "application/json")
+  const file = readdirSync(dir).find(file => file.endsWith(".tvb"))!
+  const quarantine = mkdtempSync(join(dir, ".retired-"))
+  const held = join(quarantine, file)
+  renameSync(join(dir, file), held)
+  const encrypted = readFileSync(held)
+  expect(await localBackupsExist(root)).toBe(true)
+  if (occupied) await store.put(account, container, name, Buffer.from('{"replacement":true}'), "application/json")
+  const now = Date.now()
+  vi.spyOn(Date, "now").mockReturnValue(now + 120_000)
+
+  const restarted = new LocalBlobStore(root, keys)
+  const damage = await restarted.damage(account, container)
+  if (occupied) {
+    expect(damage.files).toEqual([expect.objectContaining({
+      file: `${quarantine.split("/").at(-1)}/${file}`, reason: expect.stringContaining("interrupted cleanup"),
+    })])
+    expect(readFileSync(held)).toEqual(encrypted)
+    expect(readFileSync(join(dir, file))).not.toEqual(encrypted)
+    await expect(restarted.delete(account, container, name)).rejects.toThrow("interrupted cleanup")
+  } else {
+    expect(damage.files).toEqual([])
+    expect((await restarted.get(account, container, name)).data).toEqual(body)
+    expect(readdirSync(dir)).toEqual([file])
   }
 })
