@@ -2226,7 +2226,7 @@ async function bootstrap(): Promise<void> {
       const keys = labCopyKeys()
       const confirmation = await dialog.showMessageBox(mainWindow!, {
         type: "question", title: "Copy and verify Lab backups?",
-        message: "Continue only if the recovery key in this profile was created by TenuVault Lab.",
+        message: "Continue only if TenuVault Lab created this recovery key and it was used exclusively by Lab to save backups.",
         detail: "TenuVault Lab copies backup files it can verify with that key. The original files stay in their folder.",
         buttons: ["Cancel", "Copy and verify"], defaultId: 0, cancelId: 0,
       })

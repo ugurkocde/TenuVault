@@ -140,7 +140,7 @@ The **TenuVault Backup Writer** role can overwrite existing blobs in `intune-bac
 
 ### TenuVault Lab folders
 
-If an earlier Lab build used the stable backup folder, Lab can still browse it. Backups, archive imports and retention use a separate folder. In **Settings > Storage and recovery**, choose **Use the TenuVault Lab Backups folder**. If the profile has an identifiable Lab-created recovery key, you can choose **Copy verified Lab backups**. Lab checks the copied files and leaves the originals where they are. Unreadable files and conflicting copies are reported.
+If an earlier Lab build used the stable backup folder, Lab can still browse it. Backups, archive imports and retention use a separate folder. In **Settings > Storage and recovery**, choose **Use the TenuVault Lab Backups folder**. If the profile has a Lab-created recovery key that only Lab used to save backups, you can choose **Copy verified Lab backups**. Lab checks the copied files and leaves the originals where they are. Unreadable files and conflicting copies are reported.
 
 ## Retention
 
