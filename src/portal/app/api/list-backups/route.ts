@@ -381,7 +381,11 @@ export async function POST(request: NextRequest, runStatus?: RunStatus) {
         const properties = await fetch(`https://${storageAccountName}.blob.core.windows.net/${container}?restype=container`, { headers: storageHeaders(accessToken) }).catch(() => null)
         const count = Number(properties?.headers.get('x-tenuvault-unreadable-files') ?? 0) || 0
         damagedFiles += count
-        damagedFileNames.push(...(properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => /^[0-9a-f]{1,64}\.tvb$/i.test(name)))
+        const names = (properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',')
+        damagedFileNames.push(...names.filter((name) => /^(?:\.retired-[a-z0-9]+\/)?[0-9a-f]{1,64}\.tvb$/i.test(name)))
+        if (names.some(name => name.startsWith('.retired-'))) {
+          warnings.push('Interrupted cleanup left recoverable files in a hidden .retired- folder. Close TenuVault before moving the files. See Backup storage and retention for recovery steps.')
+        }
         if (count) {
           try {
             const value = damagedFileKindsFrom(JSON.parse(properties?.headers.get(DAMAGE_KINDS_HEADER) ?? 'null'), count)
