@@ -1722,7 +1722,13 @@ export class BackupEngine {
     // The latest backup is the reference for all candidates and resumes across runs using receipts
     // bound to its exact folder and file identities. A different newest backup starts fresh unless
     // an earlier selected replacement is still in progress.
-    const latest = metered()
+    const isAnchorUnreadable = (error: unknown): boolean =>
+      !signal.aborted
+      && !(error instanceof RetentionBudgetError)
+      && !(error instanceof InventoryDamagedError)
+      && !(error instanceof TokenError)
+      && !(error instanceof RetentionClockError)
+      && !(error instanceof RequestTimeoutError)
     const resumedLatest = limits && state.latest && state.latest !== latestPrefix
       ? ordered.find(backup => backup.prefix === state.latest && backup.time >= cutoff)
       : undefined
@@ -1733,6 +1739,7 @@ export class BackupEngine {
     let anchorManifest: Record<string, unknown> | null = null
     let anchorClaim: OwnershipFile | undefined
     let anchorCompanionManifest: Record<string, unknown> | null | undefined
+    let unreadableAnchor: { prefix: string; error: unknown } | undefined
     if (anchorPrefix !== latestPrefix) {
       let claim: OwnershipFile | undefined
       const resolved = await resolveBackupOwnership(async file => {
@@ -1745,11 +1752,32 @@ export class BackupEngine {
         anchorClaim = claim
         const companionId = anchorManifest.CompanionBackup
         if (typeof companionId === "string" && isLargeBackup(companionId)) {
-          anchorCompanionManifest = await metered().readJson(`${companionId}/metadata.json`)
+          const companionRead = await readFile(metered(), `${companionId}/metadata.json`)
+          if (companionRead.kind === "found" && companionRead.value && typeof companionRead.value === "object" && !Array.isArray(companionRead.value)) {
+            anchorCompanionManifest = companionRead.value as Record<string, unknown>
+          } else if (companionRead.kind === "unreadable") {
+            unreadableAnchor = { prefix: anchorPrefix, error: companionRead.error }
+            shared = true
+            delete state.reviews[anchorPrefix]
+            delete state.reviews[`${companionId}/`]
+            delete state.latest
+            delete state.latestAttempts
+            saveProgress()
+            anchorPrefix = latestPrefix
+            anchorManifest = null
+            anchorClaim = undefined
+          }
         }
       } else {
+        if (resolved.manifest.kind === "unreadable" || resolved.owner.kind === "unreadable") {
+          const error = resolved.manifest.kind === "unreadable" ? resolved.manifest.error : (resolved.owner as { error: unknown }).error
+          unreadableAnchor = { prefix: anchorPrefix, error }
+          shared = true
+        }
         delete state.reviews[anchorPrefix]
         delete state.latest
+        delete state.latestAttempts
+        saveProgress()
         anchorPrefix = latestPrefix
       }
     }
@@ -1757,42 +1785,94 @@ export class BackupEngine {
       if (state.latest && state.latest !== latestPrefix) {
         delete state.reviews[state.latest]
         delete state.latest
+        delete state.latestAttempts
       }
-      anchorManifest = written ?? await latest.readJson(`${current}/metadata.json`)
+      anchorManifest = written ?? await metered().readJson(`${current}/metadata.json`)
       anchorCompanionManifest = writtenCompanion
     }
     if (!anchorManifest) throw new Error("The latest backup has no readable manifest")
-    const covered = completeFolders(anchorManifest)
-    const anchorFolder = anchorPrefix.slice(0, -1)
-    const currentCompanion = anchorManifest.CompanionBackup
-    const latestProgress = limits ? review(anchorPrefix) : undefined
-    const beforeLatestFiles = Object.keys(latestProgress?.files ?? {}).length
-    const companionPrefix = typeof currentCompanion === "string" && isLargeBackup(currentCompanion) && anchorCompanionManifest && completeHalf(anchorCompanionManifest)
-      ? `${currentCompanion}/` : undefined
-    latestCompanionPrefix = companionPrefix
-    const companionProgress = limits && companionPrefix ? review(companionPrefix) : undefined
-    const beforeCompanionFiles = Object.keys(companionProgress?.files ?? {}).length
+    let covered = new Set<string>()
+    let latestProgress: ReturnType<typeof review> | undefined
+    let beforeLatestFiles = 0
+    let companionPrefix: string | undefined
+    let companionProgress: ReturnType<typeof review> | undefined
+    let beforeCompanionFiles = 0
     const replacements: Array<{ prefix: string; blobs: Map<string, string> }> = []
-    try {
-      const verifiedAnchor = await verifyHalf(latest, anchorPrefix, anchorManifest, undefined, anchorClaim, latestProgress, keyFingerprint)
+    const verifyCurrentAnchor = async (): Promise<Set<string>> => {
+      const manifest = anchorManifest!
+      const nextCovered = completeFolders(manifest)
+      const anchorFolder = anchorPrefix.slice(0, -1)
+      const currentCompanion = manifest.CompanionBackup
+      latestProgress = limits ? review(anchorPrefix) : undefined
+      beforeLatestFiles = Object.keys(latestProgress?.files ?? {}).length
+      companionPrefix = typeof currentCompanion === "string" && isLargeBackup(currentCompanion) && anchorCompanionManifest && completeHalf(anchorCompanionManifest)
+        ? `${currentCompanion}/` : undefined
+      latestCompanionPrefix = companionPrefix
+      companionProgress = limits && companionPrefix ? review(companionPrefix) : undefined
+      beforeCompanionFiles = Object.keys(companionProgress?.files ?? {}).length
+      replacements.length = 0
+      const verifiedAnchor = await verifyHalf(metered(), anchorPrefix, manifest, undefined, anchorClaim, latestProgress, keyFingerprint)
       replacements.push({ prefix: anchorPrefix, blobs: verifiedAnchor.blobs })
       if (companionPrefix && anchorCompanionManifest) {
-        if (!matchingCompanions(anchorFolder, anchorManifest, currentCompanion as string, anchorCompanionManifest)) throw new Error("The latest backup's companion does not match")
+        if (!matchingCompanions(anchorFolder, manifest, currentCompanion as string, anchorCompanionManifest)) throw new Error("The latest backup's companion does not match")
         const verifiedCompanion = await verifyHalf(metered(), companionPrefix, anchorCompanionManifest, undefined, undefined, companionProgress, keyFingerprint)
         replacements.push({ prefix: companionPrefix, blobs: verifiedCompanion.blobs })
-        for (const folder of completeFolders(anchorCompanionManifest)) covered.add(folder)
+        for (const folder of completeFolders(anchorCompanionManifest)) nextCovered.add(folder)
+      }
+      return nextCovered
+    }
+    try {
+      try {
+        covered = await verifyCurrentAnchor()
+      } catch (error) {
+        if (anchorPrefix !== latestPrefix && isAnchorUnreadable(error)) {
+          const failedAnchor = anchorPrefix
+          const failedCompanion = companionPrefix
+          unreadableAnchor = { prefix: failedAnchor, error }
+          shared = true
+          delete state.reviews[failedAnchor]
+          if (failedCompanion) delete state.reviews[failedCompanion]
+          delete state.latest
+          delete state.latestAttempts
+          saveProgress()
+          anchorPrefix = latestPrefix
+          anchorClaim = undefined
+          anchorManifest = written ?? await metered().readJson(`${current}/metadata.json`)
+          anchorCompanionManifest = writtenCompanion
+          if (!anchorManifest) throw new Error("The latest backup has no readable manifest")
+          if (limits) {
+            delete state.reviews[latestPrefix]
+            const fallbackCompanion = anchorManifest.CompanionBackup
+            if (typeof fallbackCompanion === "string" && isLargeBackup(fallbackCompanion)) {
+              delete state.reviews[`${fallbackCompanion}/`]
+            }
+          }
+          covered = await verifyCurrentAnchor()
+        } else {
+          throw error
+        }
       }
       if (limits) state.latest = anchorPrefix
       delete state.latestAttempts
     } catch (error) {
+      if (unreadableAnchor) {
+        const reason = unreadableAnchor.error instanceof Error ? unreadableAnchor.error.message : String(unreadableAnchor.error)
+        noteRepeatedFailure(unreadableAnchor.prefix)
+        this.write(job, `Kept backup ${unreadableAnchor.prefix} because a file could not be verified: ${reason}`, "warning")
+      }
       const madeLatestProgress = Boolean(
         (latestProgress && (Object.keys(latestProgress.files).length > beforeLatestFiles || latestProgress.complete !== undefined))
         || (companionProgress && (Object.keys(companionProgress.files).length > beforeCompanionFiles || companionProgress.complete !== undefined)),
       )
-      if (limits && (madeLatestProgress || state.latest === anchorPrefix)) {
+      const hasLatestProgress = Boolean(
+        (latestProgress && (Object.keys(latestProgress.files).length > 0 || latestProgress.complete !== undefined))
+        || (companionProgress && (Object.keys(companionProgress.files).length > 0 || companionProgress.complete !== undefined)),
+      )
+      if (limits && (madeLatestProgress || (error instanceof RetentionBudgetError && hasLatestProgress))) {
         state.latest = anchorPrefix
       } else if (limits && latestProgress && !Object.keys(latestProgress.files).length && !latestProgress.attempts && !latestProgress.complete) {
         delete state.reviews[anchorPrefix]
+        if (state.latest === anchorPrefix) delete state.latest
       }
       if (limits && companionPrefix && companionProgress && !Object.keys(companionProgress.files).length && !companionProgress.attempts && !companionProgress.complete) {
         delete state.reviews[companionPrefix]
@@ -1801,7 +1881,7 @@ export class BackupEngine {
         state.latestAttempts = (state.latestAttempts ?? 0) + 1
         saveProgress()
         if (state.latestAttempts >= 3) this.write(job, "Retention repeatedly reached its verification budget for the newest backup. Review storage size and the backup log. Older backups are kept.", "warning")
-      } else if (madeLatestProgress) {
+      } else if (madeLatestProgress || unreadableAnchor) {
         saveProgress()
       }
       throw error
@@ -2151,8 +2231,15 @@ export class BackupEngine {
         resumed: true,
       })
     }
+    if (unreadableAnchor && !backups.some(backup => backup.prefix === unreadableAnchor!.prefix)) {
+      keptForReview(unreadableAnchor.prefix, unreadableAnchor.error)
+    }
     for (const [index, backup] of backups.entries()) {
       if (unreadable.has(index) || backup.prefix === anchorPrefix) continue
+      if (unreadableAnchor && backup.prefix === unreadableAnchor.prefix) {
+        keptForReview(backup.prefix, unreadableAnchor.error)
+        continue
+      }
       const writer = candidateWriters[index]!
       try {
         const journal = state.deletions?.[backup.prefix]

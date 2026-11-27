@@ -418,9 +418,9 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
       expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(tamper ? 2 : 1)
       if (tamper) {
         expect(second.log.join("\n")).toContain("does not match its manifest")
-        // Remove the tampered earlier replacement: a new backup must start fresh and never reuse old receipts.
+        // Remove the earlier replacements: a new backup must start fresh and never reuse old receipts.
         for (const key of Array.from(saved.keys())) {
-          if (key.includes(`${first.backupFolder}/`)) saved.delete(key)
+          if (key.includes(`${first.backupFolder}/`) || key.includes(`${second.backupFolder}/`)) saved.delete(key)
         }
         expect(saved.has(keyOf(firstPolicy))).toBe(false)
         await vi.advanceTimersByTimeAsync(1_000)
@@ -477,6 +477,68 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
     const b = makeWriter("backup-2026-10-12-120001/")
     await verifyHalf(b.writer, "backup-2026-10-12-120001/", manifest, b.listing, undefined, progress)
     expect(readPaths).toContain("/intune-backups/backup-2026-10-12-120001/DeviceConfigurations/P0.json")
+  })
+
+  it("falls back in the same run to verifying the newest backup fresh when a resumed anchor becomes unreadable, and clears stale state.latest", async () => {
+    const progress = memoryStore()
+    const progressKey = `${TENANT}/contoso/false`
+    const big = "q".repeat(12_000)
+    let hitBudgetOnce = true
+    let failFallback = false
+    let firstPrefix = ""
+    const { createEngine, has, calls, seed, folder } = setupAzure({
+      progress,
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 100_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return Response.json({ id: url.pathname.split("/").at(-1), description: big, assignments: [] })
+        }
+        if (hitBudgetOnce && req.method === "GET" && url.pathname.endsWith("/Policy%201.json")) {
+          hitBudgetOnce = false
+          // Simulate hitting the retention budget after Policy 0 was verified and receipted.
+          return new Response(new Uint8Array(120_000), { status: 200, headers: { etag: '"oversized"' } })
+        }
+        if (failFallback && req.method === "GET" && firstPrefix && !url.pathname.includes(firstPrefix) && url.pathname.endsWith("/Policy%200.json")) {
+          return new Response(null, { status: 404 })
+        }
+        return undefined
+      },
+    })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+
+    // Run 1 verifies Policy 0 and hits the byte budget on Policy 1, saving state.latest = firstPrefix.
+    const first = await runBackup(createEngine())
+    firstPrefix = `${first.backupFolder}/`
+    expect(has(`${older}metadata.json`)).toBe(true)
+    const savedAfterFirst = JSON.parse(progress.get(progressKey)!) as { latest?: string; reviews: Record<string, unknown> }
+    expect(savedAfterFirst.latest).toBe(firstPrefix)
+
+    // Corrupt the resumed anchor so verifying it fails with a manifest mismatch.
+    seed(`${firstPrefix}DeviceConfigurations/Policy 0.json`, { id: "p0", description: "tampered" })
+
+    // If the fallback newest backup ALSO fails verification, nothing is deleted and state.latest is cleared.
+    failFallback = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    const failedFallback = await runBackup(createEngine())
+    expect(has(`${older}metadata.json`), failedFallback.log.join("\n")).toBe(true)
+    const savedAfterFailedFallback = progress.get(progressKey)
+    expect(savedAfterFailedFallback ? (JSON.parse(savedAfterFailedFallback) as { latest?: string }).latest : undefined).not.toBe(firstPrefix)
+    expect(failedFallback.log.join("\n")).toContain("does not match its manifest")
+
+    // Re-seed the broken anchor state and verify that a healthy newest backup succeeds in the same run.
+    progress.set(progressKey, JSON.stringify(savedAfterFirst))
+    failFallback = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const recovered = await runBackup(createEngine())
+    const fallbackPolicy = `${recovered.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(calls.some(call => call.name === fallbackPolicy && call.request.method === "GET")).toBe(true)
+    expect(has(`${older}metadata.json`), recovered.log.join("\n")).toBe(false)
+    expect(has(`${firstPrefix}metadata.json`)).toBe(true)
+    const savedAfterRecovery = progress.get(progressKey)
+    expect(savedAfterRecovery ? (JSON.parse(savedAfterRecovery) as { latest?: string }).latest : undefined).not.toBe(firstPrefix)
   })
 })
 
