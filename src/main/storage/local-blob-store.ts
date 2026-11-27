@@ -54,6 +54,7 @@ const IV = 12
 const TAG = 16
 const EXT = ".tvb"
 const RETIRED_PREFIX = ".retired-"
+const RETIRED_STAMP = ".quarantined"
 // Another app instance can be between the rename and delete. Let that operation settle first.
 const RETIRED_GRACE_MS = 60_000
 
@@ -608,27 +609,35 @@ export class LocalBlobStore {
       if (!info.isFile() || info.ino === 0n || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
       const quarantine = await mkdtemp(join(dir, RETIRED_PREFIX))
       const held = join(quarantine, entry.file)
+      const stamp = join(quarantine, RETIRED_STAMP)
+      let needsRecovery = false
       try {
+        await writeFile(stamp, "", { flag: "wx" })
         await rename(path, held)
+        needsRecovery = true
         this.changed(dir)
         const moved = await lstat(held, { bigint: true })
-        // The rename advances ctime. Compare the attributes that survive it.
+        // The rename can change ctime. Compare the attributes that survive it.
         if (!moved.isFile() || moved.ino === 0n || moved.dev !== info.dev || moved.ino !== info.ino
           || moved.size !== info.size || moved.mtimeNs !== info.mtimeNs) {
           this.index.delete(dir)
           try {
             await link(held, path)
             await rm(held)
+            needsRecovery = false
           } catch (error) {
             throw new BlobQuarantinedError(`A different file was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
           }
           throw new BlobConditionNotMetError(name)
         }
         await rm(held)
+        needsRecovery = false
         this.updateEntry(dir, entries, name)
       } finally {
-        // rmdir never deletes a quarantined file that still needs recovery.
-        await rmdir(quarantine).catch(() => undefined)
+        if (!needsRecovery) {
+          await rm(stamp, { force: true }).catch(() => undefined)
+          await rmdir(quarantine).catch(() => undefined)
+        }
       }
     })
   }
@@ -827,7 +836,7 @@ export class LocalBlobStore {
   }
 
   private async recoverRetired(dir: string, account: string, container: string, names: string[]): Promise<DamagedFile[]> {
-    const held: Array<{ folder: string; file: string }> = []
+    const held: Array<{ folder: string; file: string; since: number }> = []
     const damage: DamagedFile[] = []
     const report = (file: string, reason: string, backup: string | null = null) => {
       // Inventory details also travel in HTTP headers. Only expose names the store would create.
@@ -841,14 +850,21 @@ export class LocalBlobStore {
           report(folder, "the interrupted cleanup folder could not be opened")
           continue
         }
-        for (const file of await readdir(path)) held.push({ folder, file })
+        const files = await readdir(path)
+        // Directory mtime also covers older quarantines and a delayed rename after a stamp write.
+        const stamp = await lstat(join(path, RETIRED_STAMP)).catch(error => {
+          if (!isMissing(error)) throw error
+        })
+        const directoryTime = (await lstat(path)).mtimeMs
+        const since = Math.max(directoryTime, stamp ? (stamp.isFile() ? stamp.mtimeMs : Infinity) : 0)
+        for (const file of files) if (file !== RETIRED_STAMP) held.push({ folder, file, since })
       } catch (error) {
         if (!isMissing(error)) report(folder, "the interrupted cleanup folder could not be read")
       }
     }
     const counts = new Map<string, number>()
     for (const { file } of held) counts.set(file, (counts.get(file) ?? 0) + 1)
-    for (const { folder, file } of held) {
+    for (const { folder, file, since } of held) {
       const path = join(dir, folder, file)
       let backup: string | null = null
       try {
@@ -857,10 +873,11 @@ export class LocalBlobStore {
           const entry = await this.readEntry(join(dir, folder), account, container, file)
           if (entry !== VANISHED && !(entry instanceof Unreadable)) {
             backup = backupFolderOf(entry.name)
-            if (counts.get(file) === 1 && Date.now() - info.ctimeMs > RETIRED_GRACE_MS) {
+            if (counts.get(file) === 1 && Date.now() - since > RETIRED_GRACE_MS) {
               // A link publishes the whole file and never overwrites an occupied live path.
               await link(path, join(dir, file))
               await rm(path)
+              await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
               await rmdir(join(dir, folder)).catch(() => undefined)
               continue
             }
