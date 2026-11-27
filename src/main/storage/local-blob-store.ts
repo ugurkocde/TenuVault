@@ -186,7 +186,25 @@ export class BlobLeaseConflictError extends Error {
     this.holderId = options?.holderId
   }
 }
-export class BlobLeaseUnsupportedError extends Error {}
+export type RetentionLockUnsupportedCode = "LeaseUnavailable" | "RetentionHardLinksUnsupported"
+
+export class BlobLeaseUnsupportedError extends Error {
+  readonly code?: RetentionLockUnsupportedCode
+  readonly lockPath?: string
+  constructor(message: string, options?: ErrorOptions & { code?: RetentionLockUnsupportedCode; lockPath?: string }) {
+    super(message, options)
+    this.code = options?.code
+    this.lockPath = options?.lockPath
+  }
+}
+
+export function hardLinksUnsupportedWarning(folderPath?: string, consecutiveRuns?: number): string {
+  const target = folderPath ? `backup folder ${folderPath}` : "this backup folder"
+  const prefix = consecutiveRuns !== undefined
+    ? `Retention skipped cleanup on ${consecutiveRuns} consecutive runs for ${target}`
+    : `Automatic cleanup was skipped for ${target}`
+  return `${prefix} because this drive type does not support hard links and cannot clean up old backups safely. Backups and restores keep working. Old backups stay until you move the backup folder to an NTFS, APFS or ext4 drive or delete them manually in TenuVault.`
+}
 export class BlobProtectedError extends Error {}
 export interface ExpectedReplacement {
   prefix: string
@@ -222,6 +240,16 @@ class QuarantineRestoreInterruptedError extends Error {
   ) {
     super(`Could not confirm restore of ${held} to ${live} after the held file disappeared.`)
     this.name = "QuarantineRestoreInterruptedError"
+  }
+}
+
+class QuarantineRestoreUnsupportedError extends Error {
+  constructor(
+    readonly held: string,
+    readonly live: string,
+  ) {
+    super(`Could not restore ${held} to ${live} because this drive type does not support hard links.`)
+    this.name = "QuarantineRestoreUnsupportedError"
   }
 }
 
@@ -1207,6 +1235,12 @@ export class LocalBlobStore {
         assertPrefixNotProtected(dir, name)
         if (options.retentionLockId !== undefined) {
           await this.assertRetentionLockHeld(dir, options.retentionLockId)
+          if (!this.hardLinks) {
+            throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+              code: "RetentionHardLinksUnsupported",
+              lockPath: dir,
+            })
+          }
         }
         const path = join(dir, entry.file)
         const info = await lstat(path, { bigint: true })
@@ -1220,6 +1254,12 @@ export class LocalBlobStore {
           assertPrefixNotProtected(dir, name)
           if (options.retentionLockId !== undefined) {
             await this.assertRetentionLockHeld(dir, options.retentionLockId)
+            if (!this.hardLinks) {
+              throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+                code: "RetentionHardLinksUnsupported",
+                lockPath: dir,
+              })
+            }
           }
           await rename(path, held)
           renamed = true
@@ -1243,7 +1283,7 @@ export class LocalBlobStore {
             throw new BlobConditionNotMetError(name)
           }
           if (options.expectedReplacements?.length) {
-            const changed = await this.findChangedReplacement(account, container, options.expectedReplacements, quarantine, dir, entries)
+            const changed = await this.findChangedReplacement(account, container, options.expectedReplacements, quarantine, dir, entries, options.retentionLockId)
             if (changed) {
               this.index.delete(dir)
               let restoredEtag: string | undefined
@@ -1310,6 +1350,7 @@ export class LocalBlobStore {
     currentQuarantine: string,
     currentDir: string,
     currentEntries: Map<string, Entry>,
+    retentionLockId?: string,
   ): Promise<string | null> {
     const byContainer = new Map<string, ExpectedReplacement[]>()
     for (const rep of expectedReplacements) {
@@ -1336,8 +1377,15 @@ export class LocalBlobStore {
         if (stampInfo === undefined) return reps[0]!.prefix
         const since = Math.max(dirInfo.mtimeMs, stampInfo ? (stampInfo.isFile() ? stampInfo.mtimeMs : Infinity) : 0)
         if (Date.now() - since <= RETIRED_GRACE_MS) return reps[0]!.prefix
-        const heldFiles = (await readdir(retiredDir).catch(() => null))?.filter(file => file !== RETIRED_STAMP)
-        if (!heldFiles || heldFiles.length === 0) return reps[0]!.prefix
+        const rawEntries = await readdir(retiredDir).catch(() => null)
+        if (!rawEntries) return reps[0]!.prefix
+        const heldFiles = rawEntries.filter(file => file !== RETIRED_STAMP)
+        if (heldFiles.length === 0) {
+          if (retentionLockId !== undefined && repDir === currentDir && (await this.removeAgedEmptyQuarantine(retiredDir, retentionLockId, repDir))) {
+            continue
+          }
+          return reps[0]!.prefix
+        }
         for (const file of heldFiles) {
           if (!/^[a-f0-9]+\.tvb$/i.test(file)) return reps[0]!.prefix
           const entry = await this.readEntry(retiredDir, account, targetContainer, file)
@@ -1464,6 +1512,49 @@ export class LocalBlobStore {
     }
   }
 
+  private async isRetentionLockHeld(dir: string, id: string): Promise<boolean> {
+    try {
+      await this.assertRetentionLockHeld(dir, id)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Under an active retention lock, removes an aged quarantine directory that contains only the
+   * stamp file (no held files), after re-confirming it is still aged and has no held files.
+   * Returns true only when the directory was removed or was already gone.
+   */
+  private async removeAgedEmptyQuarantine(retiredDir: string, retentionLockId: string, lockDir: string): Promise<boolean> {
+    const stampPath = join(retiredDir, RETIRED_STAMP)
+    const dirInfo = await lstat(retiredDir).catch(error => isMissing(error) ? null : undefined)
+    if (dirInfo === null) return true
+    if (!dirInfo || !dirInfo.isDirectory()) return false
+    const stampInfo = await lstat(stampPath).catch(error => isMissing(error) ? null : undefined)
+    if (stampInfo === undefined) return false
+    if (stampInfo && !stampInfo.isFile()) return false
+    const since = Math.max(dirInfo.mtimeMs, stampInfo ? stampInfo.mtimeMs : 0)
+    if (Date.now() - since <= RETIRED_GRACE_MS) return false
+    const entries = await readdir(retiredDir).catch(error => isMissing(error) ? null : undefined)
+    if (entries === null) return true
+    if (!entries || entries.some(file => file !== RETIRED_STAMP)) return false
+    if (!(await this.isRetentionLockHeld(lockDir, retentionLockId))) return false
+    if (entries.includes(RETIRED_STAMP)) {
+      try {
+        await rm(stampPath)
+      } catch (error) {
+        if (!isMissing(error)) return false
+      }
+    }
+    try {
+      await rmdir(retiredDir)
+      return true
+    } catch (error) {
+      return isMissing(error)
+    }
+  }
+
   private async ownProcessStart(): Promise<string> {
     if (!this.processInfo) return defaultCurrentProcessStart()
     const observed = await this.processInfo.readProcessStart(process.pid)
@@ -1478,32 +1569,29 @@ export class LocalBlobStore {
     return (this.processInfo ?? defaultProcessInfoReader).readProcessStart(pid)
   }
 
-  private async publishLockFile(tmpPath: string, lockPath: string, signal?: AbortSignal): Promise<void> {
+  private async publishLockFile(tmpPath: string, lockPath: string, dir: string, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
-    if (this.hardLinks) {
-      try {
-        await link(tmpPath, lockPath)
-        return
-      } catch (error) {
-        if (!NO_HARD_LINKS.has((error as NodeJS.ErrnoException).code ?? "")) throw error
-        this.hardLinks = false
-      }
+    if (!this.hardLinks) {
+      throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+        code: "RetentionHardLinksUnsupported",
+        lockPath: dir,
+      })
     }
-    // Without hard links (for example exFAT drives), create the lock exclusively and write the record into the
-    // same handle. A crash in the short gap between create and write leaves an empty lock, which retention reports
-    // with the named manual warning; backups and restores are never blocked by it.
-    const record = await readFile(tmpPath)
-    signal?.throwIfAborted()
-    const handle = await open(lockPath, "wx", 0o600)
     try {
-      await handle.writeFile(record)
-      await handle.sync()
+      await link(tmpPath, lockPath)
+      return
     } catch (error) {
-      await handle.close().catch(() => undefined)
-      await rm(lockPath, { force: true }).catch(() => undefined)
+      const code = (error as NodeJS.ErrnoException).code ?? ""
+      if (NO_HARD_LINKS.has(code)) {
+        this.hardLinks = false
+        throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+          code: "RetentionHardLinksUnsupported",
+          lockPath: dir,
+          cause: error,
+        })
+      }
       throw error
     }
-    await handle.close()
   }
 
   /**
@@ -1522,6 +1610,12 @@ export class LocalBlobStore {
     const dir = this.dir(account, container)
     await mkdir(dir, { recursive: true, mode: 0o700 })
     signal?.throwIfAborted()
+    if (!this.hardLinks) {
+      throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
+        code: "RetentionHardLinksUnsupported",
+        lockPath: dir,
+      })
+    }
     const lockPath = join(dir, RETENTION_LOCK_FILE)
     const id = proposedId || randomBytes(16).toString("hex")
     const record: RetentionLockRecord = {
@@ -1554,7 +1648,7 @@ export class LocalBlobStore {
         signal?.throwIfAborted()
         let published = false
         try {
-          await this.publishLockFile(tmpPath, lockPath, signal)
+          await this.publishLockFile(tmpPath, lockPath, dir, signal)
           published = true
           await rm(tmpPath, { force: true }).catch(() => undefined)
           if (process.platform !== "win32") await syncDirectory(dir)
@@ -1578,6 +1672,7 @@ export class LocalBlobStore {
             throw error
           }
           if (signal?.aborted) throw error
+          if (error instanceof BlobLeaseUnsupportedError) throw error
           const code = (error as NodeJS.ErrnoException).code
           if (code !== "EEXIST") {
             if (code && UNSUPPORTED_LOCK_ERRORS.has(code)) {
@@ -1730,10 +1825,11 @@ export class LocalBlobStore {
       for (let attempt = 0; attempt < 2; attempt++) {
         signal?.throwIfAborted()
         try {
-          await this.publishLockFile(tmpPath, gatePath, signal)
+          await this.publishLockFile(tmpPath, gatePath, dirname(lockPath), signal)
           return { gatePath, id }
         } catch (error) {
           if (signal?.aborted) throw error
+          if (error instanceof BlobLeaseUnsupportedError) throw error
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
         }
         let gateState = await this.readRetentionLockState(gatePath)
@@ -2144,14 +2240,18 @@ export class LocalBlobStore {
   /**
    * Restores a quarantined file to its live path without ever overwriting an occupied live name.
    * Uses a hard link where supported, resuming cleanly if a prior crash left both names linked to
-   * the same file. On volumes without hard links (for example exFAT), creates the live file
-   * exclusively ("wx"), writes and fsyncs the full bytes, syncs the directory, and removes the
-   * held copy. If the live path already exists with identical encrypted bytes, removes the held
-   * copy; for any other occupied live path (including 0-byte or partial files), never overwrites
-   * live because .tvb names are path-addressed and cross-process writers can target the same path.
+   * the same file or with identical encrypted bytes. On volumes without hard links (for example
+   * exFAT), never creates a new copy at live: an identical live file reconciles by removing held,
+   * any different occupied live path uses keep-both conflict handling, and an absent live path
+   * keeps held in place and reports that the drive does not support hard-link restore.
    * Returns the restored file's ETag only when bound to the exact file just restored.
    */
-  private async resolveOccupiedLiveOnRestore(held: string, live: string, heldInfo: BigIntStats): Promise<string | undefined> {
+  private async resolveOccupiedLiveOnRestore(
+    held: string,
+    live: string,
+    heldInfo: BigIntStats,
+    allowPrefixDeleteHint = true,
+  ): Promise<string | undefined> {
     if (await isSameFile(held, live)) {
       await removeHeldAfterRestore(held, live)
       return await boundRestoredEtag(live, heldInfo)
@@ -2161,7 +2261,7 @@ export class LocalBlobStore {
       await removeHeldAfterRestore(held, live)
       return await boundRestoredEtag(live, identical.liveInfo)
     }
-    const prefix = await liveHeldPrefixInfo(live, held)
+    const prefix = allowPrefixDeleteHint ? await liveHeldPrefixInfo(live, held) : null
     throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
   }
 
@@ -2169,7 +2269,6 @@ export class LocalBlobStore {
     held: string,
     live: string,
     dir: string,
-    removeLiveIfHeldMissing = false,
   ): Promise<string | undefined> {
     const heldInfo = await lstat(held, { bigint: true })
     if (this.hardLinks) {
@@ -2184,285 +2283,17 @@ export class LocalBlobStore {
         if (linked) throw error
         const code = (error as NodeJS.ErrnoException).code ?? ""
         if (code === "EEXIST") {
-          return await this.resolveOccupiedLiveOnRestore(held, live, heldInfo)
+          return await this.resolveOccupiedLiveOnRestore(held, live, heldInfo, true)
         }
         if (!NO_HARD_LINKS.has(code)) throw error
         this.hardLinks = false
       }
     }
-    // Bind the bytes read from held to an open handle's identity before creating live.
-    let data: Buffer
-    let readHeldInfo: BigIntStats
-    let heldHandle: Awaited<ReturnType<typeof open>> | undefined
-    try {
-      heldHandle = await open(held, "r")
-      const beforeRead = await heldHandle.stat({ bigint: true })
-      if (!beforeRead.isFile() || beforeRead.ino === 0n
-        || beforeRead.dev !== heldInfo.dev || beforeRead.ino !== heldInfo.ino
-        || beforeRead.size !== heldInfo.size || beforeRead.mtimeNs !== heldInfo.mtimeNs) {
-        const liveNow = await lstat(live, { bigint: true }).catch(() => null)
-        throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), true)
-      }
-      data = await heldHandle.readFile()
-      readHeldInfo = await heldHandle.stat({ bigint: true })
-      if (!readHeldInfo.isFile() || readHeldInfo.ino === 0n
-        || readHeldInfo.dev !== beforeRead.dev || readHeldInfo.ino !== beforeRead.ino
-        || readHeldInfo.size !== beforeRead.size || readHeldInfo.mtimeNs !== beforeRead.mtimeNs
-        || data.length !== Number(readHeldInfo.size)) {
-        const liveNow = await lstat(live, { bigint: true }).catch(() => null)
-        throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), true)
-      }
-    } finally {
-      await heldHandle?.close().catch(() => undefined)
+    const liveInfo = await lstat(live, { bigint: true }).catch(error => isMissing(error) ? null : undefined)
+    if (liveInfo !== null) {
+      return await this.resolveOccupiedLiveOnRestore(held, live, heldInfo, false)
     }
-    // Re-check right before creating live that held still exists and matches the read handle.
-    const heldBeforeCreate = await lstat(held, { bigint: true })
-    if (!heldBeforeCreate.isFile() || heldBeforeCreate.ino === 0n
-      || heldBeforeCreate.dev !== readHeldInfo.dev || heldBeforeCreate.ino !== readHeldInfo.ino
-      || heldBeforeCreate.size !== readHeldInfo.size || heldBeforeCreate.mtimeNs !== readHeldInfo.mtimeNs) {
-      const liveNow = await lstat(live, { bigint: true }).catch(() => null)
-      throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), true)
-    }
-    let handle: Awaited<ReturnType<typeof open>>
-    try {
-      handle = await open(live, "wx+", 0o600)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        return await this.resolveOccupiedLiveOnRestore(held, live, heldInfo)
-      }
-      throw error
-    }
-    let createdInfo: BigIntStats | undefined
-    let writtenInfo: BigIntStats
-    let closed = false
-    try {
-      createdInfo = await handle.stat({ bigint: true })
-      await handle.writeFile(data)
-      await handle.sync()
-      writtenInfo = await handle.stat({ bigint: true })
-      if (writtenInfo.size !== BigInt(data.length)) {
-        throw new Error(`Incomplete copy while restoring ${held} to ${live}`)
-      }
-    } catch (error) {
-      // Remove our own partial file by renaming live aside and verifying its identity on the
-      // aside file before unlinking, avoiding any check-to-unlink race on live.
-      let conflictError: QuarantineRestoreConflictError | undefined
-      try {
-        if (createdInfo && createdInfo.ino !== 0n) {
-          const handleInfo = await handle.stat({ bigint: true })
-          if (handleInfo.isFile() && handleInfo.ino !== 0n
-            && handleInfo.dev === createdInfo.dev && handleInfo.ino === createdInfo.ino
-            && handleInfo.size <= BigInt(data.length)) {
-            const size = Number(handleInfo.size)
-            let onlyOurPrefix = true
-            if (size > 0) {
-              const buf = Buffer.alloc(size)
-              let offset = 0
-              while (offset < size) {
-                const { bytesRead } = await handle.read(buf, offset, size - offset, offset)
-                if (bytesRead === 0) break
-                offset += bytesRead
-              }
-              onlyOurPrefix = offset === size && buf.equals(data.subarray(0, size))
-            }
-            if (onlyOurPrefix) {
-              const afterRead = await handle.stat({ bigint: true })
-              const liveInfo = await lstat(live, { bigint: true })
-              if (fileStamp(afterRead) === fileStamp(handleInfo)
-                && liveInfo.isFile() && liveInfo.ino !== 0n
-                && liveInfo.dev === createdInfo.dev && liveInfo.ino === createdInfo.ino
-                && fileStamp(liveInfo) === fileStamp(handleInfo)) {
-                if (process.platform === "win32") {
-                  await handle.close()
-                  closed = true
-                }
-                const aside = `${live}.${randomBytes(8).toString("hex")}.partial`
-                let movedAside = false
-                try {
-                  await rename(live, aside)
-                  movedAside = true
-                } catch {
-                  // Live disappeared or could not be moved aside; leave live untouched.
-                }
-                if (movedAside) {
-                  let samePartial = false
-                  try {
-                    const asideInfo = await lstat(aside, { bigint: true })
-                    samePartial = asideInfo.isFile() && asideInfo.ino !== 0n
-                      && asideInfo.dev === createdInfo.dev
-                      && asideInfo.ino === createdInfo.ino
-                      && asideInfo.size === handleInfo.size
-                      && asideInfo.mtimeNs === handleInfo.mtimeNs
-                    if (samePartial && !closed) {
-                      const currentHandleInfo = await handle.stat({ bigint: true })
-                      samePartial = fileStamp(currentHandleInfo) === fileStamp(asideInfo)
-                    }
-                  } catch {
-                    samePartial = false
-                  }
-                  if (samePartial) {
-                    await rm(aside)
-                  } else {
-                    const movedBack = await this.moveAsideBackIfFree(aside, live, dir)
-                    if (movedBack) {
-                      const prefix = await liveHeldPrefixInfo(live, held)
-                      conflictError = new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
-                    } else {
-                      conflictError = new QuarantineRestoreConflictError(held, live, false, undefined, undefined, aside)
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      } catch {
-        // Leave live in place if identity cannot be proved.
-      }
-      if (!closed) await handle.close().catch(() => undefined)
-      if (conflictError) throw conflictError
-      throw error
-    }
-    await handle.close()
-    if (process.platform !== "win32") await syncDirectory(dir)
-    if (removeLiveIfHeldMissing) {
-      let heldGone = false
-      let heldChanged = false
-      try {
-        const heldBeforeRemove = await lstat(held, { bigint: true })
-        if (!heldBeforeRemove.isFile() || heldBeforeRemove.ino === 0n
-          || heldBeforeRemove.dev !== readHeldInfo.dev || heldBeforeRemove.ino !== readHeldInfo.ino
-          || heldBeforeRemove.size !== readHeldInfo.size || heldBeforeRemove.mtimeNs !== readHeldInfo.mtimeNs) {
-          heldChanged = true
-        }
-      } catch (error) {
-        if (isMissing(error)) heldGone = true
-        else throw error
-      }
-      if (!heldGone && !heldChanged) {
-        try {
-          await rm(held)
-        } catch (error) {
-          if (isMissing(error)) heldGone = true
-          else throw error
-        }
-      }
-      if (heldGone || heldChanged) {
-        await this.cleanupCreatedLiveAfterHeldGone(held, live, dir, writtenInfo, heldChanged)
-        if (heldChanged) throw new QuarantineRestoreInterruptedError(held, live, false, true)
-        return undefined
-      }
-      return await boundRestoredEtag(live, writtenInfo)
-    }
-    await removeHeldAfterRestore(held, live)
-    return await boundRestoredEtag(live, writtenInfo)
-  }
-
-  /**
-   * Removes a `live` file created during copy restore when `held` disappeared or changed before
-   * removal. Renames `live` aside, verifies its identity matches `writtenInfo` before unlinking,
-   * and moves an unmatched file back into `live` if free or keeps it aside and reports a conflict.
-   */
-  private async cleanupCreatedLiveAfterHeldGone(
-    held: string,
-    live: string,
-    dir: string,
-    writtenInfo: BigIntStats,
-    heldExists: boolean,
-  ): Promise<void> {
-    if (!writtenInfo.isFile() || writtenInfo.ino === 0n) {
-      const liveNow = await lstat(live, { bigint: true }).catch(() => null)
-      throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), heldExists)
-    }
-    const liveBeforeAside = await lstat(live, { bigint: true }).catch(error => isMissing(error) ? null : undefined)
-    if (liveBeforeAside === null) return
-    if (!liveBeforeAside || !liveBeforeAside.isFile() || liveBeforeAside.ino === 0n
-      || liveBeforeAside.dev !== writtenInfo.dev || liveBeforeAside.ino !== writtenInfo.ino
-      || fileStamp(liveBeforeAside) !== fileStamp(writtenInfo)) {
-      throw new QuarantineRestoreInterruptedError(held, live, true, heldExists)
-    }
-    const aside = `${live}.${randomBytes(8).toString("hex")}.partial`
-    try {
-      await rename(live, aside)
-    } catch (error) {
-      if (isMissing(error)) return
-      const liveNow = await lstat(live, { bigint: true }).catch(() => null)
-      throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), heldExists)
-    }
-    let sameCreated = false
-    try {
-      const asideInfo = await lstat(aside, { bigint: true })
-      sameCreated = asideInfo.isFile() && asideInfo.ino !== 0n
-        && asideInfo.dev === writtenInfo.dev
-        && asideInfo.ino === writtenInfo.ino
-        && asideInfo.size === writtenInfo.size
-        && asideInfo.mtimeNs === writtenInfo.mtimeNs
-    } catch {
-      sameCreated = false
-    }
-    if (sameCreated) {
-      await rm(aside)
-      if (process.platform !== "win32") await syncDirectory(dir)
-      return
-    }
-    const movedBack = await this.moveAsideBackIfFree(aside, live, dir)
-    if (movedBack) {
-      throw new QuarantineRestoreInterruptedError(held, live, true, heldExists)
-    }
-    throw new QuarantineRestoreConflictError(held, live, false, undefined, undefined, aside)
-  }
-
-  /**
-   * Moves an unverified aside file back to `live` only when `live` is free.
-   * Uses a hard link where supported, otherwise creates `live` exclusively ("wx")
-   * and copies the bytes without ever overwriting an occupied `live`.
-   */
-  private async moveAsideBackIfFree(aside: string, live: string, dir: string): Promise<boolean> {
-    if (this.hardLinks) {
-      try {
-        await link(aside, live)
-        if (process.platform !== "win32") await syncDirectory(dir)
-        await rm(aside, { force: true }).catch(() => undefined)
-        return true
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code ?? ""
-        if (code === "EEXIST") return false
-        if (!NO_HARD_LINKS.has(code)) return false
-        this.hardLinks = false
-      }
-    }
-    let src: Awaited<ReturnType<typeof open>> | undefined
-    let dst: Awaited<ReturnType<typeof open>> | undefined
-    try {
-      const asideLinkInfo = await lstat(aside, { bigint: true })
-      if (!asideLinkInfo.isFile() || asideLinkInfo.ino === 0n) return false
-      src = await open(aside, "r")
-      const before = await src.stat({ bigint: true })
-      if (!before.isFile() || before.ino === 0n || before.dev !== asideLinkInfo.dev || before.ino !== asideLinkInfo.ino) {
-        return false
-      }
-      const bytes = await src.readFile()
-      const after = await src.stat({ bigint: true })
-      if (fileStamp(before) !== fileStamp(after)) return false
-      dst = await open(live, "wx", 0o600)
-      await dst.writeFile(bytes)
-      await dst.sync()
-      const dstInfo = await dst.stat({ bigint: true })
-      if (dstInfo.size !== BigInt(bytes.length)) return false
-      await dst.close()
-      dst = undefined
-      if (process.platform !== "win32") await syncDirectory(dir)
-      const asideAfter = await lstat(aside, { bigint: true })
-      if (fileStamp(asideAfter) === fileStamp(after)) {
-        await rm(aside, { force: true }).catch(() => undefined)
-      }
-      return true
-    } catch {
-      if (dst) await dst.close().catch(() => undefined)
-      return false
-    } finally {
-      await src?.close().catch(() => undefined)
-    }
+    throw new QuarantineRestoreUnsupportedError(held, live)
   }
 
   private async recoverRetired(dir: string, account: string, container: string, names: string[]): Promise<DamagedFile[]> {
@@ -2526,7 +2357,7 @@ export class LocalBlobStore {
                 conflictReason = conflictReasonText(livePath, path, false, asidePath)
                 conflict = { held: path, live: livePath, liveFile: file, blobName, liveIsHeldPrefix: false, aside: asidePath }
               } else {
-                await this.restoreQuarantinedFile(path, join(dir, file), dir, true)
+                await this.restoreQuarantinedFile(path, join(dir, file), dir)
                 await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
                 await rmdir(join(dir, folder)).catch(() => undefined)
                 continue
@@ -2540,6 +2371,8 @@ export class LocalBlobStore {
           conflictReason = error.liveExists
             ? `restoring ${path} to ${join(dir, file)} was interrupted when the held file disappeared while the live file was present`
             : `restoring ${path} to ${join(dir, file)} was interrupted when the held file disappeared`
+        } else if (error instanceof QuarantineRestoreUnsupportedError) {
+          conflictReason = `a file was kept at ${error.held} after interrupted cleanup (live path ${error.live}) because this drive type does not support hard links. Keep ${error.held} and move the backup folder to an NTFS, APFS or ext4 drive so TenuVault can restore it safely, or contact support.`
         } else if (error instanceof QuarantineRestoreConflictError) {
           const existingPartial = partialFilesByLive.get(file)?.[0]
           const aside = error.aside ?? (existingPartial ? join(dir, existingPartial) : undefined)

@@ -361,7 +361,11 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       if (caught.holderId) headers["x-tenuvault-lock-holder"] = encodeURIComponent(caught.holderId)
       return error(409, caught.code ?? "LeaseAlreadyPresent", caught.message, Object.keys(headers).length ? headers : undefined)
     }
-    if (caught instanceof BlobLeaseUnsupportedError) return error(409, "LeaseUnavailable", caught.message)
+    if (caught instanceof BlobLeaseUnsupportedError) {
+      const headers: Record<string, string> = { ...unchanged }
+      if (caught.lockPath) headers["x-tenuvault-lock-path"] = encodeURIComponent(caught.lockPath)
+      return error(409, caught.code ?? "LeaseUnavailable", caught.message, Object.keys(headers).length ? headers : undefined)
+    }
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.", unchanged)
     if (caught instanceof BlobQuarantinedError) return error(412, "BlobQuarantined", caught.message)
     if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.", unchanged)

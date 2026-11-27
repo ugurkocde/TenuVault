@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import * as fsPromises from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
-import { basename, join } from "node:path"
+import { dirname, join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, NetworkCircuit } from "../src/main/backup/engine"
 import { BlobLeaseError, BlobWriter } from "../src/main/backup/blob-writer"
@@ -13,10 +13,12 @@ import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage
 import {
   BlobDeleteInterruptedError,
   BlobLeaseConflictError,
+  BlobLeaseUnsupportedError,
   BlobProtectedError,
   BlobQuarantinedError,
   compareProcessStart,
   createProcessInfoReader,
+  hardLinksUnsupportedWarning,
   IncompleteInventoryError,
   LocalBlobStore,
   parseDarwinPsStart,
@@ -39,6 +41,7 @@ vi.mock("node:fs/promises", async original => {
     rename: vi.fn(actual.rename),
     link: vi.fn(actual.link),
     open: vi.fn(actual.open),
+    readdir: vi.fn(actual.readdir),
     readFile: vi.fn(actual.readFile),
     rm: vi.fn(actual.rm),
   }
@@ -899,7 +902,7 @@ describe("round 5 CodeRabbit fixes", () => {
     }
   })
 
-  it("4721701734: recovers quarantined files safely without hard links (exFAT), never overwrites an occupied live name, and resumes after copy crash", async () => {
+  it("4721701734: existing quarantined files without hard links (exFAT) never create new copies, resolve identical live copies, and keep both on conflict", async () => {
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
     const root = mkdtempSync(join(tmpdir(), "tv-retired-no-hardlinks-")); roots.push(root)
     const store = new LocalBlobStore(root, [MASTER])
@@ -914,7 +917,7 @@ describe("round 5 CodeRabbit fixes", () => {
 
     const oldTime = (Date.now() - 120_000) / 1000
     try {
-      // Case A: live is absent -> exclusive create + copy + fsync restores live and removes held.
+      // Case A: live is absent -> never creates a new copy; keeps held untouched and reports damage.
       const retired1 = join(dir, ".retired-exfat1")
       mkdirSync(retired1)
       renameSync(join(dir, tvbFile), join(retired1, tvbFile))
@@ -924,12 +927,17 @@ describe("round 5 CodeRabbit fixes", () => {
       utimesSync(retired1, oldTime, oldTime)
 
       const damage1 = await store.damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(damage1.files).toEqual([])
-      expect(existsSync(retired1)).toBe(false)
-      expect(existsSync(join(dir, tvbFile))).toBe(true)
-      expect((await store.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe('{"Status":"Success","exfat":1}')
+      expect(damage1.files).toHaveLength(1)
+      expect(damage1.files[0]!.file).toBe(`.retired-exfat1/${tvbFile}`)
+      expect(damage1.files[0]!.reason).toContain("does not support hard links")
+      expect(existsSync(join(retired1, tvbFile))).toBe(true)
+      expect(existsSync(join(dir, tvbFile))).toBe(false)
 
-      // Case B: crash after copy+fsync before rm(held) -> live and held have identical encrypted bytes -> resumes cleanly.
+      // Move held back to live to test occupied-live cases without creating copies.
+      renameSync(join(retired1, tvbFile), join(dir, tvbFile))
+      rmSync(retired1, { recursive: true, force: true })
+
+      // Case B: live and held have identical encrypted bytes -> reconciles by removing held without copying.
       const retired2 = join(dir, ".retired-exfat2")
       mkdirSync(retired2)
       writeFileSync(join(retired2, tvbFile), readFileSync(join(dir, tvbFile)))
@@ -943,7 +951,7 @@ describe("round 5 CodeRabbit fixes", () => {
       expect(existsSync(retired2)).toBe(false)
       expect(existsSync(join(dir, tvbFile))).toBe(true)
 
-      // Case C: live is occupied by a DIFFERENT file -> open("wx") never overwrites live and damage is reported.
+      // Case C: live is occupied by a DIFFERENT file -> never overwrites live and keeps both files.
       const retired3 = join(dir, ".retired-exfat3")
       mkdirSync(retired3)
       writeFileSync(join(retired3, tvbFile), readFileSync(join(dir, tvbFile)))
@@ -1601,7 +1609,6 @@ describe("round 7 findings", () => {
     const progressKey = `${TENANT}/${ACCOUNT}/false`
 
     let quarantineRenames = 0
-    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
       await actual.rename(from, to)
       if (String(to).includes(".retired-")) {
@@ -1704,9 +1711,8 @@ describe("round 7 findings", () => {
 })
 
 describe("round 8 findings", () => {
-  it("P2.1: removes our own partial live file on copy error during recovery so the next scan retries cleanly, but keeps live if another writer replaced it", async () => {
-    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
-    const root = mkdtempSync(join(tmpdir(), "tv-r8-partial-clean-")); roots.push(root)
+  it("P2.1: leftover .partial files from earlier runs are kept untouched and reported with keep-both guidance", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-partial-keep-")); roots.push(root)
     const store = new LocalBlobStore(root, [MASTER])
     await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
@@ -1714,73 +1720,16 @@ describe("round 8 findings", () => {
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","round":8}'), "application/json")
     const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
     const livePath = join(dir, tvbFile)
-    const fullBytes = readFileSync(livePath)
-    const oldTime = (Date.now() - 120_000) / 1000
+    const partialName = `${tvbFile}.deadbeef12345678.partial`
+    const partialPath = join(dir, partialName)
+    writeFileSync(partialPath, Buffer.from("leftover-aside-bytes"))
 
-    const retired = join(dir, ".retired-err1")
-    const held = join(retired, tvbFile)
-    mkdirSync(retired)
-    renameSync(livePath, held)
-    writeFileSync(join(retired, ".quarantined"), "")
-    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
-    utimesSync(retired, oldTime, oldTime)
-
-    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
-    let failWrite = true
-    vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-      const handle = await actual.open(file, flags as never, mode as never)
-      if (String(file) === livePath && String(flags).startsWith("wx") && failWrite) {
-        const realWriteFile = handle.writeFile.bind(handle)
-        handle.writeFile = (async (data: Parameters<typeof handle.writeFile>[0]) => {
-          const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as Uint8Array)
-          await realWriteFile(buf.subarray(0, Math.floor(buf.length / 2)))
-          throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" })
-        }) as typeof handle.writeFile
-      }
-      return handle
-    })
-    try {
-      const firstDamage = await store.damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(firstDamage.files).toHaveLength(1)
-      expect(existsSync(livePath)).toBe(false)
-      expect(existsSync(held)).toBe(true)
-
-      failWrite = false
-      vi.mocked(fsPromises.open).mockImplementation(actual.open)
-      const secondDamage = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(secondDamage.files).toEqual([])
-      expect(secondDamage.unavailable.size).toBe(0)
-      expect(existsSync(held)).toBe(false)
-      expect(readFileSync(livePath).equals(fullBytes)).toBe(true)
-
-      const retired2 = join(dir, ".retired-err2")
-      const held2 = join(retired2, tvbFile)
-      mkdirSync(retired2)
-      renameSync(livePath, held2)
-      writeFileSync(join(retired2, ".quarantined"), "")
-      utimesSync(join(retired2, ".quarantined"), oldTime, oldTime)
-      utimesSync(retired2, oldTime, oldTime)
-
-      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-        const handle = await actual.open(file, flags as never, mode as never)
-        if (String(file) === livePath && String(flags).startsWith("wx")) {
-          handle.writeFile = (async () => {
-            const replacement = join(dir, `${tvbFile}.other.tmp`)
-            writeFileSync(replacement, Buffer.from("concurrent-writer-data"))
-            renameSync(replacement, livePath)
-            throw Object.assign(new Error("I/O error"), { code: "EIO" })
-          }) as typeof handle.writeFile
-        }
-        return handle
-      })
-      await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(existsSync(livePath)).toBe(true)
-      expect(readFileSync(livePath).toString()).toBe("concurrent-writer-data")
-      expect(existsSync(held2)).toBe(true)
-    } finally {
-      vi.mocked(fsPromises.open).mockImplementation(actual.open)
-      vi.mocked(fsPromises.link).mockImplementation(actual.link)
-    }
+    const damage = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+    expect(existsSync(partialPath)).toBe(true)
+    expect(existsSync(livePath)).toBe(true)
+    const entry = damage.files.find(f => f.file === partialName)
+    expect(entry).toBeDefined()
+    expect(entry!.reason).toContain(`Keep both files (${livePath} and ${partialPath})`)
   })
 
   it("P2.2: conflict warning and delete-blocked error name both paths with plain resolution steps, and deleting partial live restores the backup on next scan", async () => {
@@ -1808,7 +1757,6 @@ describe("round 8 findings", () => {
     utimesSync(retired, oldTime, oldTime)
     writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
 
-    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     try {
       const fresh = new LocalBlobStore(root, [MASTER])
       const damage = await fresh.damage(ACCOUNT, BACKUP_CONTAINER)
@@ -1882,7 +1830,6 @@ describe("round 8 findings", () => {
     utimesSync(retired, oldTime, oldTime)
     writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
 
-    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     try {
       const fresh = new LocalBlobStore(root, [MASTER])
 
@@ -1972,17 +1919,15 @@ describe("round 8 findings", () => {
       }
       return actual.rename(from, to)
     })
-    vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-      if (String(file) === livePath && String(flags) === "wx+") {
-        try {
-          return await actual.open(file, flags as never, mode as never)
-        } catch (error) {
-          recoveryHitLive()
-          await waitRecoveryContinue
-          throw error
-        }
+    let hitLiveCheck = false
+    vi.mocked(fsPromises.lstat).mockImplementation(async (file, options) => {
+      const result = await actual.lstat(file as never, options as never)
+      if (!hitLiveCheck && String(file) === livePath && existsSync(heldPath)) {
+        hitLiveCheck = true
+        recoveryHitLive()
+        await waitRecoveryContinue
       }
-      return actual.open(file, flags as never, mode as never)
+      return result
     })
 
     let putPromise: Promise<unknown> | undefined
@@ -2020,7 +1965,7 @@ describe("round 8 findings", () => {
       await Promise.allSettled([putPromise, recoveryPromise].filter((p): p is Promise<unknown> => Boolean(p)))
       vi.mocked(fsPromises.link).mockImplementation(actual.link)
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-      vi.mocked(fsPromises.open).mockImplementation(actual.open)
+      vi.mocked(fsPromises.lstat).mockImplementation(actual.lstat)
     }
   })
 
@@ -2208,7 +2153,6 @@ describe("round 9 findings", () => {
     writeFileSync(livePath, Buffer.from("smaller-newer-non-prefix-bytes"))
 
     const expectedKeepBoth = `Keep both files (${livePath} and ${heldPath}), do not delete either, and contact support with both paths.`
-    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     try {
       const fresh = new LocalBlobStore(root, [MASTER])
       const damage = await fresh.damage(ACCOUNT, BACKUP_CONTAINER)
@@ -2281,7 +2225,6 @@ describe("round 9 findings", () => {
     writeFileSync(livePath, prefixBytes)
 
     const expectedDelete = `Close TenuVault on every computer that uses this backup folder. Then copy the backup folder somewhere safe, then delete the file at ${livePath}. TenuVault then restores it from ${heldPath} on the next start.`
-    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     try {
       const fresh = new LocalBlobStore(root, [MASTER])
       const damage = await fresh.damage(ACCOUNT, BACKUP_CONTAINER)
@@ -2352,7 +2295,6 @@ describe("round 9 findings", () => {
     writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
 
     const expectedKeepBoth = `Keep both files (${livePath} and ${heldPath}), do not delete either, and contact support with both paths.`
-    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     try {
       // Part A: Detection caches liveIsHeldPrefix=true; live is overwritten in-place (dir mtime unchanged)
       // before cached get/delete/put use the stored conflict. All three must re-validate and fall back to keep-both.
@@ -2414,148 +2356,6 @@ describe("round 9 findings", () => {
       expect(pauseLine).toContain("retention of unrelated expired backups continues")
     }
   })
-
-  it("P3: partial copy cleanup renames live aside and verifies identity before unlink, moving back on mismatch or keeping aside when live is occupied", async () => {
-    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
-    const root = mkdtempSync(join(tmpdir(), "tv-r9-p3-race-")); roots.push(root)
-    const store = new LocalBlobStore(root, [MASTER])
-    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
-    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
-    const backupId = "backup-2026-08-01-020000"
-    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
-    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
-    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
-
-    const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
-    const payloadFile = entries.get(`${backupId}/DeviceConfigurations/Old.json`)!.file
-    const livePath = join(dir, payloadFile)
-    const oldTime = (Date.now() - 120_000) / 1000
-
-    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
-    try {
-      // Subcase A: Writer replaces live AFTER pre-cleanup lstat(live) and BEFORE rename(live, aside).
-      const retiredA = join(dir, ".retired-p3a")
-      const heldA = join(retiredA, payloadFile)
-      mkdirSync(retiredA)
-      renameSync(livePath, heldA)
-      writeFileSync(join(retiredA, ".quarantined"), "")
-      utimesSync(join(retiredA, ".quarantined"), oldTime, oldTime)
-      utimesSync(retiredA, oldTime, oldTime)
-
-      let writeFailedA = false
-      let raceInjectedA = false
-      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-        const handle = await actual.open(file, flags as never, mode as never)
-        if (String(file) === livePath && String(flags) === "wx+") {
-          const realWriteFile = handle.writeFile.bind(handle)
-          handle.writeFile = (async (data: Parameters<typeof handle.writeFile>[0]) => {
-            const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as Uint8Array)
-            await realWriteFile(buf.subarray(0, Math.floor(buf.length / 2)))
-            writeFailedA = true
-            throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" })
-          }) as typeof handle.writeFile
-        }
-        return handle
-      })
-      vi.mocked(fsPromises.lstat).mockImplementation(async (file, options) => {
-        const info = await actual.lstat(file as never, options as never)
-        if (writeFailedA && !raceInjectedA && String(file) === livePath) {
-          raceInjectedA = true
-          const replacement = join(dir, `${payloadFile}.raceA.tmp`)
-          writeFileSync(replacement, Buffer.from("writer-b-data-preserved"))
-          renameSync(replacement, livePath)
-        }
-        return info
-      })
-
-      const damageA = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(raceInjectedA).toBe(true)
-      expect(existsSync(livePath)).toBe(true)
-      expect(readFileSync(livePath).toString()).toBe("writer-b-data-preserved")
-      expect(existsSync(heldA)).toBe(true)
-      expect(readdirSync(dir).filter(f => f.endsWith(".partial"))).toEqual([])
-      const entryA = damageA.files.find(f => f.file === `.retired-p3a/${payloadFile}`)
-      expect(entryA?.conflict?.liveIsHeldPrefix).toBe(false)
-      expect(entryA!.reason).toContain(`Keep both files (${livePath} and ${heldA}), do not delete either, and contact support with both paths.`)
-
-      // Subcase B: Writer B replaces live before rename(live, aside), AND Writer C occupies live
-      // right after rename(live, aside).
-      const rootB = mkdtempSync(join(tmpdir(), "tv-r9-p3-raceb-")); roots.push(rootB)
-      vi.mocked(fsPromises.open).mockImplementation(actual.open)
-      vi.mocked(fsPromises.lstat).mockImplementation(actual.lstat)
-      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-      const storeB = new LocalBlobStore(rootB, [MASTER])
-      await storeB.createContainer(ACCOUNT, BACKUP_CONTAINER)
-      const dirB = join(rootB, ACCOUNT, BACKUP_CONTAINER)
-      await storeB.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
-      await storeB.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
-      await storeB.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
-      const entriesB = await (storeB as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
-      const payloadFileB = entriesB.get(`${backupId}/DeviceConfigurations/Old.json`)!.file
-      const livePathB = join(dirB, payloadFileB)
-      const retiredDirB = join(dirB, ".retired-p3b2")
-      const heldPathB = join(retiredDirB, payloadFileB)
-      mkdirSync(retiredDirB)
-      renameSync(livePathB, heldPathB)
-      writeFileSync(join(retiredDirB, ".quarantined"), "")
-      utimesSync(join(retiredDirB, ".quarantined"), oldTime, oldTime)
-      utimesSync(retiredDirB, oldTime, oldTime)
-
-      let writeFailedB = false
-      let raceBInjected = false
-      let writerCInjected = false
-      let asidePathB = ""
-      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-        const handle = await actual.open(file, flags as never, mode as never)
-        if (String(file) === livePathB && String(flags) === "wx+") {
-          const realWriteFile = handle.writeFile.bind(handle)
-          handle.writeFile = (async (data: Parameters<typeof handle.writeFile>[0]) => {
-            const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as Uint8Array)
-            await realWriteFile(buf.subarray(0, Math.floor(buf.length / 2)))
-            writeFailedB = true
-            throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" })
-          }) as typeof handle.writeFile
-        }
-        return handle
-      })
-      vi.mocked(fsPromises.lstat).mockImplementation(async (file, options) => {
-        const info = await actual.lstat(file as never, options as never)
-        if (writeFailedB && !raceBInjected && String(file) === livePathB) {
-          raceBInjected = true
-          const replacement = join(dirB, `${payloadFileB}.raceB.tmp`)
-          writeFileSync(replacement, Buffer.from("writer-b-kept-aside"))
-          renameSync(replacement, livePathB)
-        }
-        return info
-      })
-      vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
-        await actual.rename(from, to)
-        if (String(from) === livePathB && String(to).endsWith(".partial") && !writerCInjected) {
-          writerCInjected = true
-          asidePathB = String(to)
-          writeFileSync(livePathB, Buffer.from("writer-c-occupied-live"))
-        }
-      })
-
-      const damageB = await new LocalBlobStore(rootB, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
-      expect(raceBInjected).toBe(true)
-      expect(writerCInjected).toBe(true)
-      expect(readFileSync(livePathB).toString()).toBe("writer-c-occupied-live")
-      expect(existsSync(asidePathB)).toBe(true)
-      expect(readFileSync(asidePathB).toString()).toBe("writer-b-kept-aside")
-      expect(existsSync(heldPathB)).toBe(true)
-      const entryB = damageB.files.find(f => f.file === `.retired-p3b2/${payloadFileB}`)
-      expect(entryB?.conflict?.liveIsHeldPrefix).toBe(false)
-      expect(entryB?.conflict?.aside).toBe(asidePathB)
-      expect(entryB!.reason).toContain(asidePathB)
-      expect(entryB!.reason).toContain(`Keep both files (${livePathB} and ${heldPathB}), do not delete either, and contact support with both paths.`)
-    } finally {
-      vi.mocked(fsPromises.open).mockImplementation(actual.open)
-      vi.mocked(fsPromises.lstat).mockImplementation(actual.lstat)
-      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-      vi.mocked(fsPromises.link).mockImplementation(actual.link)
-    }
-  })
 })
 
 describe("round 10 findings", () => {
@@ -2594,7 +2394,7 @@ describe("round 10 findings", () => {
         await actual.rename(from, to)
         if (String(from) === livePath && String(to).includes(".retired-")) {
           heldPath = String(to)
-          quarantineDir = heldPath.slice(0, heldPath.lastIndexOf("/"))
+          quarantineDir = dirname(heldPath)
           utimesSync(join(quarantineDir, ".quarantined"), oldTime, oldTime)
           utimesSync(quarantineDir, oldTime, oldTime)
           deletePaused()
@@ -2673,7 +2473,7 @@ describe("round 10 findings", () => {
         await actual.rename(from, to)
         if (String(from) === livePath && String(to).includes(".retired-")) {
           heldPath = String(to)
-          quarantineDir = heldPath.slice(0, heldPath.lastIndexOf("/"))
+          quarantineDir = dirname(heldPath)
           utimesSync(join(quarantineDir, ".quarantined"), oldTime, oldTime)
           utimesSync(quarantineDir, oldTime, oldTime)
         }
@@ -2871,417 +2671,303 @@ describe("round 10 findings", () => {
   })
 })
 
-describe("round 11 findings", () => {
-  it("copy restore without hard links aborts before creating live if DELETE succeeds while paused after reading held", async () => {
+describe("round 12 findings", () => {
+  it.each(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"] as const)(
+    "no-hard-link volume (%s): skips local retention deletes with a named, escalating warning while backups, restores, and non-retention deletes keep working",
+    async (code) => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+      const root = mkdtempSync(join(tmpdir(), `tv-r12-nohl-${code.toLowerCase()}-`)); roots.push(root)
+      const store = new LocalBlobStore(root, [MASTER])
+      await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+      const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+
+      const old1 = "backup-2026-08-01-020000/"
+      const old2 = "backup-2026-08-02-020000/"
+      for (const prefix of [old1, old2]) {
+        await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+        await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+        await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+      }
+
+      const progressData = new Map<string, string>()
+      const progress: RetentionProgressStore = {
+        get: key => progressData.get(key) ?? null,
+        set: (key, value) => { progressData.set(key, value) },
+        delete: key => { progressData.delete(key) },
+      }
+      const progressKey = `${TENANT}/${ACCOUNT}/false`
+
+      let linkRefused = true
+      vi.mocked(fsPromises.link).mockImplementation(async (existing, next) => {
+        if (linkRefused) throw Object.assign(new Error(`${code}: hard links unsupported`), { code })
+        return actual.link(existing, next)
+      })
+      try {
+        // Direct acquireRetentionLock refuses with RetentionHardLinksUnsupported and leaves no lock or temp files.
+        const err = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (e: unknown) => e)
+        expect(err).toBeInstanceOf(BlobLeaseUnsupportedError)
+        expect((err as BlobLeaseUnsupportedError).code).toBe("RetentionHardLinksUnsupported")
+        expect((err as BlobLeaseUnsupportedError).lockPath).toBe(dir)
+        expect(readdirSync(dir).filter(f => f.includes(".tenuvault-retention.lock"))).toEqual([])
+
+        // Non-retention delete (such as archive rollback) still works on no-hard-link volumes.
+        const tempBlob = "backup-2026-09-10-020000/metadata.json"
+        const created = await store.put(ACCOUNT, BACKUP_CONTAINER, tempBlob, Buffer.from('{"Status":"Success"}'), "application/json", true)
+        expect((await store.get(ACCOUNT, BACKUP_CONTAINER, tempBlob)).data.toString()).toBe('{"Status":"Success"}')
+        await store.delete(ACCOUNT, BACKUP_CONTAINER, tempBlob, { despiteDamage: true, ifMatch: created.etag })
+        expect(await store.list(ACCOUNT, BACKUP_CONTAINER, "backup-2026-09-10-020000/")).toEqual([])
+
+        // Defense-in-depth: retention-locked delete also refuses when hardLinks is false.
+        const lockPath = join(dir, ".tenuvault-retention.lock")
+        writeFileSync(lockPath, JSON.stringify({ id: "manual-lock", host: hostname(), pid: process.pid, processStart: "ps:1", app: "TenuVault" }))
+        const delErr = await store.delete(ACCOUNT, BACKUP_CONTAINER, `${old1}metadata.json`, { retentionLockId: "manual-lock" }).then(() => null, (e: unknown) => e)
+        rmSync(lockPath, { force: true })
+        expect(delErr).toBeInstanceOf(BlobLeaseUnsupportedError)
+        expect((delErr as BlobLeaseUnsupportedError).code).toBe("RetentionHardLinksUnsupported")
+        expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old1)).length).toBe(3)
+
+        // End-to-end BackupEngine runs: backups & restores succeed, retention deletes nothing,
+        // warning is emitted ONCE per run (not once per expired backup), and escalates on run 3.
+        let clock = new Date(NOW.getTime())
+        const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+        const fetchImpl: typeof fetch = async (input, init) => {
+          const req = new Request(input, init)
+          const url = new URL(req.url)
+          if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), clock)
+          return handleLocalBlobRequest(store, req)
+        }
+        const runBackup = async () => {
+          const engine = new BackupEngine({
+            fetch: fetchImpl,
+            getToken: async () => "token",
+            retentionDays: () => 30,
+            retentionProgress: progress,
+            now: () => clock,
+          })
+          const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+          await engine.waitForJob(job)
+          expect(job.status).toBe("Completed")
+          clock = new Date(clock.getTime() + 2_000)
+          return job
+        }
+
+        const run1 = await runBackup()
+        const warn1 = run1.log.filter(line => line.includes("does not support hard links"))
+        expect(warn1).toHaveLength(1)
+        expect(warn1[0]).toContain(hardLinksUnsupportedWarning(dir))
+        expect(warn1[0]).toContain("NTFS, APFS or ext4")
+        expect(warn1[0]).toContain("Backups and restores keep working")
+        expect(warn1[0]).toContain("delete them manually in TenuVault")
+        expect(run1.log.join("\n")).not.toContain("local retention lock could not be acquired")
+        expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old1)).length).toBe(3)
+        expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old2)).length).toBe(3)
+        expect((await store.get(ACCOUNT, BACKUP_CONTAINER, `${old1}DeviceConfigurations/Old.json`)).data.toString()).toBe(JSON.stringify(OLD_ITEM))
+
+        const run2 = await runBackup()
+        const warn2 = run2.log.filter(line => line.includes("does not support hard links"))
+        expect(warn2).toHaveLength(1)
+        expect(warn2[0]).toContain(hardLinksUnsupportedWarning(dir))
+
+        const run3 = await runBackup()
+        const warn3 = run3.log.filter(line => line.includes("does not support hard links"))
+        expect(warn3).toHaveLength(1)
+        expect(warn3[0]).toContain(hardLinksUnsupportedWarning(dir, 3))
+        expect(warn3[0]).toContain("3 consecutive runs")
+        expect(readRetentionProgress(progressData.get(progressKey)).leaseFailures).toEqual({
+          key: `local:no-hard-links:${dir}`,
+          count: 3,
+        })
+        expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old1)).length).toBe(3)
+        expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old2)).length).toBe(3)
+
+        // Once moved to a hard-link-capable volume (fresh store instance with working link), retention succeeds and clears state.
+        linkRefused = false
+        const movedStore = new LocalBlobStore(root, [MASTER])
+        const movedFetch: typeof fetch = async (input, init) => {
+          const req = new Request(input, init)
+          const url = new URL(req.url)
+          if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), clock)
+          return handleLocalBlobRequest(movedStore, req)
+        }
+        const engineMoved = new BackupEngine({
+          fetch: movedFetch,
+          getToken: async () => "token",
+          retentionDays: () => 30,
+          retentionProgress: progress,
+          now: () => clock,
+        })
+        const run4 = engineMoved.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+        await engineMoved.waitForJob(run4)
+        expect(run4.status).toBe("Completed")
+        expect(await movedStore.list(ACCOUNT, BACKUP_CONTAINER, old1)).toEqual([])
+        expect(await movedStore.list(ACCOUNT, BACKUP_CONTAINER, old2)).toEqual([])
+        expect(readRetentionProgress(progressData.get(progressKey)).leaseFailures).toBeUndefined()
+      } finally {
+        linkRefused = false
+        vi.mocked(fsPromises.link).mockImplementation(actual.link)
+      }
+    },
+  )
+
+  it("existing quarantined file on a no-hard-link volume with a prefix live file uses keep-both guidance and never advises deleting live", async () => {
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
-    const root = mkdtempSync(join(tmpdir(), "tv-r11-copy-pause1-")); roots.push(root)
-    const storeDelete = new LocalBlobStore(root, [MASTER])
-    const storeScan = new LocalBlobStore(root, [MASTER])
-    await storeDelete.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const root = mkdtempSync(join(tmpdir(), "tv-r12-nohl-prefix-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const backupId = "backup-2026-08-01-020000"
-    await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
-    await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
-    const entries = await (storeDelete as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
-    const manifestFile = entries.get(`${backupId}/metadata.json`)!.file
-    const livePath = join(dir, manifestFile)
-    const oldTime = (Date.now() - 120_000) / 1000
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
 
-    let heldPath = ""
-    let deletePaused!: () => void
-    const onDeletePaused = new Promise<void>(resolve => { deletePaused = resolve })
-    let allowDeleteResume!: () => void
-    const waitDeleteResume = new Promise<void>(resolve => { allowDeleteResume = resolve })
-    let scanReadHeld!: () => void
-    const onScanReadHeld = new Promise<void>(resolve => { scanReadHeld = resolve })
-    let allowScanAfterRead!: () => void
-    const waitScanAfterRead = new Promise<void>(resolve => { allowScanAfterRead = resolve })
-    let openLiveAttempts = 0
+    const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
+    const payloadFile = entries.get(`${backupId}/DeviceConfigurations/Old.json`)!.file
+    const livePath = join(dir, payloadFile)
+    const fullBytes = readFileSync(livePath)
+    const retired = join(dir, ".retired-nohlpref")
+    const heldPath = join(retired, payloadFile)
+    const oldTime = (Date.now() - 120_000) / 1000
+    mkdirSync(retired)
+    renameSync(livePath, heldPath)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+    writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
 
     vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
-    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
-      await actual.rename(from, to)
-      if (String(from) === livePath && String(to).includes(".retired-")) {
-        heldPath = String(to)
-        const quarantineDir = heldPath.slice(0, heldPath.lastIndexOf("/"))
-        utimesSync(join(quarantineDir, ".quarantined"), oldTime, oldTime)
-        utimesSync(quarantineDir, oldTime, oldTime)
-        deletePaused()
-        await waitDeleteResume
-      }
-    })
-    vi.mocked(fsPromises.readFile).mockImplementation((async (file: unknown, options: unknown) => {
-      const data = await actual.readFile(file as never, options as never)
-      if (heldPath && String(file) === heldPath) {
-        scanReadHeld()
-        await waitScanAfterRead
-      }
-      return data
-    }) as typeof actual.readFile)
-    vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-      if (String(file) === livePath && String(flags) === "wx+") openLiveAttempts++
-      const handle = await actual.open(file, flags as never, mode as never)
-      if (heldPath && String(file) === heldPath && String(flags) === "r") {
-        const realReadFile = handle.readFile.bind(handle)
-        handle.readFile = (async (...args: Parameters<typeof handle.readFile>) => {
-          const data = await realReadFile(...args)
-          scanReadHeld()
-          await waitScanAfterRead
-          return data
-        }) as typeof handle.readFile
-      }
-      return handle
-    })
-
-    let delPromise: Promise<unknown> | undefined
-    let scanPromise: Promise<unknown> | undefined
     try {
-      delPromise = storeDelete.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, { despiteDamage: true })
-      await onDeletePaused
-
-      scanPromise = storeScan.damage(ACCOUNT, BACKUP_CONTAINER)
-      await onScanReadHeld
-
-      allowDeleteResume()
-      await expect(delPromise).resolves.toBeUndefined()
-      expect(existsSync(heldPath)).toBe(false)
-      expect(existsSync(livePath)).toBe(false)
-
-      allowScanAfterRead()
-      const damage = await scanPromise as Awaited<ReturnType<LocalBlobStore["damage"]>>
-      expect(damage.files).toEqual([])
-      expect(openLiveAttempts).toBe(0)
-      expect(existsSync(livePath)).toBe(false)
-      expect(readdirSync(dir).filter(f => f.endsWith(".partial"))).toEqual([])
+      const damage = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+      const conflictEntry = damage.files.find(f => f.file === `.retired-nohlpref/${payloadFile}`)
+      expect(conflictEntry?.conflict?.liveIsHeldPrefix).toBe(false)
+      expect(conflictEntry!.reason).toContain(`Keep both files (${livePath} and ${heldPath}), do not delete either, and contact support with both paths.`)
+      expect(conflictEntry!.reason).not.toContain("delete the file at")
     } finally {
-      allowDeleteResume()
-      allowScanAfterRead()
-      await Promise.allSettled([delPromise, scanPromise].filter((p): p is Promise<unknown> => Boolean(p)))
       vi.mocked(fsPromises.link).mockImplementation(actual.link)
-      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-      vi.mocked(fsPromises.readFile).mockImplementation(actual.readFile)
-      vi.mocked(fsPromises.open).mockImplementation(actual.open)
     }
   })
 
-  it("copy restore without hard links removes created live via rename-aside if DELETE succeeds between live creation and held removal", async () => {
+  it("4723504745: removes an aged stamp-only quarantine under the retention lock, while refusing recent, unreadable, unlocked, or newly-populated quarantines", async () => {
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r12-empty-q-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+
+    const rep = "backup-2026-10-12-120000/"
+    const old1 = "backup-2026-08-01-020000/"
+    const old2 = "backup-2026-08-02-020000/"
+    const repBlob = await store.put(ACCOUNT, BACKUP_CONTAINER, `${rep}metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+    const old1Blob = await store.put(ACCOUNT, BACKUP_CONTAINER, `${old1}metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+    const old2Blob = await store.put(ACCOUNT, BACKUP_CONTAINER, `${old2}metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+    const expectedReplacements = [{ prefix: rep, blobs: { [`${rep}metadata.json`]: repBlob.etag! } }]
     const oldTime = (Date.now() - 120_000) / 1000
 
-    // Subcase A: Pause right at open(live, "wx+") (after pre-create lstat(held) passed) while an
-    // unmocked DELETE succeeds and removes held. Scan then creates live and hits ENOENT on held,
-    // so it must remove the live file it created via identity-bound rename-aside.
-    {
-      const root = mkdtempSync(join(tmpdir(), "tv-r11-copy-pause2a-")); roots.push(root)
-      const storeDelete = new LocalBlobStore(root, [MASTER])
-      const storeScan = new LocalBlobStore(root, [MASTER])
-      await storeDelete.createContainer(ACCOUNT, BACKUP_CONTAINER)
-      const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
-      const backupId = "backup-2026-08-01-020000"
-      await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
-      await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
-      const entries = await (storeDelete as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
-      const manifestFile = entries.get(`${backupId}/metadata.json`)!.file
-      const livePath = join(dir, manifestFile)
+    // Case 1: Aged stamp-only quarantine without a retention lock -> refused and kept in place.
+    const agedEmpty = join(dir, ".retired-empty1")
+    mkdirSync(agedEmpty)
+    writeFileSync(join(agedEmpty, ".quarantined"), "")
+    utimesSync(join(agedEmpty, ".quarantined"), oldTime, oldTime)
+    utimesSync(agedEmpty, oldTime, oldTime)
 
-      let heldPath = ""
-      let deletePaused!: () => void
-      const onDeletePaused = new Promise<void>(resolve => { deletePaused = resolve })
-      let allowDeleteResume!: () => void
-      const waitDeleteResume = new Promise<void>(resolve => { allowDeleteResume = resolve })
-      let scanBeforeOpenLive!: () => void
-      const onScanBeforeOpenLive = new Promise<void>(resolve => { scanBeforeOpenLive = resolve })
-      let allowScanOpenLive!: () => void
-      const waitScanOpenLive = new Promise<void>(resolve => { allowScanOpenLive = resolve })
+    await expect(store.delete(ACCOUNT, BACKUP_CONTAINER, `${old1}metadata.json`, {
+      ifMatch: old1Blob.etag,
+      expectedReplacements,
+    })).rejects.toThrow(/Replacement backup/)
+    expect(existsSync(agedEmpty)).toBe(true)
 
-      vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
-      vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
-        await actual.rename(from, to)
-        if (String(from) === livePath && String(to).includes(".retired-")) {
-          heldPath = String(to)
-          const quarantineDir = heldPath.slice(0, heldPath.lastIndexOf("/"))
-          utimesSync(join(quarantineDir, ".quarantined"), oldTime, oldTime)
-          utimesSync(quarantineDir, oldTime, oldTime)
-          deletePaused()
-          await waitDeleteResume
+    // Case 2: Under an active retention lock, the aged stamp-only quarantine is removed and delete succeeds.
+    const lockId = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    try {
+      const currentOld1 = (await store.get(ACCOUNT, BACKUP_CONTAINER, `${old1}metadata.json`)).blob.etag
+      await expect(store.delete(ACCOUNT, BACKUP_CONTAINER, `${old1}metadata.json`, {
+        ifMatch: currentOld1,
+        retentionLockId: lockId,
+        expectedReplacements,
+      })).resolves.toBeUndefined()
+      expect(existsSync(agedEmpty)).toBe(false)
+      expect(await store.list(ACCOUNT, BACKUP_CONTAINER, old1)).toEqual([])
+
+      // Case 3: Recent stamp-only quarantine (within 60s grace) -> refused and kept in place even under lock.
+      const recentEmpty = join(dir, ".retired-recent1")
+      mkdirSync(recentEmpty)
+      writeFileSync(join(recentEmpty, ".quarantined"), "")
+
+      await expect(store.delete(ACCOUNT, BACKUP_CONTAINER, `${old2}metadata.json`, {
+        ifMatch: old2Blob.etag,
+        retentionLockId: lockId,
+        expectedReplacements,
+      })).rejects.toThrow(/Replacement backup/)
+      expect(existsSync(recentEmpty)).toBe(true)
+      rmSync(recentEmpty, { recursive: true, force: true })
+
+      // Case 4: Unreadable aged quarantine -> refused and kept in place even under lock.
+      const currentOld2Case4 = (await store.get(ACCOUNT, BACKUP_CONTAINER, `${old2}metadata.json`)).blob.etag
+      const unreadableDir = join(dir, ".retired-unreadable1")
+      mkdirSync(unreadableDir)
+      writeFileSync(join(unreadableDir, ".quarantined"), "")
+      utimesSync(join(unreadableDir, ".quarantined"), oldTime, oldTime)
+      utimesSync(unreadableDir, oldTime, oldTime)
+
+      vi.mocked(fsPromises.readdir).mockImplementation((async (path: unknown, options?: unknown) => {
+        if (String(path) === unreadableDir) {
+          throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })
         }
-      })
-      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-        if (String(file) === livePath && String(flags) === "wx+") {
-          scanBeforeOpenLive()
-          await waitScanOpenLive
-        }
-        return actual.open(file, flags as never, mode as never)
-      })
-
-      let delPromise: Promise<unknown> | undefined
-      let scanPromise: Promise<unknown> | undefined
+        return actual.readdir(path as never, options as never)
+      }) as typeof actual.readdir)
       try {
-        delPromise = storeDelete.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, { despiteDamage: true })
-        await onDeletePaused
-
-        scanPromise = storeScan.damage(ACCOUNT, BACKUP_CONTAINER)
-        await onScanBeforeOpenLive
-
-        allowDeleteResume()
-        await expect(delPromise).resolves.toBeUndefined()
-        expect(existsSync(heldPath)).toBe(false)
-
-        allowScanOpenLive()
-        const damage = await scanPromise as Awaited<ReturnType<LocalBlobStore["damage"]>>
-        expect(damage.files).toEqual([])
-        expect(existsSync(livePath)).toBe(false)
-        expect(readdirSync(dir).filter(f => f.endsWith(".partial"))).toEqual([])
+        await expect(store.delete(ACCOUNT, BACKUP_CONTAINER, `${old2}metadata.json`, {
+          despiteDamage: true,
+          ifMatch: currentOld2Case4,
+          retentionLockId: lockId,
+          expectedReplacements,
+        })).rejects.toThrow(/Replacement backup/)
+        expect(existsSync(unreadableDir)).toBe(true)
       } finally {
-        allowDeleteResume()
-        allowScanOpenLive()
-        await Promise.allSettled([delPromise, scanPromise].filter((p): p is Promise<unknown> => Boolean(p)))
-        vi.mocked(fsPromises.link).mockImplementation(actual.link)
-        vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-        vi.mocked(fsPromises.open).mockImplementation(actual.open)
+        vi.mocked(fsPromises.readdir).mockImplementation(actual.readdir)
+        rmSync(unreadableDir, { recursive: true, force: true })
       }
-    }
 
-    // Subcase B: Scan creates live and pauses right before rm(held); a remote DELETE removes held
-    // and succeeds. Scan resumes, its rm(held) hits ENOENT, and it cleans up the live file it created.
-    {
-      const root = mkdtempSync(join(tmpdir(), "tv-r11-copy-pause2b-")); roots.push(root)
-      const storeDelete = new LocalBlobStore(root, [MASTER])
-      const storeScan = new LocalBlobStore(root, [MASTER])
-      await storeDelete.createContainer(ACCOUNT, BACKUP_CONTAINER)
-      const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
-      const backupId = "backup-2026-08-01-020000"
-      await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
-      await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
-      const entries = await (storeDelete as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
-      const manifestFile = entries.get(`${backupId}/metadata.json`)!.file
-      const livePath = join(dir, manifestFile)
-
-      let heldPath = ""
-      let deletePaused!: () => void
-      const onDeletePaused = new Promise<void>(resolve => { deletePaused = resolve })
-      let allowDeleteResume!: () => void
-      const waitDeleteResume = new Promise<void>(resolve => { allowDeleteResume = resolve })
-      let scanAtRmHeld!: () => void
-      const onScanAtRmHeld = new Promise<void>(resolve => { scanAtRmHeld = resolve })
-      let allowScanRmHeld!: () => void
-      const waitScanRmHeld = new Promise<void>(resolve => { allowScanRmHeld = resolve })
-      let scanCreatedLive = false
-      let hideLiveFromDelete = false
-      let scanRmPaused = false
-
-      vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
-      vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
-        await actual.rename(from, to)
-        if (String(from) === livePath && String(to).includes(".retired-")) {
-          heldPath = String(to)
-          const quarantineDir = heldPath.slice(0, heldPath.lastIndexOf("/"))
-          utimesSync(join(quarantineDir, ".quarantined"), oldTime, oldTime)
-          utimesSync(quarantineDir, oldTime, oldTime)
-          deletePaused()
-          await waitDeleteResume
+      // Case 5: File appears inside aged empty quarantine before re-confirmation -> refused and preserved.
+      const currentOld2Case5 = (await store.get(ACCOUNT, BACKUP_CONTAINER, `${old2}metadata.json`)).blob.etag
+      const racingDir = join(dir, ".retired-racing1")
+      mkdirSync(racingDir)
+      writeFileSync(join(racingDir, ".quarantined"), "")
+      utimesSync(join(racingDir, ".quarantined"), oldTime, oldTime)
+      utimesSync(racingDir, oldTime, oldTime)
+      const appearedFile = join(racingDir, `${"a".repeat(40)}.tvb`)
+      let readdirCalls = 0
+      vi.mocked(fsPromises.readdir).mockImplementation((async (path: unknown, options?: unknown) => {
+        const res = await actual.readdir(path as never, options as never)
+        if (String(path) === racingDir) {
+          readdirCalls++
+          if (readdirCalls === 1) {
+            writeFileSync(appearedFile, Buffer.from("concurrent-held-file"))
+          }
         }
-      })
-      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-        const handle = await actual.open(file, flags as never, mode as never)
-        if (String(file) === livePath && String(flags) === "wx+") {
-          scanCreatedLive = true
-        }
-        return handle
-      })
-      vi.mocked(fsPromises.lstat).mockImplementation(async (file, options) => {
-        if (hideLiveFromDelete && String(file) === livePath) {
-          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" })
-        }
-        return actual.lstat(file as never, options as never)
-      })
-      vi.mocked(fsPromises.rm).mockImplementation(async (target, options) => {
-        if (scanCreatedLive && !scanRmPaused && heldPath && String(target) === heldPath) {
-          scanRmPaused = true
-          scanAtRmHeld()
-          await waitScanRmHeld
-        }
-        return actual.rm(target, options)
-      })
-
-      let delPromise: Promise<unknown> | undefined
-      let scanPromise: Promise<unknown> | undefined
+        return res
+      }) as typeof actual.readdir)
       try {
-        delPromise = storeDelete.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, { despiteDamage: true })
-        await onDeletePaused
-
-        scanPromise = storeScan.damage(ACCOUNT, BACKUP_CONTAINER)
-        await onScanAtRmHeld
-        expect(existsSync(livePath)).toBe(true)
-
-        hideLiveFromDelete = true
-        allowDeleteResume()
-        await expect(delPromise).resolves.toBeUndefined()
-        hideLiveFromDelete = false
-        expect(existsSync(heldPath)).toBe(false)
-        expect(existsSync(livePath)).toBe(true)
-
-        allowScanRmHeld()
-        const damage = await scanPromise as Awaited<ReturnType<LocalBlobStore["damage"]>>
-        expect(damage.files).toEqual([])
-        expect(existsSync(livePath)).toBe(false)
-        expect(readdirSync(dir).filter(f => f.endsWith(".partial"))).toEqual([])
+        await expect(store.delete(ACCOUNT, BACKUP_CONTAINER, `${old2}metadata.json`, {
+          despiteDamage: true,
+          ifMatch: currentOld2Case5,
+          retentionLockId: lockId,
+          expectedReplacements,
+        })).rejects.toThrow(/Replacement backup/)
+        expect(existsSync(appearedFile)).toBe(true)
       } finally {
-        hideLiveFromDelete = false
-        allowDeleteResume()
-        allowScanRmHeld()
-        await Promise.allSettled([delPromise, scanPromise].filter((p): p is Promise<unknown> => Boolean(p)))
-        vi.mocked(fsPromises.link).mockImplementation(actual.link)
-        vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-        vi.mocked(fsPromises.open).mockImplementation(actual.open)
-        vi.mocked(fsPromises.lstat).mockImplementation(actual.lstat)
-        vi.mocked(fsPromises.rm).mockImplementation(actual.rm)
+        vi.mocked(fsPromises.readdir).mockImplementation(actual.readdir)
+        rmSync(racingDir, { recursive: true, force: true })
       }
+    } finally {
+      await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
     }
   })
 
-  it("copy restore rename-aside cleanup moves an unmatched live file back if free, or keeps aside and reports conflict if taken", async () => {
-    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
-    const oldTime = (Date.now() - 120_000) / 1000
-    const backupId = "backup-2026-08-01-020000"
-
-    // Subcase A: Writer B replaces live between pre-rename lstat(live) and rename(live, aside),
-    // and live remains free -> aside mismatch moves Writer B back to live without deleting it.
-    {
-      const root = mkdtempSync(join(tmpdir(), "tv-r11-aside-free-")); roots.push(root)
-      const store = new LocalBlobStore(root, [MASTER])
-      await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
-      const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
-      await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
-      const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
-      const payloadFile = entries.get(`${backupId}/DeviceConfigurations/Old.json`)!.file
-      const livePath = join(dir, payloadFile)
-      const retiredDir = join(dir, ".retired-r11free")
-      const heldPath = join(retiredDir, payloadFile)
-      mkdirSync(retiredDir)
-      renameSync(livePath, heldPath)
-      writeFileSync(join(retiredDir, ".quarantined"), "")
-      utimesSync(join(retiredDir, ".quarantined"), oldTime, oldTime)
-      utimesSync(retiredDir, oldTime, oldTime)
-
-      let createdLive = false
-      let removedHeld = false
-      let writerBInjected = false
-      vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
-      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-        const handle = await actual.open(file, flags as never, mode as never)
-        if (String(file) === livePath && String(flags) === "wx+") createdLive = true
-        return handle
-      })
-      vi.mocked(fsPromises.rm).mockImplementation(async (target, options) => {
-        if (createdLive && !removedHeld && String(target) === heldPath) {
-          removedHeld = true
-          rmSync(heldPath)
-        }
-        return actual.rm(target, options)
-      })
-      vi.mocked(fsPromises.lstat).mockImplementation(async (file, options) => {
-        const info = await actual.lstat(file as never, options as never)
-        if (removedHeld && !writerBInjected && String(file) === livePath) {
-          writerBInjected = true
-          const replacement = join(dir, `${payloadFile}.writerb.tmp`)
-          writeFileSync(replacement, Buffer.from("writer-b-preserved"))
-          renameSync(replacement, livePath)
-        }
-        return info
-      })
-
-      try {
-        const damage = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
-        expect(writerBInjected).toBe(true)
-        expect(existsSync(livePath)).toBe(true)
-        expect(readFileSync(livePath).toString()).toBe("writer-b-preserved")
-        expect(readdirSync(dir).filter(f => f.endsWith(".partial"))).toEqual([])
-        expect(damage.files.some(f => f.reason.includes("interrupted"))).toBe(true)
-      } finally {
-        vi.mocked(fsPromises.link).mockImplementation(actual.link)
-        vi.mocked(fsPromises.open).mockImplementation(actual.open)
-        vi.mocked(fsPromises.rm).mockImplementation(actual.rm)
-        vi.mocked(fsPromises.lstat).mockImplementation(actual.lstat)
-      }
-    }
-
-    // Subcase B: Writer B replaces live before rename(live, aside) AND Writer C occupies live
-    // right after rename(live, aside) -> Writer B stays at aside, Writer C stays at live, conflict reported.
-    {
-      const root = mkdtempSync(join(tmpdir(), "tv-r11-aside-taken-")); roots.push(root)
-      const store = new LocalBlobStore(root, [MASTER])
-      await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
-      const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
-      await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
-      const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
-      const payloadFile = entries.get(`${backupId}/DeviceConfigurations/Old.json`)!.file
-      const livePath = join(dir, payloadFile)
-      const retiredDir = join(dir, ".retired-r11taken")
-      const heldPath = join(retiredDir, payloadFile)
-      mkdirSync(retiredDir)
-      renameSync(livePath, heldPath)
-      writeFileSync(join(retiredDir, ".quarantined"), "")
-      utimesSync(join(retiredDir, ".quarantined"), oldTime, oldTime)
-      utimesSync(retiredDir, oldTime, oldTime)
-
-      let createdLive = false
-      let removedHeld = false
-      let writerBInjected = false
-      let writerCInjected = false
-      let asidePath = ""
-      vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
-      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
-        const handle = await actual.open(file, flags as never, mode as never)
-        if (String(file) === livePath && String(flags) === "wx+") createdLive = true
-        return handle
-      })
-      vi.mocked(fsPromises.rm).mockImplementation(async (target, options) => {
-        if (createdLive && !removedHeld && String(target) === heldPath) {
-          removedHeld = true
-          rmSync(heldPath)
-        }
-        return actual.rm(target, options)
-      })
-      vi.mocked(fsPromises.lstat).mockImplementation(async (file, options) => {
-        const info = await actual.lstat(file as never, options as never)
-        if (removedHeld && !writerBInjected && String(file) === livePath) {
-          writerBInjected = true
-          const replacement = join(dir, `${payloadFile}.writerb.tmp`)
-          writeFileSync(replacement, Buffer.from("writer-b-at-aside"))
-          renameSync(replacement, livePath)
-        }
-        return info
-      })
-      vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
-        await actual.rename(from, to)
-        if (String(from) === livePath && String(to).endsWith(".partial") && !writerCInjected) {
-          writerCInjected = true
-          asidePath = String(to)
-          writeFileSync(livePath, Buffer.from("writer-c-at-live"))
-        }
-      })
-
-      try {
-        const damage = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
-        expect(writerBInjected).toBe(true)
-        expect(writerCInjected).toBe(true)
-        expect(readFileSync(livePath).toString()).toBe("writer-c-at-live")
-        expect(existsSync(asidePath)).toBe(true)
-        expect(readFileSync(asidePath).toString()).toBe("writer-b-at-aside")
-        const entry = damage.files.find(f => f.file === basename(asidePath) || f.conflict?.aside === asidePath)
-        expect(entry).toBeDefined()
-        expect(entry!.reason).toContain(asidePath)
-        expect(entry!.reason).toContain(livePath)
-        expect(entry!.reason).toContain("Keep both files")
-        expect(damage.hasNonConflictDamage).toBe(true)
-      } finally {
-        vi.mocked(fsPromises.link).mockImplementation(actual.link)
-        vi.mocked(fsPromises.open).mockImplementation(actual.open)
-        vi.mocked(fsPromises.rm).mockImplementation(actual.rm)
-        vi.mocked(fsPromises.lstat).mockImplementation(actual.lstat)
-        vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-      }
-    }
+  it("storage docs document the NTFS, APFS or ext4 hard-link requirement for local retention cleanup", () => {
+    const doc = readFileSync(join(process.cwd(), "docs-site/src/content/docs/backups/storage.md"), "utf8")
+    expect(doc).toContain("NTFS, APFS or ext4")
+    expect(doc).toContain("exFAT")
+    expect(doc).toContain("hard links")
+    expect(doc).not.toContain("copying the file on drives without hard links")
   })
 })

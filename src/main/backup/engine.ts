@@ -17,7 +17,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobLeaseError, BlobWriter, ReplacementChangedError, wasDeleteConfirmedUnchanged, type ExpectedReplacement } from "./blob-writer"
-import { createRetentionLeaseManager, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
+import { createRetentionLeaseManager, hardLinksUnsupportedWarning, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
 import { RetentionBudget, RetentionBudgetError, RETENTION_LIMITS, type RetentionLimits } from "./retention-budget"
 import { readRetentionProgress, retentionIdentity, type DeletionJournalEntry, type FreshVerificationProgress, type RetentionProgressStore } from "./retention-progress"
 import { RetentionManifestMismatch, verifyHalf, type VerifiedHalf } from "./retention-verification"
@@ -2767,7 +2767,9 @@ export class BackupEngine {
                 leaseFailureErrorThisRun = error
               }
               warnings++
-              this.write(job, `Kept backup ${primaryPrefix} because the local retention lock could not be acquired: ${error.message.replace(/\.$/, "")}.`, "warning")
+              if (error.code !== "RetentionHardLinksUnsupported") {
+                this.write(job, `Kept backup ${primaryPrefix} because the local retention lock could not be acquired: ${error.message.replace(/\.$/, "")}.`, "warning")
+              }
               completedPlan = false
               break
             }
@@ -2900,10 +2902,20 @@ export class BackupEngine {
             }
             if (error instanceof BlobLeaseError) {
               warnings++
-              const detail = localStorage
-                ? `the local retention lock was lost: ${error.message.replace(/\.$/, "")}`
-                : `replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}`
-              this.write(job, `Kept ${deleted || unit.resumed ? "the remaining files in " : ""}${unit.prefixes.join(", ")} because ${detail}.`, "warning")
+              if (localStorage && error.code === "RetentionHardLinksUnsupported") {
+                const failureKey = leaseFailureKey(true, error)
+                if (failureKey) {
+                  leaseAcquiredThisRun = false
+                  hadLeaseAcquireFailure = true
+                  leaseFailureKeyThisRun = failureKey
+                  leaseFailureErrorThisRun = error
+                }
+              } else {
+                const detail = localStorage
+                  ? `the local retention lock was lost: ${error.message.replace(/\.$/, "")}`
+                  : `replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}`
+                this.write(job, `Kept ${deleted || unit.resumed ? "the remaining files in " : ""}${unit.prefixes.join(", ")} because ${detail}.`, "warning")
+              }
               completedPlan = false
               stopCleanup = true
               break
@@ -2948,6 +2960,9 @@ export class BackupEngine {
         if (count >= PERMANENT_LEASE_FAILURE_RUNS) {
           warnings++
           this.write(job, permanentLeaseFailureWarning(localStorage, count, leaseFailureErrorThisRun), "warning")
+        } else if (localStorage && leaseFailureErrorThisRun?.code === "RetentionHardLinksUnsupported") {
+          warnings++
+          this.write(job, hardLinksUnsupportedWarning(leaseFailureErrorThisRun.lockPath), "warning")
         }
       } else if (hadLeaseAcquireFailure && state.leaseFailures) {
         delete state.leaseFailures
