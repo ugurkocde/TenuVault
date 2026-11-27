@@ -155,6 +155,7 @@ export class BlobNotFoundError extends Error {}
 export class BlobAlreadyExistsError extends Error {}
 /** An If-Match ETag no longer matches the stored blob. */
 export class BlobConditionNotMetError extends Error {}
+export class BlobQuarantinedError extends BlobConditionNotMetError {}
 
 export class IncompleteInventoryError extends Error {
   /** The backup folder that is unavailable, when the error is about one backup. */
@@ -612,7 +613,7 @@ export class LocalBlobStore {
             await link(held, path)
             await rm(held)
           } catch (error) {
-            throw new BlobConditionNotMetError(`A different file was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
+            throw new BlobQuarantinedError(`A different file was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
           }
           throw new BlobConditionNotMetError(name)
         }

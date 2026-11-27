@@ -100,7 +100,11 @@ it.each(['external', 'concurrent'] as const)('keeps the legacy physical filename
   expect(await store.get(account, container, name)).toEqual({ blob: latest, data: finalBody })
 })
 
-it.each([false, true])("preserves a replacement moved into quarantine, occupied live path: %s", async occupied => {
+it.each([
+  { occupied: false, despiteDamage: false },
+  { occupied: true, despiteDamage: false },
+  { occupied: true, despiteDamage: true },
+])("preserves a replacement during conditional deletion ($occupied, rollback $despiteDamage)", async ({ occupied, despiteDamage }) => {
   const root = mkdtempSync(join(tmpdir(), "tv-retire-replacement-")); roots.push(root)
   const store = new LocalBlobStore(root, [randomBytes(32)])
   const account = "account", container = "intune-backups", name = "backup-one/Policies/A.json"
@@ -116,7 +120,7 @@ it.each([false, true])("preserves a replacement moved into quarantine, occupied 
     await actual.rename(from, to)
     if (occupied) await actual.writeFile(live, "new occupant")
   })
-  await expect(store.delete(account, container, name, { ifMatch: first.etag })).rejects.toThrow(occupied ? "kept in" : name)
+  await expect(store.delete(account, container, name, { ifMatch: first.etag, despiteDamage })).rejects.toThrow(occupied ? "kept in" : name)
   if (occupied) {
     expect(readFileSync(live, "utf8")).toBe("new occupant")
     const held = join(dir, readdirSync(dir).find(file => file.startsWith(".retired-"))!)
