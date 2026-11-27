@@ -27,6 +27,14 @@ function unreadableWarning(prefix: string, attempts: number, reason?: string): s
   return `Kept unreadable backup ${prefix} after ${attempts} consecutive failed attempts${detail}. Review it before removing it manually.`
 }
 
+function sameIdentities(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false
+  for (const [name, etag] of a) {
+    if (b.get(name) !== etag) return false
+  }
+  return true
+}
+
 async function verifyReplacementUnchanged(storage: BlobWriter, prefix: string, expected: Map<string, string>): Promise<boolean> {
   const listing = await storage.list(prefix)
   const seen = new Set(listing.blobs)
@@ -454,6 +462,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       throw new RetentionBudgetError()
     }
 
+    let replacementChangedDuringRun: string | undefined
     for (const item of reviewed) {
       const { prefix, time } = item.backup
       visiting = prefix
@@ -536,13 +545,24 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
               if (ownedReplacements?.includes(replacementPrefix)) ownedReplacements = null
               continue
             }
-            replacementIdentities.set(replacementPrefix, fresh.identities)
+            const previousIdentities = replacementIdentities.get(replacementPrefix)
+            if (previousIdentities && !sameIdentities(previousIdentities, fresh.identities)) {
+              replacementChangedDuringRun = replacementPrefix
+              break
+            }
+            if (!previousIdentities) replacementIdentities.set(replacementPrefix, fresh.identities)
             if (replacements.includes(replacementPrefix)) {
               for (const folder of fresh.covers) freshCovered.add(folder)
             }
             if (ownedReplacements?.includes(replacementPrefix)) {
               for (const folder of fresh.covers) freshOwnedCovered.add(folder)
             }
+          }
+          if (replacementChangedDuringRun) {
+            plan.length = 0
+            warning = true
+            notice(`Kept remaining backups because replacement backup ${replacementChangedDuringRun} changed during retention.`, "warning")
+            break
           }
           if (ownedReplacements && !journal.noTypes && ![...journalTypes].every(folder => freshOwnedCovered.has(folder))) {
             ownedReplacements = null
@@ -642,22 +662,24 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         throw error
       }
     }
-    if (discoveryBudgetPrefix) {
-      visiting = discoveryBudgetPrefix
-      lastCompleted = lastDiscovered
-      throw new RetentionBudgetError()
-    }
-    for (const backup of older) {
-      if (unreadableThisRun.has(backup.prefix)) continue
-      const review = state.reviews[backup.prefix]
-      if ((review?.failures ?? 0) >= UNREADABLE_ATTEMPTS) {
-        warning = true
-        notice(unreadableWarning(backup.prefix, review!.failures!, review!.reason), "warning")
+    if (!replacementChangedDuringRun) {
+      if (discoveryBudgetPrefix) {
+        visiting = discoveryBudgetPrefix
+        lastCompleted = lastDiscovered
+        throw new RetentionBudgetError()
       }
+      for (const backup of older) {
+        if (unreadableThisRun.has(backup.prefix)) continue
+        const review = state.reviews[backup.prefix]
+        if ((review?.failures ?? 0) >= UNREADABLE_ATTEMPTS) {
+          warning = true
+          notice(unreadableWarning(backup.prefix, review!.failures!, review!.reason), "warning")
+        }
+      }
+      pendingCursor = candidates.at(-1)?.prefix
+      hasPendingCursor = true
+      windowCompleted = true
     }
-    pendingCursor = candidates.at(-1)?.prefix
-    hasPendingCursor = true
-    windowCompleted = true
   } catch (error) {
     if (!(error instanceof RetentionBudgetError)) {
       if (visiting && !Object.keys(state.reviews[visiting]?.files ?? {}).length
@@ -712,19 +734,15 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   for (const { prefix, identities, types, noTypes, untagged, replacements, resumed } of plan) {
     if (prefix === latestPrefix || prefix === anchorPrefix) continue
     run.beforeDelete()
-    const leaseManager = createRetentionLeaseManager()
+    const leaseManager = local ? undefined : createRetentionLeaseManager()
+    let localLockId: string | undefined
     let stopCleanup = false
     try {
       if (local) {
         try {
-          const startedAt = Date.now()
-          const localLockId = await budget.withCleanup(() => storage.acquireContainerLease(LEASE_DURATION_SECONDS))
-          leaseManager.track({
-            leaseId: localLockId,
-            expiresAt: startedAt + LEASE_DURATION_MS,
-            renew: signal => storage.renewContainerLease(localLockId, LEASE_DURATION_SECONDS, signal),
-            release: signal => storage.releaseContainerLease(localLockId, signal),
-          })
+          // Acquiring the local lock also registers the in-process write guard on `replacements`
+          // before the final identity check below; release happens in `finally`.
+          localLockId = await budget.withCleanup(() => storage.acquireContainerLease(replacements))
           leaseAcquiredThisRun = true
         } catch (error) {
           if (!(error instanceof BlobLeaseError)) throw error
@@ -734,7 +752,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           const reason = error.message
           notice(`Kept backup ${prefix} because the local retention lock could not be acquired: ${reason.replace(/\.$/, "")}.`, "warning")
           completedPlan = false
-          continue
+          break
         }
       } else {
         const replacementBlobs = [...new Set(replacements.flatMap(replacementPrefix => [...(replacementIdentities.get(replacementPrefix)?.keys() ?? [])]))].sort()
@@ -749,7 +767,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
             for (const name of replacementBlobs) {
               const startedAt = Date.now()
               const leaseId = await storage.acquireLease(name, LEASE_DURATION_SECONDS)
-              leaseManager.track({
+              leaseManager!.track({
                 leaseId,
                 expiresAt: startedAt + LEASE_DURATION_MS,
                 renew: signal => storage.renewLease(name, leaseId, signal),
@@ -769,24 +787,26 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           continue
         }
       }
-      try {
-        await leaseManager.ensureFresh()
-      } catch (error) {
-        if (!(error instanceof BlobLeaseError)) throw error
-        warning = true
-        notice(`Kept backup ${prefix} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
-        completedPlan = false
-        stopCleanup = true
-        continue
+      if (leaseManager) {
+        try {
+          await leaseManager.ensureFresh()
+        } catch (error) {
+          if (!(error instanceof BlobLeaseError)) throw error
+          warning = true
+          notice(`Kept backup ${prefix} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
+          completedPlan = false
+          stopCleanup = true
+          break
+        }
       }
-      // Under the Azure blob leases (or local retention lock), verify every replacement is still intact.
+      // Under the Azure blob leases (or local retention lock + in-process write guard), verify every replacement is still intact.
       const changedReplacement = await checkReplacementsIntact(replacements)
       if (changedReplacement) {
         warning = true
         notice(`Kept remaining backups because replacement backup ${changedReplacement} changed before deletion.`, "warning")
         completedPlan = false
         stopCleanup = true
-        continue
+        break
       }
       const manifest = prefix + "metadata.json"
       const marker = prefix + owner
@@ -811,7 +831,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         for (const name of order) {
           const etag = identities.get(name)
           if (etag) {
-            await leaseManager.ensureFresh()
+            if (leaseManager) await leaseManager.ensureFresh()
             if (local) {
               const changedBeforeDelete = await checkReplacementsIntact(replacements)
               if (changedBeforeDelete) {
@@ -827,7 +847,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
                 break
               }
             }
-            await storage.delete(name, etag)
+            await storage.delete(name, etag, localLockId)
             deleted++
             delete remaining[name]
             if (!Object.keys(remaining).length && state.deletes) {
@@ -837,7 +857,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
             save()
           }
         }
-        if (stopCleanup) continue
+        if (stopCleanup) break
         if (state.deletes) {
           delete state.deletes[prefix]
           if (!Object.keys(state.deletes).length) delete state.deletes
@@ -852,10 +872,13 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         save()
         if (error instanceof BlobLeaseError) {
           warning = true
-          notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}.`, "warning")
+          const detail = local
+            ? `the local retention lock was lost: ${error.message.replace(/\.$/, "")}`
+            : `replacement protection could not be renewed: ${error.message.replace(/\.$/, "")}`
+          notice(`Kept ${deleted || resumed ? "the remaining files in " : ""}backup ${prefix} because ${detail}.`, "warning")
           completedPlan = false
           stopCleanup = true
-          continue
+          break
         }
         if (!(error instanceof DeleteConditionError) && !(error instanceof ProtectedBlobError)) throw error
         warning = true
@@ -864,7 +887,14 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         advance(prefix)
       }
     } finally {
-      await leaseManager.cleanup()
+      if (localLockId) {
+        const releaseWarning = await storage.releaseContainerLease(localLockId).catch(() => undefined)
+        if (releaseWarning) {
+          warning = true
+          notice(releaseWarning, "warning")
+        }
+      }
+      if (leaseManager) await leaseManager.cleanup()
     }
     if (stopCleanup) break
   }

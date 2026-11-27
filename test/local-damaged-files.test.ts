@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
 import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { IncompleteInventoryError, LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { BlobProtectedError, IncompleteInventoryError, LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 
@@ -529,13 +529,16 @@ describe("damaged local backup files", () => {
     }
   })
 
-  it("re-checks local replacement identities immediately before each individual DELETE and holds a cross-process retention lock file", async () => {
-    // 1. Replacement changes AFTER initial candidate check and AFTER first DELETE (metadata.json), before second DELETE:
-    // per-delete check stops immediately so remaining payload and owner marker are kept.
+  it("blocks in-process writes to replacement prefixes during local cleanup and holds a cross-process retention lock file", async () => {
+    // 1. In-process write attempt to the replacement AFTER the final check and BEFORE the first DELETE
+    // is refused by LocalBlobStore's in-process write guard; protection is released in finally.
     {
       const { store } = await setup()
       await backup(store, OLD)
-      let mutated = false
+      let attemptedBeforeFirstDelete = false
+      let blockedError: unknown
+      let attemptedDuringDelete = false
+      let blockedDuringDeleteError: unknown
       const deletes: string[] = []
       const graph = () => Response.json({ value: [] })
       const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -545,10 +548,22 @@ describe("damaged local backup files", () => {
           if (request.method === "DELETE") {
             const path = decodeURIComponent(url.pathname)
             deletes.push(path)
+            if (!attemptedBeforeFirstDelete && path.endsWith(`/${OLD}/metadata.json`)) {
+              attemptedBeforeFirstDelete = true
+              try {
+                await store.put(account, CONTAINER, `backup-2026-09-24-120000/metadata.json`, Buffer.from('{"Status":"Success","Tampered":true}'), "application/json")
+              } catch (error) {
+                blockedError = error
+              }
+            }
             const res = await handleLocalBlobRequest(store, request)
-            if (!mutated && path.endsWith(`/${OLD}/metadata.json`)) {
-              mutated = true
-              await store.put(account, CONTAINER, `backup-2026-09-24-120000/metadata.json`, Buffer.from('{"Status":"Success","Tampered":true}'), "application/json")
+            if (!attemptedDuringDelete && path.endsWith(`/${OLD}/metadata.json`)) {
+              attemptedDuringDelete = true
+              try {
+                await store.delete(account, CONTAINER, `backup-2026-09-24-120000/metadata.json`)
+              } catch (error) {
+                blockedDuringDeleteError = error
+              }
             }
             return res
           }
@@ -559,20 +574,25 @@ describe("damaged local backup files", () => {
       const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
       const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
       expect(job.status).toBe("Completed")
-      expect(mutated).toBe(true)
-      expect(deletes).toEqual([`/${CONTAINER}/${OLD}/metadata.json`])
-      expect(job.log.join("\n")).toContain("changed before deletion")
-      const remaining = (await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)
-      expect(remaining).toContain(`${OLD}/CompliancePolicies/a.json`)
-      expect(remaining).toContain(`${OLD}/CompliancePolicies/b.json`)
+      expect(attemptedBeforeFirstDelete).toBe(true)
+      expect(blockedError).toBeInstanceOf(BlobProtectedError)
+      expect(attemptedDuringDelete).toBe(true)
+      expect(blockedDuringDeleteError).toBeInstanceOf(BlobProtectedError)
+      expect(deletes.length).toBeGreaterThanOrEqual(3)
+      // Replacement remained intact and OLD was safely deleted.
+      const replacementManifest = JSON.parse((await store.get(account, CONTAINER, "backup-2026-09-24-120000/metadata.json")).data.toString())
+      expect(replacementManifest.Tampered).toBeUndefined()
+      expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
+      // After cleanup completes, the in-process guard is released.
+      await expect(store.put(account, CONTAINER, "backup-2026-09-24-120000/post-cleanup.json", Buffer.from("{}"), "application/json")).resolves.toBeDefined()
     }
 
-    // 2. Cross-process retention lock file in backup root blocks a second instance, and is released on completion.
+    // 2. Cross-process retention lock file in container dir blocks a second instance, and is released on completion.
     {
       const { root, store } = await setup()
       const otherInstance = new LocalBlobStore(root, [Buffer.alloc(32, 3)])
       await backup(store, OLD)
-      const lockId = await otherInstance.acquireRetentionLock(account, CONTAINER, 60_000)
+      const lockId = await otherInstance.acquireRetentionLock(account, CONTAINER)
       const graph = () => Response.json({ value: [] })
       const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
@@ -594,7 +614,7 @@ describe("damaged local backup files", () => {
       expect(unblocked.status).toBe("Completed")
       expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
       // Lock file must be cleaned up after retention finishes so another instance can acquire it immediately.
-      const reacquired = await otherInstance.acquireRetentionLock(account, CONTAINER, 60_000)
+      const reacquired = await otherInstance.acquireRetentionLock(account, CONTAINER)
       await otherInstance.releaseRetentionLock(account, CONTAINER, reacquired)
     }
   })

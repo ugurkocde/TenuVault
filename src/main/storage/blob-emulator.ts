@@ -2,7 +2,7 @@ import { authenticatedBackupRead } from "./authenticated-read"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobLeaseUnsupportedError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobLeaseUnsupportedError, BlobProtectedError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -177,21 +177,27 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
           return error(404, "ContainerNotFound", "The specified container does not exist.")
         }
         const action = (request.headers.get("x-ms-lease-action") ?? "").toLowerCase()
-        const durationSec = Number(request.headers.get("x-ms-lease-duration") ?? "60")
-        const durationMs = Number.isFinite(durationSec) && durationSec > 0 ? durationSec * 1000 : 60_000
         if (action === "acquire") {
-          const leaseId = await store.acquireRetentionLock(account, container, durationMs, request.headers.get("x-ms-proposed-lease-id") ?? undefined)
+          let protectedPrefixes: string[] | undefined
+          const rawPrefixes = request.headers.get("x-tenuvault-protected-prefixes")
+          if (rawPrefixes) {
+            try {
+              const parsed = JSON.parse(rawPrefixes) as unknown
+              if (Array.isArray(parsed) && parsed.every(entry => typeof entry === "string" && entry.length > 0)) {
+                protectedPrefixes = parsed
+              }
+            } catch {
+              return error(400, "InvalidHeaderValue", "Invalid protected prefixes header.")
+            }
+          }
+          const leaseId = await store.acquireRetentionLock(account, container, request.headers.get("x-ms-proposed-lease-id") ?? undefined, protectedPrefixes)
           return new Response(null, { status: 201, headers: { "x-ms-lease-id": leaseId } })
         }
         const leaseId = request.headers.get("x-ms-lease-id") ?? ""
         if (!leaseId) return error(400, "MissingRequiredHeader", "x-ms-lease-id is required.")
-        if (action === "renew") {
-          await store.renewRetentionLock(account, container, leaseId, durationMs)
-          return new Response(null, { status: 200, headers: { "x-ms-lease-id": leaseId } })
-        }
         if (action === "release") {
-          await store.releaseRetentionLock(account, container, leaseId)
-          return new Response(null, { status: 200 })
+          const { warning } = await store.releaseRetentionLock(account, container, leaseId)
+          return new Response(null, { status: 200, headers: warning ? { "x-tenuvault-lock-warning": warning } : undefined })
         }
         return error(400, "InvalidHeaderValue", `Unsupported lease action: ${action}`)
       }
@@ -246,7 +252,10 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       return authenticatedBackupRead(new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers }))
     }
     if (method === "DELETE") {
-      await store.delete(account, container, blobName, { ifMatch: request.headers.get("if-match") ?? undefined })
+      await store.delete(account, container, blobName, {
+        ifMatch: request.headers.get("if-match") ?? undefined,
+        retentionLockId: request.headers.get("x-tenuvault-retention-lock-id") ?? undefined,
+      })
       return new Response(null, { status: 202 })
     }
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)
@@ -254,7 +263,12 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     const unchanged = method === "DELETE" && !(caught instanceof BlobQuarantinedError) && !(caught instanceof BlobDeleteInterruptedError)
       ? { "x-tenuvault-delete-unchanged": "1" }
       : undefined
-    if (caught instanceof BlobLeaseConflictError) return error(409, "LeaseAlreadyPresent", caught.message)
+    if (caught instanceof BlobProtectedError) return error(409, "BackupProtectedByRetention", caught.message, unchanged)
+    if (caught instanceof BlobLeaseConflictError) {
+      return method === "DELETE"
+        ? error(412, "RetentionLockLost", caught.message, unchanged)
+        : error(409, "LeaseAlreadyPresent", caught.message)
+    }
     if (caught instanceof BlobLeaseUnsupportedError) return error(409, "LeaseUnavailable", caught.message)
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.", unchanged)
     if (caught instanceof BlobQuarantinedError) return error(412, "BlobQuarantined", caught.message)
