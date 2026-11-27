@@ -1,6 +1,7 @@
 import { BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { largeIndexes, type LargeEntry } from "../../shared/large-backup"
-import { type Item } from "../../shared/intune/registry"
+import { typeForFolder, type Item } from "../../shared/intune/registry"
+import { backupTypeUse } from "../../shared/services/backup-use"
 import { isSafeArchivePath } from "../../shared/security"
 import { snapshotHash } from "../../portal/lib/policies/backup-manifest"
 import type { OwnershipFile } from "../../shared/backup-ownership"
@@ -78,7 +79,7 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
   }
   if (manifest) {
     const indexes = largeIndexes(manifest)
-    for (const [folder, index] of Object.entries(indexes)) counts.set(folder, index.count)
+    for (const [folder, index] of Object.entries(indexes)) counts.set(folder, (counts.get(folder) ?? 0) + index.count)
     const relations = new Map<string, string[]>()
     if (progress) for (const path of remaining) {
       const parts = path.slice(prefix.length).split("/")
@@ -134,8 +135,19 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
       if (folder && file && !rest.length && folder !== "_index" && folder !== "_relations") counts.set(folder, (counts.get(folder) ?? 0) + 1)
     }
   }
-  for (const [folder, count] of Object.entries(manifest?.ItemCounts ?? {})) {
-    if (folder !== "TotalPolicies" && count !== (counts.get(folder) ?? 0)) reject("metadata.json counts")
+  if (manifest?.ItemCounts !== undefined) {
+    if (!manifest.ItemCounts || typeof manifest.ItemCounts !== "object" || Array.isArray(manifest.ItemCounts)) reject("metadata.json counts")
+    const verifiedPolicies = [...counts.entries()].reduce(
+      (sum, [folder, count]) => (typeForFolder(folder) && !backupTypeUse(typeForFolder(folder)!).policyCount ? sum : sum + count),
+      0,
+    )
+    for (const [folder, count] of Object.entries(manifest.ItemCounts)) {
+      if (folder === "TotalPolicies") {
+        if (count !== verifiedPolicies) reject("metadata.json counts")
+      } else if (count !== (counts.get(folder) ?? 0)) {
+        reject("metadata.json counts")
+      }
+    }
   }
   if (Array.isArray(manifest?.Outcomes)) for (const outcome of manifest.Outcomes) {
     if (!outcome || typeof outcome.Folder !== "string" || (outcome.Saved !== undefined && outcome.Saved !== (counts.get(outcome.Folder) ?? 0))) reject("metadata.json outcomes")
