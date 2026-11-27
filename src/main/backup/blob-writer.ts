@@ -177,6 +177,16 @@ export class BlobWriter {
     })
   }
 
+  /** Reads only the current ETag identity of a blob, or null if it no longer exists. */
+  async headETag(name: string): Promise<string | null> {
+    return this.request(backupStoragePath(name), { method: "HEAD" }, async (response) => {
+      if (response.status === 404) return null
+      if (!response.ok) throw await storageFailure(response, this.account)
+      const etag = response.headers.get("etag")
+      return etag && etag !== "*" ? etag : null
+    })
+  }
+
   async delete(name: string, etag?: string): Promise<void> {
     await this.request(backupStoragePath(name), {
       method: "DELETE",

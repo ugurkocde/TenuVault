@@ -1,18 +1,22 @@
-import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { createHash, randomBytes } from "node:crypto"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
 import { BlobWriter } from "../src/main/backup/blob-writer"
 import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { verifyHalf } from "../src/main/backup/retention-verification"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
+import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
+import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { backupBlobName, backupContainer, backupStoragePath } from "../src/shared/backup-storage"
-import { BACKUP_OWNER_FILE } from "../src/shared/constants"
+import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { indexPath } from "../src/shared/large-backup"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { memoryStore, withServerDate } from "./helpers"
+import { jwt, registerTestTypes, testType } from "./helpers/backup-fixture"
 import type { RetentionLimits } from "../src/main/backup/retention-budget"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -150,7 +154,12 @@ async function runBackup(engine: BackupEngine, scope = DEVICE_CONFIG_SCOPE) {
   return job
 }
 
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+const tempRoots: string[] = []
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 
 describe("retention progress validation", () => {
   it("accepts valid persisted retention progress shapes including complete receipts and deletion journals", () => {
@@ -460,5 +469,376 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
     const b = makeWriter("backup-2026-10-12-120001/")
     await verifyHalf(b.writer, "backup-2026-10-12-120001/", manifest, b.listing, undefined, progress)
     expect(readPaths).toContain("/intune-backups/backup-2026-10-12-120001/DeviceConfigurations/P0.json")
+  })
+})
+
+describe("replacement protection, deletion journal, cursor safety, and per-backup guards (items 2, 3, 7, 8)", () => {
+  it("stops deleting immediately if the replacing backup changes before a candidate's deletes (item 2, Azure)", async () => {
+    const first = "backup-2026-08-02-020000/"
+    const second = "backup-2026-08-01-020000/"
+    let mutated = false
+    let mutateReplacement: (() => void) | undefined
+    const { engine, has, calls, seed, folder } = setupAzure({
+      count: 1,
+      override: (url, req) => {
+        // Mutate the replacing backup right after the first candidate's payload is deleted.
+        if (!mutated && req.method === "DELETE" && url.pathname.endsWith(`${first}${BACKUP_OWNER_FILE}`)) {
+          mutated = true
+          mutateReplacement?.()
+        }
+        return undefined
+      },
+    })
+    for (const prefix of [first, second]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, COMPLETE_MANIFEST)
+    }
+    const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: "contoso", scope: DEVICE_CONFIG_SCOPE })
+    mutateReplacement = () => {
+      seed(`${job.backupFolder}/DeviceConfigurations/Policy 0.json`, { id: "p0", mutated: true })
+    }
+    await engine.waitForJob(job)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mutated).toBe(true)
+    expect(has(`${first}metadata.json`)).toBe(false)
+    expect(has(`${second}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(second))).toBe(false)
+    expect(job.log.join("\n")).toContain("changed before cleanup completed")
+  })
+
+  it("stops deleting on local storage if a replacing backup file identity changes before cleanup (item 2, local)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-ret-replace-local-"))
+    tempRoots.push(root)
+    const store = new LocalBlobStore(root, [randomBytes(32)])
+    const account = localStorageAccountName(TENANT)
+    await store.createContainer(account, BACKUP_CONTAINER)
+    const older = "backup-2026-08-01-020000/"
+    await store.put(account, BACKUP_CONTAINER, `${older}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
+    await store.put(account, BACKUP_CONTAINER, `${older}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(account, BACKUP_CONTAINER, `${older}metadata.json`, Buffer.from(JSON.stringify(COMPLETE_MANIFEST)), "application/json")
+
+    let mutated = false
+    let currentFolder = ""
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (!localAccountFromUrl(url)) {
+        if (url.pathname.endsWith("/deviceConfigurations")) {
+          return withServerDate(Response.json({ value: [{ id: "p0", displayName: "Policy 0" }] }), NOW)
+        }
+        return withServerDate(Response.json({ id: "p0", displayName: "Policy 0", assignments: [] }), NOW)
+      }
+      // After older's manifest is read during verification (right before deletes), replace the current backup's policy file.
+      if (!mutated && req.method === "GET" && decodeURIComponent(url.pathname).endsWith(`${older}DeviceConfigurations/Old.json`)) {
+        mutated = true
+        const res = await handleLocalBlobRequest(store, req)
+        await store.put(account, BACKUP_CONTAINER, `${currentFolder}/DeviceConfigurations/Policy 0.json`, Buffer.from(JSON.stringify({ id: "p0", modified: true })), "application/json")
+        return res
+      }
+      return handleLocalBlobRequest(store, req)
+    }
+
+    const engine = new BackupEngine({
+      fetch: fetchImpl,
+      getToken: async () => "token",
+      retentionDays: () => 30,
+      now: () => NOW,
+    })
+    const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE })
+    currentFolder = job.backupFolder!
+    await engine.waitForJob(job)
+    expect(mutated).toBe(true)
+    expect(job.log.join("\n")).toContain("changed before cleanup completed")
+    expect(await store.list(account, BACKUP_CONTAINER, older)).toHaveLength(3)
+  })
+
+  it("resumes a partially deleted Azure backup from the deletion journal after re-verifying replacement coverage (item 3, Azure)", async () => {
+    const progress = memoryStore()
+    const target = "backup-2026-08-01-020000/"
+    const secondPolicy = { id: "new" }
+    let failSecondDelete = true
+    const { createEngine, has, saved, keyOf, calls, seed, folder } = setupAzure({
+      progress,
+      override: (url, req) => {
+        if (failSecondDelete && req.method === "DELETE" && url.pathname.endsWith(`${target}DeviceConfigurations/New.json`)) {
+          return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+        }
+        return undefined
+      },
+    })
+    folder(target)
+    seed(`${target}DeviceConfigurations/New.json`, secondPolicy)
+    seed(`${target}metadata.json`, {
+      ...COMPLETE_MANIFEST,
+      Items: { ...ITEMS, "DeviceConfigurations/new": { file: "New.json", sha256: sha256(secondPolicy) } },
+      ItemCounts: { DeviceConfigurations: 2, TotalPolicies: 2 },
+    })
+
+    // Run 1 deletes Old.json, fails on New.json, keeps manifest + marker + New.json, and writes the journal.
+    const run1 = await runBackup(createEngine())
+    expect(run1.log.join("\n")).toContain("Retention partly removed")
+    expect(has(`${target}DeviceConfigurations/Old.json`)).toBe(false)
+    expect(has(`${target}DeviceConfigurations/New.json`)).toBe(true)
+    expect(has(`${target}metadata.json`)).toBe(true)
+    expect(has(`${target}${BACKUP_OWNER_FILE}`)).toBe(true)
+
+    // Remove run1's backup so no newer backup covers DeviceConfigurations in run2.
+    for (const key of [...calls.map(c => c.name)]) {
+      if (key.startsWith(`${run1.backupFolder}/`)) saved.delete(keyOf(key))
+    }
+    // Run 2 with narrower scope (CompliancePolicies only): replacement coverage does NOT cover DeviceConfigurations, so do not resume deleting.
+    failSecondDelete = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const run2 = await runBackup(createEngine(), COMPLIANCE_ONLY_SCOPE)
+    expect(has(`${target}DeviceConfigurations/New.json`), run2.log.join("\n")).toBe(true)
+    expect(has(`${target}metadata.json`)).toBe(true)
+
+    // Run 3 with DeviceConfigurations covered again: resumes deleting ONLY remaining files with their original ETags!
+    calls.length = 0
+    await vi.advanceTimersByTimeAsync(1_000)
+    const run3 = await runBackup(createEngine(), DEVICE_CONFIG_SCOPE)
+    expect(has(`${target}DeviceConfigurations/New.json`), run3.log.join("\n")).toBe(false)
+    expect(has(`${target}metadata.json`)).toBe(false)
+    expect(has(`${target}${BACKUP_OWNER_FILE}`)).toBe(false)
+    expect(calls.filter(c => c.request.method === "DELETE" && c.name.startsWith(target)).map(c => c.name)).toEqual([
+      `${target}DeviceConfigurations/New.json`,
+      `${target}metadata.json`,
+      `${target}${BACKUP_OWNER_FILE}`,
+    ])
+  })
+
+  it("resumes a manifestless local backup named in the deletion journal, while keeping unjournaled manifestless folders untouched (item 3, local)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-ret-journal-local-"))
+    tempRoots.push(root)
+    const store = new LocalBlobStore(root, [randomBytes(32)])
+    const account = localStorageAccountName(TENANT)
+    const progress = memoryStore()
+    await store.createContainer(account, BACKUP_CONTAINER)
+
+    const resumable = "backup-2026-08-02-020000/"
+    const unjournaled = "backup-2026-08-01-020000/"
+    await store.put(account, BACKUP_CONTAINER, `${resumable}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
+    await store.put(account, BACKUP_CONTAINER, `${resumable}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(account, BACKUP_CONTAINER, `${resumable}metadata.json`, Buffer.from(JSON.stringify(COMPLETE_MANIFEST)), "application/json")
+    // Unjournaled manifestless prefix must still be kept safely (never treated as resumable).
+    await store.put(account, BACKUP_CONTAINER, `${unjournaled}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
+    await store.put(account, BACKUP_CONTAINER, `${unjournaled}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+
+    let failPayloadDelete = true
+    let clock = NOW
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (!localAccountFromUrl(url)) {
+        return withServerDate(Response.json({ value: [] }), clock)
+      }
+      if (failPayloadDelete && req.method === "DELETE" && decodeURIComponent(url.pathname).endsWith(`${resumable}DeviceConfigurations/Old.json`)) {
+        return new Response(null, { status: 412, headers: { "x-ms-error-code": "ConditionNotMet" } })
+      }
+      return handleLocalBlobRequest(store, req)
+    }
+    const createLocalEngine = () => new BackupEngine({
+      fetch: fetchImpl,
+      getToken: async () => "token",
+      retentionDays: () => 30,
+      retentionProgress: progress,
+      now: () => clock,
+    })
+
+    // Run 1 deletes resumable/metadata.json first, then fails deleting Old.json.
+    const eng1 = createLocalEngine()
+    const r1 = eng1.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE })
+    await eng1.waitForJob(r1)
+    expect((await store.list(account, BACKUP_CONTAINER, resumable)).map(b => b.name)).toEqual([
+      `${resumable}${BACKUP_OWNER_FILE}`,
+      `${resumable}DeviceConfigurations/Old.json`,
+    ])
+    expect(await store.list(account, BACKUP_CONTAINER, unjournaled)).toHaveLength(2)
+
+    // Run 2: manifest is gone, but journal names resumable -> resumes and finishes deleting it!
+    failPayloadDelete = false
+    clock = new Date(NOW.getTime() + 2_000)
+    const eng2 = createLocalEngine()
+    const r2 = eng2.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE })
+    await eng2.waitForJob(r2)
+    expect(await store.list(account, BACKUP_CONTAINER, resumable), r2.log.join("\n")).toEqual([])
+    // Unjournaled manifestless prefix stays untouched!
+    expect(await store.list(account, BACKUP_CONTAINER, unjournaled)).toHaveLength(2)
+  })
+
+  it("does not advance the cursor past planned deletes interrupted before starting (item 7)", async () => {
+    const progress = memoryStore()
+    const first = "backup-2026-08-03-020000/"
+    const second = "backup-2026-08-02-020000/"
+    const third = "backup-2026-08-01-020000/"
+    let cancelOnce = true
+    let activeEngine: BackupEngine | undefined
+    let activeJobId = ""
+    const { createEngine, has, seed, folder } = setupAzure({
+      progress,
+      limits: { candidates: 2, requests: 200, bytes: 100_000 },
+      override: (url, req) => {
+        // Cancel right when the first DELETE is about to run, so planned deletes never complete.
+        if (cancelOnce && req.method === "DELETE" && url.pathname.startsWith(`/intune-backups/${first}`)) {
+          cancelOnce = false
+          activeEngine?.cancel(activeJobId)
+          return new Promise(() => {})
+        }
+        return undefined
+      },
+    })
+    for (const prefix of [first, second, third]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, COMPLETE_MANIFEST)
+    }
+
+    const eng1 = createEngine()
+    activeEngine = eng1
+    const job1 = eng1.start({ tenantId: TENANT, clientId: "client", storageAccountName: "contoso", scope: DEVICE_CONFIG_SCOPE })
+    activeJobId = job1.id
+    await eng1.waitForJob(job1)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(has(`${first}metadata.json`)).toBe(true)
+    expect(has(`${second}metadata.json`)).toBe(true)
+    expect(has(`${third}metadata.json`)).toBe(true)
+    // Cursor must NOT have advanced past the unstarted window [first, second].
+    const savedState = [...progress.values.values()].map(raw => JSON.parse(raw))
+    expect(savedState.every(s => !s.cursor)).toBe(true)
+
+    // Next run reconsiders first immediately instead of skipping past [first, second] to third.
+    await vi.advanceTimersByTimeAsync(1_000)
+    const job2 = await runBackup(createEngine())
+    expect(has(`${first}metadata.json`), job2.log.join("\n")).toBe(false)
+    expect(has(`${third}metadata.json`)).toBe(true)
+  })
+
+  it("re-runs the recovery-key and clock guard before each planned backup's deletes (item 8)", async () => {
+    const first = "backup-2026-08-02-020000/"
+    const second = "backup-2026-08-01-020000/"
+    let rotated = false
+    const { engine, has, calls, seed, folder, keys } = setupAzure({
+      override: (url, req) => {
+        if (!rotated && req.method === "DELETE" && url.pathname.endsWith(`${first}${BACKUP_OWNER_FILE}`)) {
+          rotated = true
+          // Rotate recovery keyring right after first backup finishes deleting, before second starts.
+          keys[0] = Buffer.alloc(32, 9)
+        }
+        return undefined
+      },
+    })
+    for (const prefix of [first, second]) {
+      folder(prefix)
+      seed(`${prefix}metadata.json`, COMPLETE_MANIFEST)
+    }
+    const job = await runBackup(engine)
+    expect(rotated).toBe(true)
+    expect(has(`${first}metadata.json`)).toBe(false)
+    expect(has(`${second}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(second))).toBe(false)
+    expect(job.log.join("\n")).toContain("recovery key changed during retention")
+  })
+
+  it("resumes a partially deleted large backup from the deletion journal and stops if a large replacement changes (items 2 & 3, large)", async () => {
+    const largeType = testType("AuthorizationPolicy", "syntheticItems", {
+      volume: "large",
+      apiVersion: "v1.0",
+      inventory: true,
+      listOnly: true,
+      listQuery: "$top=999&$select=id,displayName",
+      keep: ["displayName"],
+    })
+    const undo = registerTestTypes([largeType])
+    try {
+      const progress = memoryStore()
+      const largeScope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "AuthorizationPolicy").map(type => type.folder) }
+      const item1 = { id: "item-1", displayName: "Item 1" }
+      const item2 = { id: "item-2", displayName: "Item 2" }
+      const target = "backup-large-2026-08-01-020000/"
+      const shardName = indexPath("AuthorizationPolicy", 0)
+      const shard = [item1, item2].map(item => ({ id: item.id, file: `${item.id}.json`, hash: snapshotHash(item), sha256: sha256(item) }))
+      const largeManifest = {
+        TenantId: TENANT,
+        BackupFolder: target.slice(0, -1),
+        Status: "Success",
+        Failures: 0,
+        Coverage: "Complete",
+        Scope: { Included: ["AuthorizationPolicy"], Excluded: largeScope.excluded },
+        Items: {},
+        LargeItems: { AuthorizationPolicy: { version: 1, count: 2, shards: 1, complete: true } },
+        LargeIndexHashes: { [shardName]: sha256(shard) },
+        ItemCounts: { AuthorizationPolicy: 2, TotalPolicies: 0 },
+      }
+      let failSecondItem = true
+      let mutateLargeReplacement = false
+      let currentLargeFolder = () => ""
+      const { fetch, has, seed, keys } = setupAzure({
+        progress,
+        override: (url, req) => {
+          if (url.hostname === "graph.microsoft.com") {
+            return Response.json({ value: [] })
+          }
+          if (failSecondItem && req.method === "DELETE" && url.pathname.endsWith(`${target}AuthorizationPolicy/${item2.id}.json`)) {
+            return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+          }
+          if (mutateLargeReplacement && req.method === "GET" && url.searchParams.get("comp") === "list" && (url.searchParams.get("prefix") ?? "").includes(target)) {
+            mutateLargeReplacement = false
+            seed(`${currentLargeFolder()}/${BACKUP_OWNER_FILE}`, { ...OWNER, Tampered: true })
+          }
+          return undefined
+        },
+      })
+      const createLargeEngine = () => new BackupEngine({
+        fetch,
+        getToken: async () => {
+          const token = jwt({ scp: "Policy.Read.All" })
+          registerStorageToken(token, TENANT)
+          return token
+        },
+        retentionDays: () => 30,
+        retentionProgress: progress,
+        services: () => ({ services: ["entra"], areas: {} }),
+        recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keys),
+      })
+      seed(`${target}${BACKUP_OWNER_FILE}`, OWNER)
+      seed(`${target}${shardName}`, shard)
+      seed(`${target}AuthorizationPolicy/${item1.id}.json`, item1)
+      seed(`${target}AuthorizationPolicy/${item2.id}.json`, item2)
+      seed(`${target}metadata.json`, largeManifest)
+
+      // Run 1 deletes item1 (and index shard), fails on item2, persists journal for remaining large files.
+      const eng1 = createLargeEngine()
+      const job1 = eng1.start({ tenantId: TENANT, clientId: "client", storageAccountName: "contoso", scope: largeScope })
+      await eng1.waitForJob(job1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(job1.status, job1.log.join("\n")).toBe("Completed")
+      expect(job1.log.join("\n")).toContain("Retention partly removed")
+      expect(has(`${target}AuthorizationPolicy/${item2.id}.json`)).toBe(true)
+      expect(has(`${target}metadata.json`)).toBe(true)
+
+      // Run 2 mutates the replacing large backup before cleanup commits -> must stop deleting and keep target.
+      failSecondItem = false
+      mutateLargeReplacement = true
+      await vi.advanceTimersByTimeAsync(1_000)
+      const eng2 = createLargeEngine()
+      const job2 = eng2.start({ tenantId: TENANT, clientId: "client", storageAccountName: "contoso", scope: largeScope })
+      currentLargeFolder = () => job2.backupFolder!
+      await eng2.waitForJob(job2)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(job2.log.join("\n")).toContain("changed before cleanup completed")
+      expect(has(`${target}AuthorizationPolicy/${item2.id}.json`)).toBe(true)
+      expect(has(`${target}metadata.json`)).toBe(true)
+
+      // Run 3 without tampering resumes from the journal and finishes removing the remaining large files.
+      await vi.advanceTimersByTimeAsync(1_000)
+      const eng3 = createLargeEngine()
+      const job3 = eng3.start({ tenantId: TENANT, clientId: "client", storageAccountName: "contoso", scope: largeScope })
+      await eng3.waitForJob(job3)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(has(`${target}AuthorizationPolicy/${item2.id}.json`), job3.log.join("\n")).toBe(false)
+      expect(has(`${target}metadata.json`)).toBe(false)
+      expect(has(`${target}${BACKUP_OWNER_FILE}`)).toBe(false)
+    } finally {
+      undo()
+    }
   })
 })

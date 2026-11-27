@@ -17,7 +17,7 @@ import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } f
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { RetentionBudget, RetentionBudgetError, RETENTION_LIMITS, type RetentionLimits } from "./retention-budget"
-import { readRetentionProgress, type RetentionProgressStore } from "./retention-progress"
+import { readRetentionProgress, type DeletionJournalEntry, type RetentionProgressStore } from "./retention-progress"
 import { RetentionManifestMismatch, verifyHalf, type VerifiedHalf } from "./retention-verification"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
@@ -1369,10 +1369,13 @@ export class BackupEngine {
         if (mixed && committedLargeManifest) {
           unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, now, keyFingerprint, limits, mixed)
         }
-        checkClock()
-        if (limits && keyFingerprint !== this.deps.recoveryKeyFingerprint?.()) throw new Error("The recovery key changed during retention")
+        const beforeDelete = () => {
+          checkClock()
+          if (limits && keyFingerprint !== this.deps.recoveryKeyFingerprint?.()) throw new Error("The recovery key changed during retention")
+        }
+        beforeDelete()
         let deletionWarnings = 0
-        for (const apply of pending) deletionWarnings += await apply(checkClock)
+        for (const apply of pending) deletionWarnings += await apply(beforeDelete)
         if (unreadableOlder || unreadableLarge || deletionWarnings) retentionWarnings++
       } catch (error) {
         retentionWarnings++
@@ -1589,7 +1592,7 @@ export class BackupEngine {
     const limit = !limits ? ordered.length : !mixed ? limits.candidates : isLargeBackup(current) ? Math.floor(limits.candidates / 2) : Math.ceil(limits.candidates / 2)
     const backups = ordered.slice(start, start + limit)
 
-    if (!backups.length) return markerWarnings
+    if (!backups.length && !Object.keys(state.deletions ?? {}).length) return markerWarnings
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
@@ -1712,11 +1715,14 @@ export class BackupEngine {
     latestCompanionPrefix = companionPrefix
     const companionProgress = limits && companionPrefix ? review(companionPrefix) : undefined
     const beforeCompanionFiles = Object.keys(companionProgress?.files ?? {}).length
+    const replacements: Array<{ prefix: string; blobs: Map<string, string> }> = []
     try {
-      await verifyHalf(latest, anchorPrefix, anchorManifest, undefined, anchorClaim, latestProgress, keyFingerprint)
+      const verifiedAnchor = await verifyHalf(latest, anchorPrefix, anchorManifest, undefined, anchorClaim, latestProgress, keyFingerprint)
+      replacements.push({ prefix: anchorPrefix, blobs: verifiedAnchor.blobs })
       if (companionPrefix && anchorCompanionManifest) {
         if (!matchingCompanions(anchorFolder, anchorManifest, currentCompanion as string, anchorCompanionManifest)) throw new Error("The latest backup's companion does not match")
-        await verifyHalf(metered(), companionPrefix, anchorCompanionManifest, undefined, undefined, companionProgress, keyFingerprint)
+        const verifiedCompanion = await verifyHalf(metered(), companionPrefix, anchorCompanionManifest, undefined, undefined, companionProgress, keyFingerprint)
+        replacements.push({ prefix: companionPrefix, blobs: verifiedCompanion.blobs })
         for (const folder of completeFolders(anchorCompanionManifest)) covered.add(folder)
       }
       if (limits) state.latest = anchorPrefix
@@ -1751,7 +1757,15 @@ export class BackupEngine {
     let unowned = 0
     let protectedKept = 0
     let unverified = unreadable.size
-    const plan: Array<{ halves: VerifiedHalf[]; prefixes: string[]; remnant: boolean; writer: BlobWriter }> = []
+    const plan: Array<{
+      halves: VerifiedHalf[]
+      prefixes: string[]
+      remnant: boolean
+      folders: string[]
+      replacements: Array<{ prefix: string; blobs: Map<string, string> }>
+      writer: BlobWriter
+      resumed?: boolean
+    }> = []
     const keptForReview = (prefix: string, error: unknown) => {
       signal.throwIfAborted()
       if (error instanceof InventoryDamagedError || error instanceof TokenError || error instanceof RetentionClockError || (!limits && error instanceof RetentionManifestMismatch)) throw error
@@ -1774,10 +1788,61 @@ export class BackupEngine {
     const reportRemnants = () => {
       if (remnants.deleted || remnants.kept || remnants.unowned) this.write(job, `Remnant cleanup: deleted ${remnants.deleted} halves (${remnants.deletedBytes} bytes); kept ${remnants.kept} owned halves (${remnants.keptBytes} bytes) for recovery or storage protection; kept ${remnants.unowned} unverified halves (${remnants.unownedBytes} bytes) for manual review. Recovery grace is ${REMNANT_RECOVERY_DAYS} days after the ${days}-day retention period.`, remnants.unowned ? "warning" : "info")
     }
+    const planJournaledDeletion = async (
+      primaryPrefix: string,
+      backupTime: number,
+      journal: DeletionJournalEntry,
+      writer: BlobWriter,
+    ): Promise<void> => {
+      const expired = journal.remnant ? backupTime < cutoff - REMNANT_RECOVERY_DAYS * DAY_MS : backupTime < cutoff
+      const coveredNow = journal.folders.every(folder => !uncovered.has(folder) && Boolean(typeForFolder(folder)))
+      if (!expired || !coveredNow) {
+        if (journal.remnant) remnants.kept++
+        else kept++
+        return
+      }
+      const halves: VerifiedHalf[] = []
+      let totalBlobs = 0
+      for (const prefix of journal.prefixes) {
+        const listing = await writer.listFolder(prefix)
+        const blobs = new Map<string, string>()
+        for (const name of listing.blobs) {
+          const expectedEtag = journal.remaining[name]
+          if (!expectedEtag) throw new Error(`${name} was not part of the recorded deletion plan for ${primaryPrefix}`)
+          const actualEtag = listing.etags.get(name) ?? await writer.headETag(name)
+          if (actualEtag !== expectedEtag) throw new Error(`${name} changed since deletion of ${primaryPrefix} started`)
+          blobs.set(name, expectedEtag)
+        }
+        if (blobs.size > 0) {
+          halves.push({ blobs, listing, counts: new Map() })
+          totalBlobs += blobs.size
+        }
+      }
+      if (totalBlobs === 0) {
+        delete state.deletions![primaryPrefix]
+        return
+      }
+      const deletion = deletionWriter(totalBlobs)
+      if (limits) review(primaryPrefix).attempts = 0
+      plan.push({
+        halves,
+        prefixes: journal.prefixes,
+        remnant: journal.remnant,
+        folders: journal.folders,
+        replacements: [...replacements],
+        writer: deletion,
+        resumed: true,
+      })
+    }
     for (const [index, backup] of backups.entries()) {
       if (unreadable.has(index) || backup.prefix === anchorPrefix) continue
       const writer = candidateWriters[index]!
       try {
+        const journal = state.deletions?.[backup.prefix]
+        if (journal) {
+          await planJournaledDeletion(backup.prefix, backup.time, journal, writer)
+          continue
+        }
         const entry = owners[index]
         const metadata = entry?.metadata
         let companion: Record<string, unknown> | null = null
@@ -1824,7 +1889,14 @@ export class BackupEngine {
           }
           const deletion = deletionWriter(verified.blobs.size)
           if (limits) review(backup.prefix).attempts = 0
-          plan.push({ halves: [verified], prefixes: [backup.prefix], remnant: true, writer: deletion })
+          plan.push({
+            halves: [verified],
+            prefixes: [backup.prefix],
+            remnant: true,
+            folders: [...verified.counts.keys()],
+            replacements: [...replacements],
+            writer: deletion,
+          })
           continue
         }
         if (!metadata || !entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
@@ -1856,13 +1928,23 @@ export class BackupEngine {
           return inventory.Items !== undefined || inventory.ItemCounts !== undefined || inventory.LargeItems !== undefined || Array.isArray(inventory.Outcomes)
         })
         for (const folder of coverage) uncovered.delete(folder)
+        if (coverage.length) {
+          replacements.push({ prefix: backup.prefix, blobs: verified.blobs })
+          if (other && typeof companionId === "string") replacements.push({ prefix: `${companionId}/`, blobs: other.blobs })
+        }
         if (expired) {
           const payloadFolders = [...verified.counts.keys(), ...(other ? other.counts.keys() : [])]
           if (providesCoverage.length || payloadFolders.some(folder => uncovered.has(folder) || !typeForFolder(folder))) kept++
           else {
             const deletion = deletionWriter(verified.blobs.size + (other ? other.blobs.size : 0))
-            plan.push({ halves: other ? [verified, other] : [verified], prefixes: other ? [backup.prefix, `${companionId}/`] : [backup.prefix],
-              remnant: false, writer: deletion })
+            plan.push({
+              halves: other ? [verified, other] : [verified],
+              prefixes: other ? [backup.prefix, `${companionId}/`] : [backup.prefix],
+              remnant: false,
+              folders: payloadFolders,
+              replacements: [...replacements],
+              writer: deletion,
+            })
           }
         }
         if (limits) review(backup.prefix).attempts = 0
@@ -1870,23 +1952,76 @@ export class BackupEngine {
         keptForReview(backup.prefix, error)
       }
     }
+    if (state.deletions) {
+      for (const [primaryPrefix, journal] of Object.entries(state.deletions)) {
+        if (ordered.some(backup => backup.prefix === primaryPrefix)) continue
+        const parsed = parseBackupName(primaryPrefix.slice(0, -1))
+        const time = parsed ? Date.parse(parsed.timestamp) : NaN
+        if (!Number.isFinite(time)) {
+          delete state.deletions[primaryPrefix]
+          continue
+        }
+        try {
+          await planJournaledDeletion(primaryPrefix, time, journal, metered())
+        } catch (error) {
+          keptForReview(primaryPrefix, error)
+        }
+      }
+    }
+
+    const verifyReplacements = async (required: Array<{ prefix: string; blobs: Map<string, string> }>) => {
+      const checker = metered()
+      for (const replacement of required) {
+        const listing = await checker.listFolder(replacement.prefix)
+        const listed = new Set(listing.blobs)
+        if (listed.size !== replacement.blobs.size || listing.blobs.length !== replacement.blobs.size) {
+          throw new Error(`Replacement backup ${replacement.prefix} changed before cleanup completed`)
+        }
+        for (const [name, expectedEtag] of replacement.blobs) {
+          if (!listed.has(name)) {
+            throw new Error(`Replacement backup ${replacement.prefix} changed before cleanup completed`)
+          }
+          const actualEtag = listing.etags.get(name) ?? await checker.headETag(name)
+          if (actualEtag !== expectedEtag) {
+            throw new Error(`Replacement backup ${replacement.prefix} changed before cleanup completed`)
+          }
+        }
+      }
+    }
 
     // Another half may still detect a manifest mismatch and veto this run's removals.
     saveProgress()
-    pending.push(async checkClock => {
+    pending.push(async beforeDelete => {
       let warnings = 0
       for (const unit of plan) {
-        checkClock()
+        beforeDelete()
+        await verifyReplacements(unit.replacements)
         const verified = new Map(unit.halves.flatMap(half => [...half.blobs]))
         const size = (name: string) => unit.halves.reduce((sum, half) => sum + (half.listing.sizes.get(name) ?? 0), 0)
         const manifests = new Set(unit.prefixes.map(prefix => `${prefix}metadata.json`))
         const markers = new Set(unit.prefixes.map(prefix => `${prefix}${BACKUP_OWNER_FILE}`))
         const names = [...verified.keys()]
+        const primaryPrefix = unit.prefixes[0]!
+        const existingJournal = state.deletions?.[primaryPrefix]
+        const journal: DeletionJournalEntry = existingJournal
+          ? { ...existingJournal, remaining: Object.fromEntries(verified) }
+          : {
+              prefixes: unit.prefixes,
+              remnant: unit.remnant,
+              folders: unit.folders,
+              remaining: Object.fromEntries(verified),
+              deleted: [],
+            }
+        state.deletions ??= {}
+        state.deletions[primaryPrefix] = journal
+        saveProgress()
         let deleted = 0
         let remaining = names.reduce((sum, name) => sum + size(name), 0)
         const remove = async (name: string) => {
           await unit.writer.delete(name, verified.get(name)!)
           deleted++
+          delete journal.remaining[name]
+          journal.deleted.push(name)
           if (unit.remnant) { remaining -= size(name); remnants.deletedBytes += size(name) }
         }
         try {
@@ -1894,16 +2029,23 @@ export class BackupEngine {
           // In Azure, keep the manifests through the payload phase for recovery after a refusal.
           const localStorage = isLocalAccount(job.storageAccountName)
           const manifestNames = names.filter(name => manifests.has(name))
-          if (localStorage) for (const name of manifestNames) await remove(name)
+          if (localStorage && manifestNames.length) {
+            for (const name of manifestNames) await remove(name)
+            saveProgress()
+          }
           for (const half of unit.halves) {
             await pool([...half.blobs.keys()].filter(name => !manifests.has(name) && !markers.has(name)), 4, remove, signal)
           }
           if (!localStorage) for (const name of manifestNames) await remove(name)
           for (const name of names.filter(name => markers.has(name))) await remove(name)
+          delete state.deletions[primaryPrefix]
           for (const prefix of unit.prefixes) delete state.reviews[prefix]
+          saveProgress()
           if (unit.remnant) remnants.deleted++
           else removed++
         } catch (error) {
+          if (deleted === 0 && !unit.resumed) delete state.deletions[primaryPrefix]
+          saveProgress()
           if (deleted) {
             warnings++
             this.write(job, `Retention partly removed ${unit.prefixes.join(", ")}. Remaining files were kept for recovery.`, "warning")
