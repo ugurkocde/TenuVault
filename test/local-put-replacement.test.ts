@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import * as fileSystem from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { LocalBlobStore, localBackupsExist } from '../src/main/storage/local-blob-store'
 
@@ -154,7 +154,7 @@ it.each([false, true])("recovers interrupted cleanup without overwriting a live 
   const damage = await restarted.damage(account, container)
   if (occupied) {
     expect(damage.files).toEqual([expect.objectContaining({
-      file: `${quarantine.split("/").at(-1)}/${file}`, reason: expect.stringContaining("interrupted cleanup"),
+      file: `${basename(quarantine)}/${file}`, reason: expect.stringContaining("interrupted cleanup"),
     })])
     expect(readFileSync(held)).toEqual(encrypted)
     expect(readFileSync(join(dir, file))).not.toEqual(encrypted)
@@ -194,7 +194,7 @@ it("uses the quarantine stamp for the full grace period when rename leaves the b
   expect((await new LocalBlobStore(root, keys).damage(account, container)).files).toEqual([
     expect.objectContaining({ file: expect.stringContaining(file) }),
   ])
-  expect(readdirSync(dir)).toEqual([quarantine.split("/").at(-1)])
+  expect(readdirSync(dir)).toEqual([basename(quarantine)])
   clock.mockReturnValue(now + 61_000)
   expect((await new LocalBlobStore(root, keys).get(account, container, name)).data).toEqual(body)
   expect(readdirSync(dir)).toEqual([file])

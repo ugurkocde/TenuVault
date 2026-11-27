@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import type { RetentionLimits } from "../src/main/backup/retention-budget"
+import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { NextRequest } from "next/server"
@@ -31,7 +32,7 @@ const owner = { Source: "TenuVault Desktop", TenantId: TENANT }
 const oldItem = { id: "old" }
 const indexed = { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(oldItem), sha256: createHash("sha256").update(JSON.stringify(oldItem)).digest("hex") } }
 
-function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; serverTime?: () => Date | null; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; serverTime?: () => Date | null; progress?: RetentionProgressStore; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
   vi.useFakeTimers()
   vi.setSystemTime(now)
   const saved = new Map<string, Buffer>()
@@ -73,7 +74,13 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
   }
   registerStorageToken("token", TENANT)
   const fetch = legacyAzureReader(wireFetch, () => keyring)
-  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keyring) })
+  const progressData = new Map<string, string>()
+  const progress: RetentionProgressStore = options.progress ?? {
+    get: key => progressData.get(key) ?? null,
+    set: (key, value) => { progressData.set(key, value) },
+    delete: key => { progressData.delete(key) },
+  }
+  const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, retentionProgress: progress, recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keyring) })
   /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
   function seed(name: string, value: unknown, sealed = false, key = master) {
     const body = Buffer.from(typeof value === "string" ? value : JSON.stringify(value))
@@ -83,7 +90,7 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
     seed(`${prefix}DeviceConfigurations/Old.json`, { id: "old" }, sealed)
     if (marker !== null) seed(`${prefix}${BACKUP_OWNER_FILE}`, marker, sealed)
   }
-  return { engine, fetch, saved, calls, seed, folder, keyring }
+  return { engine, fetch, saved, calls, seed, folder, keyring, progress, progressData }
 }
 
 async function complete(engine: BackupEngine) {
@@ -761,5 +768,100 @@ describe("retention server time", () => {
     expect(saved.has(expired + "metadata.json")).toBe(false)
     expect(calls.some(call => call.name.startsWith(future))).toBe(false)
     expect(job.log.join("\n")).toContain("excluded them from the review")
+  })
+})
+
+describe("retention progress and manifest validation", () => {
+  const expired = "backup-2026-08-01-020000/"
+  const manifest = { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } }
+
+  it("discards malformed persisted retention progress and recovers cleanly", async () => {
+    const invalidCases = [
+      JSON.stringify({ reviews: { [expired]: {} } }),
+      JSON.stringify({ cursor: 123, reviews: {} }),
+      JSON.stringify({ latest: 456, reviews: {} }),
+      JSON.stringify({ latestAttempts: -1, reviews: {} }),
+      JSON.stringify({ latestAttempts: 1.5, reviews: {} }),
+      JSON.stringify({ reviews: [] }),
+      JSON.stringify({ reviews: { [expired]: { attempts: "bad", files: {} } } }),
+      JSON.stringify({ reviews: { [expired]: { attempts: 0, files: [] } } }),
+      JSON.stringify({ reviews: { [expired]: { attempts: 0, files: { "a.json": 123 } } } }),
+      JSON.stringify({ reviews: { [expired]: { attempts: 0, files: {}, failures: -1 } } }),
+      JSON.stringify({ reviews: { [expired]: { attempts: 0, files: {}, reason: 123 } } }),
+      JSON.stringify({ reviews: {}, deletes: [] }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { remaining: [], types: [], untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { remaining: {}, types: [1], untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { remaining: {}, types: [], untagged: "no" } } }),
+    ]
+    for (const raw of invalidCases) {
+      expect(readRetentionProgress(raw)).toEqual({ reviews: {} })
+    }
+    const valid = {
+      cursor: expired,
+      latest: "backup-2026-10-12-120000/",
+      latestAttempts: 1,
+      reviews: { [expired]: { attempts: 1, files: { "DeviceConfigurations/Old.json": "abc" }, failures: 2, reason: "missing" } },
+      deletes: { [expired]: { remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], untagged: false } },
+    }
+    expect(readRetentionProgress(JSON.stringify(valid))).toEqual(valid)
+
+    const { engine, saved, seed, folder, progressData } = setup()
+    progressData.set(`${TENANT}/contoso`, JSON.stringify({ reviews: { [expired]: {} } }))
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+  })
+
+  it("rejects inconsistent TotalPolicies and ItemCounts before granting replacement coverage, while allowing valid empty and inventory-only backups", async () => {
+    const appsExpired = "backup-2026-07-01-020000/"
+    const appsHolder = "backup-2026-09-25-020000/"
+    const appItem = { id: "app1" }
+    const appIndexed = { "Apps/app1": { file: "App.json", hash: snapshotHash(appItem), sha256: createHash("sha256").update(JSON.stringify(appItem)).digest("hex") } }
+    const appManifest = { TenantId: TENANT, Status: "Success", Scope: { Included: ["Apps"] }, Items: appIndexed, ItemCounts: { Apps: 1, TotalPolicies: 1 } }
+
+    // Contradictory TotalPolicies: 1 with empty Items must not grant coverage for Apps.
+    const { engine, saved, seed } = setup()
+    seed(appsExpired + "Apps/App.json", appItem)
+    seed(appsExpired + BACKUP_OWNER_FILE, owner)
+    seed(appsExpired + "metadata.json", appManifest)
+    seed(appsHolder + BACKUP_OWNER_FILE, owner)
+    seed(appsHolder + "metadata.json", {
+      TenantId: TENANT, Status: "Success", Failures: 0,
+      Scope: { Included: ["Apps"] }, Items: {}, ItemCounts: { Apps: 0, TotalPolicies: 1 },
+    })
+    const job = await complete(engine)
+    expect(saved.has(appsExpired + "metadata.json")).toBe(true)
+    expect(job.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("policy total") }))
+
+    // Nonzero folder count in Scope.Included with empty Items must also grant no coverage.
+    const second = setup()
+    second.seed(appsExpired + "Apps/App.json", appItem)
+    second.seed(appsExpired + BACKUP_OWNER_FILE, owner)
+    second.seed(appsExpired + "metadata.json", appManifest)
+    second.seed(appsHolder + BACKUP_OWNER_FILE, owner)
+    second.seed(appsHolder + "metadata.json", {
+      TenantId: TENANT, Status: "Success", Failures: 0,
+      Scope: { Included: ["Apps"] }, Items: {}, ItemCounts: { Apps: 1, TotalPolicies: 1 },
+    })
+    await complete(second.engine)
+    expect(second.saved.has(appsExpired + "metadata.json")).toBe(true)
+
+    // Valid empty backup with TotalPolicies: 0 and inventory-only backup (AutopilotDevices excluded from TotalPolicies) still pass and grant coverage.
+    const third = setup()
+    const device = { id: "ap1" }
+    third.seed(appsExpired + "Apps/App.json", appItem)
+    third.seed(appsExpired + BACKUP_OWNER_FILE, owner)
+    third.seed(appsExpired + "metadata.json", appManifest)
+    third.seed(appsHolder + "AutopilotDevices/Device.json", device)
+    third.seed(appsHolder + BACKUP_OWNER_FILE, owner)
+    third.seed(appsHolder + "metadata.json", {
+      TenantId: TENANT, Status: "Success", Failures: 0,
+      Scope: { Included: ["Apps", "AutopilotDevices"] },
+      Items: { "AutopilotDevices/ap1": { file: "Device.json", hash: snapshotHash(device), sha256: createHash("sha256").update(JSON.stringify(device)).digest("hex") } },
+      ItemCounts: { Apps: 0, AutopilotDevices: 1, TotalPolicies: 0 },
+    })
+    await complete(third.engine)
+    expect(third.saved.has(appsExpired + "metadata.json")).toBe(false)
   })
 })

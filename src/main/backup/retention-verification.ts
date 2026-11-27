@@ -76,8 +76,13 @@ export async function verifyBackup(
   const declared = manifest.ItemCounts
   if (declared !== undefined) {
     if (!declared || typeof declared !== "object" || Array.isArray(declared)) reject("metadata.json", "item counts are invalid")
+    const totalPolicies = [...counts.entries()].reduce((sum, [folder, count]) => (typeForFolder(folder)?.inventory ? sum : sum + count), 0)
     for (const [folder, count] of Object.entries(declared!)) {
-      if (folder !== "TotalPolicies" && count !== (counts.get(folder) ?? 0)) reject("metadata.json", "a recorded item count does not match")
+      if (folder === "TotalPolicies") {
+        if (count !== totalPolicies) reject("metadata.json", "the recorded policy total does not match")
+      } else if (count !== (counts.get(folder) ?? 0)) {
+        reject("metadata.json", "a recorded item count does not match")
+      }
     }
   }
   const types = new Set([...counts.keys(), ...coveredFolders(manifest)].filter(folder =>
