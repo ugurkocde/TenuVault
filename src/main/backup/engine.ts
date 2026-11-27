@@ -1461,8 +1461,11 @@ export class BackupEngine {
     const candidateWriters = backups.map(metered)
     await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
       let claim: OwnershipFile | undefined
+      let timedOut: OwnershipFile | undefined
       const { manifest, owner } = await resolveBackupOwnership(async (file) => {
-        const read = await readFile(candidateWriters[index]!, `${backup.prefix}${file}`)
+        // Another read of this candidate cannot make a timed-out manifest safe to use.
+        const read = timedOut ?? await readFile(candidateWriters[index]!, `${backup.prefix}${file}`)
+        if (read.kind === "unreadable" && read.error instanceof RequestTimeoutError) timedOut = read
         if (file === BACKUP_OWNER_FILE) claim = read
         return read
       }, tenant)
