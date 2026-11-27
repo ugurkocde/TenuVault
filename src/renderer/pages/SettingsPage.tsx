@@ -9,7 +9,7 @@ import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Dialog, DialogAnimationProvider, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { storageLabel } from "~/lib/storage-label"
-import type { AppInfo, AppPreferences, ProxyCredentialSummary, SignedInAccount, UpdateStatus } from "../../shared/ipc"
+import type { AppInfo, AppPreferences, BackgroundLaunchStatus, ProxyCredentialSummary, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
@@ -524,7 +524,7 @@ export function BackgroundAndRetention() {
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [launcher, setLauncher] = useState<{ supported: boolean; installed: boolean } | null>(null)
+  const [launcher, setLauncher] = useState<BackgroundLaunchStatus | null>(null)
   const [launchBusy, setLaunchBusy] = useState<"install" | "remove" | null>(null)
   const [checkBusy, setCheckBusy] = useState(true)
   const [checkError, setCheckError] = useState(false)
@@ -545,12 +545,12 @@ export function BackgroundAndRetention() {
       setCheckBusy(false)
     }
   }
-  const changeLauncher = async () => {
+  const changeLauncher = async (action: "install" | "remove") => {
     if (launchInFlight.current || checkInFlight.current || !launcher?.supported) return
     launchInFlight.current = true
-    setLaunchBusy(launcher.installed ? "remove" : "install")
+    setLaunchBusy(action)
     try {
-      setLauncher(await (launcher.installed ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()))
+      setLauncher(await (action === "remove" ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()))
     } catch (error) {
       toast(String(error), "error")
     } finally {
@@ -577,6 +577,11 @@ export function BackgroundAndRetention() {
   if (loadError) return <SectionLoadError title="Background runner" icon={MonitorCog} message={loadError} onRetry={load} />
   if (!prefs || !info) return null
   const iconLocation = info.platform === "darwin" ? "menu bar" : "tray"
+  const launchDescription = info.platform === "linux"
+    ? launcher?.mode === "autostart"
+      ? "TenuVault opens in the tray at sign-in. Backups run while you are signed in and TenuVault stays running. If you quit TenuVault, open it again or sign in again to resume backups."
+      : "A systemd user timer opens TenuVault in the tray at graphical sign-in and checks every five minutes. If your desktop does not support the timer, TenuVault opens at sign-in only."
+    : `${info.platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"}. The background runner can reopen TenuVault in the ${iconLocation} within five minutes while you are signed in.`
   return (
     <Card>
       <CardHeader className="p-7 pb-4">
@@ -588,16 +593,20 @@ export function BackgroundAndRetention() {
       <CardContent className="space-y-4 px-7 pb-7 text-sm text-gray-700">
         <div className="rounded-xl border border-gray-200 p-4">
           <p className="font-medium">Restart TenuVault for scheduled backups</p>
-          <p className="mt-2 text-sm">{info.platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"}. The background runner can reopen TenuVault in the {iconLocation} within five minutes while you are signed in. Backups still require valid Microsoft sign-in (or a verified Backup Reader for scheduled backups), plan access and available storage. This does not run while signed out, asleep or powered off.</p>
+          <p className="mt-2 text-sm">{launchDescription} Backups still require valid Microsoft sign-in (or a verified Backup Reader for scheduled backups), plan access and available storage. This does not run while signed out, asleep or powered off.</p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => void changeLauncher()}>{launchBusy === "install" ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
-            <p role="status">{checkBusy ? "Checking..." : checkError ? "Unable to check" : launcher?.installed ? "Installed" : "Not installed"}</p>
+            <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => void changeLauncher(launcher?.installed ? "remove" : "install")}>{launchBusy === "install" && !launcher?.installed ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
+            <p role="status">{checkBusy ? "Checking..." : checkError ? "Unable to check" : launcher?.mode === "autostart" ? "Installed (sign-in only)" : launcher?.installed ? "Installed" : "Not installed"}</p>
+            {launcher?.mode === "autostart" && (
+              <Button variant="outline" disabled={checkBusy || !!launchBusy} onClick={() => void changeLauncher("install")}>{launchBusy === "install" ? "Checking..." : "Try systemd timer"}</Button>
+            )}
           </div>
           {checkError && <div className="mt-3 flex flex-wrap items-center gap-3">
             <p role="alert">Could not check background startup. Try again.</p>
             <Button variant="outline" size="sm" disabled={checkBusy} onClick={() => void checkLauncher()}>Retry check</Button>
           </div>}
-          {launcher && !launcher.supported && <p className="mt-2 text-xs">Available in installed Windows and macOS builds.</p>}
+          {info.platform === "linux" && <p className="mt-2 text-xs">Background launch requires a Linux build you package yourself. There is no official Linux download yet.</p>}
+          {info.platform !== "linux" && launcher && !launcher.supported && <p className="mt-2 text-xs">Available in installed Windows and macOS builds.</p>}
           <p className="mt-2 text-xs">Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.</p>
           <p className="mt-2 text-xs">To stop automatic restarts, remove the background runner and turn off Start at login before quitting. Removing it leaves your backup schedules unchanged.</p>
         </div>

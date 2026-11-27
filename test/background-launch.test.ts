@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
@@ -41,10 +41,182 @@ it('installs and removes a user-session launch agent without interpolating execu
 })
 it('does not install on unsupported platforms or development builds', async () => {
   const exec = vi.fn(async () => ({ stdout: '' }))
-  const launcher = new BackgroundLaunch({ platform: 'linux', packaged: true, executable: '/app', home: '/unused', data: '/unused', exec })
-  await expect(launcher.install()).rejects.toThrow('installed Windows or macOS')
+  const options = { executable: '/app', home: '/unused', data: '/unused', exec }
+  for (const launcher of [
+    new BackgroundLaunch({ ...options, platform: 'freebsd', packaged: true }),
+    new BackgroundLaunch({ ...options, platform: 'linux', packaged: false }),
+  ]) {
+    await expect(launcher.status()).resolves.toEqual({ supported: false, installed: false })
+    await expect(launcher.install()).rejects.toThrow('installed Windows, macOS or Linux')
+  }
   expect(exec).not.toHaveBeenCalled()
   expect(launchAgent('/Applications/Test.app/Contents/MacOS/Test')).toContain('<integer>300</integer>')
+})
+
+const linuxStatus = { supported: true, installed: true, mode: 'systemd' }
+const autostartStatus = { supported: true, installed: true, mode: 'autostart' }
+const absentStatus = { supported: true, installed: false }
+
+function linuxSystemctl() {
+  const state = {
+    session: 'active',
+    display: 'WAYLAND_DISPLAY=wayland-0',
+    timer: false,
+    error: null as Error | null,
+    timerError: null as Error | null,
+    enableError: null as Error | null,
+    enableStartsTimer: true,
+  }
+  const exec = vi.fn(async (file: string, args: string[]) => {
+    expect(file).toBe('systemctl')
+    expect(args[0]).toBe('--user')
+    if (state.error) throw state.error
+    switch (args[1]) {
+      case 'show':
+        if (args.at(-1) === 'graphical-session.target') return { stdout: state.session }
+        if (state.timerError) throw state.timerError
+        return { stdout: state.timer ? 'ActiveState=active\nUnitFileState=enabled\n' : 'ActiveState=inactive\nUnitFileState=\n' }
+      case 'show-environment': return { stdout: state.display }
+      case 'enable':
+        if (state.enableError) throw state.enableError
+        state.timer = state.enableStartsTimer
+        break
+      case 'disable': state.timer = false; break
+    }
+    return { stdout: '' }
+  })
+  return { state, exec }
+}
+
+it('manages a graphical systemd timer and replaces the executable path after moving the app', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-linux-'))
+  const { exec, state } = linuxSystemctl()
+  const configHome = join(root, 'custom-config')
+  const options = { platform: 'linux' as const, packaged: true, executable: '/opt/TenuVault/tenuvault-desktop', home: root, data: root, configHome, exec }
+  const launcher = new BackgroundLaunch(options)
+  const service = join(configHome, 'systemd/user/tenuvault-background.service')
+  const timer = join(configHome, 'systemd/user/tenuvault-background.timer')
+  try {
+    expect(await launcher.status()).toEqual(absentStatus)
+    expect(await launcher.install()).toEqual(linuxStatus)
+    expect(await readFile(service, 'utf8')).toContain(String.raw`ExecStart=:/bin/sh -c "exec \"$@\"" "tenuvault-background" "/opt/TenuVault/tenuvault-desktop" "--hidden"`)
+    const timerContents = await readFile(timer, 'utf8')
+    expect(timerContents).toContain('PartOf=graphical-session.target')
+    expect(timerContents).toContain('WantedBy=graphical-session.target')
+    expect(timerContents).toContain('OnActiveSec=1s\nOnCalendar=*:0/5\nAccuracySec=1s')
+    expect(await launcher.install()).toEqual(linuxStatus)
+    expect(exec.mock.calls.filter(([, args]) => args[1] === 'enable')).toEqual([
+      ['systemctl', ['--user', 'enable', '--now', 'tenuvault-background.timer']],
+    ])
+    state.timer = false
+    expect(await launcher.status()).toEqual(absentStatus)
+    state.timer = true
+
+    const moved = new BackgroundLaunch({ ...options, executable: '/tmp/.mount_tv/tenuvault-desktop', appImage: '/home/test/TenuVault $v%2 "New".AppImage' })
+    await writeFile(timer, 'outdated timer')
+    expect(await moved.status()).toEqual(linuxStatus)
+    expect(await moved.refresh()).toEqual(linuxStatus)
+    expect(await readFile(timer, 'utf8')).toBe(timerContents)
+    const updated = await readFile(service, 'utf8')
+    expect(updated).toContain(String.raw`"/home/test/TenuVault $v%%2 \"New\".AppImage" "--hidden"`)
+    expect(updated).not.toContain('/tmp/.mount_tv')
+    expect(await moved.remove()).toEqual(absentStatus)
+    expect(await moved.remove()).toEqual(absentStatus)
+    expect(exec.mock.calls.filter(([, args]) => ['disable', 'daemon-reload', 'stop'].includes(args[1]!))).toEqual([
+      ['systemctl', ['--user', 'disable', '--now', 'tenuvault-background.timer']],
+      ['systemctl', ['--user', 'daemon-reload']],
+    ])
+    await expect(readFile(service)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(timer)).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it.each(['missing-systemctl', 'missing-bus', 'missing-manager', 'timer-probe-error', 'inactive-session', 'missing-display'])('installs sign-in-only autostart with %s', async reason => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-xdg-'))
+  const { exec, state } = linuxSystemctl()
+  if (reason === 'missing-systemctl') state.error = Object.assign(new Error('spawn systemctl ENOENT'), { code: 'ENOENT' })
+  if (reason === 'missing-bus') state.error = new Error('Failed to connect to user scope bus via local transport: No medium found')
+  if (reason === 'missing-manager') state.error = new Error('Failed to get properties: Process org.freedesktop.systemd1 exited with status 1')
+  if (reason === 'timer-probe-error') state.timerError = Object.assign(new Error('Command failed: systemctl'), { stderr: 'Failed to get properties: Operation not permitted' })
+  if (reason === 'inactive-session') state.session = 'inactive'
+  if (reason === 'missing-display') state.display = 'XDG_CURRENT_DESKTOP=GNOME'
+  const options = { platform: 'linux' as const, packaged: true, executable: '/opt/TenuVault/tenuvault-desktop', home: root, data: root, exec }
+  const launcher = new BackgroundLaunch({ ...options, appImage: '/home/test/TenuVault=100% $var.AppImage' })
+  const entry = join(root, '.config/autostart/tenuvault-background.desktop')
+  try {
+    expect(await launcher.install()).toEqual(autostartStatus)
+    expect(await launcher.status()).toEqual(autostartStatus)
+    expect(await launcher.install()).toEqual(autostartStatus)
+    expect(await readFile(entry, 'utf8')).toContain(String.raw`"/home/test/TenuVault=100%% \\$var.AppImage" "--hidden"`)
+    const moved = new BackgroundLaunch(options)
+    expect(await moved.status()).toEqual(absentStatus)
+    expect(await moved.install()).toEqual(autostartStatus)
+    expect(await readFile(entry, 'utf8')).toContain('"/opt/TenuVault/tenuvault-desktop" "--hidden"')
+    expect(await moved.remove()).toEqual(absentStatus)
+    expect(await moved.remove()).toEqual(absentStatus)
+    expect(exec.mock.calls.some(([, args]) => args[1] === 'enable')).toBe(false)
+    await expect(readFile(entry)).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('upgrades sign-in-only autostart once the display is available to systemd', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-upgrade-'))
+  const { exec, state } = linuxSystemctl()
+  const launcher = new BackgroundLaunch({ platform: 'linux', packaged: true, executable: '/app', home: root, data: root, exec })
+  const entry = join(root, '.config/autostart/tenuvault-background.desktop')
+  try {
+    state.display = ''
+    expect(await launcher.install()).toEqual(autostartStatus)
+    state.display = 'DISPLAY=:0'
+    expect(await launcher.install()).toEqual(linuxStatus)
+    await expect(readFile(entry)).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('reports a failed enable after writing the units and keeps sign-in-only autostart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-enable-'))
+  const { exec, state } = linuxSystemctl()
+  const launcher = new BackgroundLaunch({ platform: 'linux', packaged: true, executable: '/app', home: root, data: root, exec })
+  try {
+    state.display = ''
+    expect(await launcher.install()).toEqual(autostartStatus)
+    state.display = 'DISPLAY=:0'
+    state.enableError = Object.assign(new Error('Command failed: systemctl'), { stderr: 'Operation not permitted' })
+    await expect(launcher.install()).rejects.toThrow(/^Could not enable the TenuVault background timer in your systemd user session\.$/)
+    expect(await readFile(join(root, '.config/systemd/user/tenuvault-background.timer'), 'utf8')).toContain('OnCalendar=*:0/5')
+    expect(await launcher.status()).toEqual(autostartStatus)
+    state.enableError = null
+    expect(await launcher.install()).toEqual(linuxStatus)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('reports when enable succeeds but the timer is still missing from the user manager', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-unverified-'))
+  const { exec, state } = linuxSystemctl()
+  const launcher = new BackgroundLaunch({ platform: 'linux', packaged: true, executable: '/app', home: root, data: root, exec })
+  try {
+    state.enableStartsTimer = false
+    await expect(launcher.install()).rejects.toThrow('The TenuVault background timer did not start.')
+    expect(await launcher.status()).toEqual(absentStatus)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it.skipIf(process.platform === 'win32')('cleans up the enabled timer after losing the systemd user bus', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-offline-'))
+  const { exec, state } = linuxSystemctl()
+  const launcher = new BackgroundLaunch({ platform: 'linux', packaged: true, executable: '/app', home: root, data: root, exec })
+  const units = join(root, '.config/systemd/user')
+  try {
+    expect(await launcher.install()).toEqual(linuxStatus)
+    const wants = join(units, 'graphical-session.target.wants')
+    await mkdir(wants)
+    const enabled = join(wants, 'tenuvault-background.timer')
+    await symlink(join(units, 'tenuvault-background.timer'), enabled)
+    state.error = new Error('Failed to connect to bus: No such file or directory')
+    expect(await launcher.remove()).toEqual(absentStatus)
+    expect(await launcher.remove()).toEqual(absentStatus)
+    expect(await readdir(wants)).toEqual([])
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 it('replaces a stale launch helper after the application bundle moves', async () => {
   const root = await mkdtemp(join(tmpdir(), 'tv-background-move-'))

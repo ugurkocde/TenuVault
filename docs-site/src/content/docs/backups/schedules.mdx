@@ -150,7 +150,7 @@ You find both check boxes on the **Schedule** tab under **Background runner**, a
 
 ### Background launch
 
-Background launch registers a task with your operating system that starts TenuVault in the menu bar on macOS or the tray on Windows when you sign in to the computer, and again every five minutes. If TenuVault is not running, it is reopened there within five minutes. Background launch is available in installed Windows and macOS builds.
+Background launch opens TenuVault in the menu bar or tray at sign-in. On systems with a periodic launcher, it reopens TenuVault within five minutes after you quit.
 
 1. Open **Settings** and go to **Background runner**.
 2. Under **Restart TenuVault for scheduled backups**, click **Install background launch**.
@@ -165,6 +165,20 @@ TenuVault creates a Task Scheduler task for your user account, named **TenuVault
 <TabItem label="macOS">
 
 TenuVault installs a LaunchAgent for your user account that runs at login and every five minutes and opens TenuVault in the background. No password is stored.
+
+</TabItem>
+
+<TabItem label="Linux">
+
+Background launch requires a Linux build you package yourself. There is no official Linux download yet.
+
+TenuVault installs a systemd user timer and service. The timer runs when you sign in to your graphical desktop and every five minutes during that session. The desktop must activate `graphical-session.target` and provide its X11 or Wayland display environment to the systemd user manager. TenuVault needs that display even when it starts hidden.
+
+On desktops without that systemd session support, TenuVault installs an XDG autostart entry and Settings shows **Installed (sign-in only)**. TenuVault then starts in the tray at sign-in. Backups run while you are signed in and TenuVault stays running. If you quit TenuVault, open it again or sign in again to resume scheduled backups.
+
+To retry the timer from sign-in-only mode, select **Try systemd timer** in **Settings** > **Background runner**.
+
+If you move an AppImage, open it at its new location to update the installed timer. For sign-in-only mode, install background launch again.
 
 </TabItem>
 </Tabs>

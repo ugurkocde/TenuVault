@@ -330,6 +330,12 @@ export type RendererSetupEvent =
   | { name: "script_saved" }
   | { name: "storage"; props: { kind: "local" | "azure" } }
 
+export interface BackgroundLaunchStatus {
+  supported: boolean
+  installed: boolean
+  mode?: "systemd" | "autostart"
+}
+
 export interface AppPreferences {
   /** Start TenuVault (hidden, in the tray) when the admin signs in to the computer. */
   startAtLogin: boolean
@@ -593,9 +599,9 @@ export interface TenuVaultBridge {
     onRefusalsChanged: (listener: () => void) => () => void
   }
   backgroundLaunch: {
-    status: () => Promise<{ supported: boolean; installed: boolean }>
-    install: () => Promise<{ supported: boolean; installed: boolean }>
-    remove: () => Promise<{ supported: boolean; installed: boolean }>
+    status: () => Promise<BackgroundLaunchStatus>
+    install: () => Promise<BackgroundLaunchStatus>
+    remove: () => Promise<BackgroundLaunchStatus>
   }
   preferences: {
     get: () => Promise<AppPreferences>

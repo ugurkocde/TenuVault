@@ -1,6 +1,7 @@
 # Background execution
 
-Install background launch in Settings on a packaged Windows or macOS app. This is a per-user
+Install background launch in Settings on a packaged Windows or macOS app, or on a Linux build you
+package yourself. There is no official Linux download yet. This is a per-user
 launcher, not a system service: it runs under the same logged-in OS account that owns the encrypted
 credentials and backup keys. Installation and removal use the OS task APIs; no password is stored.
 
@@ -8,6 +9,13 @@ Windows uses a Task Scheduler task with an interactive, limited principal, a log
 five-minute repeating trigger. macOS uses a user LaunchAgent restricted to the Aqua session, loaded
 at login and every five minutes. Both launch the installed executable with `--hidden`. Repeated
 launches use the app's single-instance lock and do not open another window or backup engine.
+
+Linux uses a systemd user timer tied to `graphical-session.target`, starting at graphical login and
+every five minutes. The user manager inherits the desktop's display environment, which Electron
+needs even when hidden. Without that systemd session support, an XDG autostart entry starts the
+app at login only. The launcher uses the AppImage file when applicable, or the installed executable.
+Open TenuVault from its new location to update an installed timer. Reinstall the sign-in-only
+launcher after moving the executable or AppImage.
 
 The existing scheduler catches up the latest missed slot after launch. It serializes scheduled runs,
 and the backup engine prevents concurrent jobs for the same tenant. A failed scheduled backup is recorded and
@@ -25,8 +33,8 @@ app-only instead: a separate read-only app registration with a certificate in th
 
 The launcher does not run while logged off, asleep or powered off. After restart it resumes when the
 same user logs in. It does not provide a headless service identity or guaranteed execution at an exact
-wall-clock time. Wake timers and unattended sign-in are not installed. Linux and development builds
-do not offer this control.
+wall-clock time. Wake timers and unattended sign-in are not installed. Development builds do not
+offer this control.
 
 To stop automatic relaunch, remove background launch and turn off Start at login before quitting the app. Removal leaves the
 backup schedules intact and does not terminate an active backup. Turning off Start at login alone
