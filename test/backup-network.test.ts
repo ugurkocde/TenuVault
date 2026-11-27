@@ -415,7 +415,7 @@ describe("backup request recovery", () => {
         return new Response(null, { status: 202 })
       }
       const body = saved.get(url.pathname)
-      return body ? new Response(new Uint8Array(body)) : new Response(null, { status: 404 })
+      return body ? new Response(new Uint8Array(body), { headers: { etag: '"fixture"' } }) : new Response(null, { status: 404 })
     })
     const engine = new BackupEngine({ fetch: azureBridge(networkFetch), getToken: async () => "token", retentionDays: () => 30 })
     const job = engine.start(request)
@@ -553,7 +553,7 @@ describe("backup request recovery", () => {
           : [oldManifest, oldPolicy].map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`).join("")
         return new Response(`<EnumerationResults><Blobs>${entries}</Blobs></EnumerationResults>`)
       }
-      if (init?.method === "GET") return new Response(saved.get(url.pathname), { headers: { "content-type": "application/json" } })
+      if (init?.method === "GET") return new Response(saved.get(url.pathname), { headers: { "content-type": "application/json", etag: '"fixture"' } })
       if (init?.method === "DELETE") saved.delete(url.pathname)
     })
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30 })

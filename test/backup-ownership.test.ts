@@ -56,7 +56,7 @@ function setup(options: { retention?: number; count?: number; override?: (url: U
       saved.delete(name)
       return new Response(null, { status: 202 })
     }
-    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404 })
+    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: { etag: '"fixture"' } })
   }
   registerStorageToken("token", TENANT)
   const fetch = legacyAzureReader(wireFetch, () => [master])

@@ -45,7 +45,7 @@ function setup(options: { count?: number; retention?: number; getToken?: (saved:
         saved.delete(name)
         return new Response(null, { status: 202 })
       }
-      return saved.has(name) ? new Response(saved.get(name)) : new Response(null, { status: 404 })
+      return saved.has(name) ? new Response(saved.get(name), { headers: { etag: '"fixture"' } }) : new Response(null, { status: 404 })
     },
   })
   const manifestPuts = () => calls.filter(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))

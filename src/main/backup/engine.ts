@@ -1432,7 +1432,7 @@ export class BackupEngine {
     const verify = async (prefix: string, names: string[]) => {
       const verified = new Map<string, string>()
       try {
-        for (const name of names) verified.set(name, await storage.verifyForDeletion(name))
+        await pool(names, CONCURRENCY, async name => { verified.set(name, await storage.verifyForDeletion(name)) }, signal)
         return verified
       } catch (error) {
         signal.throwIfAborted()
@@ -1484,11 +1484,11 @@ export class BackupEngine {
           if (!owned || !modern) { remnants.unowned++; remnants.unownedBytes += bytes; if (backup.time < cutoff) unowned++; continue }
           // A remnant keeps every type it read completely, even when the half as a whole is incomplete
           // or its companion is missing, so it is never removed while it holds a type's newest copy.
-          let holdsUncovered = false
-          for (const folder of completeFolders(metadata)) if (uncovered.delete(folder)) holdsUncovered = true
-          if (holdsUncovered || backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000) { remnants.kept++; remnants.keptBytes += bytes; continue }
-          const verified = await verify(backup.prefix, listing.blobs)
-          if (!verified) { remnants.kept++; remnants.keptBytes += bytes; continue }
+          const providesCoverage = [...completeFolders(metadata)].filter(folder => uncovered.has(folder))
+          const inGrace = backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000
+          const verified = !inGrace || providesCoverage.length ? await verify(backup.prefix, listing.blobs) : null
+          if (verified) for (const folder of providesCoverage) uncovered.delete(folder)
+          if (!verified || providesCoverage.length || inGrace) { remnants.kept++; remnants.keptBytes += bytes; continue }
           let remaining = bytes
           try {
             const markerName = `${backup.prefix}${BACKUP_OWNER_FILE}`, manifestName = `${backup.prefix}metadata.json`
@@ -1512,7 +1512,6 @@ export class BackupEngine {
         }
         // The ordinary half alone coordinates complete pairs and records both halves' coverage.
         if (paired && (!validPair || isLargeBackup(backup.prefix))) continue
-        let holdsUncovered = false
         // A backup with per-type outcomes satisfies coverage for each type it read completely, so one
         // that finished with warnings is kept while it holds a type's newest complete copy. One recorded
         // before outcomes may miss items in any folder it appears to hold, so it counts only when it read
@@ -1522,26 +1521,24 @@ export class BackupEngine {
         // Coverage that says it is incomplete never counts; manifests recorded before Coverage existed count by status.
         const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0) && (metadata.Coverage === undefined || metadata.Coverage === "Complete")
         const holds = Array.isArray(metadata.Outcomes) ? completeFolders(metadata) : complete ? indexedFolders(metadata, restorableFolders(metadata)) : new Set<string>()
-        // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
-        // Coverage is recorded before a pair's own deletion checks, so older copies are judged against it.
-        for (const folder of [...holds, ...(paired && companion ? indexedFolders(companion, restorableFolders(companion)) : [])]) {
-          if (uncovered.delete(folder)) holdsUncovered = true
-        }
-        if (paired) {
-          if (Date.parse(parseBackupName(String(companionId))!.timestamp) >= cutoff) continue
-          if ([...restorableFolders(companion!)].some(folder => !covered.has(folder))) continue
-        }
-        if (backup.time >= cutoff) continue
-        if (holdsUncovered) {
-          kept++
-          continue
-        }
+        // Authenticate the files before counting any older backup as the only remaining copy.
+        const providesCoverage = [...holds, ...(paired && companion ? indexedFolders(companion, restorableFolders(companion)) : [])].filter(folder => uncovered.has(folder))
+        const expired = backup.time < cutoff && (!paired || (
+          Date.parse(parseBackupName(String(companionId))!.timestamp) < cutoff
+          && [...restorableFolders(companion!)].every(folder => covered.has(folder))
+        ))
+        if (!expired && !providesCoverage.length) continue
         const unitPrefixes = [backup.prefix, ...(companion ? [`${companionId}/`] : [])]
-        // Settle both inventories before the first delete, including large storage access.
         const unitListings = await Promise.all(unitPrefixes.map(prefix => storage.listFolder(prefix)))
         const blobs = unitListings.flatMap(listing => listing.blobs)
         const verified = await verify(backup.prefix, blobs)
         if (!verified) continue
+        for (const folder of providesCoverage) uncovered.delete(folder)
+        if (!expired) continue
+        if (providesCoverage.length) {
+          kept++
+          continue
+        }
         // The manifest goes first: a delete that stops at a protected file must not leave a
         // metadata.json that still reports the backup as complete. A protected manifest stops
         // before any policy file is touched.

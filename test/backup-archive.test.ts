@@ -44,7 +44,7 @@ it('rejects an archive whose declared expansion exceeds the limit', async () => 
 it('attempts all rollback deletions and preserves the original write failure', async () => {
   let writes = 0
   const cleanup = vi.fn(async () => { throw new Error('cleanup failed') })
-  const store = { createContainer: async () => true, list: async () => [], put: async () => { if (++writes === 3) throw new Error('original failure') }, delete: cleanup } as unknown as LocalBlobStore
+  const store = { createContainer: async () => true, list: async () => [], put: async (_account: string, _container: string, name: string) => { if (++writes === 3) throw new Error('original failure'); return { name, etag: String(writes) } }, delete: cleanup } as unknown as LocalBlobStore
   const reviewed = await reviewArchive(await archive())
   reviewed.files.set('DeviceConfigurations/second.json', Buffer.from('{}'))
   await expect(importArchive(store, reviewed)).rejects.toThrow('original failure')

@@ -46,7 +46,7 @@ function setup(options: { count?: number; retention?: number; retentionDays?: ()
         return new Response(null, { status: 202 })
       }
       return saved.has(name)
-        ? new Response(saved.get(name))
+        ? new Response(saved.get(name), { headers: { etag: '"fixture"' } })
         : new Response(null, { status: 404 })
     },
   })
@@ -217,7 +217,8 @@ describe("storage read retries", () => {
     expect(attempts).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(1)
     await engine.waitForJob(job)
-    expect(attempts).toEqual([0, 1000, 3000])
+    // After ownership is read, retention verifies the manifest again with the payload.
+    expect(attempts).toEqual(operation === "readJson" ? [0, 1000, 3000, 3000] : [0, 1000, 3000])
     expect(job.status).toBe("Completed")
     expect(job.progressMessage).toBe("Backup completed successfully")
     expect(saved.has(old)).toBe(false)

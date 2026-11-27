@@ -140,10 +140,10 @@ export class BlobWriter {
     })
   }
 
-  async delete(name: string, etag: string): Promise<void> {
+  async delete(name: string, etag?: string): Promise<void> {
     await this.request(backupStoragePath(name), {
       method: "DELETE",
-      headers: { "if-match": etag },
+      ...(etag ? { headers: { "if-match": etag } } : {}),
     }, async (response) => {
       if (!response.ok && response.status !== 404) {
         const code = response.headers.get("x-ms-error-code") ?? ""

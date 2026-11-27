@@ -444,6 +444,12 @@ export class LocalBlobStore {
       entry = entries.get(name)
       if (!entry) throw this.missing(entries, name)
     }
+    return this.readBody(account, container, entry, entries)
+  }
+
+  private async readBody(account: string, container: string, entry: Entry, entries: Map<string, Entry>): Promise<{ blob: StoredBlob; data: Buffer }> {
+    const { name } = entry
+    const folder = backupFolderOf(name)
     const raw = await readFile(join(this.dir(account, container), entry.file))
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
     if (!version) throw new Error("Invalid backup header")
@@ -459,7 +465,7 @@ export class LocalBlobStore {
       const why = unreadable(error)
       const { reason } = why
       const damage = this.damageOf.get(entries)
-      if (damage && [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].includes(container) && !damage.files.some((file) => file.file === entry!.file)) {
+      if (damage && [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].includes(container) && !damage.files.some((file) => file.file === entry.file)) {
         damage.files.push(damagedFile(entry.file, why, folder))
         if (folder && !damage.unavailable.has(folder)) damage.unavailable.set(folder, `one of its files could not be read: ${reason}.`)
         this.damagedStamps.get(entries)?.set(entry.file, entry.stamp)
@@ -585,8 +591,8 @@ export class LocalBlobStore {
       // Retention verifies the full candidate over the storage bridge and binds each delete to that
       // read. Direct deletes must also authenticate every body in the candidate before removing one.
       const folder = backupFolderOf(name)
-      const candidate = !options.ifMatch && folder ? [...entries.keys()].filter(blob => backupFolderOf(blob) === folder) : [name]
-      for (const blob of candidate) await this.get(account, container, blob)
+      const candidate = !options.ifMatch && folder ? [...entries.values()].filter(blob => backupFolderOf(blob.name) === folder) : [entry]
+      for (const blob of candidate) await this.readBody(account, container, blob, entries)
     }
     await this.write(dir, async () => {
       const path = join(dir, entry.file)
