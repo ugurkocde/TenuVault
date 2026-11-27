@@ -21,6 +21,8 @@ TenuVault never sends backups to a TenuVault server. For the protection details,
 
 By default, backups are stored in the **TenuVault Backups** folder in your Documents folder. Every file is encrypted, and file names reveal nothing about your policies.
 
+Lab builds use **TenuVault Lab Backups** in Documents by default. If you previously chose a folder in Lab, it stays selected. If Lab and the stable app share a folder, save the Lab recovery key before switching Lab to its own folder. Import that key in the stable app to read the existing Lab backups there.
+
 To manage the folder, open **Settings**, go to **Storage and recovery** and use the **Backups on this device** card:
 
 * **Folder** shows the current folder.

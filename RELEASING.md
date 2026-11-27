@@ -255,6 +255,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for 0.6.0
 
+- **Local backup folders.** Lab now defaults to `Documents/TenuVault Lab Backups`. Stable defaults to `Documents/TenuVault Backups`. Saved folder choices are kept. If Lab wrote backups into the stable folder, export Lab's recovery key and import it into stable to read those backups alongside the stable ones.
+
 Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
 
 - **Azure backup coverage.** Run the cloud backup setup script again with the existing values to deploy backup runbook 1.6.1. This version verifies policy details and records incomplete reads so change reports can qualify comparisons. The Schedule tab prompts for an update when the last run reports a version earlier than 1.6.1. The audit capability threshold remains 1.5.0.

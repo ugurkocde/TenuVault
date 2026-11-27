@@ -450,7 +450,7 @@ async function bootstrap(): Promise<void> {
   const backupKeys = new BackupKeys(appStore)
   setRestoreJournalStore(appStore)
   setRestoreApprovalStore(appStore)
-  const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), "TenuVault Backups")
+  const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), __TV_LAB_BUILD__ ? "TenuVault Lab Backups" : "TenuVault Backups")
   let localStore: LocalBlobStore | null = null
   const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
   // The unreadable-backups warning reads inventories through its own store, so a check never shares
