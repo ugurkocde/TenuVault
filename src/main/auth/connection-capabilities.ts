@@ -95,6 +95,8 @@ export class ConnectionCapabilities {
 
   /** Called by the Backup Reader only after its credential and resource checks passed. */
   bindReaderToken(tenantId: string, clientId: string, scope: string, token: string, expiresOn?: Date | null): void {
+    if (normalizeGuid(clientId) === SETUP_HELPER_CLIENT_ID) throw new Error(SETUP_HELPER_ONLY)
+    if (isTenuVaultApp(clientId) || !isGuid(tenantId) || !isGuid(clientId)) throw new Error(TOKEN_UNVERIFIED)
     this.rememberToken(token, { tenantId: normalizeGuid(tenantId), clientId: normalizeGuid(clientId), scope, expiresAt: expiresOn?.getTime() ?? Date.now() + 3600_000, reader: true })
   }
 

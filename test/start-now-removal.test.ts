@@ -20,7 +20,7 @@ import { SecureStore } from "../src/main/storage/secure-store"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { POST as listBackupContents } from "../src/portal/app/api/list-backup-contents/route"
 import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
-import { localStorageAccountName } from "../src/shared/constants"
+import { localStorageAccountName, RESOURCE_SCOPES } from "../src/shared/constants"
 import { SIGN_IN_METHODS, SETUP_HELPER_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod } from "../src/shared/tenant-connection"
 import { memoryStore } from "./helpers"
 
@@ -310,5 +310,15 @@ describe("0.6 removal of Start now (main process and data)", () => {
       { method: "GET", headers: { Authorization: `Bearer ${helperToken}` } },
       TENANT,
     )).rejects.toThrow("setup helper")
+  })
+
+  it("rejects SETUP_HELPER and TenuVault client IDs in bindReaderToken", () => {
+    const own = { version: 1 as const, method: "ownApp" as const, clientId: OWN, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW }
+    const caps = new ConnectionCapabilities(() => own)
+    expect(() => caps.bindReaderToken(TENANT, SETUP_HELPER_CLIENT_ID, RESOURCE_SCOPES.graph, "opaque-helper-reader")).toThrow("setup helper")
+    expect(() => caps.bindReaderToken(TENANT, SETUP_HELPER_CLIENT_ID.toUpperCase(), RESOURCE_SCOPES.graph, "opaque-helper-reader-upper")).toThrow("setup helper")
+    expect(() => caps.bindReaderToken(TENANT, TENUVAULT_CLIENT_ID, RESOURCE_SCOPES.graph, "opaque-tv-reader")).toThrow("could not verify")
+    expect(() => caps.bindReaderToken(TENANT, TENUVAULT_CLIENT_ID.toUpperCase(), RESOURCE_SCOPES.graph, "opaque-tv-reader-upper")).toThrow("could not verify")
+    expect(() => caps.bindReaderToken(TENANT, OWN, RESOURCE_SCOPES.graph, "opaque-own-reader")).not.toThrow()
   })
 })
