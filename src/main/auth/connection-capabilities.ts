@@ -1,25 +1,30 @@
 import { expandedEntraScope } from "../../shared/intune/entra-scope"
 import type { TokenGrant } from "./network-client"
-import { graphCliScopes } from "./connection-coverage"
-import { localStorageAccountName, RESOURCE_SCOPES } from "../../shared/constants"
+import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid, normalizeGuid } from "../../shared/security"
 import { privilegedRestoreEnabled, DEFERRED_RESTORE_MESSAGE } from "../../shared/intune/directory-review-folders"
 import { admittedDirectoryPermissions } from "../../shared/intune/restore-matrix"
 import { tenantWriteTargets } from "../../shared/tenant-writes"
 import { accessTokenDigest, observedTokenGrant, sharedTokenScopes, tokenIdentity } from "./token-identity"
 import { APPLICATION_METADATA_RESTORE_PACK, GRANT_REMOVAL_SCOPE, isPackWriteScope, missingPackScopes, type PermissionPack } from "../../shared/services/permission-packs"
-import { CONNECTION_WRITE_REFUSED, GRAPH_CLI_CLIENT_ID, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, GRAPH_CLI_READ_ONLY, sharedSignInMethod as sharedMethod } from "../../shared/tenant-connection"
+import {
+  CONNECTION_WRITE_REFUSED,
+  SETUP_HELPER_CLIENT_ID,
+  START_NOW_REMOVED_REASON,
+  TENUVAULT_APP_UNAVAILABLE,
+  connectionNeedsMethod,
+  isTenuVaultApp,
+} from "../../shared/tenant-connection"
 import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
 import type { RequestAuthorization } from "../api/fetch-bridge"
 
-export const READ_ONLY = GRAPH_CLI_READ_ONLY
 const PACK_REQUIRED = "Approve the restore permission pack for this service in Sign-in and access."
 const CONNECTION_CHANGED = "This tenant's sign-in method changed. Reload the tenant and try again."
 const TOKEN_UNVERIFIED = "TenuVault could not verify the tenant and app in this access token. Sign in again."
-type SharedMethod = NonNullable<ReturnType<typeof sharedMethod>>
+const NEEDS_SIGN_IN_METHOD = `${START_NOW_REMOVED_REASON} Choose a sign-in method.`
+const SETUP_HELPER_ONLY = "Microsoft Graph Command Line Tools is only used by the setup helper and cannot back up or restore tenants."
 type IssuedToken = TokenGrant & { tenantId: string; clientId: string; scope: string; expiresAt: number; reader?: true }
-const GRAPH_ONLY = `Start now only connects to Microsoft Graph and uses local backup storage. ${GRAPH_CLI_NEXT_STEP}`
 
 export interface AppRestoreAuthorization {
   connections: ReadonlyMap<string, string | undefined>
@@ -33,8 +38,8 @@ export class ConnectionCapabilities {
   constructor(
     private readonly connection: (tenantId: string) => TenantConnection | null,
     private readonly packs: (tenantId: string) => readonly PermissionPack[] = () => [],
-    private readonly sharedEnabled: (method: SharedMethod, fresh?: boolean) => Promise<boolean> = async () => false,
-    private readonly sharedEnabledNow?: (method: SharedMethod) => boolean,
+    private readonly tenuvaultAppEnabled: (fresh?: boolean) => Promise<boolean> = async () => false,
+    private readonly tenuvaultAppEnabledNow?: () => boolean,
   ) {}
 
   requireWrite(tenantIds: string[]): void {
@@ -42,37 +47,39 @@ export class ConnectionCapabilities {
     if (blocker) throw new Error(blocker)
   }
 
-  requireResource(tenantId: string, scope: string): void {
-    if (scope !== RESOURCE_SCOPES.graph && this.isGraphOnly(tenantId)) throw new Error(GRAPH_ONLY)
+  requireResource(tenantId: string, _scope: string): void {
+    if (this.needsMethod(tenantId)) throw new Error(NEEDS_SIGN_IN_METHOD)
   }
 
   requireConnection(tenantId: string, clientId: string, scope: string): void {
+    if (normalizeGuid(clientId) === SETUP_HELPER_CLIENT_ID) throw new Error(SETUP_HELPER_ONLY)
     const record = this.record(tenantId)
+    if (connectionNeedsMethod(record)) throw new Error(NEEDS_SIGN_IN_METHOD)
     if (record?.origin === "wizard" && normalizeGuid(record.clientId) !== normalizeGuid(clientId)) {
       throw new Error(CONNECTION_CHANGED)
     }
     const bound = executionMetadata.getStore()?.connections?.get(normalizeGuid(tenantId))
-    if (bound && (sharedMethod(bound) || sharedMethod(clientId)) && normalizeGuid(bound) !== normalizeGuid(clientId)) {
+    if (bound && (isTenuVaultApp(bound) || isTenuVaultApp(clientId)) && normalizeGuid(bound) !== normalizeGuid(clientId)) {
       throw new Error(CONNECTION_CHANGED)
     }
     this.requireResource(tenantId, scope)
   }
 
   async requireConnectionEnabled(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph, fresh = false): Promise<void> {
-    const method = sharedMethod(clientId)
-    if (method && !await this.sharedEnabled(method, fresh)) {
-      throw sharedUnavailable(method)
+    if (isTenuVaultApp(clientId) && !await this.tenuvaultAppEnabled(fresh)) {
+      throw tenuvaultAppUnavailable()
     }
     this.requireConnection(tenantId, clientId, scope)
   }
 
   requireIssuedToken(tenantId: string, clientId: string, scope: string, token: string, result?: TokenGrant & { expiresOn?: Date | null }): void {
-    if (sharedMethod(clientId) || sharedMethod(this.record(tenantId)?.clientId ?? null)) {
+    if (normalizeGuid(clientId) === SETUP_HELPER_CLIENT_ID) throw new Error(SETUP_HELPER_ONLY)
+    if (isTenuVaultApp(clientId) || isTenuVaultApp(this.record(tenantId)?.clientId)) {
       this.requireConnection(tenantId, clientId, scope)
     }
     tenantId = normalizeGuid(tenantId)
     clientId = normalizeGuid(clientId)
-    if (sharedMethod(clientId)) {
+    if (isTenuVaultApp(clientId)) {
       const identity = tokenIdentity(token)
       if (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== clientId)) throw new Error(TOKEN_UNVERIFIED)
     }
@@ -80,7 +87,7 @@ export class ConnectionCapabilities {
   }
 
   bindOwnClientCredentials(tenantId: string, clientId: string, scope: string, token: string, expiresIn?: number): void {
-    if (!isGuid(tenantId) || !isGuid(clientId) || sharedMethod(clientId)) return
+    if (!isGuid(tenantId) || !isGuid(clientId) || isTenuVaultApp(clientId) || normalizeGuid(clientId) === SETUP_HELPER_CLIENT_ID) return
     this.requireIssuedToken(tenantId, clientId, scope, token, {
       expiresOn: new Date(Date.now() + (expiresIn ?? 3600) * 1000),
     })
@@ -101,14 +108,13 @@ export class ConnectionCapabilities {
     const connections = this.bindConnections([source, destination])
     const sourceClient = connections.get(normalizeGuid(source)) ?? null
     const destinationClient = connections.get(normalizeGuid(destination)) ?? null
-    this.requireNonGraphCli(source)
-    this.requireNonGraphCli(destination)
+    if (this.needsMethod(source)) throw new Error(NEEDS_SIGN_IN_METHOD)
+    this.requireWrite([destination])
     return {
       connections,
       authorize: async () => {
-        this.requireNonGraphCli(source)
+        if (this.needsMethod(source)) throw new Error(NEEDS_SIGN_IN_METHOD)
         await this.requireAppRestoreWrite(destination, destinationClient)
-        this.requireNonGraphCli(source)
         this.requireBoundParticipant(source, sourceClient)
       },
     }
@@ -117,24 +123,19 @@ export class ConnectionCapabilities {
   async requireAppRestoreWrite(tenantId: string, admittedClientId: string | null): Promise<void> {
     this.requireWrite([tenantId])
     const currentClientId = this.record(tenantId)?.clientId ?? null
-    if (!sharedMethod(admittedClientId) && !sharedMethod(currentClientId)) return
+    if (!isTenuVaultApp(admittedClientId) && !isTenuVaultApp(currentClientId)) return
     if (!admittedClientId || !currentClientId || normalizeGuid(admittedClientId) !== normalizeGuid(currentClientId)) {
       throw new Error(CONNECTION_CHANGED)
     }
     await this.requireConnectionEnabled(tenantId, admittedClientId, RESOURCE_SCOPES.graph, true)
     this.requireWrite([tenantId])
-    if (sharedMethod(admittedClientId) === "tenuvaultApp" && !this.restorePacks(tenantId).some(pack => pack.id === "intune-restore")) {
+    if (isTenuVaultApp(admittedClientId) && !this.restorePacks(tenantId).some(pack => pack.id === "intune-restore")) {
       throw new Error(PACK_REQUIRED)
     }
   }
 
   requireInteractive(tenantId: string): void {
-    const method = this.record(tenantId)?.method
-    if (method === "graphCli") throw new Error(GRAPH_CLI_NEXT_STEP)
-  }
-
-  requireNonGraphCli(tenantId: string): void {
-    if (this.isGraphOnly(tenantId)) throw new Error(READ_ONLY)
+    if (this.needsMethod(tenantId)) throw new Error(NEEDS_SIGN_IN_METHOD)
   }
 
   async guard(request: Request): Promise<Response | null> {
@@ -143,13 +144,11 @@ export class ConnectionCapabilities {
     if (!body || typeof body !== "object" || Array.isArray(body)) return null
     const path = new URL(request.url).pathname.replace(/\/$/, "")
     const input = body as Record<string, unknown>
-    if (path === "/api/backup/start" && typeof input.tenantId === "string" && this.isGraphOnly(input.tenantId) &&
-      input.storageAccountName !== localStorageAccountName(input.tenantId)) {
-      return Response.json({ error: GRAPH_ONLY }, { status: 403 })
+    if (path === "/api/backup/start" && typeof input.tenantId === "string" && this.needsMethod(input.tenantId)) {
+      return Response.json({ error: NEEDS_SIGN_IN_METHOD }, { status: 403 })
     }
     const targets = tenantWriteTargets(path, input)
     if (path === "/api/restore-directory" && input.action === "resume" && typeof input.tenantId === "string") targets.push(input.tenantId)
-    // A read-only tenant also cannot initiate Copy to Tenants using its backup as the source.
     if (path === "/api/restore-backup" && "targetTenants" in body && targets.length &&
       "tenantId" in body && typeof body.tenantId === "string") targets.push(body.tenantId)
     const blocker = this.writeBlocker(targets)
@@ -170,12 +169,6 @@ export class ConnectionCapabilities {
     if (parent?.connections?.has(normalizeGuid(tenantId))) return run()
     const connections = new Map([...parent?.connections ?? [], ...this.bindConnections([tenantId])])
     return executionMetadata.run({ ...parent, connections }, run)
-  }
-
-  graphCliGrant(token: string): ReadonlySet<string> | undefined {
-    const acquisition = this.issued.get(accessTokenDigest(token))
-    const explicit = acquisition?.clientId === GRAPH_CLI_CLIENT_ID && acquisition.expiresAt > Date.now() ? acquisition.grantedScopes : undefined
-    return graphCliScopes(token, explicit)
   }
 
   graphGrant(token: string): ReturnType<typeof observedTokenGrant> {
@@ -203,7 +196,7 @@ export class ConnectionCapabilities {
     if (registration && graph) {
       const { tenantId, clientId, tokenDigest } = registration
       const setup = Boolean(metadata?.registrationSetup)
-      if ((setup ? clientId !== GRAPH_CLI_CLIENT_ID : !isGuid(clientId) || sharedMethod(clientId)) ||
+      if ((setup ? clientId !== SETUP_HELPER_CLIENT_ID : !isGuid(clientId) || isTenuVaultApp(clientId) || normalizeGuid(clientId) === SETUP_HELPER_CLIENT_ID) ||
         !isGuid(tenantId) || tokenDigest !== digest ||
         (routeTenant && normalizeGuid(routeTenant) !== tenantId)) throw new Error(TOKEN_UNVERIFIED)
       if (!graphWrite) return
@@ -215,17 +208,19 @@ export class ConnectionCapabilities {
     const identity = token && !acquisition ? tokenIdentity(token) : undefined
     const tenantId = acquisition?.tenantId ?? identity?.tenantId
     const clientId = acquisition?.clientId ?? identity?.clientId ?? null
+    // The setup helper's client ID is only permitted inside registration setup/addition above.
+    if (clientId && normalizeGuid(clientId) === SETUP_HELPER_CLIENT_ID) throw new Error(SETUP_HELPER_ONLY)
     const copy = metadata?.copyTenants
     const bound = metadata?.connections ?? (isGuid(routeTenant) ? this.bindConnections([routeTenant]) : undefined)
-    const shared = sharedMethod(clientId)
+    const shared = isTenuVaultApp(clientId)
     // Own registrations keep the original transport. Their acquisition context is used
-    // only when a shared connection participates or a tenant switches to one in flight.
+    // only when the TenuVault app connection participates or a tenant switches to it in flight.
     const usesSharedConnection = () => shared || (bound && [...bound].some(([id, admitted]) =>
-      sharedMethod(admitted ?? null) || sharedMethod(this.record(id)?.clientId ?? null))) ||
-      (tenantId && sharedMethod(this.record(tenantId)?.clientId ?? null))
+      isTenuVaultApp(admitted) || isTenuVaultApp(this.record(id)?.clientId))) ||
+      (tenantId && isTenuVaultApp(this.record(tenantId)?.clientId))
     const appRestoreDestination = metadata?.appRestoreDestination
+    if (tenantId && resource && this.needsMethod(tenantId)) throw new Error(NEEDS_SIGN_IN_METHOD)
     if (!graphWrite && !azureWrite && !appRestoreDestination && !(graph && (bound?.size ?? 0) > 1) && !usesSharedConnection()) return
-    if (!graph && shared === "graphCli") throw new Error(GRAPH_ONLY)
     let writes = graphWrite ? [url.pathname] : []
     if (graph && method === "POST" && /^\/(?:beta|v1\.0)\/\$batch$/i.test(url.pathname)) {
       // Inspect a copy so the real request keeps its body. Treat an uncopyable body as a write.
@@ -238,7 +233,7 @@ export class ConnectionCapabilities {
     }
 
     const tenantWrite = writes.length > 0 || azureWrite
-    const checkAtDispatch = tenantWrite || Boolean(shared) || Boolean(appRestoreDestination) || (graph && (bound?.size ?? 0) > 1)
+    const checkAtDispatch = tenantWrite || shared || Boolean(appRestoreDestination) || (graph && (bound?.size ?? 0) > 1)
     const writeConnections = new Map(bound)
     if (tenantWrite && tenantId && !writeConnections.has(tenantId)) {
       // A Backup Reader token names an unattended app, so bind the tenant's sign-in instead.
@@ -252,7 +247,7 @@ export class ConnectionCapabilities {
       const pathAllowed = temporary.kind === "metadata"
         ? method === "PATCH" && isGuid(url.pathname.split("/")[3]) && /^\/beta\/applications\/[^/]+$/.test(url.pathname)
         : ["PATCH", "DELETE"].includes(method) && /^\/beta\/oauth2PermissionGrants\/[A-Za-z0-9_-]+$/.test(url.pathname)
-      if (!token || !acquisition || !tenantId || shared !== "tenuvaultApp" || temporary.tenantId !== tenantId ||
+      if (!token || !acquisition || !tenantId || !shared || temporary.tenantId !== tenantId ||
         temporary.tokenDigest !== digest || temporary.method !== method || temporary.path !== url.pathname ||
         url.search || !pathAllowed || (routeTenant && normalizeGuid(routeTenant) !== tenantId) ||
         acquisition.scope !== RESOURCE_SCOPES.graph || missingPackScopes(scopes, sharedTokenScopes(token, acquisition.grantedScopes)).length) throw new Error(TOKEN_UNVERIFIED)
@@ -261,21 +256,19 @@ export class ConnectionCapabilities {
         if (acquisition.expiresAt <= Date.now()) throw new Error(TOKEN_UNVERIFIED)
         if (temporary.kind === "metadata") {
           this.requireWrite([tenantId])
-          this.requireSharedEnabledNow(shared)
+          this.requireTenuVaultAppEnabledNow()
         }
       } }
     }
 
     const check = () => {
       if (tenantWrite || appRestoreDestination) this.requireWriteDispatch(writeConnections)
-      if (shared) this.requireSharedEnabledNow(shared)
+      if (shared) this.requireTenuVaultAppEnabledNow()
       if (!usesSharedConnection()) return
       if (appRestoreDestination && bound) {
         if (this.record(appRestoreDestination)?.method === "tenuvaultApp" &&
           !this.restorePacks(appRestoreDestination).some(pack => pack.id === "intune-restore")) throw new Error(PACK_REQUIRED)
       }
-      if (!graph && (shared === "graphCli" || (resource && bound && [...bound.keys()].some(id => this.isGraphOnly(id))))) throw new Error(GRAPH_ONLY)
-      if (acquisition?.reader && tenantId && this.isGraphOnly(tenantId)) throw new Error(READ_ONLY)
       if (token && (resource || shared || bound?.size) && (!tenantId || !clientId)) throw new Error(TOKEN_UNVERIFIED)
       if (acquisition && (acquisition.expiresAt <= Date.now() || (resource && acquisition.scope !== resource))) throw new Error(TOKEN_UNVERIFIED)
 
@@ -284,7 +277,7 @@ export class ConnectionCapabilities {
         const admitted = bound?.get(tenantId)
         if (bound?.size && !bound.has(tenantId)) throw new Error(CONNECTION_CHANGED)
         // An unrelated shared participant does not pin two own registrations to one client ID.
-        if (!acquisition?.reader && (shared || sharedMethod(admitted ?? null) || sharedMethod(current?.clientId ?? null))) {
+        if (!acquisition?.reader && (shared || isTenuVaultApp(admitted) || isTenuVaultApp(current?.clientId))) {
           if (admitted && normalizeGuid(admitted) !== clientId) throw new Error(CONNECTION_CHANGED)
           if ((shared || current?.origin === "wizard" || (acquisition && current)) && (!current || normalizeGuid(current.clientId) !== clientId)) {
             throw new Error(CONNECTION_CHANGED)
@@ -297,8 +290,8 @@ export class ConnectionCapabilities {
         ? [copy.source, ...(tenantId && copy.destinations.some(id => normalizeGuid(id) === tenantId) ? [tenantId] : copy.destinations)]
         : [tenantId ?? routeTenant].filter((id): id is string => id != null)
       this.requireWrite(targets)
-      if (acquisition?.reader || shared === "graphCli") throw new Error(READ_ONLY)
-      if (shared !== "tenuvaultApp") {
+      if (acquisition?.reader) throw new Error("Backup Reader is read-only and cannot restore.")
+      if (!shared) {
         if (!token && targets.some(id => this.record(id)?.method === "tenuvaultApp")) throw new Error(PACK_REQUIRED)
         return
       }
@@ -319,36 +312,32 @@ export class ConnectionCapabilities {
     // The bridge calls the dispatch check after its last await, in the same turn as fetch.
     if (!checkAtDispatch) check()
     const beforeDispatch = checkAtDispatch ? check : undefined
-    if (writes.length || shared !== "graphCli") return beforeDispatch ? { beforeDispatch } : undefined
-
-    // Some shared readers still construct a versioned URL for an own registration.
-    const path = url.pathname.replace(/^\/v1\.0(?=\/)/i, "/beta")
-    if (!path.startsWith("/beta/")) throw new Error(GRAPH_ONLY)
-    const beta = new URL(url)
-    beta.pathname = path
-    return { url: beta, beforeDispatch }
+    return beforeDispatch ? { beforeDispatch } : undefined
   }
 
   private requireWriteDispatch(connections: ReadonlyMap<string, string | undefined>): void {
     for (const [tenant, admitted] of connections) {
-      this.requireNonGraphCli(tenant)
+      if (this.needsMethod(tenant)) throw new Error(NEEDS_SIGN_IN_METHOD)
       this.requireBoundParticipant(tenant, admitted ?? null)
-      const method = sharedMethod(admitted ?? null)
-      if (method) this.requireSharedEnabledNow(method)
+      if (isTenuVaultApp(admitted)) this.requireTenuVaultAppEnabledNow()
     }
   }
 
-  private requireSharedEnabledNow(method: SharedMethod): void {
-    if (this.sharedEnabledNow?.(method) === false) throw sharedUnavailable(method)
+  private requireTenuVaultAppEnabledNow(): void {
+    if (this.tenuvaultAppEnabledNow?.() === false) throw tenuvaultAppUnavailable()
   }
 
   private requireBoundParticipant(tenant: string, admitted: string | null): void {
     const current = this.record(tenant)?.clientId ?? null
-    if ((sharedMethod(admitted) || sharedMethod(current)) && admitted !== current) throw new Error(CONNECTION_CHANGED)
+    if ((isTenuVaultApp(admitted) || isTenuVaultApp(current)) && admitted !== current) throw new Error(CONNECTION_CHANGED)
   }
 
   private record(tenant: string) {
     return isGuid(tenant) ? this.connection(normalizeGuid(tenant)) : null
+  }
+
+  private needsMethod(tenant: string): boolean {
+    return connectionNeedsMethod(this.record(tenant))
   }
 
   private restorePacks(tenant: string): PermissionPack[] {
@@ -358,17 +347,13 @@ export class ConnectionCapabilities {
   }
 
   private writeBlocker(tenants: string[]): string | undefined {
-    if (tenants.some(id => this.isGraphOnly(id))) return READ_ONLY
+    if (tenants.some(id => this.needsMethod(id))) return NEEDS_SIGN_IN_METHOD
     if (tenants.some(id => this.record(id)?.method === "tenuvaultApp" && !this.restorePacks(id).length)) return PACK_REQUIRED
-  }
-
-  isGraphOnly(tenantId: string): boolean {
-    return this.record(tenantId)?.method === "graphCli"
   }
 }
 
-function sharedUnavailable(method: SharedMethod): Error {
-  return new Error(method === "graphCli" ? `${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}` : "TenuVault app sign-in is currently unavailable.")
+function tenuvaultAppUnavailable(): Error {
+  return new Error(TENUVAULT_APP_UNAVAILABLE)
 }
 
 function restorePackForPath(path: string): string | undefined {

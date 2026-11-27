@@ -1,4 +1,4 @@
-import { sharedSignInMethod } from "../../shared/tenant-connection"
+import { isTenuVaultApp } from "../../shared/tenant-connection"
 import { configurationPayload, isEntraConfiguration, configurationApproval, configurationConfirmation, configurationDifference } from "./entra-configuration"
 import { randomUUID } from "node:crypto"
 import { INTUNE_TYPES, typeForFolder, restoreCapability } from "../../shared/intune/registry"
@@ -28,7 +28,7 @@ export class IdentityRestoreService {
     const permissionBlocker = !readOnly && folder ? restorePermissionBlocker(folder, restorePermissions(connection.token, connection.authorization?.scopes), connection.clientId) : undefined
     if (permissionBlocker) throw new RestoreSafetyError(permissionBlocker)
     const protections = folder ? operationProtections(folder, operation) : undefined
-    const actorReader = sharedSignInMethod(connection.clientId) ? safetyReader(connection.token, this.fetchImpl, "beta") : reader
+    const actorReader = isTenuVaultApp(connection.clientId) ? safetyReader(connection.token, this.fetchImpl, "beta") : reader
     const actor = await resolveRestoreActor(actorReader, connection, readOnly || protections?.length === 0 ? [] : this.recovery.get(tenant), protections)
     const io = guardedGraphIO(connection.token, actor, (step, current, desired) => resolveSafetyReferences(reader, step, current, desired), this.fetchImpl, (mappings, signal) => {
       const granted = restorePermissions(connection.token, connection.authorization?.scopes)

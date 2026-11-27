@@ -1,6 +1,4 @@
 import { oauthSignInCode, signInLogCode } from "../../shared/sign-in-errors"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP } from "../../shared/tenant-connection"
-import { graphCliScopes } from "../auth/connection-coverage"
 import { isBackupName, parseBackupName } from "../../shared/intune/backup-names"
 import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, matchingCompanions } from "../../shared/backup-companion"
 import { backupContainer, isLargeBackup, LARGE_BACKUP_CONTAINER, untrustedTimeFolder, untrustedTimeMarker } from "../../shared/backup-storage"
@@ -186,8 +184,6 @@ export interface BackupEngineDeps {
   wizardConnection?: (tenantId: string) => boolean
   /** Permission claims or explicit response scopes for the Graph token. */
   graphGrant?: (token: string) => ReturnType<typeof grantedPermissions>
-  /** Receipt evidence for an opaque Start now token from the shared-client request binding. */
-  graphCliGrant?: (token: string) => ReadonlySet<string> | undefined
   /** Permission names of a Graph token the run used, for health only; never changes its outcomes. */
   onToken?: (runId: string, granted: ReturnType<typeof grantedPermissions>) => void
 }
@@ -601,13 +597,9 @@ export class BackupEngine {
   private async run(job: BackupJob, request: BackupRequest, tokens: RunTokens, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun, releaseTurn: () => void): Promise<void> {
     const started = this.now()
     const startedTick = performance.now()
-    const startNow = request.clientId.toLowerCase() === GRAPH_CLI_CLIENT_ID
-    const readVersion = (type: IntuneType) => startNow ? "beta" as const : graphVersion(type)
-    const readGrant = (token: string): ReturnType<typeof grantedPermissions> => {
-      if (!startNow) return this.deps.graphGrant ? this.deps.graphGrant(token) : grantedPermissions(token)
-      const permissions = this.deps.graphCliGrant ? this.deps.graphCliGrant(token) : graphCliScopes(token)
-      return permissions === undefined ? undefined : { kind: "delegated", permissions }
-    }
+    const readVersion = (type: IntuneType) => graphVersion(type)
+    const readGrant = (token: string): ReturnType<typeof grantedPermissions> =>
+      this.deps.graphGrant ? this.deps.graphGrant(token) : grantedPermissions(token)
     const local = isLocalAccount(request.storageAccountName)
     const storageHost = `${request.storageAccountName.toLowerCase()}.blob.core.windows.net`
     const storageOrigin = `https://${storageHost}`
@@ -695,7 +687,7 @@ export class BackupEngine {
     let lastToken: string | undefined
     const graphToken = async (options?: { fresh: true }) => {
       const token = await tokenOrStop(() => (options ? tokens.graph(options) : tokens.graph()), outcome)
-      if (!startNow) tokens.auditUser ??= auditUserFromToken(token, request.tenantId)
+      tokens.auditUser ??= auditUserFromToken(token, request.tenantId)
       if (token !== lastToken) {
         lastToken = token
         observeToken(readGrant(token))
@@ -724,13 +716,13 @@ export class BackupEngine {
       const entry = moduleForFolder(folder)
       return entry?.module.precheck || entry?.part.backupPrecheck || checkIntune(folder)
     }
-    const granted = await moduleGrants(tokens, startNow || selectedTypes.some((type) => permissionChecked(type.folder)), network.signal, readGrant)
+    const granted = await moduleGrants(tokens, selectedTypes.some((type) => permissionChecked(type.folder)), network.signal, readGrant)
     if (granted) observeToken(granted)
     const signIn: SignInMode = tokens.mode === "app-only" ? "application" : "delegated"
     // A type only a signed-in admin can read is left out of a Backup Reader run whatever its token says: no permission changes that.
     const adminOnly = (type: IntuneType) => tokens.mode === "app-only" && signedInOnly(type.folder)
     const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
-    const unpermitted = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || ((startNow || permissionChecked(type.folder)) && granted && !canBackUp(type.folder, granted))))
+    const unpermitted = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || (permissionChecked(type.folder) && granted && !canBackUp(type.folder, granted))))
     const types = selectedTypes.filter((type) => !readerExcluded.has(type.folder) && !unpermitted.includes(type))
       .map(type => type.betaReadPath && readVersion(type) === "beta" ? { ...type, path: type.betaReadPath } : type)
     const largeTypes = types.filter(type => type.volume === "large")
@@ -786,9 +778,8 @@ export class BackupEngine {
       }
     }
     stopped.outcomes = (status) => outcomesNow(status, this.now(), true)
-    const missingReadPermission = (needed: Requirement, service: string) => startNow
-      ? `Start now lacks ${describeRequirement(needed, granted?.permissions)} for ${service}. ${GRAPH_CLI_NEXT_STEP}`
-      : `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(needed, granted?.permissions)} permission for ${service}. ${SERVICES_PAGE} in Settings shows how to add it.`
+    const missingReadPermission = (needed: Requirement, service: string) =>
+      `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(needed, granted?.permissions)} permission for ${service}. ${SERVICES_PAGE} in Settings shows how to add it.`
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
       const needed = entry.part.backup[granted?.kind ?? signIn]
@@ -830,7 +821,7 @@ export class BackupEngine {
       const module = moduleForFolder(type.folder)?.module
       const id = module?.id ?? "intune"
       let session = sessions.get(id)
-      if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated, grantForToken: readGrant, requireGrantEvidence: startNow })))
+      if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated, grantForToken: readGrant })))
       return { id, module, isolated: module?.isolated === true, session }
     }
     const typeBudgets = new Map<string, ReturnType<typeof typeReadBudget>>()
@@ -883,15 +874,15 @@ export class BackupEngine {
      */
     const notSetUp = (type: IntuneType, error: unknown) =>
       error instanceof GraphError && !error.continuationPage && !!type.notConfigured && classifyAnswer({ status: error.status, ...error.answer }, { notConfigured: type.notConfigured, mode: tokens.mode }).outcome === "notConfigured"
-    const grantForRead = (error: GraphError) => error.grant ?? (startNow ? undefined : granted)
+    const grantForRead = (error: GraphError) => error.grant ?? granted
     const grantedReadDenied = (type: IntuneType, error: unknown) => {
       if (!(error instanceof GraphError) || error.status !== 403) return false
       const grant = grantForRead(error)
       return !!grant && canBackUp(type.folder, grant)
     }
     const checkedReadDenied = (type: IntuneType, error: unknown) =>
-      error instanceof GraphError && ((error.status === 403 && (startNow || grantedReadDenied(type, error) || moduleForFolder(type.folder)?.part.backupPrecheck === true)) || (startNow && error.status === 400))
-    const scopeEvidence = (error: unknown) => ({ mode: tokens.mode, grantUnknown: startNow && !(error instanceof GraphError && error.grant) })
+      error instanceof GraphError && error.status === 403 && (grantedReadDenied(type, error) || moduleForFolder(type.folder)?.part.backupPrecheck === true)
+    const scopeEvidence = () => ({ mode: tokens.mode, grantUnknown: false })
     // An access refusal can explain why a type was left out. Once its read has started,
     // or the request used a known grant, an incomplete capture must count as a failure.
     // A tenant without the product or onboarding stays a skip even when the grant covers the type.
@@ -903,16 +894,14 @@ export class BackupEngine {
       const { module } = serviceOf(type)
       const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
       const refusedGrant = error instanceof GraphError ? grantForRead(error) : granted
-      const verdict = answer ? classifyAnswer(answer, { ...scopeEvidence(error), held: refusedGrant ? canBackUp(type.folder, refusedGrant) : undefined, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
+      const verdict = answer ? classifyAnswer(answer, { ...scopeEvidence(), held: refusedGrant ? canBackUp(type.folder, refusedGrant) : undefined, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
       const code = providerErrorCode(answer?.code)
       const evidence = answer ? { status: answer.status, ...(code ? { code } : {}) } : {}
       const entry = result(type.folder)
       if (verdict.outcome === "skipped" && maySkipRead(type, error, beforeCapture, verdict.cause)) {
         const needed = type.folder === "PolicySets" && !refusedGrant ? backupNeed(type.folder, signIn) : undefined
         const permission = needed && needed !== "unsupported" ? describeRequirement(needed) : undefined
-        const reason = startNow && verdict.cause === "permission"
-          ? `Microsoft refused this read with Start now. ${GRAPH_CLI_NEXT_STEP}`
-          : skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE, permission })
+        const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE, permission })
         skippedTypes.push(type.folder)
         Object.assign(entry, { state: "skipped", reason })
         settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, ...evidence })
@@ -1180,7 +1169,7 @@ export class BackupEngine {
         const readDenied = grantedReadDenied(type, error)
         if (!readDenied && (service.isolated || checkedReadDenied(type, error)) && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
-          const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, scopeEvidence(error)).outcome === "skipped"
+          const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, scopeEvidence()).outcome === "skipped"
           if (refused || error instanceof ReadBudgetError || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
             endType(type, error)
             done++
@@ -1190,7 +1179,7 @@ export class BackupEngine {
         // Counted before any rethrow, so the job sees this cause whichever failure ends it.
         recordFailure(outcome, error)
         network.signal.throwIfAborted()
-        if (!(startNow && readDenied) && !service.isolated) countAuthFailure(error, service.id)
+        if (!service.isolated) countAuthFailure(error, service.id)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (signInEnded(error) || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
         failures++

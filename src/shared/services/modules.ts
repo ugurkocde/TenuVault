@@ -12,7 +12,7 @@
 import { area, part, type FolderPermissions, type Need, type PermissionArea, type Requirement, type SignInMode } from "./areas"
 import { expandedEntraScope } from "../intune/entra-scope"
 import { ENTRA_AREAS } from "./entra"
-import { GRAPH_CLI_READ_ONLY, sharedSignInMethod } from "../tenant-connection"
+import { isTenuVaultApp } from "../tenant-connection"
 
 export type { AnyOf, FolderPermissions, Need, PermissionArea, Requirement, SignInMode } from "./areas"
 
@@ -284,17 +284,13 @@ export function checksRestorePermission(folder: string): boolean {
 }
 
 export function restoreAccessGuidance(clientId?: string): string {
-  const method = sharedSignInMethod(clientId ?? null)
-  if (method === "graphCli") return GRAPH_CLI_READ_ONLY
-  if (method === "tenuvaultApp") return "Review the restore permission pack for this service in Sign-in and access."
+  if (isTenuVaultApp(clientId)) return "Review the restore permission pack for this service in Sign-in and access."
   if (!clientId) return `Review the restore permissions for this service. ${SERVICES_PAGE} shows how to add them.`
   return `Add it to your app registration. ${SERVICES_PAGE} shows how to add it.`
 }
 
 /** Why the current permissions cannot restore a folder that checks its token before writing. */
 export function restorePermissionBlocker(folder: string, granted: GrantedPermissions | undefined, clientId?: string): string | undefined {
-  const method = sharedSignInMethod(clientId ?? null)
-  if (method === "graphCli") return restoreAccessGuidance(clientId)
   const entry = restorePermissionEntry(folder)
   if (!entry || !granted) return undefined
   const needed = entry.part.restore[granted.kind]

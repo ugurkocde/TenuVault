@@ -2,7 +2,7 @@ import { ALL_RESTORE_PROTECTIONS, operationProtections, type RestoreProtection }
 import type { KeyValueStore } from "../storage/secure-store"
 import type { GraphReader } from "../../shared/intune/read"
 import type { Item } from "../../shared/intune/registry"
-import { sharedSignInMethod } from "../../shared/tenant-connection"
+import { isTenuVaultApp } from "../../shared/tenant-connection"
 import { isGuid, normalizeGuid } from "../../shared/security"
 import { RestoreSafetyError, type RestoreActor, type SafetyReferences } from "../../shared/intune/restore-guards"
 import type { GuardedStep } from "./guarded-run"
@@ -40,7 +40,7 @@ export async function resolveRestoreActor(reader: GraphReader, connection: { ten
   if (!protections.length) return { tenantId: connection.tenantId, clientId: connection.clientId, userId: connection.userId, recoveryAccountIds: [] }
   const filter = encodeURIComponent(`appId eq '${connection.clientId}'`)
   const appKey = `(appId='${connection.clientId}')?$select=id,appId`
-  const shared = sharedSignInMethod(connection.clientId)
+  const shared = isTenuVaultApp(connection.clientId)
   let applicationObjectId: string | undefined
   let servicePrincipalId: string
   if (shared) {

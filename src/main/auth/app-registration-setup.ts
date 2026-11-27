@@ -1,6 +1,6 @@
 import { ORGANIZATIONS, resolveOnboardingTenant, signedInTenant } from "./onboarding-tenant"
 import { executionMetadata } from "../api/execution-metadata"
-import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
+import { SETUP_HELPER_CLIENT_ID } from "../../shared/tenant-connection"
 import { accessTokenDigest, tokenIdentity } from "./token-identity"
 import { PublicClientApplication } from "@azure/msal-node"
 import { fetchNetworkClient } from "./network-client"
@@ -116,7 +116,7 @@ export class AppRegistrationSetup {
       const authority = target === undefined || target === "" ? ORGANIZATIONS : await resolveOnboardingTenant(target, this.host.fetch, controller.signal)
       controller.signal.throwIfAborted()
       app = new PublicClientApplication({
-        auth: { clientId: GRAPH_CLI_CLIENT_ID, authority: `https://login.microsoftonline.com/${authority}` },
+        auth: { clientId: SETUP_HELPER_CLIENT_ID, authority: `https://login.microsoftonline.com/${authority}` },
         system: { networkClient: fetchNetworkClient(this.host.fetch) },
       })
       const result = await loopbackSignIn({
@@ -158,11 +158,11 @@ export class AppRegistrationSetup {
       try {
         const tenantId = signedInTenant(authority, result)
         const identity = tokenIdentity(result.accessToken)
-        if (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== GRAPH_CLI_CLIENT_ID)) {
+        if (identity.decoded && (identity.tenantId !== tenantId || identity.clientId !== SETUP_HELPER_CLIENT_ID)) {
           throw new Error("Microsoft returned a setup sign-in for a different tenant or app. Nothing was changed.")
         }
         this.host.checkNewTenant?.(tenantId)
-        const registrationSetup = { tenantId, clientId: GRAPH_CLI_CLIENT_ID, tokenDigest: accessTokenDigest(result.accessToken) }
+        const registrationSetup = { tenantId, clientId: SETUP_HELPER_CLIENT_ID, tokenDigest: accessTokenDigest(result.accessToken) }
         const registration = await executionMetadata.run({ registrationSetup }, () => provisionRegistration({
           fetch: this.host.fetch, token: result.accessToken,
           tenantId, username: result.account!.username,

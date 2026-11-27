@@ -1,6 +1,6 @@
 import { discoverAzureResources } from "../shared/azure-discovery"
 import { ORGANIZATIONS, resolveOnboardingTenant } from "./auth/onboarding-tenant"
-import { GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, GRAPH_CLI_CLIENT_ID, GRAPH_CLI_SIGN_IN_REQUIREMENTS, GRAPH_CLI_DISABLED, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
+import { START_NOW_REMOVED_REASON, TENUVAULT_APP_UNAVAILABLE, TENUVAULT_CLIENT_ID } from "../shared/tenant-connection"
 import { WizardSignIn, wizardChoice, wizardFailure } from "./auth/wizard-sign-in"
 import { PackConsentFlow } from "./auth/pack-consent"
 import { ConnectionSwitchError } from "./auth/switch-failure"
@@ -81,7 +81,7 @@ import { routes } from "./api/routes"
 import { isFreshIdToken, AuthManager, isResourceScope, requireOwnReauthenticationClient, SignInRequiredError } from "./auth/msal"
 import { TenantConnections } from "./auth/tenant-connections"
 import { ConnectionCapabilities } from "./auth/connection-capabilities"
-import { connectionChoice, connectionCoverage, graphCliScopes } from "./auth/connection-coverage"
+import { connectionChoice, connectionCoverage } from "./auth/connection-coverage"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
@@ -323,19 +323,14 @@ async function bootstrap(): Promise<void> {
     return bridgedFetchImpl(input, init)
   }
   const cache = connectionCache(appStore, tokenStore)
-  const stageGraphCli = async (tenant: string) => {
-    const staged = stageConnectionCache(cache, GRAPH_CLI_CLIENT_ID)
-    return { ...(await auth.stageGraphCliSignIn(tenant, staged.plugin)), cacheWrites: staged.cacheWrites }
-  }
   const stagedWizardProof = new Map<string, { idToken: string; clientId: string }>()
   const connections = new TenantConnections({
     store: appStore,
     legacyCache: tokenStore,
     signIn: {
-      graphCli: stageGraphCli,
       tenuvaultApp: async (tenant, clientId) => {
         const packs = await consentPlan(tenant)
-        if (!packs) throw new ConnectionSwitchError("unavailable", "TenuVault app sign-in is currently unavailable.")
+        if (!packs) throw new ConnectionSwitchError("unavailable", TENUVAULT_APP_UNAVAILABLE)
         const signature = JSON.stringify(packs)
         const staged = stageConnectionCache(cache, clientId)
         const account = await auth.stageTenuVaultSignIn(tenant, staged.plugin, packs)
@@ -355,19 +350,18 @@ async function bootstrap(): Promise<void> {
   connections.migrate()
   const accounts = accountStore(appStore, notifyAccountChange, tenant => {
     const record = connections.get(tenant)
-    return !!record && record.method !== "ownApp"
+    return !!record && record.method === "tenuvaultApp"
   })
   const capabilities = new ConnectionCapabilities(
     tenant => connections.get(tenant), tenant => currentPacks(tenant),
-    (method, fresh) => license.connectMethodEnabled(method, fresh), method => license.connectMethodEnabledNow(method),
+    fresh => license.tenuvaultAppEnabled(fresh), () => license.connectMethodEnabledNow("tenuvaultApp"),
   )
   const auth: AuthManager = new AuthManager({
     fetch: bridgedFetchLater,
     cachePlugin: (clientId) => secureCachePlugin(cache, clientId),
     authorizeInteractive: tenant => capabilities.requireInteractive(tenant),
-    graphCliEnabled: fresh => license.connectMethodEnabled("graphCli", fresh),
     sharedScopes: async (tenant, scope, freshHealth) => {
-      if (!await license.tenuvaultAppEnabled(freshHealth)) throw new Error("TenuVault app sign-in is currently unavailable.")
+      if (!await license.tenuvaultAppEnabled(freshHealth)) throw new Error(TENUVAULT_APP_UNAVAILABLE)
       const connection = connections.get(tenant)
       if (connection?.method !== "tenuvaultApp") throw new Error("Choose TenuVault app for this tenant first.")
       const resource = scope === RESOURCE_SCOPES.graph ? "graph" : scope === RESOURCE_SCOPES.storage ? "storage" : scope === RESOURCE_SCOPES.management ? "management" : null
@@ -620,7 +614,7 @@ async function bootstrap(): Promise<void> {
   })
   const readerScheduled = (tenantId: string) => {
     const plan = license.plan(tenantId)
-    return Boolean(plan && allows(plan, "backupReader") && !capabilities.isGraphOnly(tenantId))
+    return Boolean(plan && allows(plan, "backupReader") && !connections.needsSignInMethod(tenantId))
   }
   // Connection health: what the token checks and the backup runs of each tenant observed, and what
   // that adds up to. A check asks Microsoft for a new token without any window, so it goes straight
@@ -629,10 +623,9 @@ async function bootstrap(): Promise<void> {
     store: appStore,
     tenant: (tenantId) => {
       const profile = tenantProfile(tenantId)
-      return profile && { clientId: profile.clientId, storage: isLocalAccount(profile.storageAccountName) ? "local" : "azure", storageId: profile.storageAccountName }
+      return profile && profile.clientId ? { clientId: profile.clientId, storage: isLocalAccount(profile.storageAccountName) ? "local" : "azure", storageId: profile.storageAccountName } : null
     },
     account: (tenantId) => accounts.get(tenantId)?.homeAccountId ?? null,
-    readOnly: tenant => capabilities.isGraphOnly(tenant),
     settings: (tenantId) => moduleSettings.get(tenantId),
     token: (tenantId, clientId, resource) => auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES[resource], true),
     reader: (tenantId) => {
@@ -652,7 +645,6 @@ async function bootstrap(): Promise<void> {
     changed: (tenantId) => mainWindow?.webContents.send("health:changed", tenantId),
   })
   const backupAuditActor = (tenantId: string) => {
-    if (capabilities.isGraphOnly(tenantId)) return { id: "start-now", email: "", name: "Start now" }
     const account = accounts.get(tenantId)
     return { id: account?.username ?? "unknown", email: account?.username ?? "", name: account?.name ?? account?.username ?? "Unknown user" }
   }
@@ -660,7 +652,6 @@ async function bootstrap(): Promise<void> {
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
     graphGrant: token => capabilities.graphGrant(token),
-    graphCliGrant: token => capabilities.graphCliGrant(token),
     wizardConnection: tenant => connections.get(tenant)?.origin === "wizard",
     services: (tenantId) => moduleSettings.selection(tenantId),
     unattendedTokens: (request) => {
@@ -940,10 +931,12 @@ async function bootstrap(): Promise<void> {
         resources?: { storageAccountName?: string; subscriptionId?: string; resourceGroupName?: string; resourceGroupLocation?: string; automationAccountName?: string }
       }>
       const tenant = tenants.find((t) => t.credentials?.tenantId?.toLowerCase() === tenantId.toLowerCase())
-      if (!tenant?.credentials?.appId || !tenant.resources?.storageAccountName) return null
+      if (!tenant?.resources?.storageAccountName) return null
+      const clientId = tenant.credentials?.appId ?? ""
+      if (!clientId && !connections.needsSignInMethod(tenantId)) return null
       return {
         name: backupTenantLabel(tenant),
-        clientId: tenant.credentials.appId,
+        clientId,
         storageAccountName: tenant.resources.storageAccountName,
         subscriptionId: tenant.resources.subscriptionId,
         resourceGroupName: tenant.resources.resourceGroupName,
@@ -1013,7 +1006,7 @@ async function bootstrap(): Promise<void> {
   setDirectoryRestoreService(new DirectoryRestoreService(directoryStore, recoveryAccounts, restoreConnection, tenant => auth.cachedAccountIdentity(tenant), bridgedFetch, tenant => {
     const id = backupReader.status(tenant)?.clientId
     return id ? [id] : []
-  }, moduleSettings, undefined, tenant => connections.get(tenant)?.method, metadataAccess, async tenant => {
+  }, moduleSettings, undefined, tenant => connections.get(tenant)?.method ?? undefined, metadataAccess, async tenant => {
     const plan = await license.requireEntitlement(tenant).catch(() => null)
     if (!plan || !allows(plan, "directoryRestore")) throw new PlanRequired("directoryRestore")
   }, directoryReconcileConnection))
@@ -1021,7 +1014,7 @@ async function bootstrap(): Promise<void> {
   const missingReaderAuditContainers = new Set<string>()
   const readerAuditKey = (tenantId: string, account: string) => `${tenantId.toLowerCase()}:${account}`
   const originalReaderTokens = (tenantId: string, clientId: string, storageAccountName: string, registrationId?: string) => {
-    capabilities.requireNonGraphCli(tenantId)
+    capabilities.requireInteractive(tenantId)
     const tokens = backupReader.tokens({ tenantId, clientId, storageAccountName, trigger: "scheduled" })
     return tokens?.registrationId === registrationId ? tokens : null
   }
@@ -1209,6 +1202,12 @@ async function bootstrap(): Promise<void> {
       failedAttempts.record({ tenantId, trigger, slot, message })
       return { status: "Failed" as const, message }
     }
+    if (connections.needsSignInMethod(tenantId) || !profile.clientId) {
+      const message = `${START_NOW_REMOVED_REASON} Choose a sign-in method.`
+      failedAttempts.record({ tenantId, trigger, slot, message })
+      notifyFailure(tenantId, profile.name, message, trigger)
+      return { status: "Failed" as const, message }
+    }
     // A tenant the license does not cover is not backed up. Its audit log lives in the
     // tenant's own storage, which is closed without a license too, so the refusal is
     // recorded in the refusal log on this device, notified and shown on the schedule.
@@ -1263,10 +1262,14 @@ async function bootstrap(): Promise<void> {
   const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure, slot) => runScheduledBackup(tenantId, "scheduled", afterFailure, slot), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
-  }, () => new Date(), (tenantId) => scheduledCoverage(license, tenantId, tenantProfile(tenantId)), async () => { await prepareCoverage(scheduler); pushLicense() }, (tenantId) => {
+  }, () => new Date(), (tenantId) => scheduledCoverage(license, tenantId, tenantProfile(tenantId), connections.needsSignInMethod(tenantId)), async () => { await prepareCoverage(scheduler); pushLicense() }, (tenantId) => {
     if (Notification.isSupported()) new Notification({ title: "Backup schedule now weekly", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Runs weekly on Community (daily needs Pro).` }).show()
   }, (tenantId, reason) => {
     if (reason === "choice") { pushLicense(); return }
+    if (reason === "signInMethod") {
+      if (Notification.isSupported()) new Notification({ title: "Scheduled backups paused", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: ${START_NOW_REMOVED_REASON} Open TenuVault to choose a sign-in method.` }).show()
+      return
+    }
     if (Notification.isSupported()) new Notification({ title: "Paused: Azure storage needs Pro", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Open TenuVault to switch to local backups. Existing Azure backups are kept.` }).show()
   }, tenantId => engine.hasLargeTypes(tenantId, scopes.get(tenantId).scope))
 
@@ -1385,7 +1388,7 @@ async function bootstrap(): Promise<void> {
   // New-TenuVaultStorage.ps1 -BackupReaderAppId). The result is recorded for the card's checklist;
   // a storage problem stays a warning, since the Graph part can still work.
   const testReader = async (tenantId: string): Promise<{ warning?: string }> => {
-    capabilities.requireNonGraphCli(tenantId)
+    capabilities.requireInteractive(tenantId)
     const profile = tenantProfile(tenantId)
     if (!profile) return {}
     const azure = !isLocalAccount(profile.storageAccountName)
@@ -1492,14 +1495,14 @@ async function bootstrap(): Promise<void> {
   handleTrusted("backupReader:prepare", (_event, tenantId: unknown) => withPlanError(async () => {
     const tenant = readerTenant(tenantId)
     await requireReaderPlan(tenant)
-    capabilities.requireNonGraphCli(tenant)
+    capabilities.requireInteractive(tenant)
     backupReader.prepare(tenant, hostname())
     return readerState(tenant)
   }))
   handleTrusted("backupReader:verify", (_event, tenantId: unknown, clientId: unknown, renewal: unknown) => withPlanError(async () => {
     const tenant = readerTenant(tenantId)
     await requireReaderPlan(tenant)
-    capabilities.requireNonGraphCli(tenant)
+    capabilities.requireInteractive(tenant)
     await backupReader.verify(tenant, typeof clientId === "string" ? clientId.trim() : "", { renewal: renewal === true })
     const { warning } = await testReader(tenant)
     return { ...readerState(tenant), ...(warning ? { warning } : {}) }
@@ -1720,13 +1723,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:reauthenticate", async (_event, tenantId: unknown, clientId: unknown, scope?: unknown) => {
     if (!isGuid(tenantId) || !isGuid(clientId)) throw new Error("Choose a tenant and a valid application ID.")
     if (scope !== undefined && !isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
-    const account = await reauthenticate(tenantId, clientId, scope).catch((error: unknown) => {
-      if (error instanceof ConnectionSwitchError && error.code === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED) {
-        return { error: { code: GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, message: error.message } }
-      }
-      throw error
-    })
-    if ("error" in account) return account
+    const account = await reauthenticate(tenantId, clientId, scope)
     void health.check(tenantId, "signIn").catch(() => undefined)
     try {
       await license.requireEntitlement(tenantId, { retry: true })
@@ -1736,26 +1733,6 @@ async function bootstrap(): Promise<void> {
     return account
   })
   const reauthenticate = async (tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph) => {
-    if (capabilities.isGraphOnly(tenantId)) {
-      capabilities.requireResource(tenantId, scope)
-      if (clientId.toLowerCase() !== GRAPH_CLI_CLIENT_ID) throw new Error("Reload the tenant and try again.")
-      if (!await license.connectMethodEnabled("graphCli", true)) throw new Error(`${GRAPH_CLI_DISABLED} ${GRAPH_CLI_NEXT_STEP}`)
-      const response = await dialog.showMessageBox(mainWindow!, {
-        title: "Sign in with Start now", message: GRAPH_CLI_SIGN_IN_REQUIREMENTS,
-        buttons: ["Cancel", "Continue to Microsoft"], defaultId: 0, cancelId: 0,
-      })
-      if (response.response !== 1) throw new Error("Sign-in cancelled.")
-      if (!capabilities.isGraphOnly(tenantId)) throw new Error("The sign-in method changed. Reload the tenant and try again.")
-      const outcome = await connections.switchForIpc(tenantId, { method: "graphCli" }, returnToApp)
-      if ("error" in outcome) {
-        if (outcome.error.code === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED) {
-          throw new ConnectionSwitchError(outcome.error.code, outcome.error.message)
-        }
-        throw new Error(outcome.error.message)
-      }
-      notifyAccountChange(outcome.result.account.tenantId)
-      return outcome.result.account
-    }
     requireOwnReauthenticationClient(clientId)
     return auth.reauthenticate(tenantId, clientId, scope).finally(returnToApp)
   }
@@ -1771,7 +1748,6 @@ async function bootstrap(): Promise<void> {
     if (!isGuid(tenantId) || !tenantProfile(tenantId)) return null
     return connections.get(tenantId)
   })
-  handleTrusted("auth:graphCliAvailable", () => license.connectMethodEnabled("graphCli", true))
   handleTrusted("auth:tenuvaultAppAvailable", () => license.tenuvaultAppEnabled(true))
   const WIZARD_LICENSE_KEY = "auth.wizardLicenseTenant"
   const releaseWizardLicense = async (tenant: string) => {
@@ -1788,10 +1764,9 @@ async function bootstrap(): Promise<void> {
     fetch: chromiumFetch,
     resolveTenant: input => resolveOnboardingTenant(input, bridgedFetchLater),
     connected: tenant => wizardExistingTenant(tenant) || Boolean(accounts.get(tenant)),
-    enabled: method => license.connectMethodEnabled(method, true),
-    stage: async (tenant, method, choice) => {
+    enabled: () => license.tenuvaultAppEnabled(true),
+    stage: async (tenant, _method, choice) => {
       await cleanupWizard
-      if (method === "graphCli") return stageGraphCli(tenant).finally(returnToApp)
       const staged = stageConnectionCache(cache, TENUVAULT_CLIENT_ID)
       const packs = tenantPermissionPacks(choice!, { azure: false, audit: false })
       return { ...(await auth.stageTenuVaultSignIn(tenant, staged.plugin, packs, true).finally(returnToApp)), cacheWrites: staged.cacheWrites }
@@ -1951,6 +1926,7 @@ async function bootstrap(): Promise<void> {
     const { account, ...result } = outcome.result
     try { notifyAccountChange(account.tenantId) } catch { console.warn("[auth] Could not notify the window of the sign-in change") }
     try { pushLicense() } catch { console.warn("[auth] Could not notify the window of the license status") }
+    try { mainWindow?.webContents.send("schedules:changed", scheduler.list()); tray.refresh() } catch { /* Schedule list refreshes on open. */ }
     void Promise.resolve().then(() => health.check(account.tenantId, "signIn")).catch(() => undefined)
     return { result }
   })
@@ -2041,11 +2017,10 @@ async function bootstrap(): Promise<void> {
     if (tenantId !== undefined && tenantId !== null && !isTenantId(tenantId)) throw new Error("Unknown tenant.")
     return withStatus(() => license.retry(tenantId ? [tenantId] : signedInTenants()))
   })
-  handleTrusted("license:setShared", (_event, tenantId: unknown, shared: unknown, allowGraphCli: unknown) => {
+  handleTrusted("license:setShared", (_event, tenantId: unknown, shared: unknown) => {
     if (!isTenantId(tenantId)) throw new Error("Unknown tenant.")
     if (typeof shared !== "boolean") throw new Error("Choose whether to share the license.")
-    if (allowGraphCli !== undefined && (typeof allowGraphCli !== "boolean" || !shared)) throw new Error("Choose whether to allow Start now when sharing this license.")
-    return withStatus(() => license.setShared(tenantId, shared, allowGraphCli))
+    return withStatus(() => license.setShared(tenantId, shared))
   })
   handleTrusted("license:deactivate", () => withStatus(() => license.deactivate()))
   handleTrusted("license:checkNewTenant", (_event, tenantId: unknown) => {
@@ -2156,10 +2131,7 @@ async function bootstrap(): Promise<void> {
   const servicesFor = (tenantId: unknown, clientId: unknown, refresh: boolean) => {
     if (typeof tenantId !== "string" || typeof clientId !== "string") throw new Error("Choose a tenant.")
     return servicesStatus(tenantId, moduleSettings, (force) => tokenFor(tenantId, clientId, RESOURCE_SCOPES.graph, force), refresh,
-      clientId.toLowerCase() === GRAPH_CLI_CLIENT_ID ? token => {
-        const permissions = graphCliScopes(token.accessToken, token.grantedScopes)
-        return permissions && { kind: "delegated", permissions }
-      } : undefined,
+      undefined,
       () => {
         if (!readerScheduled(tenantId)) return undefined
         const report = health.report(tenantId)
@@ -2384,7 +2356,7 @@ async function bootstrap(): Promise<void> {
     },
     ensureKeys: () => { backupKeys.keyring() },
     capture: async (tenant, appId, jobId, store, signal, progress) => {
-      capabilities.requireNonGraphCli(tenant)
+      capabilities.requireInteractive(tenant)
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")
       progress({ phase: "authorizing", receivedBytes: 0, totalBytes: null })
       await requireCaptureEnabled({ keys: LICENSE_PUBLIC_KEYS, appVersion: app.getVersion(), signal, fetch: bridgedFetch })
@@ -2396,7 +2368,7 @@ async function bootstrap(): Promise<void> {
       signal.throwIfAborted()
       progress({ phase: "windows-approval", receivedBytes: 0, totalBytes: null })
       const helper = app.isPackaged ? join(process.resourcesPath, "app-backup", "TenuVault.Capture.exe") : join(app.getAppPath(), "out", "helper", "TenuVault.Capture.exe")
-      capabilities.requireNonGraphCli(tenant)
+      capabilities.requireInteractive(tenant)
       const content = await requestWindowsContent(helper, { tenantId: tenant, appId, jobId, accessToken: token.accessToken }, signal, client)
       signal.throwIfAborted()
       const after = await readRestoreSnapshot(tenant, appId, token.accessToken, bridgedFetch, "capture")
@@ -2457,13 +2429,13 @@ async function bootstrap(): Promise<void> {
   handleTrusted("appSources:restoreReview", (_event, tenant: unknown, source: unknown) => appSources.restoreReview(tenant, source))
   handleTrusted("appSources:loadRestoreSettings", (_event, tenant: unknown, source: unknown) => appSources.loadRestoreSettings(tenant, source))
   handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => withPlanError(() => {
-    if (isGuid(tenant)) capabilities.requireNonGraphCli(tenant)
-    if (isGuid(target)) capabilities.requireNonGraphCli(target)
+    if (isGuid(tenant)) capabilities.requireInteractive(tenant)
+    if (isGuid(target)) capabilities.requireInteractive(target)
     return appSources.restore(tenant, operation, source, target, name, settingsHash)
   }))
   handleTrusted("appSources:restoreProgress", (_event, tenant: unknown, operation: unknown) => appSources.restoreProgress(tenant, operation))
   handleTrusted("appSources:capture", (_event, tenant: unknown, operation: unknown, id: unknown) => {
-    if (isGuid(tenant)) capabilities.requireNonGraphCli(tenant)
+    if (isGuid(tenant)) capabilities.requireInteractive(tenant)
     return appSources.capture(tenant, operation, id)
   })
   handleTrusted("appSources:assignments", (_event, tenant: unknown, id: unknown) => appSources.assignments(tenant, id))

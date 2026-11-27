@@ -1,5 +1,4 @@
-import { needsBackupAccess } from "../../shared/services/backup-coverage"
-import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
+import { delegatedBackupCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
 import type { PermissionChoice } from "../../shared/services/manifest"
 import type { ConnectionHealthReport } from "../../shared/connection-health/model"
 import type { ServicesStatus } from "../../shared/ipc"
@@ -46,7 +45,7 @@ export async function servicesStatus(
           return [module.id, { access, areas: Object.keys(areas).filter(area => areas[area]) }]
         }))
         const readerServices = readerReadableServices?.()
-        needsAccess = graphCliCoverage(granted.permissions, choice)
+        needsAccess = delegatedBackupCoverage(granted.permissions, choice)
           .filter(row => needsBackupAccess(row) && !readerServices?.includes(row.service))
           .map(row => row.service)
       }

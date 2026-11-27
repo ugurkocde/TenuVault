@@ -99,6 +99,9 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
             } catch (error) {
               return tokenError(403, "unauthorized_client", error)
             }
+            if (form.get("scope")?.includes("storage.azure.com") && routeUsesLocalStorage(tenant)) {
+              return Response.json({ token_type: "Bearer", access_token: LOCAL_STORAGE_TOKEN, expires_in: 3600, ext_expires_in: 3600 })
+            }
             if (form.get("client_secret") === DELEGATED_CLIENT_SECRET) {
               return await delegatedTokenResponse(options, tenant, form)
             }
@@ -132,12 +135,12 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
       }
 
       const authorization = await options.authorizeRequest?.(url, input, init, currentRouteTenant())
-      const graphCliUrl = authorization?.url
+      const authorizedUrl = authorization?.url
       authorization?.beforeDispatch?.()
-      if (graphCliUrl) {
-        // Keep a Start now read inside Graph, including when Graph returns a redirect.
+      if (authorizedUrl) {
+        // Keep a scoped Graph request inside Graph, including when Graph returns a redirect.
         const request = new Request(input, { ...init, redirect: "error" })
-        return realFetch(graphCliUrl.href === url.href ? request : new Request(graphCliUrl, request))
+        return realFetch(authorizedUrl.href === url.href ? request : new Request(authorizedUrl, request))
       }
       return realFetch(input, init)
     } catch (error) {
@@ -154,13 +157,13 @@ async function delegatedTokenResponse(
 ): Promise<Response> {
   const clientId = form.get("client_id")
   const scope = form.get("scope")
+  // Local blob requests need no token, so a route on this device's backups must not depend
+  // on Azure Storage consent or an active sign-in method.
+  if (scope?.includes("storage.azure.com") && routeUsesLocalStorage(tenant)) {
+    return Response.json({ token_type: "Bearer", access_token: LOCAL_STORAGE_TOKEN, expires_in: 3600, ext_expires_in: 3600 })
+  }
   if (!clientId || !scope) {
     return Response.json({ error: "invalid_request", error_description: "client_id and scope are required" }, { status: 400 })
-  }
-  // Local blob requests need no token, so a route on this device's backups must not depend
-  // on Azure Storage consent (the backup engine skips this token the same way).
-  if (scope.includes("storage.azure.com") && routeUsesLocalStorage(tenant)) {
-    return Response.json({ token_type: "Bearer", access_token: LOCAL_STORAGE_TOKEN, expires_in: 3600, ext_expires_in: 3600 })
   }
   try {
     options.authorizeResource?.(tenant, scope)

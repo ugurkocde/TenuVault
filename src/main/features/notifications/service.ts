@@ -5,7 +5,6 @@ import { AUDIT_EVENT_SELECT, filterAuditChanges, mapAuditEvent, type AuditChange
 import { hasConditions, isChangeEventType, parseConditions, parseDelivery, planChangeAlerts, WATCHER_ALERTS_SCHEMA, watcherAlertsHash, type AlertMatcher, type WatcherAlert, type WatcherAlerts, type WatcherDestination } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, parseCardLayout, styleFor, type CardLayout } from "../../../shared/notifications/layout"
 import { ENTRA_AUDIT_FILTER, ENTRA_AUDIT_SELECT, mapEntraAuditEvent, type EntraAuditRaw } from "../../../shared/notifications/entra"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP } from "../../../shared/tenant-connection"
 import { allows } from "../../../shared/plans"
 import { withTenantConnection, type FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
@@ -331,9 +330,6 @@ export async function deliverToChannel(deps: FeatureDeps, tenantId: string, chan
 type GraphItem = Record<string, unknown>
 
 async function deliverEmail(deps: FeatureDeps, tenantId: string, channel: ChannelRecord, envelope: NotificationEnvelope, base: { at: string; test: boolean }): Promise<DeliveryResult> {
-  if (deps.tenant(tenantId)?.clientId.toLowerCase() === GRAPH_CLI_CLIENT_ID) {
-    return { ...base, ok: false, attempts: 1, status: 403, error: `Email delivery needs a different sign-in method. ${GRAPH_CLI_NEXT_STEP}` }
-  }
   const graph = await deps.graph(tenantId)
   const recipients = await resolveRecipients(graph, channel)
   if ("error" in recipients) return { ...base, ok: false, attempts: 1, status: null, error: recipients.error }

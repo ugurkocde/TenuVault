@@ -1,5 +1,5 @@
 import type { BackupScopeCoverage } from "../../shared/tenant-connection"
-import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
+import { delegatedBackupCoverage } from "../../shared/services/backup-coverage"
 import { checkedOnboardingChoice } from "../../shared/services/onboarding"
 import { missingForChoice } from "../../shared/services/manifest"
 import { grantedPermissions } from "../../shared/services/token"
@@ -11,9 +11,9 @@ export async function checkOnboardingPermissions(value: unknown, token: () => Pr
   try {
     const granted = grantedPermissions((await token()).accessToken)
     if (!granted || granted.kind !== "delegated") throw new Error("The permissions in the Microsoft Graph token could not be read.")
-    return { missing: missingForChoice(choice, granted), coverage: graphCliCoverage(granted.permissions, choice) }
+    return { missing: missingForChoice(choice, granted), coverage: delegatedBackupCoverage(granted.permissions, choice) }
   } catch (error) {
-    return { missing: [], coverage: graphCliCoverage(undefined, choice), error: error instanceof Error ? error.message : String(error) }
+    return { missing: [], coverage: delegatedBackupCoverage(undefined, choice), error: error instanceof Error ? error.message : String(error) }
   }
 }
 

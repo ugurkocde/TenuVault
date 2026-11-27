@@ -96,10 +96,10 @@ export class BackupScheduler {
     private readonly run: (tenantId: string, afterFailure: boolean, slot: string) => Promise<ScheduledRunResult>,
     private readonly onChange: () => void = () => undefined,
     private readonly now: () => Date = () => new Date(),
-    private readonly coverage?: (tenantId: string) => { plan: Plan | null; azure: boolean; endedAt?: number; pendingChoice?: boolean } | undefined,
+    private readonly coverage?: (tenantId: string) => { plan: Plan | null; azure: boolean; endedAt?: number; pendingChoice?: boolean; needsSignInMethod?: boolean } | undefined,
     private readonly prepare: (() => Promise<void>) | undefined = undefined,
     private readonly onFallback: (tenantId: string) => void = () => undefined,
-    private readonly onPaused: (tenantId: string, reason: "azure" | "choice") => void = () => undefined,
+    private readonly onPaused: (tenantId: string, reason: "azure" | "choice" | "signInMethod") => void = () => undefined,
     /** Streaming tenants release the scheduler tick while their engine job yields between pages. */
     private readonly largeTenant: (tenantId: string) => boolean = () => false,
   ) {}
@@ -337,7 +337,8 @@ export class BackupScheduler {
       const coverage = this.coverage?.(schedule.tenantId)
       if (!coverage) continue
       const before = JSON.stringify(schedule)
-      const pausedReason = coverage.plan === "community" && coverage.azure ? "Paused: Azure storage needs Pro"
+      const pausedReason = coverage.needsSignInMethod ? "Paused: Start now was removed in 0.6. Choose a sign-in method"
+        : coverage.plan === "community" && coverage.azure ? "Paused: Azure storage needs Pro"
         : coverage.plan === null && coverage.pendingChoice ? "Paused: choose a Community tenant or add a license" : undefined
       const fallback = coverage.plan === "community" && schedule.frequency === "daily"
         ? schedule.fallbackWeekday ?? this.firstFallbackSlot(schedule, coverage.endedAt).getDay() : undefined
@@ -349,13 +350,19 @@ export class BackupScheduler {
         schedule.fallbackNoticeFor = noticeFor
         notices.push(() => this.onFallback(schedule.tenantId))
       }
-      if (pausedReason && coverage.azure && coverage.plan === "community") {
+      if (coverage.needsSignInMethod) {
+        if (schedule.enabled && !schedule.signInMethodPauseNotified) {
+          schedule.signInMethodPauseNotified = true
+          notices.push(() => this.onPaused(schedule.tenantId, "signInMethod"))
+        }
+      } else schedule.signInMethodPauseNotified = undefined
+      if (pausedReason && !coverage.needsSignInMethod && coverage.azure && coverage.plan === "community") {
         if (schedule.enabled && !schedule.azurePauseNotified) {
           schedule.azurePauseNotified = true
           notices.push(() => this.onPaused(schedule.tenantId, "azure"))
         }
       } else schedule.azurePauseNotified = undefined
-      if (coverage.pendingChoice) {
+      if (!coverage.needsSignInMethod && coverage.pendingChoice) {
         if (schedule.enabled && !schedule.choicePauseNotified) {
           schedule.choicePauseNotified = true
           if (!choiceNotified) notices.push(() => this.onPaused(schedule.tenantId, "choice"))
@@ -420,6 +427,7 @@ function parseSchedule(id: string, value: unknown): BackupSchedule | null {
     || (entry.fallbackNoticeFor !== undefined && typeof entry.fallbackNoticeFor !== "string")
     || (entry.azurePauseNotified !== undefined && typeof entry.azurePauseNotified !== "boolean")
     || (entry.choicePauseNotified !== undefined && typeof entry.choicePauseNotified !== "boolean")
+    || (entry.signInMethodPauseNotified !== undefined && typeof entry.signInMethodPauseNotified !== "boolean")
     || (entry.pausedReason !== undefined && typeof entry.pausedReason !== "string")
     || (entry.weekday !== undefined && !validWeekday(entry.weekday))
     || (entry.lastRunAt !== undefined && !validDate(entry.lastRunAt))

@@ -1,6 +1,6 @@
 import type { AzureStorageAccount } from "./azure-discovery"
 import type { PackConsentAction, PackConsentPlan, PackConsentResult } from "./pack-consent"
-import type { GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, ConnectionSwitchResponse, ConnectionTarget, TenantConnection, BackupScopeCoverage, WizardSignInMethod, WizardSignInResponse, WizardFinishResponse } from "./tenant-connection"
+import type { ConnectionSwitchResponse, ConnectionTarget, TenantConnection, BackupScopeCoverage, WizardSignInMethod, WizardSignInResponse, WizardFinishResponse } from "./tenant-connection"
 import type { PermissionAdditionPreview, PermissionAdditionResult } from "./registration-additions"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
@@ -172,7 +172,6 @@ export interface TenantLicenseStatus {
   trial?: boolean
   /** Key licenses: whether other admins in the tenant may use it, as last confirmed by the licensing service. */
   shared: boolean | null
-  graphCliShared?: boolean
   /** Key licenses: sharing could not be confirmed without a fresh sign-in. */
   shareNeedsSignIn: boolean
   /** Organization licenses: the masked key, such as ****ABCDEF. */
@@ -291,6 +290,7 @@ export interface BackupSchedule extends ScheduleInput {
   fallbackNoticeFor?: string
   azurePauseNotified?: boolean
   choicePauseNotified?: boolean
+  signInMethodPauseNotified?: boolean
   pausedReason?: string
   /** When the schedule was last changed; slots before it are not caught up. */
   since: string
@@ -471,7 +471,6 @@ export interface TenuVaultBridge {
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
     connection: (tenantId: string) => Promise<TenantConnection | null>
-    graphCliAvailable: () => Promise<boolean>
     tenuvaultAppAvailable: () => Promise<boolean>
     wizardStage: (tenantId: string, method: WizardSignInMethod, choice?: PermissionChoice) => Promise<WizardSignInResponse>
     wizardFinish: (id: string, profile: string, choice: PermissionChoice) => Promise<WizardFinishResponse>
@@ -488,8 +487,7 @@ export interface TenuVaultBridge {
     /** Called after an account is saved or removed, before any old verification is reused. */
     onAccountsChanged: (listener: (tenantId: string) => void) => () => void
     /** Signs in again to an existing tenant profile, for `scope` (Microsoft Graph when omitted). */
-    reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount |
-      { error: { code: typeof GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED; message: string } }>
+    reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount>
     /** Called when a background request needs the admin to sign in again. Returns an unsubscribe function. */
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
     /**
@@ -637,7 +635,7 @@ export interface TenuVaultBridge {
     /** Retries activation for one tenant, or for every signed-in tenant without a license. */
     retry: (tenantId?: string) => Promise<LicenseStatus>
     /** The key holder lets other admins of the tenant use the license, or stops. */
-    setShared: (tenantId: string, shared: boolean, allowGraphCli?: boolean) => Promise<LicenseStatus>
+    setShared: (tenantId: string, shared: boolean) => Promise<LicenseStatus>
     /** Releases every activation of this machine and forgets the key. */
     deactivate: () => Promise<LicenseStatus>
     /**

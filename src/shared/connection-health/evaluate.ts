@@ -12,8 +12,7 @@
  */
 
 import type { BackupScopeCoverage } from "../tenant-connection"
-import { groupBackupCoverage } from "../services/backup-coverage"
-import { chosenFolder, DELEGATED_BACKUP_FOLDERS } from "../services/graph-cli-coverage"
+import { chosenFolder, DELEGATED_BACKUP_FOLDERS, groupBackupCoverage } from "../services/backup-coverage"
 import type { PermissionChoice } from "../services/manifest"
 import { backupServiceForFolder } from "../services/presentation"
 import { carryChanges, folderValue } from "./observe"

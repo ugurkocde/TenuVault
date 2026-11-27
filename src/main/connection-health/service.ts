@@ -1,4 +1,3 @@
-import { graphCliScopes } from "../auth/connection-coverage"
 import { createHash } from "node:crypto"
 import type { RunOutcomes } from "../../shared/backup-outcomes"
 import { evaluateHealth, type HealthEvaluation, type ServiceChoice } from "../../shared/connection-health/evaluate"
@@ -63,7 +62,6 @@ export interface HealthHost {
   tenant: (tenantId: string) => { clientId: string; storage: "local" | "azure"; storageId?: string } | null
   /** The ID of the account signed in to the tenant, never its name; null when nobody is. */
   account: (tenantId: string) => string | null
-  readOnly?: (tenantId: string) => boolean
   settings: (tenantId: string) => Record<ModuleId, ServiceChoice>
   /**
    * Asks Microsoft for a new token of the signed-in admin, without any window. `fromCache` has to
@@ -164,7 +162,6 @@ export class ConnectionHealth {
     this.connectionsChanged(tenantId)
     const tenant = tenantId.toLowerCase()
     const { report, current, baseline } = this.evaluate(tenant)
-    if (this.host.readOnly?.(tenant)) report.readOnly = true
     const key = this.adminKey(tenant)
     if (!key || !current || !baseline) return { ...report, acknowledgement: null }
     if (!current.account && this.host.account(tenant)) {
@@ -321,10 +318,7 @@ export class ConnectionHealth {
       } else {
         const token = await answered(this.host.token(tenant, key.clientId, kind === "admin" ? "graph" : "storage"))
         if (token.fromCache !== false) return
-        if (kind === "admin" && this.host.readOnly?.(tenant)) {
-          const scopes = graphCliScopes(token.accessToken, token.grantedScopes)
-          observation = { at: this.now().toISOString(), ...(scopes ? { permissions: [...scopes].sort() } : {}) }
-        } else observation = this.issued(token.accessToken, kind === "admin" ? token.grantedScopes : undefined)
+        observation = this.issued(token.accessToken, kind === "admin" ? token.grantedScopes : undefined)
       }
     } catch (error) {
       observation = { at: this.now().toISOString(), failure: signInFailure(error) }

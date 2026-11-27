@@ -1,4 +1,4 @@
-import { GRAPH_CLI_CLIENT_ID, ORGANIZATION_RENEWAL_NOTICE, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { ORGANIZATION_RENEWAL_NOTICE, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { organizationClientIds } from "./client-ids"
 import { readTenantTrials, TENANT_TRIAL_STATE_KEY, type StoredTenantTrial, type TrialTally } from "./tenant-trial-state"
 import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
@@ -54,7 +54,6 @@ interface StoredActivation {
   // Key activations: whether the service last confirmed the license as shared with the
   // tenant's other admins.
   shared?: boolean
-  graphCliShared?: boolean
   // Key activations: the service could not share the license because the request lacked
   // a fresh sign-in to the tenant.
   shareNeedsSignIn?: true
@@ -242,8 +241,7 @@ const LEGACY_KEYS = ["license.key", "license.trialStartedAt", "license.lastSeenA
 const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function isPublicClient(clientId: string | null | undefined): boolean {
-  const id = clientId?.toLowerCase()
-  return id === GRAPH_CLI_CLIENT_ID || id === TENUVAULT_CLIENT_ID
+  return clientId?.toLowerCase() === TENUVAULT_CLIENT_ID
 }
 
 // Time and status checks for a token whose signature already verified.
@@ -338,7 +336,7 @@ function retryAfterMs(value: string | null): number | null {
 
 export const TRIAL_END_NOTICE_DAYS = 60
 
-type ConnectMethod = "graphCli" | "tenuvaultApp"
+type ConnectMethod = "tenuvaultApp"
 interface LicenseHealthResponse {
   connectMethods?: Partial<Record<ConnectMethod, unknown>>
   organizationLicenses?: { clientIdSets?: unknown; tenantIdHashes?: unknown }
@@ -747,7 +745,6 @@ export class LicenseService {
   }
 
   async connectMethodEnabled(method: ConnectMethod, fresh = false): Promise<boolean> {
-    if (method === "tenuvaultApp" && !(typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__)) return false
     if (!fresh && this.connectMethodsHealth && Date.now() < this.connectMethodsHealth.expiresAt) {
       return this.connectMethodsHealth.enabled[method]
     }
@@ -757,7 +754,6 @@ export class LicenseService {
 
   /** Use the latest known availability immediately before dispatching a shared-client request. */
   connectMethodEnabledNow(method: ConnectMethod): boolean {
-    if (method === "tenuvaultApp" && !(typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__)) return false
     return this.connectMethodsHealth?.enabled[method] === true
   }
 
@@ -772,7 +768,7 @@ export class LicenseService {
       } catch { /* Shared sign-in requires positive health discovery. */ }
       this.connectMethodsHealth = {
         expiresAt: Date.now() + 2 * 60_000,
-        enabled: { graphCli: data?.connectMethods?.graphCli === true, tenuvaultApp: data?.connectMethods?.tenuvaultApp === true },
+        enabled: { tenuvaultApp: data?.connectMethods?.tenuvaultApp === true },
       }
       this.organizationHealth = {
         expiresAt: this.connectMethodsHealth.expiresAt,
@@ -809,16 +805,16 @@ export class LicenseService {
     return { tenantIdHash: createHash("sha256").update(normalized, "utf8").digest("hex") }
   }
 
-  private async keyTenantFields(tenantId: string, share?: boolean, allowGraphCli?: boolean): Promise<Record<string, unknown>> {
-    const fields = await this.sharingFields(tenantId, share, allowGraphCli)
+  private async keyTenantFields(tenantId: string, share?: boolean): Promise<Record<string, unknown>> {
+    const fields = await this.sharingFields(tenantId, share)
     const hash = this.tenantHashFields(tenantId, fields.publicClientProof ?? fields.idToken)
     return { ...fields, ...(hash.tenantIdHash ? hash : { tenantId }) }
   }
 
-  private async sharingFields(tenantId: string, share?: boolean, allowGraphCli?: boolean): Promise<Record<string, unknown>> {
+  private async sharingFields(tenantId: string, share?: boolean): Promise<Record<string, unknown>> {
     const clientId = this.clientId(tenantId)?.toLowerCase()
     const publicClient = isPublicClient(clientId)
-    const supported = (publicClient || this.options.ownClientId || allowGraphCli !== undefined) && await this.supportsClientIdSets()
+    const supported = (publicClient || this.options.ownClientId) && await this.supportsClientIdSets()
     if (share === false) {
       const choice = { shareWithTenant: false }
       if (!this.supportsTenantHashes() || !clientId || !guidPattern.test(clientId)) return choice
@@ -826,7 +822,6 @@ export class LicenseService {
       if (!proof || this.clientId(tenantId)?.toLowerCase() !== clientId) return choice
       return publicClient ? { ...choice, publicClientProof: proof } : { ...choice, idToken: proof }
     }
-    if (allowGraphCli !== undefined && !supported) throw new Error("The license service does not support Start now sharing yet.")
     // The legacy server preserves the mapping when sharing is requested without proof.
     // Explicit true also avoids the MSP default of removing an existing mapping.
     const choice = publicClient ? { shareWithTenant: true } : share === undefined ? {} : { shareWithTenant: share }
@@ -840,8 +835,7 @@ export class LicenseService {
       clientId,
       // A legacy handler strips this field even if a capable server rolls back between requests.
       ...(publicClient ? { publicClientProof: idToken } : { idToken }),
-      allowedClientIds: organizationClientIds(ownClientId, allowGraphCli),
-      ...(allowGraphCli === undefined ? {} : { allowGraphCli }),
+      allowedClientIds: organizationClientIds(ownClientId),
     }
   }
 
@@ -1179,11 +1173,6 @@ export class LicenseService {
         : previous?.source === undefined
           ? previous?.shared
           : undefined
-    const graphCliShared = shared === true
-      ? !shareNeedsSignIn && Array.isArray(data.allowedClientIds)
-        ? data.allowedClientIds.includes(GRAPH_CLI_CLIENT_ID)
-        : previous?.graphCliShared
-      : undefined
     this.state.activations[tenantId] = {
       activationId: data.activationId,
       token: data.token,
@@ -1198,7 +1187,6 @@ export class LicenseService {
           }
         : {
             ...(shared !== undefined ? { shared } : {}),
-            ...(graphCliShared !== undefined ? { graphCliShared } : {}),
             ...(shareNeedsSignIn ? { shareNeedsSignIn: true as const } : {}),
           }),
     }
@@ -1302,12 +1290,7 @@ export class LicenseService {
     const idToken = await this.idToken(tenantId)
     this.assertCurrent(() => current() && this.clientId(tenantId) === clientId)
     if (!idToken) throw new NoIdToken()
-    const graphCli = clientId?.toLowerCase() === GRAPH_CLI_CLIENT_ID
-    if (graphCli && !await this.supportsClientIdSets()) {
-      throw new LicenseDenied("Start now organization licensing is unavailable.", "tenant_not_licensed")
-    }
-    this.assertCurrent(() => current() && this.clientId(tenantId) === clientId)
-    const data = await this.tenantCall(tenantId, "activate", current, undefined, idToken, {}, graphCli)
+    const data = await this.tenantCall(tenantId, "activate", current, undefined, idToken, {}, false)
     this.assertCurrent(current)
     this.accept(tenantId, data, "tenant", true, clientId)
   }
@@ -1358,7 +1341,7 @@ export class LicenseService {
     }
   }
 
-  private async refreshCurrent(tenantId: string, share?: boolean, allowGraphCli?: boolean): Promise<void> {
+  private async refreshCurrent(tenantId: string, share?: boolean): Promise<void> {
     const entry = this.state?.activations[tenantId]
     if (!this.state || !entry) return
     const current = this.requestGuard(tenantId)
@@ -1402,14 +1385,10 @@ export class LicenseService {
         installId: this.installId,
         // Lets the service send version 2 tokens to apps that read them.
         appVersion: this.options.appVersion,
-        ...(await this.keyTenantFields(tenantId, shareWithTenant, allowGraphCli)),
+        ...(await this.keyTenantFields(tenantId, shareWithTenant)),
       }, current)
       this.assertCurrent(current)
       this.accept(tenantId, data, "key")
-      if (allowGraphCli !== undefined && data.sharedReason !== "sign_in_required" &&
-        (!Array.isArray(data.allowedClientIds) || data.allowedClientIds.includes(GRAPH_CLI_CLIENT_ID) !== allowGraphCli)) {
-        throw new Error("The license service did not confirm the Start now sharing setting.")
-      }
     } catch (error) {
       this.assertCurrent(current)
       if (error instanceof LicenseDenied && error.reason !== "trial_used") {
@@ -1456,15 +1435,15 @@ export class LicenseService {
   }
 
   /** The key holder lets the tenant's other admins use the license, or stops. */
-  async setShared(tenantId: string, share: boolean, allowGraphCli?: boolean): Promise<void> {
+  async setShared(tenantId: string, share: boolean): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()
     return this.mutate([tenant], true, async () => {
       const entry = this.state?.activations[tenant]
-      if (!this.state?.key || !entry || entry.source === "tenant" || (allowGraphCli !== undefined && entry.source === "trial")) {
+      if (!this.state?.key || !entry || entry.source === "tenant") {
         throw new Error("Only the machine that holds the license key can change sharing.")
       }
-      await this.refreshCurrent(tenant, share, allowGraphCli)
+      await this.refreshCurrent(tenant, share)
       if (share && this.state?.activations[tenant]?.shareNeedsSignIn) {
         if (isPublicClient(this.clientId(tenant))) {
           throw new Error("To start sharing, sign in with your own app registration in Settings, under Sign-in and access. If this key already shares with the tenant, sign in again and retry.")
@@ -2235,7 +2214,6 @@ export class LicenseService {
         trialCanResume: resumeUntil !== null,
         trialResumeUntil: resumeUntil !== null ? new Date(resumeUntil).toISOString() : undefined,
         shared: source === "key" ? (entry?.shared ?? null) : null,
-        ...(source === "key" && entry?.graphCliShared !== undefined ? { graphCliShared: entry.graphCliShared } : {}),
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,
         ...(this.organizationRenewalPending(tenantId) ? { organizationRenewalPending: true } : {}),

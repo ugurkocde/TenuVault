@@ -4,6 +4,7 @@ import { loopbackSignIn } from "./loopback-sign-in"
 import { ERROR_PAGE, page, SIGN_IN_TIMEOUT_MS } from "./msal"
 import { setupSignInError } from "./app-registration-setup"
 import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
+import { SETUP_HELPER_CLIENT_ID } from "../../shared/tenant-connection"
 import { RegistrationAdditions, sameAdditionConnection, type AdditionConnection } from "./registration-additions"
 import type { PermissionAdditionPreview, PermissionAdditionResult } from "../../shared/registration-additions"
 import { grantedPermissions } from "../../shared/services/token"
@@ -22,7 +23,7 @@ export function verifyPermissionAdditionToken(result: { accessToken: string }, a
 
 /** Setup-only consent is never persisted in the tenant's normal MSAL cache. */
 export async function signInForPermissionAddition(connection: AdditionConnection, request: typeof fetch, openBrowser: (url: string) => Promise<void>, signal: AbortSignal): Promise<string> {
-  const app = new PublicClientApplication({ auth: { clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e", authority: `https://login.microsoftonline.com/${connection.tenantId}` }, system: { networkClient: fetchNetworkClient(request) } })
+  const app = new PublicClientApplication({ auth: { clientId: SETUP_HELPER_CLIENT_ID, authority: `https://login.microsoftonline.com/${connection.tenantId}` }, system: { networkClient: fetchNetworkClient(request) } })
   try {
     const result = await loopbackSignIn({ app, scopes: ["https://graph.microsoft.com/Application.ReadWrite.All", "https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All"], loginHint: connection.username, signal,
       openBrowser: url => { if (!isMicrosoftLoginUrl(url)) throw new Error("Microsoft returned an unexpected sign-in address."); return openBrowser(url) },

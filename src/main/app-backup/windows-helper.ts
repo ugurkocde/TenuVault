@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { SETUP_HELPER_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { tokenIdentity } from "../auth/token-identity"
 import type { DeviceContent } from "./capture-download"
 import { bindCapture } from "./capture-identity"
@@ -13,8 +13,8 @@ export function requestWindowsContent(executable: string, request: CaptureHelper
   sourceTenant(request.tenantId); sourceTenant(request.appId); sourceTenant(request.jobId)
   signal.throwIfAborted()
   // The helper makes its own Graph calls after Windows approval, outside the desktop's live transport guard.
-  const shared = [TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID]
-  if (shared.includes(clientId.toLowerCase()) || shared.includes(tokenIdentity(request.accessToken).clientId ?? "")) {
+  const disallowed = [TENUVAULT_CLIENT_ID, SETUP_HELPER_CLIENT_ID]
+  if (disallowed.includes(clientId.toLowerCase()) || disallowed.includes(tokenIdentity(request.accessToken).clientId ?? "")) {
     throw new Error("Windows installer capture requires your own app registration. Change the tenant's sign-in method to use this preview.")
   }
   return new Promise((resolve, reject) => {
