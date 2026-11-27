@@ -16,6 +16,7 @@ export interface DeletionJournalEntry {
   prefixes: string[]
   remnant: boolean
   folders: string[]
+  emptyFolders?: boolean
   remaining: Record<string, string>
   deleted: string[]
 }
@@ -65,6 +66,7 @@ function isDeletionJournalEntry(value: unknown): value is DeletionJournalEntry {
     || !value.prefixes.every(prefix => typeof prefix === "string" && prefix.endsWith("/"))) return false
   if (typeof value.remnant !== "boolean") return false
   if (!Array.isArray(value.folders) || !value.folders.every(folder => typeof folder === "string")) return false
+  if (value.emptyFolders !== undefined && typeof value.emptyFolders !== "boolean") return false
   if (!isPlainRecord(value.remaining)
     || !Object.values(value.remaining).every(etag => typeof etag === "string" && etag.length > 0)) return false
   if (!Array.isArray(value.deleted) || !value.deleted.every(name => typeof name === "string")) return false

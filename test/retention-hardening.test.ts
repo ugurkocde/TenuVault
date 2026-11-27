@@ -935,3 +935,286 @@ describe("retention clock diagnostics and protected untrusted-date markers", () 
     expect(job.log.join("\n")).toContain("immutability")
   })
 })
+
+describe("deletion journal tampering and binding guards", () => {
+  it("discards a tampered journal keyed to an old prefix whose prefixes target the newest backup with empty folders", async () => {
+    const progress = memoryStore()
+    const oldPrefix = "backup-2026-08-01-020000/"
+    const progressKey = `${TENANT}/contoso/false`
+    let injected = false
+    let newestPrefix = ""
+    const { engine, has, etags, keyOf, seed, folder } = setupAzure({
+      progress,
+      count: 1,
+      override: (url, req) => {
+        // After the newest backup's manifest is written, inject a tampered journal keyed to oldPrefix
+        // whose prefixes point to the newest backup with its real current ETags and folders: [].
+        if (!injected && req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+          const match = /\/(backup-[^/]+\/)metadata\.json$/.exec(url.pathname)
+          if (match) newestPrefix = match[1]!
+        }
+        if (!injected && newestPrefix && req.method === "GET" && url.searchParams.get("comp") === "list") {
+          injected = true
+          const newestFiles = [
+            `${newestPrefix}metadata.json`,
+            `${newestPrefix}${BACKUP_OWNER_FILE}`,
+            `${newestPrefix}DeviceConfigurations/Policy 0.json`,
+          ]
+          const remaining: Record<string, string> = {}
+          for (const name of newestFiles) {
+            const etag = etags.get(keyOf(name))
+            if (etag) remaining[name] = etag
+          }
+          progress.set(progressKey, JSON.stringify({
+            reviews: {},
+            deletions: {
+              [oldPrefix]: {
+                prefixes: [newestPrefix],
+                remnant: false,
+                folders: [],
+                remaining,
+                deleted: [],
+              },
+            },
+          }))
+        }
+        return undefined
+      },
+    })
+    folder(oldPrefix)
+    seed(`${oldPrefix}metadata.json`, COMPLETE_MANIFEST)
+
+    const job = await runBackup(engine)
+    expect(injected).toBe(true)
+    expect(newestPrefix).toBe(`${job.backupFolder}/`)
+    expect(has(`${newestPrefix}metadata.json`), job.log.join("\n")).toBe(true)
+    expect(has(`${newestPrefix}DeviceConfigurations/Policy 0.json`)).toBe(true)
+    expect(has(`${newestPrefix}${BACKUP_OWNER_FILE}`)).toBe(true)
+    // Nothing is deleted through the invalid journal and the journal itself is discarded.
+    expect(has(`${oldPrefix}metadata.json`)).toBe(true)
+    expect(progress.get(progressKey)).toBeNull()
+    expect(job.log.join("\n")).toContain("Discarded deletion journal")
+  })
+
+  it("discards a tampered journal keyed directly to the latest backup prefix", async () => {
+    const progress = memoryStore()
+    const progressKey = `${TENANT}/contoso/false`
+    let injected = false
+    let newestPrefix = ""
+    const { engine, has, etags, keyOf } = setupAzure({
+      progress,
+      count: 1,
+      override: (url, req) => {
+        if (!injected && req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+          const match = /\/(backup-[^/]+\/)metadata\.json$/.exec(url.pathname)
+          if (match) newestPrefix = match[1]!
+        }
+        if (!injected && newestPrefix && req.method === "GET" && url.searchParams.get("comp") === "list") {
+          injected = true
+          const remaining: Record<string, string> = {}
+          for (const name of [
+            `${newestPrefix}metadata.json`,
+            `${newestPrefix}${BACKUP_OWNER_FILE}`,
+            `${newestPrefix}DeviceConfigurations/Policy 0.json`,
+          ]) {
+            const etag = etags.get(keyOf(name))
+            if (etag) remaining[name] = etag
+          }
+          progress.set(progressKey, JSON.stringify({
+            reviews: {},
+            deletions: {
+              [newestPrefix]: {
+                prefixes: [newestPrefix],
+                remnant: false,
+                folders: ["DeviceConfigurations"],
+                remaining,
+                deleted: [],
+              },
+            },
+          }))
+        }
+        return undefined
+      },
+    })
+
+    const job = await runBackup(engine)
+    expect(injected).toBe(true)
+    expect(has(`${newestPrefix}metadata.json`), job.log.join("\n")).toBe(true)
+    expect(has(`${newestPrefix}DeviceConfigurations/Policy 0.json`)).toBe(true)
+    expect(progress.get(progressKey)).toBeNull()
+    expect(job.log.join("\n")).toContain("Discarded deletion journal")
+  })
+
+  it("discards a tampered journal that names an unrelated large backup as a second prefix", async () => {
+    const progress = memoryStore()
+    const progressKey = `${TENANT}/contoso/false`
+    const oldPrefix = "backup-2026-08-01-020000/"
+    const unrelatedLarge = "backup-large-2026-08-01-020000/"
+    const { engine, has, etags, keyOf, seed, folder } = setupAzure({ progress })
+    folder(oldPrefix)
+    seed(`${oldPrefix}metadata.json`, {
+      ...COMPLETE_MANIFEST,
+      BackupFolder: oldPrefix.slice(0, -1),
+      RunId: "run-old-ordinary",
+    })
+    seed(`${unrelatedLarge}${BACKUP_OWNER_FILE}`, {
+      Source: "TenuVault Desktop",
+      TenantId: TENANT,
+      RunId: "run-different-large",
+      LargeInventory: { version: 1 },
+    })
+    seed(`${unrelatedLarge}metadata.json`, {
+      TenantId: TENANT,
+      BackupFolder: unrelatedLarge.slice(0, -1),
+      RunId: "run-different-large",
+      Status: "Success",
+      Failures: 0,
+      Coverage: "Complete",
+      Items: {},
+      LargeItems: {},
+      ItemCounts: { TotalPolicies: 0 },
+    })
+
+    const remaining: Record<string, string> = {}
+    for (const name of [
+      `${oldPrefix}metadata.json`,
+      `${oldPrefix}${BACKUP_OWNER_FILE}`,
+      `${oldPrefix}DeviceConfigurations/Old.json`,
+      `${unrelatedLarge}metadata.json`,
+      `${unrelatedLarge}${BACKUP_OWNER_FILE}`,
+    ]) {
+      remaining[name] = etags.get(keyOf(name))!
+    }
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletions: {
+        [oldPrefix]: {
+          prefixes: [oldPrefix, unrelatedLarge],
+          remnant: false,
+          folders: ["DeviceConfigurations"],
+          remaining,
+          deleted: [],
+        },
+      },
+    }))
+
+    const job = await runBackup(engine)
+    expect(has(`${unrelatedLarge}metadata.json`), job.log.join("\n")).toBe(true)
+    expect(has(`${unrelatedLarge}${BACKUP_OWNER_FILE}`)).toBe(true)
+    expect(has(`${oldPrefix}metadata.json`)).toBe(true)
+    expect(progress.get(progressKey)).toBeNull()
+    expect(job.log.join("\n")).toContain("Discarded deletion journal")
+  })
+
+  it("discards a tampered journal targeting another tenant's backup", async () => {
+    const progress = memoryStore()
+    const progressKey = `${TENANT}/contoso/false`
+    const otherTenantPrefix = "backup-2026-08-01-020000/"
+    const otherTenant = "22222222-2222-2222-2222-222222222222"
+    const { engine, has, etags, keyOf, seed } = setupAzure({ progress })
+    seed(`${otherTenantPrefix}DeviceConfigurations/Old.json`, OLD_POLICY)
+    seed(`${otherTenantPrefix}${BACKUP_OWNER_FILE}`, { Source: "TenuVault Desktop", TenantId: otherTenant })
+    seed(`${otherTenantPrefix}metadata.json`, { ...COMPLETE_MANIFEST, TenantId: otherTenant })
+
+    const remaining: Record<string, string> = {}
+    for (const name of [
+      `${otherTenantPrefix}metadata.json`,
+      `${otherTenantPrefix}${BACKUP_OWNER_FILE}`,
+      `${otherTenantPrefix}DeviceConfigurations/Old.json`,
+    ]) {
+      remaining[name] = etags.get(keyOf(name))!
+    }
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletions: {
+        [otherTenantPrefix]: {
+          prefixes: [otherTenantPrefix],
+          remnant: false,
+          folders: ["DeviceConfigurations"],
+          remaining,
+          deleted: [],
+        },
+      },
+    }))
+
+    const job = await runBackup(engine)
+    expect(has(`${otherTenantPrefix}metadata.json`), job.log.join("\n")).toBe(true)
+    expect(has(`${otherTenantPrefix}DeviceConfigurations/Old.json`)).toBe(true)
+    expect(progress.get(progressKey)).toBeNull()
+    expect(job.log.join("\n")).toContain("Discarded deletion journal")
+  })
+
+  it.each([false, true])(
+    "discards a tampered journal with empty folders for an uncovered backup (emptyFolders flag: %s)",
+    async emptyFolders => {
+      const progress = memoryStore()
+      const progressKey = `${TENANT}/contoso/false`
+      const oldPrefix = "backup-2026-08-01-020000/"
+      const { engine, has, etags, keyOf, seed, folder } = setupAzure({ progress })
+      folder(oldPrefix)
+      seed(`${oldPrefix}metadata.json`, COMPLETE_MANIFEST)
+
+      const remaining: Record<string, string> = {}
+      for (const name of [
+        `${oldPrefix}metadata.json`,
+        `${oldPrefix}${BACKUP_OWNER_FILE}`,
+        `${oldPrefix}DeviceConfigurations/Old.json`,
+      ]) {
+        remaining[name] = etags.get(keyOf(name))!
+      }
+      progress.set(progressKey, JSON.stringify({
+        reviews: {},
+        deletions: {
+          [oldPrefix]: {
+            prefixes: [oldPrefix],
+            remnant: false,
+            folders: [],
+            ...(emptyFolders ? { emptyFolders: true } : {}),
+            remaining,
+            deleted: [],
+          },
+        },
+      }))
+
+      // Current backup covers only CompliancePolicies, so oldPrefix's DeviceConfigurations is uncovered.
+      const job = await runBackup(engine, COMPLIANCE_ONLY_SCOPE)
+      expect(has(`${oldPrefix}metadata.json`), job.log.join("\n")).toBe(true)
+      expect(has(`${oldPrefix}DeviceConfigurations/Old.json`)).toBe(true)
+      expect(progress.get(progressKey)).toBeNull()
+      expect(job.log.join("\n")).toContain("Discarded deletion journal")
+    },
+  )
+
+  it("still resumes a genuinely empty candidate journaled with emptyFolders: true", async () => {
+    const progress = memoryStore()
+    const oldPrefix = "backup-2026-08-01-020000/"
+    let failOwnerDelete = true
+    const { createEngine, has, seed } = setupAzure({
+      progress,
+      override: (url, req) => {
+        if (failOwnerDelete && req.method === "DELETE" && url.pathname.endsWith(`${oldPrefix}${BACKUP_OWNER_FILE}`)) {
+          return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+        }
+        return undefined
+      },
+    })
+    seed(`${oldPrefix}${BACKUP_OWNER_FILE}`, OWNER)
+    seed(`${oldPrefix}metadata.json`, {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["DeviceConfigurations"] },
+      Items: {},
+      ItemCounts: { DeviceConfigurations: 0, TotalPolicies: 0 },
+    })
+
+    const run1 = await runBackup(createEngine())
+    expect(has(`${oldPrefix}metadata.json`), run1.log.join("\n")).toBe(false)
+    expect(has(`${oldPrefix}${BACKUP_OWNER_FILE}`)).toBe(true)
+
+    failOwnerDelete = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const run2 = await runBackup(createEngine())
+    expect(has(`${oldPrefix}${BACKUP_OWNER_FILE}`), run2.log.join("\n")).toBe(false)
+  })
+})

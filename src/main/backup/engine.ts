@@ -5,7 +5,8 @@ import { isBackupName, parseBackupName } from "../../shared/intune/backup-names"
 import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, matchingCompanions } from "../../shared/backup-companion"
 import { isLargeBackup, LARGE_BACKUP_CONTAINER, untrustedTimeFolder, untrustedTimeMarker } from "../../shared/backup-storage"
 import { captureLarge } from "./large"
-import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, type LargeIndexes } from "../../shared/large-backup"
+import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, largeIndexes, type LargeIndexes } from "../../shared/large-backup"
+import { isSafeArchivePath } from "../../shared/security"
 import { backupTypeUse } from "../../shared/services/backup-use"
 import { maskBackupAccountIdentifiers } from "../../shared/backup-log"
 import { auditUserFromToken } from "../api/audit-sink"
@@ -1703,7 +1704,7 @@ export class BackupEngine {
       if (!limits) return unreadable.size + markerWarnings
       saveProgress()
     }
-    if (unreadable.size === backups.length) {
+    if (backups.length > 0 && unreadable.size === backups.length) {
       advance()
       return unreadable.size + markerWarnings
     }
@@ -1844,13 +1845,270 @@ export class BackupEngine {
     const reportRemnants = () => {
       if (remnants.deleted || remnants.kept || remnants.unowned) this.write(job, `Remnant cleanup: deleted ${remnants.deleted} halves (${remnants.deletedBytes} bytes); kept ${remnants.kept} owned halves (${remnants.keptBytes} bytes) for recovery or storage protection; kept ${remnants.unowned} unverified halves (${remnants.unownedBytes} bytes) for manual review. Recovery grace is ${REMNANT_RECOVERY_DAYS} days after the ${days}-day retention period.`, remnants.unowned ? "warning" : "info")
     }
+    const protectedPrefixes = new Set<string>([latestPrefix, anchorPrefix])
+    if (latestCompanionPrefix) protectedPrefixes.add(latestCompanionPrefix)
+    if (typeof written?.CompanionBackup === "string" && isBackupName(written.CompanionBackup)) {
+      protectedPrefixes.add(`${written.CompanionBackup}/`)
+    }
+    if (typeof anchorManifest.CompanionBackup === "string" && isBackupName(anchorManifest.CompanionBackup)) {
+      protectedPrefixes.add(`${anchorManifest.CompanionBackup}/`)
+    }
+    const discardJournal = (primaryPrefix: string, reason: string) => {
+      if (state.deletions) delete state.deletions[primaryPrefix]
+      saveProgress()
+      unverified++
+      this.write(job, `Discarded deletion journal for ${primaryPrefix}: ${reason}. No files were deleted through it.`, "warning")
+    }
+    if (state.deletions) {
+      for (const prefix of Object.keys(state.deletions)) {
+        if (protectedPrefixes.has(prefix)) {
+          discardJournal(prefix, "journal key referenced the latest or anchor backup")
+        }
+      }
+    }
+    const blobPayloadFolder = (prefix: string, name: string): { kind: "root" } | { kind: "folder"; folder: string } | { kind: "invalid" } => {
+      if (!name.startsWith(prefix)) return { kind: "invalid" }
+      const rel = name.slice(prefix.length)
+      if (!rel || !isSafeArchivePath(rel)) return { kind: "invalid" }
+      if (rel === "metadata.json" || rel === BACKUP_OWNER_FILE || rel === BACKUP_RUN_RECORD_FILE) return { kind: "root" }
+      const parts = rel.split("/")
+      if ((parts[0] === "_index" || parts[0] === "_relations") && parts.length >= 3 && parts[1]) return { kind: "folder", folder: parts[1] }
+      if (parts.length === 2 && parts[0] && parts[1] && parts[0] !== "_index" && parts[0] !== "_relations") return { kind: "folder", folder: parts[0] }
+      return { kind: "invalid" }
+    }
+    const metadataHasItems = (metadata: Record<string, unknown>): boolean => {
+      if (metadata.Items !== undefined) {
+        if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) return true
+        if (Object.keys(metadata.Items).length > 0) return true
+      }
+      try {
+        if (Object.values(largeIndexes(metadata)).some(index => index.count > 0)) return true
+      } catch {
+        return true
+      }
+      if (metadata.ItemCounts && typeof metadata.ItemCounts === "object" && !Array.isArray(metadata.ItemCounts)) {
+        if (Object.values(metadata.ItemCounts as Record<string, unknown>).some(value => typeof value === "number" && value > 0)) return true
+      }
+      if (Array.isArray(metadata.Outcomes)) {
+        if (metadata.Outcomes.some((entry: any) => typeof entry?.Saved === "number" && entry.Saved > 0)) return true
+      }
+      return false
+    }
+    const validCompanionHalf = (id: string, otherId: string, meta: Record<string, unknown> | null, claim: Record<string, unknown> | null): string | null => {
+      let metaRunId: string | null = null
+      if (meta) {
+        if (meta.BackupFolder !== id || meta.CompanionBackup !== otherId
+          || typeof meta.RunId !== "string" || !meta.RunId.trim()
+          || typeof meta.TenantId !== "string" || meta.TenantId.toLowerCase() !== tenant) return null
+        metaRunId = meta.RunId
+      }
+      let claimRunId: string | null = null
+      if (claim) {
+        if (claim.Source !== "TenuVault Desktop" || claim.CompanionBackup !== otherId
+          || typeof claim.RunId !== "string" || !claim.RunId.trim()
+          || typeof claim.TenantId !== "string" || claim.TenantId.toLowerCase() !== tenant
+          || (claim.BackupFolder !== undefined && claim.BackupFolder !== id)
+          || (isLargeBackup(id) && (claim.LargeInventory as { version?: unknown } | undefined)?.version !== 1)) return null
+        claimRunId = claim.RunId
+      }
+      if (metaRunId && claimRunId && metaRunId !== claimRunId) return null
+      return metaRunId ?? claimRunId
+    }
     const planJournaledDeletion = async (
       primaryPrefix: string,
       backupTime: number,
       journal: DeletionJournalEntry,
       writer: BlobWriter,
+      discoveredOwner?: { metadata: Record<string, unknown> | null; owner: "this" | "other" | "untagged"; claim?: OwnershipFile } | null,
     ): Promise<void> => {
-      const expired = journal.remnant ? backupTime < cutoff - REMNANT_RECOVERY_DAYS * DAY_MS : backupTime < cutoff
+      const primaryId = primaryPrefix.slice(0, -1)
+      if (!primaryPrefix.endsWith("/") || !isBackupName(primaryId) || isLargeBackup(primaryPrefix) !== currentIsLarge) {
+        discardJournal(primaryPrefix, "journal key is not a valid backup prefix for this pass")
+        return
+      }
+      if ((journal.prefixes.length !== 1 && journal.prefixes.length !== 2) || journal.prefixes[0] !== primaryPrefix) {
+        discardJournal(primaryPrefix, "journal prefixes do not match its key")
+        return
+      }
+      const companionPrefix = journal.prefixes[1]
+      let companionTime: number | undefined
+      if (companionPrefix !== undefined) {
+        const companionId = companionPrefix.slice(0, -1)
+        const parsedCompanion = parseBackupName(companionId)
+        companionTime = parsedCompanion ? Date.parse(parsedCompanion.timestamp) : NaN
+        if (journal.remnant || isLargeBackup(primaryPrefix) || !isLargeBackup(companionPrefix)
+          || !isBackupName(companionId) || companionPrefix === primaryPrefix || !Number.isFinite(companionTime)) {
+          discardJournal(primaryPrefix, "journal companion prefix is not a valid large companion")
+          return
+        }
+      }
+      if (journal.prefixes.some(prefix => protectedPrefixes.has(prefix))) {
+        discardJournal(primaryPrefix, "journal referenced the latest or anchor backup")
+        return
+      }
+      if (journal.prefixes.some(prefix => ignored.some(b => b.prefix === prefix) || marked.has(prefix.slice(0, -1)))) {
+        discardJournal(primaryPrefix, "journal referenced a future-dated or time-protected backup")
+        return
+      }
+      if (journal.folders.length === 0) {
+        if (journal.emptyFolders !== true) {
+          discardJournal(primaryPrefix, "journal has empty folders without verified empty-candidate marker")
+          return
+        }
+      } else if (journal.emptyFolders === true || journal.folders.some(folder => !typeForFolder(folder))) {
+        discardJournal(primaryPrefix, "journal folders are inconsistent")
+        return
+      }
+      const journalFolders = new Set(journal.folders)
+      for (const path of [...Object.keys(journal.remaining), ...journal.deleted]) {
+        const matchedPrefix = journal.prefixes.find(prefix => path.startsWith(prefix))
+        if (!matchedPrefix) {
+          discardJournal(primaryPrefix, `journal path ${path} is outside its prefixes`)
+          return
+        }
+        const parsedPath = blobPayloadFolder(matchedPrefix, path)
+        if (parsedPath.kind === "invalid" || (parsedPath.kind === "folder" && !journalFolders.has(parsedPath.folder))) {
+          discardJournal(primaryPrefix, `journal path ${path} does not match recorded folders`)
+          return
+        }
+      }
+
+      const listings = new Map<string, VerifiedHalf["listing"]>()
+      let listedCount = 0
+      for (const prefix of journal.prefixes) {
+        const listing = await writer.listFolder(prefix)
+        if (new Set(listing.blobs).size !== listing.blobs.length) {
+          throw new Error(`Storage listed duplicate files for ${prefix}`)
+        }
+        listings.set(prefix, listing)
+        listedCount += listing.blobs.length
+      }
+      if (listedCount === 0) {
+        delete state.deletions![primaryPrefix]
+        saveProgress()
+        return
+      }
+
+      const halfRecords = new Map<string, {
+        metadata: Record<string, unknown> | null
+        owner: "this" | "other" | "untagged"
+        claimFile?: OwnershipFile
+      }>()
+      for (const prefix of journal.prefixes) {
+        const listing = listings.get(prefix)!
+        if (listing.blobs.length === 0) continue
+        if (prefix === primaryPrefix && discoveredOwner) {
+          halfRecords.set(prefix, {
+            metadata: discoveredOwner.metadata,
+            owner: discoveredOwner.owner,
+            claimFile: discoveredOwner.claim,
+          })
+        } else {
+          let claimFile: OwnershipFile | undefined
+          const resolved = await resolveBackupOwnership(async file => {
+            const read = await readFile(writer, `${prefix}${file}`)
+            if (file === BACKUP_OWNER_FILE) claimFile = read
+            return read
+          }, tenant)
+          const failure = resolved.manifest.kind === "unreadable" ? resolved.manifest.error
+            : resolved.owner.kind === "unreadable" ? resolved.owner.error : null
+          if (failure !== null) throw failure
+          halfRecords.set(prefix, {
+            metadata: resolved.manifest.kind === "found" ? resolved.manifest.metadata : null,
+            owner: resolved.owner.kind === "owned" ? "this" : resolved.owner.kind === "other" ? "other" : "untagged",
+            claimFile,
+          })
+        }
+      }
+
+      for (const [prefix, record] of halfRecords) {
+        if (record.owner === "other") {
+          discardJournal(primaryPrefix, `${prefix} belongs to another tenant`)
+          return
+        }
+      }
+
+      const readClaimRecord = async (prefix: string): Promise<Record<string, unknown> | null> => {
+        const record = halfRecords.get(prefix)
+        if (!record) return null
+        const listing = listings.get(prefix)!
+        let claimFile = record.claimFile
+        if (!claimFile && listing.blobs.includes(`${prefix}${BACKUP_OWNER_FILE}`)) {
+          claimFile = await readFile(writer, `${prefix}${BACKUP_OWNER_FILE}`)
+        }
+        if (claimFile?.kind === "unreadable") throw claimFile.error
+        return claimFile?.kind === "found" && claimFile.value && typeof claimFile.value === "object" && !Array.isArray(claimFile.value)
+          ? claimFile.value as Record<string, unknown>
+          : null
+      }
+
+      if (journal.remnant) {
+        const record = halfRecords.get(primaryPrefix)
+        if (record) {
+          const claim = await readClaimRecord(primaryPrefix)
+          if (!ownedRemnant(primaryId, tenant, claim, record.metadata)) {
+            discardJournal(primaryPrefix, `${primaryPrefix} failed remnant ownership check`)
+            return
+          }
+          const linked = claim?.CompanionBackup ?? record.metadata?.CompanionBackup
+          if (isBackupName(linked) && await protectedTime(linked, writer)) {
+            remnants.kept++
+            return
+          }
+        }
+      } else if (companionPrefix !== undefined) {
+        const companionId = companionPrefix.slice(0, -1)
+        for (const [prefix, record] of halfRecords) {
+          if (record.owner !== "this") {
+            discardJournal(primaryPrefix, `paired backup ${prefix} is not owned by this tenant`)
+            return
+          }
+        }
+        let primaryRunId: string | null = null
+        let companionRunId: string | null = null
+        const primaryRecord = halfRecords.get(primaryPrefix)
+        const companionRecord = halfRecords.get(companionPrefix)
+        if (primaryRecord) {
+          primaryRunId = validCompanionHalf(primaryId, companionId, primaryRecord.metadata, await readClaimRecord(primaryPrefix))
+          if (!primaryRunId) {
+            discardJournal(primaryPrefix, `${primaryPrefix} does not match recorded companion ${companionPrefix}`)
+            return
+          }
+        }
+        if (companionRecord) {
+          companionRunId = validCompanionHalf(companionId, primaryId, companionRecord.metadata, await readClaimRecord(companionPrefix))
+          if (!companionRunId) {
+            discardJournal(primaryPrefix, `${companionPrefix} does not match recorded primary ${primaryPrefix}`)
+            return
+          }
+        }
+        if (primaryRunId && companionRunId && primaryRunId !== companionRunId) {
+          discardJournal(primaryPrefix, `${companionPrefix} belongs to a different run than ${primaryPrefix}`)
+          return
+        }
+        if (primaryRecord?.metadata && companionRecord?.metadata
+          && !matchingCompanions(primaryId, primaryRecord.metadata, companionId, companionRecord.metadata)) {
+          discardJournal(primaryPrefix, `${companionPrefix} is not a reciprocal companion of ${primaryPrefix}`)
+          return
+        }
+        if (await protectedTime(companionId, writer)) {
+          kept++
+          return
+        }
+      }
+
+      if (journal.folders.length === 0) {
+        for (const [prefix, record] of halfRecords) {
+          if (record.metadata && metadataHasItems(record.metadata)) {
+            discardJournal(primaryPrefix, `${prefix} metadata records items despite empty journal folders`)
+            return
+          }
+        }
+      }
+
+      const expired = journal.remnant
+        ? backupTime < cutoff - REMNANT_RECOVERY_DAYS * DAY_MS
+        : backupTime < cutoff && (companionTime === undefined || companionTime < cutoff)
       const coveredNow = journal.folders.every(folder => !uncovered.has(folder) && Boolean(typeForFolder(folder)))
       if (!expired || !coveredNow) {
         if (journal.remnant) remnants.kept++
@@ -1860,11 +2118,13 @@ export class BackupEngine {
       const halves: VerifiedHalf[] = []
       let totalBlobs = 0
       for (const prefix of journal.prefixes) {
-        const listing = await writer.listFolder(prefix)
+        const listing = listings.get(prefix)!
         const blobs = new Map<string, string>()
         for (const name of listing.blobs) {
-          const expectedEtag = journal.remaining[name]
-          if (!expectedEtag) throw new Error(`${name} was not part of the recorded deletion plan for ${primaryPrefix}`)
+          if (!Object.hasOwn(journal.remaining, name)) {
+            throw new Error(`${name} was not part of the recorded deletion plan for ${primaryPrefix}`)
+          }
+          const expectedEtag = journal.remaining[name]!
           const actualEtag = listing.etags.get(name) ?? await writer.headETag(name)
           if (actualEtag !== expectedEtag) throw new Error(`${name} changed since deletion of ${primaryPrefix} started`)
           blobs.set(name, expectedEtag)
@@ -1876,6 +2136,7 @@ export class BackupEngine {
       }
       if (totalBlobs === 0) {
         delete state.deletions![primaryPrefix]
+        saveProgress()
         return
       }
       const deletion = deletionWriter(totalBlobs)
@@ -1896,7 +2157,7 @@ export class BackupEngine {
       try {
         const journal = state.deletions?.[backup.prefix]
         if (journal) {
-          await planJournaledDeletion(backup.prefix, backup.time, journal, writer)
+          await planJournaledDeletion(backup.prefix, backup.time, journal, writer, owners[index])
           continue
         }
         const entry = owners[index]
@@ -2065,6 +2326,7 @@ export class BackupEngine {
               prefixes: unit.prefixes,
               remnant: unit.remnant,
               folders: unit.folders,
+              ...(unit.folders.length === 0 ? { emptyFolders: true } : {}),
               remaining: Object.fromEntries(verified),
               deleted: [],
             }
