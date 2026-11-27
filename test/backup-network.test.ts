@@ -545,7 +545,7 @@ describe("backup request recovery", () => {
       if (init?.method === "GET" && url.search) {
         const entries = url.searchParams.get("delimiter") === "/"
           ? `<BlobPrefix><Name>${oldPrefix}</Name></BlobPrefix>`
-          : [...saved.keys()].filter(path => path.startsWith(`/intune-backups/${url.searchParams.get("prefix")}`)).map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`).join("")
+          : [...saved.keys()].filter(path => path.startsWith(`/intune-backups/${url.searchParams.get("prefix")}`)).map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name><Properties><Etag>"fixture"</Etag></Properties></Blob>`).join("")
         return new Response(`<EnumerationResults><Blobs>${entries}</Blobs></EnumerationResults>`)
       }
       if (init?.method === "GET") return new Response(saved.get(url.pathname), { headers: { "content-type": "application/json", etag: '"fixture"' } })
