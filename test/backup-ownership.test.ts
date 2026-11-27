@@ -1,12 +1,16 @@
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { createHash } from "node:crypto"
 import type { RetentionProgressStore } from "../src/main/backup/retention-progress"
-import type { RetentionLimits } from "../src/main/backup/retention-budget"
+import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "../src/main/backup/retention-budget"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { NextRequest } from "next/server"
 import { BackupEngine } from "../src/main/backup/engine"
-import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azure-seal"
+import { BlobWriter } from "../src/main/backup/blob-writer"
+import { verifyHalf } from "../src/main/backup/retention-verification"
+import { backupStoragePath } from "../src/shared/backup-storage"
+import { indexPath } from "../src/shared/large-backup"
+import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { sealLegacyAzure } from "./legacy-seal"
 import { endlessBody, memoryStore } from "./helpers"
@@ -69,10 +73,11 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
     return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: { etag: etag(name), ...(options.clock ? { "last-modified": new Date().toUTCString() } : {}) } })
   }
   registerStorageToken("token", TENANT)
-  const fetch = legacyAzureReader(wireFetch, () => [master])
+  const keys = [master]
+  const fetch = legacyAzureReader(wireFetch, () => keys)
   const createEngine = () => new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" },
     retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, retentionProgress: options.progress,
-    retentionClock: options.clock, uptime: () => 3600 })
+    retentionClock: options.clock, uptime: () => 3600, recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keys) })
   const engine = createEngine()
   /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
   function seed(name: string, value: unknown, sealed = false, key = master) {
@@ -83,7 +88,7 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
     seed(`${prefix}DeviceConfigurations/Old.json`, oldPolicy, sealed)
     if (marker !== null) seed(`${prefix}${BACKUP_OWNER_FILE}`, marker, sealed)
   }
-  return { engine, createEngine, fetch, saved, calls, seed, folder }
+  return { engine, createEngine, fetch, saved, calls, seed, folder, keys }
 }
 
 async function complete(engine: BackupEngine, scope = request.scope) {
@@ -552,6 +557,93 @@ describe("verified retention coverage", () => {
     expect(saved.has(`${older}metadata.json`)).toBe(changed)
     expect(calls.some(call => call.name === firstPath && call.request.method === "GET")).toBe(changed)
     if (changed) expect(resumed.log.join("\n")).toContain("does not match its manifest")
+  })
+
+  it.each(["unchanged", "recovery keyring", "manifest entry", "ETag"])("resumes sealed verification only with the same evidence (%s)", async changed => {
+    const progress = memoryStore()
+    const { engine, createEngine, saved, calls, seed, keys } = setup({ progress, limits: { candidates: 8, requests: 100, bytes: 13_000 } })
+    const older = "backup-2026-08-01-020000/"
+    const manifestPath = `${older}metadata.json`
+    const firstPath = `${older}DeviceConfigurations/First.json`
+    const secondPath = `${older}DeviceConfigurations/Second.json`
+    const first = { id: "first", description: "a".repeat(8000) }
+    const second = { id: "second", description: "b".repeat(8000) }
+    const entries = {
+      "DeviceConfigurations/first": { file: "First.json", sha256: sha256(first) },
+      "DeviceConfigurations/second": { file: "Second.json", sha256: sha256(second) },
+    }
+    const writeManifest = () => seed(manifestPath, { ...completeManifest, Items: entries }, true)
+    writeManifest()
+    seed(firstPath, first, true)
+    seed(secondPath, second, true)
+    expect((await complete(engine)).log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(manifestPath)).toBe(true)
+    expect([...progress.values.values()].join("")).toContain("DeviceConfigurations/First.json")
+
+    if (changed === "recovery keyring") keys[0] = Buffer.alloc(32, 5)
+    if (changed === "manifest entry") {
+      entries["DeviceConfigurations/first"].sha256 = "wrong"
+      writeManifest()
+    }
+    if (changed === "ETag") seed(firstPath, first, true)
+    // Keep the manifest readable with the new key but leave the cached payload sealed with the old one.
+    if (changed === "recovery keyring") seed(manifestPath, { ...completeManifest, Items: entries }, true, keys[0])
+    calls.length = 0
+    await vi.advanceTimersByTimeAsync(1000)
+    const job = await complete(createEngine())
+    expect(calls.some(call => call.name === firstPath && call.request.method === "GET")).toBe(changed !== "unchanged")
+    expect(saved.has(manifestPath)).toBe(changed !== "unchanged")
+    if (changed === "recovery keyring") expect(job.log.join("\n")).toContain(LEGACY_SEALED_MESSAGE)
+    if (changed === "manifest entry") expect(job.log.join("\n")).toContain("does not match its manifest")
+    if (changed === "ETag") expect(job.log.join("\n")).toContain("reached its storage budget")
+  })
+
+  it("resumes sealed sharded reads and invalidates the completed receipt when the keyring changes", async () => {
+    const prefix = "backup-large-2026-08-01-020000/"
+    const folder = "DeviceConfigurations"
+    const first = { id: "a", description: "a".repeat(8000) }
+    const second = { id: "b", description: "b".repeat(8000) }
+    const shardName = indexPath(folder, 0)
+    const shard = [first, second].map(item => ({ id: item.id, file: `${item.id}.json`, hash: snapshotHash(item) }))
+    const manifest = {
+      LargeItems: { [folder]: { version: 1, count: 2, shards: 1, complete: true } },
+      LargeIndexHashes: { [shardName]: sha256(shard) },
+    }
+    const stored = new Map<string, { bytes: Buffer; etag: string }>()
+    const etags = new Map<string, string>()
+    for (const [name, value] of [["metadata.json", manifest], [shardName, shard], [`${folder}/a.json`, first], [`${folder}/b.json`, second]] as const) {
+      const logical = prefix + name
+      const path = "/" + backupStoragePath(logical)
+      const bytes = sealLegacyAzure(Buffer.from(JSON.stringify(value)), master, TENANT, new URL(path, base))
+      const etag = `"${name}"`
+      stored.set(path, { bytes, etag })
+      etags.set(logical, etag)
+    }
+    const calls: string[] = []
+    const keys = [master]
+    const fetch = legacyAzureReader(async input => {
+      const path = new URL(String(input)).pathname
+      calls.push(path)
+      const { bytes, etag } = stored.get(path)!
+      return new Response(new Uint8Array(bytes), { headers: { etag } })
+    }, () => keys)
+    registerStorageToken("token", TENANT)
+    const storage = new BlobWriter(fetch, "contoso", async () => "token")
+    const listing = { blobs: [...etags.keys()], prefixes: [], sizes: new Map(), etags, newestLastModified: 0 }
+    const progress = { files: {}, attempts: 0 }
+    const verify = () => verifyHalf(storage.withBudget(new RetentionBudget({ candidates: 1, requests: 100, bytes: 13_000 })),
+      prefix, manifest, listing, undefined, progress, legacyRecoveryFingerprint(keys))
+    await expect(verify()).rejects.toBeInstanceOf(RetentionBudgetError)
+    expect(progress.files).toHaveProperty([`large:${folder}/a`])
+    calls.length = 0
+    await expect(verify()).resolves.toMatchObject({ counts: new Map([[folder, 2]]) })
+    expect(calls.every(path => !path.endsWith("/a.json"))).toBe(true)
+    calls.length = 0
+    await verify()
+    expect(calls).toEqual([])
+    keys.push(Buffer.alloc(32, 5))
+    await expect(verify()).rejects.toBeInstanceOf(RetentionBudgetError)
+    expect(calls.some(path => path.endsWith("/a.json"))).toBe(true)
   })
 
   it("continues with the next candidate after reaching the candidate limit", async () => {

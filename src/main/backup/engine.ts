@@ -148,6 +148,7 @@ export interface BackupEngineDeps {
   retentionProgress?: RetentionProgressStore
   retentionClock?: Pick<KeyValueStore, "get" | "set">
   uptime?: () => number
+  recoveryKeyFingerprint?: () => string
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
@@ -1292,14 +1293,16 @@ export class BackupEngine {
         const now = this.now().getTime()
         const warning = clockWarning ?? this.checkRetentionClock(now, true)
         if (warning) throw new RetentionClockError(warning)
+        const keyFingerprint = limits ? this.deps.recoveryKeyFingerprint?.() : undefined
         const pending: Array<() => Promise<number>> = []
-        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, now, limits, mixed, committedLargeManifest)
+        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, now, keyFingerprint, limits, mixed, committedLargeManifest)
         let unreadableLarge = 0
         if (mixed && committedLargeManifest) {
-          unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, now, limits, mixed)
+          unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, now, keyFingerprint, limits, mixed)
         }
         const beforeDelete = this.checkRetentionClock(this.now().getTime(), false)
         if (beforeDelete) throw new RetentionClockError(beforeDelete)
+        if (limits && keyFingerprint !== this.deps.recoveryKeyFingerprint?.()) throw new Error("The recovery key changed during retention")
         let deletionWarnings = 0
         for (const apply of pending) deletionWarnings += await apply()
         if (unreadableOlder || unreadableLarge || deletionWarnings) retentionWarnings++
@@ -1391,7 +1394,7 @@ export class BackupEngine {
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<number>>, signal: AbortSignal, now: number, limits?: RetentionLimits, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<number>>, signal: AbortSignal, now: number, keyFingerprint?: string, limits?: RetentionLimits, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
     const cutoff = now - days * DAY_MS
@@ -1552,7 +1555,7 @@ export class BackupEngine {
         : `Kept backup ${prefix} because a file could not be verified: ${reason}`, "warning")
     }
     const verify = async (writer: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) => {
-      const half = await verifyHalf(writer, prefix, manifest, listing, expectedOwner, limits ? review(prefix) : undefined)
+      const half = await verifyHalf(writer, prefix, manifest, listing, expectedOwner, limits ? review(prefix) : undefined, keyFingerprint)
       newestLastModified = Math.max(newestLastModified, half.newestLastModified)
       return half
     }

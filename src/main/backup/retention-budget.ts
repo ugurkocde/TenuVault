@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { authenticatedBackupRead, wasBackupReadAuthenticated } from "../storage/authenticated-read"
+import { authenticatedBackupRead, backupReadKeyFingerprint, wasBackupReadAuthenticated } from "../storage/authenticated-read"
 import { FetchApplicationError } from "../api/network-error"
 import { REQUEST_ATTEMPTS } from "./request"
 
@@ -68,6 +68,6 @@ export class RetentionBudget {
       cancel: reason => reader.cancel(reason),
     }, { highWaterMark: 0 })
     const metered = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
-    return wasBackupReadAuthenticated(response) ? authenticatedBackupRead(metered) : metered
+    return wasBackupReadAuthenticated(response) ? authenticatedBackupRead(metered, backupReadKeyFingerprint(response)) : metered
   }
 }

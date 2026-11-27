@@ -98,7 +98,7 @@ import { readBackupSettings } from "./backup/settings"
 import { folderToOpen, localInventoryProblem } from "./backup/local-inventory"
 import { labDownloadDestination, labDownloadStream, stageLabDownload, type SaveDownload } from "./backup/lab-download"
 import { copyLabBackups, guardLabBackupWrites, isStableBackupFolder, LAB_FOLDER_ERROR } from "./backup/lab-folder"
-import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
+import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
 import { BackupReaderService, readerConfidenceRead } from "./auth/backup-reader"
 import { readerSetupArguments } from "../shared/services/manifest"
@@ -689,6 +689,7 @@ async function bootstrap(): Promise<void> {
     },
     retentionDays: backupAccess.retentionDays,
     retentionClock: appStore,
+    recoveryKeyFingerprint: () => legacyRecoveryFingerprint(backupKeys.existingKeyring()),
     retentionProgress: {
       get: key => appStore.get(`backup.retention.${key}`),
       set: (key, prefix) => appStore.set(`backup.retention.${key}`, prefix),

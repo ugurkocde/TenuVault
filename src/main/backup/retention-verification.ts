@@ -19,18 +19,20 @@ export interface VerifiedHalf {
 export class RetentionManifestMismatch extends Error {}
 
 /** The listing supplies deletion identities, never the expected inventory. */
-export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile, progress?: VerificationProgress): Promise<VerifiedHalf> {
+export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile, progress?: VerificationProgress, keyFingerprint?: string): Promise<VerifiedHalf> {
   listing ??= await storage.listFolder(prefix)
   let newestLastModified = listing.newestLastModified
   const remaining = new Set(listing.blobs)
   const blobs = new Map<string, string>()
   const listedIdentities = [...remaining].sort().map(name => [name, listing.etags.get(name)])
+  const receiptIdentity = (evidence: unknown[]) => retentionIdentity([...evidence, keyFingerprint])
   const listedIdentity = progress && listedIdentities.every(([, etag]) => etag) && remaining.size === listing.blobs.length
-    ? retentionIdentity([manifest, expectedOwner, listedIdentities]) : undefined
+    ? receiptIdentity([manifest, expectedOwner, listedIdentities]) : undefined
   if (listedIdentity && progress?.complete?.identity === listedIdentity) {
     return { blobs: new Map(listing.etags), listing, counts: new Map(progress.complete.counts), newestLastModified }
   }
-  let containsSealed = false
+  // A sealed read is reusable only if it was opened with the keyring in the receipt.
+  let unmatchedAuthentication = 0
   let lastRead: RetentionBlob | undefined
   const reject = (name: string): never => { throw new Error(`${prefix}${name} could not be verified for retention.`) }
   const read = async (name: string) => {
@@ -39,7 +41,7 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
     lastRead = await storage.readForRetention(path)
     blobs.set(path, lastRead.etag)
     if (Number.isFinite(lastRead.lastModified)) newestLastModified = Math.max(newestLastModified, lastRead.lastModified)
-    containsSealed ||= lastRead.authenticated
+    if (lastRead.authenticated && (!keyFingerprint || lastRead.keyFingerprint !== keyFingerprint)) unmatchedAuthentication++
     return lastRead.value
   }
   const mismatch = (name: string): never => {
@@ -63,16 +65,17 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
       || !/^[^/\\]+\.json$/.test(entry.file) || !isSafeArchivePath(name)) reject("metadata.json")
     const path = prefix + name
     const listedETag = listing.etags.get(path)
-    const receipt = progress && listedETag ? retentionIdentity([key, entry, listedETag]) : undefined
+    const receipt = progress && listedETag ? receiptIdentity([key, entry, listedETag]) : undefined
     if (receipt && progress?.files[name] === receipt) {
       if (!remaining.delete(path)) reject(name)
       blobs.set(path, listedETag!)
     } else {
+      const beforeRead = unmatchedAuthentication
       const value = await read(name) as Item
       if (Array.isArray(value) || value.id !== key.slice(slash + 1)) mismatch(name)
       if (entry.hash !== undefined && snapshotHash(value) !== entry.hash) mismatch(name)
       if (entry.sha256 !== undefined || entry.hash === undefined) authenticate(name, entry.sha256)
-      if (progress && receipt && !lastRead?.authenticated && lastRead?.etag === listedETag) progress.files[name] = receipt
+      if (progress && receipt && beforeRead === unmatchedAuthentication && lastRead?.etag === listedETag) progress.files[name] = receipt
     }
     counts.set(folder, (counts.get(folder) ?? 0) + 1)
   }
@@ -91,15 +94,15 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
     const objectPaths = (folder: string, entry: LargeEntry) =>
       [prefix + `${folder}/${entry.file}`, ...(relations.get(`${folder}/${entry.id}`) ?? [])].sort()
     const receiptFor = (entry: LargeEntry, paths: string[]) =>
-      paths.every(path => listing.etags.has(path)) ? retentionIdentity([entry, paths.map(path => [path, listing.etags.get(path)])]) : undefined
-    let beforeObject = false
+      paths.every(path => listing.etags.has(path)) ? receiptIdentity([entry, paths.map(path => [path, listing.etags.get(path)])]) : undefined
+    let beforeObject = 0
     // Existing archive validation walks every object and relationship and checks its fingerprint.
     try {
       for await (const _file of largeFiles({ LargeItems: indexes, LargeIndexHashes: manifest.LargeIndexHashes }, read, undefined, (name, hash) => {
         if (name.startsWith("_index/") || hash !== undefined) authenticate(name, hash)
       }, progress && {
         reuse(folder, entry) {
-          beforeObject = containsSealed
+          beforeObject = unmatchedAuthentication
           const paths = objectPaths(folder, entry)
           const receipt = receiptFor(entry, paths)
           if (!receipt || progress.files[`large:${folder}/${entry.id}`] !== receipt) return false
@@ -110,8 +113,7 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
           return true
         },
         verified(folder, entry) {
-          // Never reuse authenticated reads after a recovery key change.
-          if (beforeObject || containsSealed) return
+          if (beforeObject !== unmatchedAuthentication) return
           const paths = objectPaths(folder, entry)
           const receipt = receiptFor(entry, paths)
           if (receipt && paths.every(path => blobs.get(path) === listing.etags.get(path))) {
@@ -141,7 +143,7 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
   if (Array.isArray(manifest?.Outcomes)) for (const outcome of manifest.Outcomes) {
     if (!outcome || typeof outcome.Folder !== "string" || (outcome.Saved !== undefined && outcome.Saved !== (counts.get(outcome.Folder) ?? 0))) reject("metadata.json outcomes")
   }
-  if (progress && listedIdentity && !containsSealed && [...blobs].every(([name, etag]) => listing.etags.get(name) === etag)) {
+  if (progress && listedIdentity && unmatchedAuthentication === 0 && [...blobs].every(([name, etag]) => listing.etags.get(name) === etag)) {
     progress.complete = { identity: listedIdentity, counts: [...counts] }
     progress.files = {}
   }

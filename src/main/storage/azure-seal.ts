@@ -27,6 +27,13 @@ export function registerStorageToken(token: string, tenant: string): void {
 const key = (master: Buffer) => Buffer.from(hkdfSync('sha256', master, Buffer.alloc(0), 'tenuvault-azure-backup-v1', 32))
 function aad(tenant: string, url: URL) { return Buffer.from(JSON.stringify([tenant.toLowerCase(), url.hostname, decodeURIComponent(url.pathname)])) }
 
+/** A full fingerprint of the recovery keyring used to authenticate a sealed read. */
+export function legacyRecoveryFingerprint(masters: Buffer[]): string {
+  const hash = createHash('sha256')
+  for (const master of masters) hash.update(master)
+  return hash.digest('hex')
+}
+
 /** Whether a blob is in the legacy `TVAZ1` envelope. */
 export function isLegacySealed(raw: Buffer): boolean {
   return raw.subarray(0, MAGIC.length).equals(MAGIC)
@@ -149,6 +156,6 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
       throw new LegacySealedError(error, otherTenant)
     }
     headers.set('content-type', 'application/json')
-    return authenticatedBackupRead(new Response(new Uint8Array(data), { status: response.status, headers }))
+    return authenticatedBackupRead(new Response(new Uint8Array(data), { status: response.status, headers }), legacyRecoveryFingerprint(keyring))
   }
 }

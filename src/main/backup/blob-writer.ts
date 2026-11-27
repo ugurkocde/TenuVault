@@ -1,7 +1,7 @@
 import { backupBlobName, backupContainer, backupStoragePath, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../../shared/backup-storage"
 import { assertStorageAccountName } from "../../shared/storage-account"
 import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constants"
-import { wasBackupReadAuthenticated } from "../storage/authenticated-read"
+import { backupReadKeyFingerprint, wasBackupReadAuthenticated } from "../storage/authenticated-read"
 import { createHash } from "node:crypto"
 import { readBytesCapped, readJsonCapped } from "../../shared/capped-body"
 import { oversizedOwnershipFile } from "../../shared/backup-ownership"
@@ -11,7 +11,7 @@ import type { RetentionBudget } from "./retention-budget"
 import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, DeleteConditionError, ImmutableBlobError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
-export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; sha256: string; lastModified: number }
+export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; keyFingerprint?: string; sha256: string; lastModified: number }
 
 export interface BlobListing {
   blobs: string[]
@@ -175,7 +175,7 @@ export class BlobWriter {
       try {
         const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
         if (!value || typeof value !== "object") throw new Error("Expected JSON data")
-        return { value, etag, authenticated: wasBackupReadAuthenticated(response), sha256: createHash("sha256").update(bytes).digest("hex"),
+        return { value, etag, authenticated: wasBackupReadAuthenticated(response), keyFingerprint: backupReadKeyFingerprint(response), sha256: createHash("sha256").update(bytes).digest("hex"),
           lastModified: Date.parse(response.headers.get("last-modified") ?? "") }
       } catch (error) {
         throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`, { cause: error }))
