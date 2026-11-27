@@ -5,8 +5,14 @@ import { blobPath } from "./security"
 export const LARGE_BACKUP_CONTAINER = "intune-backups-large"
 export const LARGE_BACKUP_PREFIX = "backup-large-"
 export const isLargeBackup = (name: string) => name.startsWith(LARGE_BACKUP_PREFIX)
+// A root marker can be discovered without enumerating a backup's payload or changing its manifest.
+const UNTRUSTED_TIME_SUFFIX = ".untrusted-time.json"
+export const untrustedTimeMarker = (folder: string) => folder + UNTRUSTED_TIME_SUFFIX
+export const untrustedTimeFolder = (name: string) => name.endsWith(UNTRUSTED_TIME_SUFFIX) ? name.slice(0, -UNTRUSTED_TIME_SUFFIX.length) : null
+
 export const backupContainer = (name: string) => isLargeBackup(name) ? LARGE_BACKUP_CONTAINER : BACKUP_CONTAINER
 export function backupBlobName(name: string): string {
+  if (untrustedTimeFolder(name)) return name
   const [folder, ...parts] = name.split("/")
   return isLargeBackup(folder!) && !(parts.length === 1 && ["metadata.json", BACKUP_OWNER_FILE].includes(parts[0]!)) ? `payload/${name}` : name
 }

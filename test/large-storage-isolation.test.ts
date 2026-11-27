@@ -24,7 +24,7 @@ import { POST as contents } from "../src/portal/app/api/list-backup-contents/rou
 import { POST as validate } from "../src/portal/app/api/restore-validate/route"
 import { exportLargeArchive, importLargeArchive, reviewLargeArchive, saveLargeDownload } from "../src/main/backup/large-archive"
 import { CLIENT, jwt, registerTestTypes, TENANT, testType } from "./helpers/backup-fixture"
-import { memoryStore } from "./helpers"
+import { memoryStore, withServerDate } from "./helpers"
 
 const roots: string[] = []
 let undo: (() => void) | undefined
@@ -44,15 +44,15 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
       if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
       if (url.pathname === "/api/revert-metadata") return Response.json({ reverts: {} })
       if (url.hostname === "graph.microsoft.com") {
-        if (url.pathname === "/v1.0/synthetic") return Response.json({ value: [{ id: "large-one", displayName: "Large" }] })
-        if (url.pathname === "/beta/deviceManagement/deviceCategories") return Response.json({ value: [{ id: "one", displayName: "One" }, { id: "two", displayName: "Two" }] })
-        if (url.pathname.startsWith("/beta/deviceManagement/deviceCategories/")) return Response.json({ id: url.pathname.split("/").at(-1), displayName: "Category" })
+        if (url.pathname === "/v1.0/synthetic") return withServerDate(Response.json({ value: [{ id: "large-one", displayName: "Large" }] }), new Date())
+        if (url.pathname === "/beta/deviceManagement/deviceCategories") return withServerDate(Response.json({ value: [{ id: "one", displayName: "One" }, { id: "two", displayName: "Two" }] }), new Date())
+        if (url.pathname.startsWith("/beta/deviceManagement/deviceCategories/")) return withServerDate(Response.json({ id: url.pathname.split("/").at(-1), displayName: "Category" }), new Date())
         throw new Error(`Unexpected Graph request ${url}`)
       }
       requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`)
       if (refused && url.pathname.startsWith(`/${LARGE_BACKUP_CONTAINER}`) && (failAt === "all" || url.pathname.includes(failAt))) return new Response(`<Error><Code>${refusalCode ?? (refused === 403 ? "AuthorizationPermissionMismatch" : "ContainerNotFound")}</Code></Error>`, { status: refused })
       url.hostname = `${local}.blob.core.windows.net`
-      return handleLocalBlobRequest(store, new Request(url, init))
+      return withServerDate(await handleLocalBlobRequest(store, new Request(url, init)), new Date())
     })
     vi.stubGlobal("fetch", fetcher)
     const write = async (folder: string, name: string, value: unknown) => {

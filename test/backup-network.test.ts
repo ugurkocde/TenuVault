@@ -1,4 +1,4 @@
-import { emptyIntuneRead } from "./helpers"
+import { emptyIntuneRead, withServerDate } from "./helpers"
 import { createHash } from "node:crypto"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, verifyStorageAccess } from "../src/main/backup/engine"
@@ -25,7 +25,8 @@ function requestTimers() {
 function setup(override: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, concurrency?: number) {
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
-    return override(url, init) ?? (url.hostname === "graph.microsoft.com" ? emptyIntuneRead(url.pathname) : new Response(null, { status: 201 }))
+    const response = await (override(url, init) ?? (url.hostname === "graph.microsoft.com" ? emptyIntuneRead(url.pathname) : new Response(null, { status: 201 })))
+    return withServerDate(response, new Date())
   })
   const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", concurrency })
   return { engine, fetchImpl }
@@ -38,7 +39,7 @@ function azureBridge(networkFetch: typeof fetch): typeof fetch {
   return createBridgedFetch({
     dispatch: async () => new Response(),
     getDelegatedToken: async () => ({ accessToken: "token", expiresOn: null }),
-    fetch: legacyAzureReader(withNetworkErrors((input, init) => networkFetch(new Request(input, init))), () => [master]),
+    fetch: legacyAzureReader(withNetworkErrors(async (input, init) => withServerDate(await networkFetch(new Request(input, init)), new Date())), () => [master]),
   })
 }
 

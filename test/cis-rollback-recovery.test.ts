@@ -10,7 +10,7 @@ import { CommunityLimitError } from "../src/shared/plan-errors"
 import type { Finding } from "../src/shared/frameworks/policies"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting } from "./feature-change-sets-fakes"
 import { fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
-import { emptyIntuneRead, memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore, withServerDate } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -233,7 +233,7 @@ describe("the recovery backup in the real backup engine and API host", () => {
         }
         return handleLocalBlobRequest(store, request)
       }
-      return graph(url)
+      return withServerDate(graph(url), new Date("2026-11-03T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: storageFetch, getToken: access.getToken, retentionDays: access.retentionDays, now: () => new Date("2026-11-03T12:00:00Z") })
     const host: ApiHost = new ApiHost({

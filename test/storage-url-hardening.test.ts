@@ -1,4 +1,4 @@
-import { emptyIntuneRead } from "./helpers"
+import { emptyIntuneRead, withServerDate } from "./helpers"
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -258,8 +258,8 @@ describe('pagination guards', () => {
         if (url.searchParams.get('comp') === 'list' && url.searchParams.get('prefix') === 'backup-') return new Response(listing(url.searchParams.get('marker') ?? ''))
         return handleLocalBlobRequest(store, request)
       }
-      if (graph) return graph(url)
-      return url.pathname.split('/').length <= 4 ? emptyIntuneRead(url.pathname) : Response.json({ id: 'x' })
+      if (graph) return withServerDate(graph(url), new Date('2026-09-24T12:00:00Z'))
+      return withServerDate(url.pathname.split('/').length <= 4 ? emptyIntuneRead(url.pathname) : Response.json({ id: 'x' }), new Date('2026-09-24T12:00:00Z'))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => 'token', retentionDays: () => 30, now: () => new Date('2026-09-24T12:00:00Z') })
     const { id } = engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account })

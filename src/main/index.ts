@@ -688,7 +688,6 @@ async function bootstrap(): Promise<void> {
       }
     },
     retentionDays: backupAccess.retentionDays,
-    retentionClock: appStore,
     recoveryKeyFingerprint: () => legacyRecoveryFingerprint(backupKeys.existingKeyring()),
     retentionProgress: {
       get: key => appStore.get(`backup.retention.${key}`),

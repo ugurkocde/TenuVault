@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
-import { BackupEngine, CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit, safeFileName, verifyStorageAccess } from "../src/main/backup/engine"
+import { BackupEngine, type BackupJob, CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit, safeFileName, verifyStorageAccess } from "../src/main/backup/engine"
 import { scheduledResult } from "../src/main/backup/scheduler"
 import { FailedAttemptLog } from "../src/main/backup/failed-attempts"
 import { firstBackupEvent } from "../src/main/setup-diagnostics/hooks"
@@ -17,7 +17,7 @@ import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
 import { manifestCoverage } from "../src/shared/backup-outcomes"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
-import { memoryStore } from "./helpers"
+import { memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -496,58 +496,128 @@ describe("surfaceTokenErrors", () => {
 })
 
 describe("retention", () => {
-  it.each(["ahead", "behind"])("keeps local history across restarts when the device clock goes %s", async direction => {
+  async function clockFixture(test: (fixture: {
+    run: () => Promise<BackupJob>
+    clocks: (wall: string, server?: string | "offline" | "missing") => void
+    has: (folder: string) => Promise<boolean>
+  }) => Promise<void>, old: string) {
     const root = mkdtempSync(join(tmpdir(), "tv-retention-clock-"))
     try {
       const store = new LocalBlobStore(root, [randomBytes(32)])
-      const clock = memoryStore()
-      const baseline = Date.parse("2026-09-24T12:00:00Z")
-      let wall = baseline
-      let uptime = 3600
-      let days = 0
-      const graph = fakeGraph()
-      const createEngine = () => new BackupEngine({
-        fetch: async (input, init) => {
-          const request = new Request(input, init)
-          const url = new URL(request.url)
-          return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
-        },
-        getToken: async () => "token", retentionDays: () => days,
-        now: () => new Date(wall), uptime: () => uptime, retentionClock: clock,
-      })
-      const run = (tenantId = TENANT) => {
-        const engine = createEngine()
-        return engine.waitForJob(engine.start({ tenantId, clientId: CLIENT, storageAccountName: localStorageAccountName(tenantId) }))
-      }
-      const account = localStorageAccountName(TENANT), container = "intune-backups"
-      const old = direction === "ahead" ? "backup-2026-09-20-020000" : "backup-2026-08-01-020000"
-      const oldManifest = `${old}/metadata.json`
+      const account = localStorageAccountName(TENANT)
+      const container = "intune-backups"
       await store.createContainer(account, container)
-      await store.put(account, container, oldManifest, Buffer.from("{}"), "application/json")
-      await store.put(account, container, `${old}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
-      expect((await run(CLIENT)).status).toBe("Completed")
-
-      days = 30
-      const elapsed = direction === "ahead" ? 35 * 86400 : -3600
-      wall = baseline + elapsed * 1000
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const job = await run()
-        expect(job.status).toBe("Completed")
-        expect(job.results?.notices).toContainEqual({ level: "warning", message: expect.stringContaining(
-          direction === "ahead" ? "beyond the elapsed device uptime" : "earlier than the last trusted backup time",
-        ) })
-        expect((await store.get(account, container, oldManifest)).data.toString()).toBe("{}")
-        wall += 1000
-        uptime++
+      await store.put(account, container, `${old}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT })), "application/json")
+      let wall: Date
+      let server: Date | "offline" | "missing"
+      const graph = fakeGraph()
+      // Prior versions kept a clock reading across restarts. Supply those dependencies so restoring
+      // the old guard reproduces its behavior across runs with the same uptime after boot.
+      const priorClock = { retentionClock: memoryStore(), uptime: () => 3600 }
+      const run = () => {
+        const engine = new BackupEngine({
+          fetch: async (input, init) => {
+            const request = new Request(input, init)
+            const url = new URL(request.url)
+            if (localAccountFromUrl(url)) return withServerDate(await handleLocalBlobRequest(store, request), wall)
+            if (server === "offline") throw new TypeError("fetch failed", { cause: { code: "ENETUNREACH" } })
+            return server === "missing" ? graph(url) : withServerDate(graph(url), server)
+          },
+          getToken: async () => "token", retentionDays: () => 30,
+          now: () => wall,
+          ...priorClock,
+        })
+        return finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account,
+          scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) } }).id)
       }
-      if (direction === "ahead") {
-        uptime += elapsed
-        const job = await run()
-        expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
-        expect(await store.list(account, container, `${old}/`)).toEqual([])
-      }
+      await test({
+        run,
+        clocks: (device, source = device) => { wall = new Date(device); server = source === "offline" || source === "missing" ? source : new Date(source) },
+        has: async folder => (await store.list(account, container, `${folder}/`)).length > 0,
+      })
     } finally {
       rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  it("keeps backups on the first upgraded run with the device clock ahead", async () => {
+    const recent = "backup-2026-09-20-120000"
+    await clockFixture(async ({ clocks, run, has }) => {
+      clocks("2026-10-29T12:00:00Z", "2026-09-24T12:00:00Z")
+      const job = await run()
+      expect(job.status).toBe("Completed")
+      expect(await has(recent)).toBe(true)
+      expect(job.log.join("\n")).toContain("differs from Microsoft's time by about 840.0 hours")
+    }, recent)
+  })
+
+  it("resumes retention with a correct clock after a weekend off", async () => {
+    const old = "backup-2026-09-01-120000"
+    await clockFixture(async ({ clocks, run, has }) => {
+      clocks("2026-09-30T12:00:00Z")
+      await run()
+      expect(await has(old)).toBe(true)
+      clocks("2026-10-03T12:00:00Z")
+      expect((await run()).log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+      expect(await has(old)).toBe(false)
+    }, old)
+  })
+
+  it.each(["offline", "missing"] as const)("keeps backups when Microsoft's time is %s", async source => {
+    const expired = "backup-2026-08-01-120000"
+    await clockFixture(async ({ clocks, run, has }) => {
+      clocks("2026-08-30T12:00:00Z")
+      await run()
+      expect(await has(expired)).toBe(true)
+      clocks("2026-09-24T12:00:00Z", source)
+      expect((await run()).log.join("\n")).toContain("could not verify the time with Microsoft")
+      expect(await has(expired)).toBe(true)
+    }, expired)
+  })
+
+  it("ignores and keeps a future-dated local backup without blocking retention of older backups", async () => {
+    const old = "backup-2026-08-01-120000"
+    await clockFixture(async ({ clocks, run, has }) => {
+      clocks("2026-10-29T12:00:00Z", "2026-09-24T12:00:00Z")
+      const jumped = await run()
+      expect(jumped.status).toBe("Completed")
+      expect(await has(old)).toBe(true)
+      const future = jumped.backupFolder!
+
+      clocks("2026-09-24T13:00:00Z")
+      const corrected = await run()
+      expect(corrected.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+      expect(await has(old)).toBe(false)
+      expect(await has(future)).toBe(true)
+    }, old)
+  })
+
+  it("keeps retention in UTC when DST ends and the device changes time zone", async () => {
+    const old = "backup-2026-10-02-065000"
+    const original = process.env.TZ
+    try {
+      await clockFixture(async ({ clocks, run, has }) => {
+        process.env.TZ = "America/New_York"
+        clocks("2026-10-30T05:45:00Z")
+        await run()
+        expect(await has(old)).toBe(true)
+        clocks("2026-11-01T05:45:00Z")
+        expect((await run()).backupFolder).toBe("backup-2026-11-01-054500")
+        expect(await has(old)).toBe(true)
+        clocks("2026-11-01T06:15:00Z")
+        expect((await run()).backupFolder).toBe("backup-2026-11-01-061500")
+        expect(await has(old)).toBe(true)
+        process.env.TZ = "Pacific/Auckland"
+        clocks("2026-11-01T06:30:00Z")
+        await run()
+        expect(await has(old)).toBe(true)
+        clocks("2026-11-01T07:00:00Z")
+        expect((await run()).log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+        expect(await has(old)).toBe(false)
+      }, old)
+    } finally {
+      if (original === undefined) delete process.env.TZ
+      else process.env.TZ = original
     }
   })
 
@@ -565,7 +635,7 @@ describe("retention", () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      if (!localAccountFromUrl(url)) return graph(url)
+      if (!localAccountFromUrl(url)) return withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
       const response = await handleLocalBlobRequest(store, request)
       if (request.method === "PUT" && url.pathname.endsWith(`${current}/metadata.json`) && response.ok) {
         const manifest = JSON.parse((await store.get(account, container, `${current}/metadata.json`)).data.toString())
@@ -594,7 +664,7 @@ describe("retention", () => {
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({
       fetch: fetchImpl,
@@ -626,7 +696,7 @@ describe("retention and storage protection", () => {
       if (request.method === "DELETE" && decodeURIComponent(url.pathname).endsWith(`${old}/${protectedName}`)) {
         return new Response("<Error><Code>BlobImmutableDueToPolicy</Code></Error>", { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
       }
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)

@@ -9,6 +9,7 @@ import { LocalBlobStore } from "../../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../../src/shared/constants"
 import { moduleForFolder } from "../../src/shared/services/modules"
 import { INTUNE_TYPES, TYPE_BY_FOLDER, type IntuneType } from "../../src/shared/intune/registry"
+import { withServerDate } from "../helpers"
 
 /**
  * A backup engine over a local store and a scripted Microsoft Graph, and test-only types.
@@ -100,7 +101,7 @@ export function fixture(graph: ReturnType<typeof scriptedGraph>, deps: Partial<B
     if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
     if (url.hostname !== "graph.microsoft.com") throw new Error(`unexpected ${url}`)
     requests.push({ path: decodeURIComponent(url.pathname + url.search), headers: request.headers })
-    return graph(request)
+    return withServerDate(await graph(request), deps.now?.() ?? new Date())
   }) as typeof fetch
   const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", services: () => ({ services: ["intune", "conditionalAccess", "entra"] }), ...deps })
   const files = async (job: BackupJob) => (await store.list(account, backupContainer(job.backupFolder!))).map(blob => ({ ...blob, name: logicalBackupName(blob.name) })).filter((blob) => blob.name.startsWith(`${job.backupFolder}/`)).map((blob) => blob.name.slice(job.backupFolder!.length + 1))

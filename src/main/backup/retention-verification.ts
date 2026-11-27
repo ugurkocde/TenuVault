@@ -12,7 +12,6 @@ export interface VerifiedHalf {
   blobs: Map<string, string>
   listing: Awaited<ReturnType<BlobWriter["listFolder"]>>
   counts: Map<string, number>
-  newestLastModified: number
 }
 
 /** Conflicting manifest evidence invalidates the entire retention plan. */
@@ -21,7 +20,6 @@ export class RetentionManifestMismatch extends Error {}
 /** The listing supplies deletion identities, never the expected inventory. */
 export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile, progress?: VerificationProgress, keyFingerprint?: string): Promise<VerifiedHalf> {
   listing ??= await storage.listFolder(prefix)
-  let newestLastModified = listing.newestLastModified
   const remaining = new Set(listing.blobs)
   const blobs = new Map<string, string>()
   const listedIdentities = [...remaining].sort().map(name => [name, listing.etags.get(name)])
@@ -29,7 +27,7 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
   const listedIdentity = progress && listedIdentities.every(([, etag]) => etag) && remaining.size === listing.blobs.length
     ? receiptIdentity([manifest, expectedOwner, listedIdentities]) : undefined
   if (listedIdentity && progress?.complete?.identity === listedIdentity) {
-    return { blobs: new Map(listing.etags), listing, counts: new Map(progress.complete.counts), newestLastModified }
+    return { blobs: new Map(listing.etags), listing, counts: new Map(progress.complete.counts) }
   }
   // A sealed read is reusable only if it was opened with the keyring in the receipt.
   let unmatchedAuthentication = 0
@@ -40,7 +38,6 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
     if (!remaining.delete(path)) reject(name)
     lastRead = await storage.readForRetention(path)
     blobs.set(path, lastRead.etag)
-    if (Number.isFinite(lastRead.lastModified)) newestLastModified = Math.max(newestLastModified, lastRead.lastModified)
     if (lastRead.authenticated && (!keyFingerprint || lastRead.keyFingerprint !== keyFingerprint)) unmatchedAuthentication++
     return lastRead.value
   }
@@ -147,5 +144,5 @@ export async function verifyHalf(storage: BlobWriter, prefix: string, manifest: 
     progress.complete = { identity: listedIdentity, counts: [...counts] }
     progress.files = {}
   }
-  return { blobs, listing, counts, newestLastModified }
+  return { blobs, listing, counts }
 }

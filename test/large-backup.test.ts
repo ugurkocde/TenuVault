@@ -15,6 +15,7 @@ import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { jwt, registerTestTypes, TENANT, CLIENT, testType } from "./helpers/backup-fixture"
 import { fakeGraph } from "./helpers/fake-graph"
+import { withServerDate } from "./helpers"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { indexPath, largeIndexes } from "../src/shared/large-backup"
 
@@ -36,10 +37,13 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
     const engine = new BackupEngine({
       fetch: (async (input, init) => {
         const url = new URL(String(input))
-        if (url.hostname === "graph.microsoft.com") return graph.fetch(input, init)
+        if (url.hostname === "graph.microsoft.com") {
+          const response = await graph.fetch(input, init)
+          return withServerDate(new Response(response.body, { status: response.status, headers: response.headers }), new Date())
+        }
         const target = new URL(url); target.hostname = `${local}.blob.core.windows.net`
         requests.push(`${init?.method ?? "GET"} ${url.pathname}`)
-        return handleLocalBlobRequest(store, new Request(target, init))
+        return withServerDate(await handleLocalBlobRequest(store, new Request(target, init)), new Date())
       }) as typeof fetch,
       getToken: async () => jwt({ scp: "Policy.Read.All" }),
       services: () => ({ services: ["entra"], areas: {} }),

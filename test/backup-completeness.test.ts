@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
 import { BackupScheduler, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { emptyIntuneRead, memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore, withServerDate } from "./helpers"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -22,7 +22,7 @@ function engineSetup(graph: (url: URL) => Response, options: { retentionDays?: n
     const request = new Request(input, init)
     const url = new URL(request.url)
     if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
-    return graph(url)
+    return withServerDate(graph(url), options.now ? new Date(options.now) : new Date())
   }) as typeof fetch
   const engine = new BackupEngine({
     fetch: fetchImpl,

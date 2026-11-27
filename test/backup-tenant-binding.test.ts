@@ -1,4 +1,4 @@
-import { emptyIntuneRead } from "./helpers"
+import { emptyIntuneRead, withServerDate } from "./helpers"
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -278,7 +278,7 @@ describe("retention is scoped to the backup's tenant", () => {
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
         const url = new URL(request.url)
-        return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : fakeGraph(url)
+        return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(fakeGraph(url), new Date("2026-09-24T12:00:00Z"))
       }) as typeof fetch,
       getToken: async () => "token",
       retentionDays: () => 30,

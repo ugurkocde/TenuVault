@@ -38,3 +38,9 @@ export function emptyIntuneRead(pathname: string): Response {
     enhancedJailBreak: false,
   } : { value: [] })
 }
+
+/** Add the response time of the synthetic Microsoft endpoint. */
+export function withServerDate(response: Response, time: Date): Response {
+  response.headers.set("date", time.toUTCString())
+  return response
+}

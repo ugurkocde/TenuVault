@@ -3,7 +3,7 @@ import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP } from "../../shared/tenant-co
 import { graphCliScopes } from "../auth/connection-coverage"
 import { isBackupName, parseBackupName } from "../../shared/intune/backup-names"
 import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, matchingCompanions } from "../../shared/backup-companion"
-import { isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
+import { isLargeBackup, LARGE_BACKUP_CONTAINER, untrustedTimeFolder, untrustedTimeMarker } from "../../shared/backup-storage"
 import { captureLarge } from "./large"
 import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, type LargeIndexes } from "../../shared/large-backup"
 import { backupTypeUse } from "../../shared/services/backup-use"
@@ -13,8 +13,6 @@ import type { AuditUser } from "~/lib/audit/types"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
-import { uptime } from "node:os"
-import type { KeyValueStore } from "../storage/secure-store"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
@@ -40,7 +38,8 @@ import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadR
 
 class RetentionClockError extends Error {}
 
-const RETENTION_CLOCK = "backup.retention-clock"
+const HOUR_MS = 3600_000
+const NO_TRUSTED_TIME = "TenuVault could not verify the time with Microsoft. Old backups were kept."
 const DAY_MS = 86400_000
 
 /**
@@ -146,8 +145,6 @@ export interface BackupEngineDeps {
   retentionDays?: (tenantId: string) => number
   retentionLimits?: RetentionLimits
   retentionProgress?: RetentionProgressStore
-  retentionClock?: Pick<KeyValueStore, "get" | "set">
-  uptime?: () => number
   recoveryKeyFingerprint?: () => string
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
@@ -240,19 +237,33 @@ function recordFailure(outcome: RunOutcome, error: unknown): void {
  * storage account (`localHost`) come from this device, not the network. A request that ends
  * because the job aborted it says nothing new: the abort reason is classified where it is raised.
  */
-function answeredFetch(fetchImpl: typeof fetch, outcome: RunOutcome, localHost: string | null): typeof fetch {
+function answeredFetch(fetchImpl: typeof fetch, outcome: RunOutcome, localHost: string | null, timeOrigin: string, observeTime: (time: number) => void): typeof fetch {
   return async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+    const timeSource = url.origin === timeOrigin
     let response: Response
     try {
-      response = await fetchImpl(input, init)
+      response = await fetchImpl(input, timeSource ? { ...init, redirect: "error", cache: "no-store" } : init)
     } catch (error) {
       if (!init?.signal?.aborted) recordFailure(outcome, error)
       throw error
     }
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
     // A network error response (status 0) is not an answer.
-    if (response.type !== "error" && response.status !== 0 && new URL(url).hostname !== localHost) outcome.answered = true
+    if (response.type !== "error" && response.status !== 0 && url.hostname !== localHost) outcome.answered = true
+    if (timeSource && response.ok && !response.redirected && (!response.url || new URL(response.url).origin === timeOrigin)
+      && Number(response.headers.get("age") ?? 0) === 0) {
+      const date = response.headers.get("date")
+      const time = Date.parse(date ?? "")
+      if (Number.isFinite(time) && new Date(time).toUTCString() === date) observeTime(time)
+    }
     return response
+  }
+}
+
+function checkRetentionClock(wall: number, trusted: number): void {
+  const difference = Math.abs(wall - trusted)
+  if (difference > HOUR_MS) {
+    throw new RetentionClockError(`Your computer's clock differs from Microsoft's time by about ${(difference / HOUR_MS).toFixed(1)} hours. Old backups are kept until it is corrected.`)
   }
 }
 
@@ -487,6 +498,7 @@ export class BackupEngine {
         if (job.status === "Failed" && tokens.mode === "app-only" && causedBy(error, "BackupReaderError")) job.credentialError = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
+        if (job.unreachable && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) this.write(job, NO_TRUSTED_TIME, "warning")
         // A run that committed its manifest before it failed keeps the outcomes that manifest records.
         if (stopped.outcomes && !job.outcomes) this.conclude(job, stopped.outcomes(job.status))
         const outcomes = job.outcomes
@@ -550,7 +562,7 @@ export class BackupEngine {
 
   private async run(job: BackupJob, request: BackupRequest, tokens: RunTokens, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun, releaseTurn: () => void): Promise<void> {
     const started = this.now()
-    const clockWarning = this.checkRetentionClock(started.getTime(), true)
+    const startedTick = performance.now()
     const startNow = request.clientId.toLowerCase() === GRAPH_CLI_CLIENT_ID
     const readVersion = (type: IntuneType) => startNow ? "beta" as const : graphVersion(type)
     const readGrant = (token: string): ReturnType<typeof grantedPermissions> => {
@@ -559,7 +571,14 @@ export class BackupEngine {
       return permissions === undefined ? undefined : { kind: "delegated", permissions }
     }
     const local = isLocalAccount(request.storageAccountName)
-    const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
+    const storageHost = `${request.storageAccountName.toLowerCase()}.blob.core.windows.net`
+    // Compare against time measured within this run, independent of the device wall clock.
+    const clock: { first?: { time: number; tick: number }; latest?: { time: number; tick: number } } = {}
+    const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? storageHost : null, local ? GRAPH : `https://${storageHost}`, time => {
+      if (clock.latest && time < clock.latest.time) return
+      clock.latest = { time, tick: performance.now() }
+      clock.first ??= clock.latest
+    })
     const streaming = this.hasLargeTypes(request.tenantId, request.scope ?? EVERYTHING)
     let backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
@@ -1279,6 +1298,14 @@ export class BackupEngine {
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
     let retentionWarnings = 0
+    const first = clock.first
+    const trustedStart = first && first.time - (first.tick - startedTick)
+    if (trustedStart !== undefined && started.getTime() > trustedStart + HOUR_MS) {
+      // Mark the committed halves separately so either can be discovered on its own.
+      for (const folder of [backupFolder, ...(mixed && committedLargeManifest ? [largeFolder] : [])]) {
+        if (!await this.markUntrustedTime(job, isLargeBackup(folder) ? largeStorage : storage, folder)) retentionWarnings++
+      }
+    }
     // The Backup Reader cannot delete from Azure Storage. The next backup with an admin's sign-in applies
     // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
     const deletesAllowed = local || tokens.mode === "delegated"
@@ -1290,21 +1317,27 @@ export class BackupEngine {
       const limits = local ? undefined : this.deps.retentionLimits ?? RETENTION_LIMITS
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
-        const now = this.now().getTime()
-        const warning = clockWarning ?? this.checkRetentionClock(now, true)
-        if (warning) throw new RetentionClockError(warning)
+        signal.throwIfAborted()
+        if (Date.now() >= deadline) throw new Error("Backup job deadline reached")
+        if (!clock.latest || trustedStart === undefined) throw new RetentionClockError(NO_TRUSTED_TIME)
+        checkRetentionClock(started.getTime(), trustedStart)
+        const checkClock = () => {
+          const { time, tick } = clock.latest!
+          checkRetentionClock(this.now().getTime(), time + (performance.now() - tick))
+        }
+        checkClock()
+        const now = clock.latest.time
         const keyFingerprint = limits ? this.deps.recoveryKeyFingerprint?.() : undefined
-        const pending: Array<() => Promise<number>> = []
+        const pending: Array<(checkClock: () => void) => Promise<number>> = []
         const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, isLargeBackup(backupFolder) ? committedLargeManifest : metadata, pending, retentionNetwork.signal, now, keyFingerprint, limits, mixed, committedLargeManifest)
         let unreadableLarge = 0
         if (mixed && committedLargeManifest) {
           unreadableLarge = await this.applyRetention(job, retentionStorage, largeFolder, committedLargeManifest, pending, retentionNetwork.signal, now, keyFingerprint, limits, mixed)
         }
-        const beforeDelete = this.checkRetentionClock(this.now().getTime(), false)
-        if (beforeDelete) throw new RetentionClockError(beforeDelete)
+        checkClock()
         if (limits && keyFingerprint !== this.deps.recoveryKeyFingerprint?.()) throw new Error("The recovery key changed during retention")
         let deletionWarnings = 0
-        for (const apply of pending) deletionWarnings += await apply()
+        for (const apply of pending) deletionWarnings += await apply(checkClock)
         if (unreadableOlder || unreadableLarge || deletionWarnings) retentionWarnings++
       } catch (error) {
         retentionWarnings++
@@ -1325,6 +1358,10 @@ export class BackupEngine {
       }
     } else if (!complete) {
       this.write(job, "Older backups were kept because this backup is incomplete.", "info")
+      if (!clock.latest && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+        this.write(job, NO_TRUSTED_TIME, "warning")
+        retentionWarnings++
+      }
     }
 
     job.failures = failures
@@ -1394,31 +1431,43 @@ export class BackupEngine {
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<number>>, signal: AbortSignal, now: number, keyFingerprint?: string, limits?: RetentionLimits, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<(checkClock: () => void) => Promise<number>>, signal: AbortSignal, now: number, keyFingerprint?: string, limits?: RetentionLimits, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
     const cutoff = now - days * DAY_MS
     const metered = () => limits ? storage.withBudget(new RetentionBudget(limits)) : storage
     const discovery = metered()
     // Large discovery lists only root records, not the flat inventory of policy and relationship blobs.
-    const ordinary = isLargeBackup(current) ? { prefixes: [], newestLastModified: 0 } : await discovery.list("backup-", "/")
-    const large = isLargeBackup(current) ? await discovery.list("backup-large-", "/", LARGE_BACKUP_CONTAINER, true) : { blobs: [], prefixes: [], newestLastModified: 0 }
+    const ordinary = isLargeBackup(current) ? { blobs: [], prefixes: [] } : await discovery.list("backup-", "/")
+    const large = isLargeBackup(current) ? await discovery.list("backup-large-", "/", LARGE_BACKUP_CONTAINER, true) : { blobs: [], prefixes: [] }
+    const marked = new Set([...ordinary.blobs, ...large.blobs].map(untrustedTimeFolder).filter(isBackupName))
     const largePrefixes = [...new Set([...large.prefixes, ...large.blobs.map(name => `${name.split("/")[0]}/`)])].filter(isLargeBackup)
     const prefixes = [...ordinary.prefixes, ...largePrefixes]
     const allBackups = [...new Set(prefixes)]
-      .map((prefix) => {
-        const match = /^backup-(?:large-)?(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
-        if (!match || prefix === `${current}/`) return null
-        const [, y, mo, d, h, mi, se] = match.map(Number) as number[]
-        return { prefix, time: Date.UTC(y!, mo! - 1, d!, h!, mi!, se!) }
+      .flatMap(prefix => {
+        const folder = parseBackupName(prefix.slice(0, -1))
+        return !folder || !folder.name.startsWith("backup-") || folder.name === current ? [] : [{ prefix, time: Date.parse(folder.timestamp) }]
       })
-      .filter((backup) => backup !== null)
-      .sort((a, b) => b.time - a.time)
-
-    const currentTime = Date.parse(parseBackupName(current)?.timestamp ?? "")
-    if (currentTime > now || (allBackups[0]?.time ?? 0) > now) {
-      throw new RetentionClockError("Retention was skipped because this device's clock is earlier than the newest backup. Check the device clock before the next backup.")
+    const protectedTime = async (folder: string, writer: BlobWriter): Promise<boolean> => {
+      if (marked.has(folder)) return true
+      if (await writer.readJson(untrustedTimeMarker(folder))) return true
+      if (Date.parse(parseBackupName(folder)!.timestamp) <= now + HOUR_MS) return false
+      await this.markUntrustedTime(job, writer, folder)
+      marked.add(folder)
+      return true
     }
+    const ordered: typeof allBackups = []
+    const ignored: typeof allBackups = []
+    for (const backup of allBackups) {
+      const folder = backup.prefix.slice(0, -1)
+      if (marked.has(folder) || backup.time > now + HOUR_MS) {
+        ignored.push(backup)
+        if (!marked.has(folder) && await this.markUntrustedTime(job, metered(), folder)) marked.add(folder)
+      } else {
+        ordered.push(backup)
+      }
+    }
+    ordered.sort((a, b) => b.time - a.time)
 
     const cursorKey = `${job.tenantId}/${job.storageAccountName}/${isLargeBackup(current)}`
     const persisted = this.deps.retentionProgress
@@ -1439,15 +1488,15 @@ export class BackupEngine {
       }
     }
     const advance = () => {
-      if (start + limit < allBackups.length) state.cursor = backups.at(-1)?.prefix
+      if (start + limit < ordered.length) state.cursor = backups.at(-1)?.prefix
       else delete state.cursor
       if (state.cursor) this.write(job, "Retention will continue reviewing older backups on the next run.", "info")
       saveProgress()
     }
-    const after = state.cursor ? allBackups.findIndex(backup => backup.prefix < state.cursor!) : 0
+    const after = state.cursor ? ordered.findIndex(backup => backup.prefix < state.cursor!) : 0
     const start = after < 0 ? 0 : after
-    const limit = !limits ? allBackups.length : !mixed ? limits.candidates : isLargeBackup(current) ? Math.floor(limits.candidates / 2) : Math.ceil(limits.candidates / 2)
-    const backups = allBackups.slice(start, start + limit)
+    const limit = !limits ? ordered.length : !mixed ? limits.candidates : isLargeBackup(current) ? Math.floor(limits.candidates / 2) : Math.ceil(limits.candidates / 2)
+    const backups = ordered.slice(start, start + limit)
 
     if (!backups.length) return 0
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
@@ -1507,7 +1556,16 @@ export class BackupEngine {
       advance()
       return unreadable.size
     }
-    const shared = unreadable.size > 0 || backups.length !== allBackups.length || owners.some(entry => entry?.owner === "other")
+    let shared = unreadable.size > 0 || backups.length !== ordered.length || owners.some(entry => entry?.owner === "other")
+    // Untagged backups can only be removed if the visible history gives no sign of a shared container.
+    // A future date disqualifies a backup's contents as a replacement, but its tenant still matters.
+    if (!shared && owners.some(entry => entry?.owner === "untagged")) {
+      for (const { prefix } of ignored) {
+        const writer = metered()
+        const { owner } = await resolveBackupOwnership(file => readFile(writer, prefix + file), tenant)
+        if (owner.kind === "other" || owner.kind === "unreadable") { shared = true; break }
+      }
+    }
 
     // The latest backup is the reference for all candidates and has its own request and job budgets.
     const reference = () => limits ? storage.withBudget(new RetentionBudget({ ...limits, bytes: Infinity })) : storage
@@ -1516,14 +1574,11 @@ export class BackupEngine {
     if (!currentManifest) throw new Error("The latest backup has no readable manifest")
     const covered = completeFolders(currentManifest)
     const currentCompanion = currentManifest.CompanionBackup
-    let newestLastModified = Math.max(ordinary.newestLastModified, large.newestLastModified)
     try {
-      const currentHalf = await verifyHalf(latest, `${current}/`, currentManifest)
-      newestLastModified = Math.max(newestLastModified, currentHalf.newestLastModified)
+      await verifyHalf(latest, `${current}/`, currentManifest)
       if (typeof currentCompanion === "string" && isLargeBackup(currentCompanion) && writtenCompanion && completeHalf(writtenCompanion)) {
         if (!matchingCompanions(current, currentManifest, currentCompanion, writtenCompanion)) throw new Error("The latest backup's companion does not match")
-        const companionHalf = await verifyHalf(reference(), `${currentCompanion}/`, writtenCompanion)
-        newestLastModified = Math.max(newestLastModified, companionHalf.newestLastModified)
+        await verifyHalf(reference(), `${currentCompanion}/`, writtenCompanion)
         for (const folder of completeFolders(writtenCompanion)) covered.add(folder)
       }
       delete state.latestAttempts
@@ -1554,11 +1609,8 @@ export class BackupEngine {
       this.write(job, budgetReached ? `Kept backup ${prefix} because retention reached its storage budget while reviewing it.`
         : `Kept backup ${prefix} because a file could not be verified: ${reason}`, "warning")
     }
-    const verify = async (writer: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) => {
-      const half = await verifyHalf(writer, prefix, manifest, listing, expectedOwner, limits ? review(prefix) : undefined, keyFingerprint)
-      newestLastModified = Math.max(newestLastModified, half.newestLastModified)
-      return half
-    }
+    const verify = (writer: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) =>
+      verifyHalf(writer, prefix, manifest, listing, expectedOwner, limits ? review(prefix) : undefined, keyFingerprint)
     const deletionWriter = (count: number) => {
       if (!limits) return storage
       const budget = new RetentionBudget(limits)
@@ -1597,6 +1649,7 @@ export class BackupEngine {
           const bytes = [...listing.sizes.values()].reduce((sum, size) => sum + size, 0)
           const id = backup.prefix.slice(0, -1)
           const linked = claim?.CompanionBackup ?? metadata?.CompanionBackup
+          if (owned && isBackupName(linked) && await protectedTime(linked, writer)) continue
           let modern = isLargeBackup(id) || (typeof linked === "string" && isLargeBackup(linked) && isBackupName(linked))
           if (owned && !modern && listing.blobs.includes(`${backup.prefix}${BACKUP_RUN_RECORD_FILE}`)) {
             const record = await readFile(writer, `${backup.prefix}${BACKUP_RUN_RECORD_FILE}`)
@@ -1627,6 +1680,7 @@ export class BackupEngine {
         }
         // The ordinary half alone coordinates complete pairs and records both halves' coverage.
         if (paired && (!validPair || isLargeBackup(backup.prefix))) continue
+        if (validPair && typeof companionId === "string" && await protectedTime(companionId, writer)) continue
         // A backup with per-type outcomes satisfies coverage for each type it read completely, so one
         // that finished with warnings is kept while it holds a type's newest complete copy. One recorded
         // before outcomes may miss items in any folder it appears to hold, so it counts only when it read
@@ -1664,15 +1718,12 @@ export class BackupEngine {
       }
     }
 
-    if (limits && newestLastModified > 0 && now - newestLastModified > DAY_MS) {
-      throw new RetentionClockError("Retention was skipped because this device's clock is more than one day ahead of the latest Azure storage timestamp. Check the device clock before the next backup.")
-    }
-
     // Another half may still detect a manifest mismatch and veto this run's removals.
     saveProgress()
-    pending.push(async () => {
+    pending.push(async checkClock => {
       let warnings = 0
       for (const unit of plan) {
+        checkClock()
         const verified = new Map(unit.halves.flatMap(half => [...half.blobs]))
         const size = (name: string) => unit.halves.reduce((sum, half) => sum + (half.listing.sizes.get(name) ?? 0), 0)
         const manifests = new Set(unit.prefixes.map(prefix => `${prefix}metadata.json`))
@@ -1732,31 +1783,14 @@ export class BackupEngine {
     if (level) job.results?.notices.push({ level, message: line })
   }
 
-  private checkRetentionClock(wall: number, record: boolean): string | undefined {
-    const store = this.deps.retentionClock
-    if (!store) return
+  private async markUntrustedTime(job: BackupJob, storage: BlobWriter, folder: string): Promise<boolean> {
     try {
-      const up = (this.deps.uptime ?? uptime)() * 1000
-      if (!Number.isFinite(wall) || !Number.isFinite(up) || up < 0) throw new Error("Invalid clock reading")
-      const saved = store.get(RETENTION_CLOCK)
-      if (saved !== null) {
-        const previous = JSON.parse(saved)
-        if (!Number.isFinite(previous?.wall) || !Number.isFinite(previous?.up) || previous.up < 0) throw new Error("Invalid clock record")
-        const elapsed = wall - previous.wall
-        // After a reboot, only the current boot's uptime is evidence of elapsed time.
-        const elapsedUptime = up >= previous.up ? up - previous.up : up
-        if (elapsed < 0 || elapsed - elapsedUptime > DAY_MS) {
-          const reason = elapsed < 0 ? "is earlier than the last trusted backup time" : "advanced more than one day beyond the elapsed device uptime"
-          return `Retention was skipped because this device's clock ${reason}. Check the device clock before the next backup.`
-        }
-      }
-      // A skipped run must never make an untrusted time the baseline for the next run.
-      if (record) {
-        const observation = JSON.stringify({ wall, up })
-        if (observation !== saved) store.set(RETENTION_CLOCK, observation)
-      }
-    } catch {
-      return "Retention was skipped because TenuVault could not read or save the clock check in app storage."
+      await storage.put(untrustedTimeMarker(folder), JSON.stringify({ BackupFolder: folder, RunId: job.id }), undefined, true)
+      return true
+    } catch (error) {
+      if (error instanceof BlobClaimError) return true
+      this.write(job, `Kept backup ${folder} because its date is in the future. TenuVault could not save its untrusted date marker.`, "warning")
+      return false
     }
   }
 

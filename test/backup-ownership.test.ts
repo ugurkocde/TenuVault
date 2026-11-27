@@ -8,12 +8,12 @@ import { NextRequest } from "next/server"
 import { BackupEngine } from "../src/main/backup/engine"
 import { BlobWriter } from "../src/main/backup/blob-writer"
 import { verifyHalf } from "../src/main/backup/retention-verification"
-import { backupStoragePath } from "../src/shared/backup-storage"
+import { backupStoragePath, untrustedTimeMarker } from "../src/shared/backup-storage"
 import { indexPath } from "../src/shared/large-backup"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { sealLegacyAzure } from "./legacy-seal"
-import { endlessBody, memoryStore } from "./helpers"
+import { endlessBody, memoryStore, withServerDate } from "./helpers"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { reviewArchive } from "../src/main/backup/archive"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
@@ -37,7 +37,7 @@ const sha256 = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const items = { "DeviceConfigurations/old": { file: "Old.json", sha256: sha256(oldPolicy) } }
 const completeManifest = { TenantId: TENANT, Status: "Success", Items: items, Scope: { Included: ["DeviceConfigurations"] } }
 
-function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; progress?: RetentionProgressStore; clock?: ReturnType<typeof memoryStore>; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { retention?: number; count?: number; limits?: RetentionLimits; progress?: RetentionProgressStore; serverTime?: () => Date | null; override?: (url: URL, request: Request) => Response | Promise<Response> | undefined } = {}) {
   vi.useFakeTimers()
   vi.setSystemTime(now)
   const saved = new Map<string, Buffer>()
@@ -58,7 +58,7 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
     if (url.searchParams.get("comp") === "list") {
       const names = [...saved.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
       const entries = url.searchParams.has("delimiter")
-        ? [...new Set(names.map(name => `${name.split("/")[0]}/`))].map(name => `<BlobPrefix><Name>${name}</Name></BlobPrefix>`)
+        ? [...new Set(names.map(name => name.includes("/") ? `${name.split("/")[0]}/` : name))].map(name => name.endsWith("/") ? `<BlobPrefix><Name>${name}</Name></BlobPrefix>` : `<Blob><Name>${name}</Name></Blob>`)
         : names.map(name => `<Blob><Name>${name}</Name><Properties><Etag>${etag(name)}</Etag></Properties></Blob>`)
       return new Response(`<Blobs>${entries.join("")}</Blobs>`)
     }
@@ -70,14 +70,19 @@ function setup(options: { retention?: number; count?: number; limits?: Retention
       saved.delete(name)
       return new Response(null, { status: 202 })
     }
-    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: { etag: etag(name), ...(options.clock ? { "last-modified": new Date().toUTCString() } : {}) } })
+    return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404, headers: { etag: etag(name) } })
   }
   registerStorageToken("token", TENANT)
   const keys = [master]
-  const fetch = legacyAzureReader(wireFetch, () => keys)
+  const fetch = legacyAzureReader(async (input, init) => {
+    const response = await wireFetch(input, init)
+    const url = new URL(input instanceof Request ? input.url : input)
+    const serverTime = options.serverTime ? options.serverTime() : now
+    return url.hostname === "contoso.blob.core.windows.net" && serverTime ? withServerDate(response, serverTime) : response
+  }, () => keys)
   const createEngine = () => new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" },
     retentionDays: () => options.retention ?? 30, retentionLimits: options.limits, retentionProgress: options.progress,
-    retentionClock: options.clock, uptime: () => 3600, recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keys) })
+    recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keys) })
   const engine = createEngine()
   /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
   function seed(name: string, value: unknown, sealed = false, key = master) {
@@ -426,46 +431,68 @@ describe("verified retention coverage", () => {
     }
   })
 
-  it("skips cleanup when the device clock is earlier than a stored backup", async () => {
+  it("keeps a future-dated backup permanently without using it to replace a needed copy", async () => {
+    let serverTime = now
+    const { engine, createEngine, saved, calls, seed, folder } = setup({ serverTime: () => serverTime })
+    const older = "backup-2026-08-01-020000/"
+    const redundant = "backup-2026-08-02-020000/"
+    const future = "backup-2026-10-13-120000"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    seed(`${redundant}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Included: ["CompliancePolicies"] }, Items: {} })
+    folder(`${future}/`)
+    seed(`${future}/metadata.json`, completeManifest)
+    const withoutConfigurations = { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) }
+    const guardedJob = await complete(engine, withoutConfigurations)
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(saved.has(`${redundant}metadata.json`), guardedJob.log.join("\n")).toBe(false)
+    expect(saved.has(`${future}/metadata.json`)).toBe(true)
+    expect(saved.has(untrustedTimeMarker(future))).toBe(true)
+
+    serverTime = new Date("2026-12-12T12:00:00Z")
+    vi.setSystemTime(serverTime)
+    await complete(createEngine())
+    expect(saved.has(`${older}metadata.json`)).toBe(false)
+    expect(saved.has(`${future}/metadata.json`)).toBe(true)
+    expect(calls.filter(call => call.request.method === "PUT" && call.name === untrustedTimeMarker(future))).toHaveLength(1)
+  })
+
+  it("uses the Azure response Date on the first run, even when the device clock is ahead", async () => {
     const { engine, saved, calls, seed, folder } = setup()
-    const older = "backup-2026-08-01-020000/"
-    folder(older)
-    seed(`${older}metadata.json`, completeManifest)
-    seed("backup-2026-10-12-120001/metadata.json", completeManifest)
+    const recent = "backup-2026-10-08-020000/"
+    folder(recent)
+    seed(`${recent}metadata.json`, completeManifest)
+    vi.setSystemTime(new Date("2026-11-16T12:00:00Z"))
     const job = await complete(engine)
-    expect(job.log.join("\n")).toContain("clock is earlier than the newest backup")
-    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(job.log.join("\n")).toContain("differs from Microsoft's time by about 840.0 hours")
+    expect(saved.has(`${recent}metadata.json`)).toBe(true)
+    expect(saved.has(untrustedTimeMarker(job.backupFolder!))).toBe(true)
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
   })
 
-  it("skips Azure retention after a clock jump even when Azure timestamps agree", async () => {
-    const { engine, createEngine, saved, calls, seed, folder } = setup({ clock: memoryStore() })
-    const older = "backup-2026-10-01-020000/"
-    folder(older)
-    seed(`${older}metadata.json`, completeManifest)
-    await complete(engine)
-    vi.setSystemTime(new Date("2026-11-12T12:00:00Z"))
-    const job = await complete(createEngine())
-    expect(job.log.join("\n")).toContain("beyond the elapsed device uptime")
-    expect(saved.has(`${older}metadata.json`)).toBe(true)
-    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+  it("uses Azure server time to calculate age when the device clock is within one hour", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const recent = "backup-2026-09-12-123000/"
+    folder(recent)
+    seed(`${recent}metadata.json`, completeManifest)
+    const expired = "backup-2026-09-12-115900/"
+    folder(expired)
+    seed(`${expired}metadata.json`, completeManifest)
+    vi.setSystemTime(new Date("2026-10-12T12:55:00Z"))
+    const job = await complete(engine)
+    expect(saved.has(`${recent}metadata.json`)).toBe(true)
+    expect(saved.has(`${expired}metadata.json`), job.log.join("\n")).toBe(false)
   })
 
-  it.each([0, 1000])("uses Azure Last-Modified for the one-day clock guard (%s ms beyond the limit)", async excess => {
-    const latest = new Date(now.getTime() - 86400_000 - excess).toUTCString()
-    const { engine, saved, calls, seed, folder } = setup({ override: (url, sent) => {
-      if (sent.method === "GET" && url.pathname.endsWith("backup-2026-10-12-120000/metadata.json")) {
-        return new Response(new Uint8Array(saved.get("backup-2026-10-12-120000/metadata.json")!),
-          { headers: { etag: '"fixture"', "last-modified": latest } })
-      }
-    } })
+  it("keeps expired Azure backups when Azure returns no Date header", async () => {
+    const { engine, saved, calls, seed, folder } = setup({ serverTime: () => null })
     const older = "backup-2026-08-01-020000/"
     folder(older)
     seed(`${older}metadata.json`, completeManifest)
     const job = await complete(engine)
-    expect(job.log.join("\n").includes("clock is more than one day ahead")).toBe(excess > 0)
-    expect(saved.has(`${older}metadata.json`)).toBe(excess > 0)
-    expect(calls.some(call => call.request.method === "DELETE")).toBe(excess === 0)
+    expect(job.log.join("\n")).toContain("could not verify the time with Microsoft")
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
   })
 
   it.each(["requests", "bytes"] as const)("keeps the expired backup when the %s budget is exhausted", async limit => {
@@ -629,7 +656,7 @@ describe("verified retention coverage", () => {
     }, () => keys)
     registerStorageToken("token", TENANT)
     const storage = new BlobWriter(fetch, "contoso", async () => "token")
-    const listing = { blobs: [...etags.keys()], prefixes: [], sizes: new Map(), etags, newestLastModified: 0 }
+    const listing = { blobs: [...etags.keys()], prefixes: [], sizes: new Map(), etags }
     const progress = { files: {}, attempts: 0 }
     const verify = () => verifyHalf(storage.withBudget(new RetentionBudget({ candidates: 1, requests: 100, bytes: 13_000 })),
       prefix, manifest, listing, undefined, progress, legacyRecoveryFingerprint(keys))

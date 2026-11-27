@@ -11,14 +11,13 @@ import type { RetentionBudget } from "./retention-budget"
 import type { NetworkCircuit } from "./engine"
 import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, DeleteConditionError, ImmutableBlobError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
-export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; keyFingerprint?: string; sha256: string; lastModified: number }
+export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; keyFingerprint?: string; sha256: string }
 
 export interface BlobListing {
   blobs: string[]
   prefixes: string[]
   sizes: Map<string, number>
   etags: Map<string, string>
-  newestLastModified: number
 }
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
@@ -96,7 +95,6 @@ export class BlobWriter {
     const sizes = new Map<string, number>()
     const etags = new Map<string, string>()
     const prefixes: string[] = []
-    let newestLastModified = 0
     let marker = ""
     const seen = new Set<string>()
     do {
@@ -116,8 +114,6 @@ export class BlobWriter {
         blobs.push(name)
         const size = /<Content-Length>(\d+)<\/Content-Length>/.exec(properties)?.[1]
         if (size !== undefined) sizes.set(name, Number(size))
-        const modified = Date.parse(/<Last-Modified>([^<]+)<\/Last-Modified>/.exec(properties)?.[1] ?? "")
-        if (Number.isFinite(modified)) newestLastModified = Math.max(newestLastModified, modified)
         const raw = /<Etag>([^<]+)<\/Etag>/i.exec(properties)?.[1]
         if (raw) {
           const etag = decode(raw)
@@ -129,7 +125,7 @@ export class BlobWriter {
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes, sizes, etags, newestLastModified }
+    return { blobs, prefixes, sizes, etags }
   }
 
   /** Root records and payload together, for deletion after ownership has been checked. */
@@ -142,7 +138,6 @@ export class BlobWriter {
       prefixes: [],
       sizes: new Map([...roots.sizes, ...payload.sizes]),
       etags: new Map([...roots.etags, ...payload.etags]),
-      newestLastModified: Math.max(roots.newestLastModified, payload.newestLastModified),
     }
   }
 
@@ -175,8 +170,7 @@ export class BlobWriter {
       try {
         const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
         if (!value || typeof value !== "object") throw new Error("Expected JSON data")
-        return { value, etag, authenticated: wasBackupReadAuthenticated(response), keyFingerprint: backupReadKeyFingerprint(response), sha256: createHash("sha256").update(bytes).digest("hex"),
-          lastModified: Date.parse(response.headers.get("last-modified") ?? "") }
+        return { value, etag, authenticated: wasBackupReadAuthenticated(response), keyFingerprint: backupReadKeyFingerprint(response), sha256: createHash("sha256").update(bytes).digest("hex") }
       } catch (error) {
         throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`, { cause: error }))
       }

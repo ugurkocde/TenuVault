@@ -11,7 +11,7 @@ import { localStorageAccountName } from "../src/shared/constants"
 import { BackupReaderError, BackupReaderService } from "../src/main/auth/backup-reader"
 import { SecureStore } from "../src/main/storage/secure-store"
 import { BackupScheduler, scheduledResult } from "../src/main/backup/scheduler"
-import { memoryStore } from "./helpers"
+import { memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -31,11 +31,11 @@ function setup(options: { reader?: boolean; storageAccountName?: string; retenti
     if (url.hostname === "graph.microsoft.com") {
       graphAuth.push(request.headers.get("authorization") ?? "")
       await gate
-      return Response.json({ value: [] })
+      return withServerDate(Response.json({ value: [] }), new Date())
     }
     if (url.hostname.endsWith(".blob.core.windows.net")) {
       blobMethods.push(`${request.method} ${url.search}`)
-      return new Response(null, { status: 201 })
+      return withServerDate(new Response(null, { status: 201 }), new Date())
     }
     throw new Error(`unexpected ${url}`)
   }) as unknown as typeof fetch

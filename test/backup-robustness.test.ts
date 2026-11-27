@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, JOB_DEADLINE_MS, MANIFEST_COMMIT_GRACE_MS, type BackupJob } from "../src/main/backup/engine"
 import { BackupScheduler } from "../src/main/backup/scheduler"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
-import { memoryStore } from "./helpers"
+import { memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const OTHER = "33333333-3333-3333-3333-333333333333"
@@ -20,34 +20,37 @@ function setup(options: { count?: number; retention?: number; retentionDays?: ()
     fetch: async (input, init = {}) => {
       const url = new URL(String(input))
       calls.push({ url, init })
-      const overridden = options.override?.(url, init)
-      if (overridden) return overridden
-      if (url.hostname === "graph.microsoft.com") {
-        return url.pathname.endsWith("/deviceConfigurations")
-          ? Response.json({ value: Array.from({ length: options.count ?? 0 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
-          : Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
-      }
-      if (url.searchParams.get("comp") === "list") {
-        const names = [...saved.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
-        const entries = url.searchParams.get("delimiter")
-          ? [...new Set(names.map(name => `${name.split("/")[0]}/`))].map(name => `<BlobPrefix><Name>${name}</Name></BlobPrefix>`)
-          : names.map(name => `<Blob><Name>${name}</Name></Blob>`)
-        return new Response(`<Blobs>${entries.join("")}</Blobs>`)
-      }
-      const name = decodeURIComponent(url.pathname.slice(prefix.length))
-      if (init.method === "PUT") {
-        if (!url.search) {
-          saved.set(name, String(init.body))
+      const respond = async (): Promise<Response> => {
+        const overridden = options.override?.(url, init)
+        if (overridden) return overridden
+        if (url.hostname === "graph.microsoft.com") {
+          return url.pathname.endsWith("/deviceConfigurations")
+            ? Response.json({ value: Array.from({ length: options.count ?? 0 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
+            : Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
         }
-        return new Response(null, { status: 201 })
+        if (url.searchParams.get("comp") === "list") {
+          const names = [...saved.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+          const entries = url.searchParams.get("delimiter")
+            ? [...new Set(names.map(name => `${name.split("/")[0]}/`))].map(name => `<BlobPrefix><Name>${name}</Name></BlobPrefix>`)
+            : names.map(name => `<Blob><Name>${name}</Name></Blob>`)
+          return new Response(`<Blobs>${entries.join("")}</Blobs>`)
+        }
+        const name = decodeURIComponent(url.pathname.slice(prefix.length))
+        if (init.method === "PUT") {
+          if (!url.search) {
+            saved.set(name, String(init.body))
+          }
+          return new Response(null, { status: 201 })
+        }
+        if (init.method === "DELETE") {
+          saved.delete(name)
+          return new Response(null, { status: 202 })
+        }
+        return saved.has(name)
+          ? new Response(saved.get(name), { headers: { etag: '"fixture"' } })
+          : new Response(null, { status: 404 })
       }
-      if (init.method === "DELETE") {
-        saved.delete(name)
-        return new Response(null, { status: 202 })
-      }
-      return saved.has(name)
-        ? new Response(saved.get(name), { headers: { etag: '"fixture"' } })
-        : new Response(null, { status: 404 })
+      return withServerDate(await respond(), options.now?.() ?? new Date())
     },
   })
   return { engine, saved, calls }

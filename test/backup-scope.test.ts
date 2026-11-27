@@ -12,7 +12,7 @@ import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { coveredFolders, DEFAULT_SCOPE, describeScope, EVERYTHING, includedTypes, LEGACY_FOLDERS, normalizeScope, presetOf } from "../src/shared/intune/scope"
 import { compareBackups, summarize } from "../src/shared/intune/backup-changes"
 import { comparableSnapshot, sameSnapshot } from "../src/shared/intune/compare"
-import { emptyIntuneRead, memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -103,7 +103,7 @@ function engineSetup(graph: (url: URL) => Response, options: { retentionDays?: n
     const url = new URL(request.url)
     if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
     requested.push(decodeURIComponent(url.pathname + url.search))
-    return graph(url)
+    return withServerDate(graph(url), options.now ? new Date(options.now) : new Date())
   }) as typeof fetch
   const engine = new BackupEngine({
     fetch: fetchImpl,

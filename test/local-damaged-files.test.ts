@@ -1,4 +1,4 @@
-import { emptyIntuneRead } from "./helpers"
+import { emptyIntuneRead, withServerDate } from "./helpers"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -279,7 +279,7 @@ describe("damaged local backup files", () => {
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
     const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)

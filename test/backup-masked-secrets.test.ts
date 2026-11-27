@@ -12,6 +12,7 @@ import { compareBackups, type BackupFingerprint } from "../src/shared/intune/bac
 import { readObject, withMaskedSecrets } from "../src/shared/intune/read"
 import { typeForFolder, INTUNE_TYPES, type Item } from "../src/shared/intune/registry"
 import { coveredFolders, restorableFolders } from "../src/shared/intune/scope"
+import { withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -40,14 +41,14 @@ function setup(options: { decrypt?: boolean; retentionDays?: number; excludedTyp
       if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
       const path = decodeURIComponent(url.pathname)
       graphPaths.push(path)
-      if (path === "/beta/deviceManagement/deviceConfigurations") return Response.json({ value: [{ id: "cfg1", displayName: "Wi-Fi" }] })
-      if (path === "/beta/deviceManagement/deviceConfigurations/cfg1") return Response.json(profile())
+      if (path === "/beta/deviceManagement/deviceConfigurations") return withServerDate(Response.json({ value: [{ id: "cfg1", displayName: "Wi-Fi" }] }), new Date(clock))
+      if (path === "/beta/deviceManagement/deviceConfigurations/cfg1") return withServerDate(Response.json(profile()), new Date(clock))
       if (path.includes("getOmaSettingPlainTextValue")) {
-        return decrypt
+        return withServerDate(decrypt
           ? Response.json({ value: "plain-key" })
-          : Response.json({ error: { code: "Forbidden", message: "Forbidden" } }, { status: 403 })
+          : Response.json({ error: { code: "Forbidden", message: "Forbidden" } }, { status: 403 }), new Date(clock))
       }
-      if (path.startsWith("/beta/")) return Response.json({ value: [] })
+      if (path.startsWith("/beta/")) return withServerDate(Response.json({ value: [] }), new Date(clock))
       throw new Error(`unexpected ${url}`)
     }) as typeof fetch,
     getToken: async () => "admin",

@@ -9,6 +9,7 @@ import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
+import { withServerDate } from "./helpers"
 
 /**
  * What a backup of an Intune tenant wrote and reported before the engine learned to read Entra ID
@@ -129,7 +130,7 @@ async function run(scenario: Scenario) {
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
     const url = new URL(request.url)
-    return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : scenario.graph(url)
+    return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(scenario.graph(url), NOW)
   }) as typeof fetch
   // One reader at a time, so the log and the per type results come in the same order on every machine.
   const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => NOW, concurrency: 1, unattendedTokens: () => scenario.reader ?? null })
