@@ -34,8 +34,8 @@ async function verifyReplacementUnchanged(storage: BlobWriter, prefix: string, e
     if (listing.etags.has(path)) {
       if (listing.etags.get(path) !== etag) return false
     } else {
-      const current = await storage.readForRetention(path, true)
-      if (!current || current.etag !== etag) return false
+      const current = await storage.readEtag(path)
+      if (current !== etag) return false
     }
   }
   return true
@@ -220,6 +220,8 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   if (unreadableAnchor) discardJournal(unreadableAnchor.prefix, `Discarded an invalid deletion journal for unreadable backup ${unreadableAnchor.prefix}.`)
 
   const replacementIdentities = new Map<string, Map<string, string>>([[anchorPrefix, anchorVerified.identities]])
+  const guardRequests = (prefixes: string[]) =>
+    prefixes.reduce((sum, replacementPrefix) => sum + 1 + (replacementIdentities.get(replacementPrefix)?.size ?? 0), 0)
   const ownedProviders = new Map<string, string>()
   const untaggedProviders = new Map<string, string>()
   for (const folder of anchorVerified.covers) ownedProviders.set(folder, anchorPrefix)
@@ -492,7 +494,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           continue
         }
         const ownedReplacements = providersFor(journalTypes, true, journal.noTypes)
-        budget.reserveDeletes(identities.size + replacements.length)
+        budget.reserveDeletes(identities.size + Math.max(guardRequests(replacements), ownedReplacements ? guardRequests(ownedReplacements) : 0))
         plan.push({ prefix, identities, types: journalTypes, noTypes: journal.noTypes, untagged: journal.untagged, replacements, ownedReplacements, resumed: true })
         lastCompleted = prefix
         continue
@@ -517,7 +519,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         const replacements = time < cutoff ? providersFor(verified.types, shared, noTypes) : null
         if (replacements) {
           const ownedReplacements = providersFor(verified.types, true, noTypes)
-          budget.reserveDeletes(verified.identities.size + replacements.length)
+          budget.reserveDeletes(verified.identities.size + Math.max(guardRequests(replacements), ownedReplacements ? guardRequests(ownedReplacements) : 0))
           plan.push({ prefix, identities: verified.identities, types: verified.types, noTypes, untagged, replacements, ownedReplacements, resumed: false })
         } else {
           if (time < cutoff) kept++

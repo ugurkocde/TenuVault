@@ -20,6 +20,8 @@ export interface BlobListing {
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
+  private headEtagUnsupported = false
+
   constructor(
     private readonly fetchImpl: typeof fetch,
     private readonly account: string,
@@ -138,6 +140,27 @@ export class BlobWriter {
         throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`, { cause: error }))
       }
     })
+  }
+
+  /** Reads a blob's ETag with HEAD where supported, falling back to GET when HEAD is unsupported or omits the ETag. */
+  async readEtag(name: string): Promise<string | null> {
+    const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
+    if (!this.headEtagUnsupported) {
+      const head = await this.request(path, { method: "HEAD" }, async (response) => {
+        void response.body?.cancel().catch(() => undefined)
+        if (response.status === 404) return { kind: "missing" as const }
+        if (response.status === 405 || response.status === 501) return { kind: "unsupported" as const }
+        if (!response.ok) throw await storageFailure(response, this.account)
+        const etag = response.headers.get("etag")
+        if (!etag || etag === "*") return { kind: "missing-etag" as const }
+        return { kind: "etag" as const, etag }
+      })
+      if (head.kind === "missing") return null
+      if (head.kind === "etag") return head.etag
+      if (head.kind === "unsupported") this.headEtagUnsupported = true
+    }
+    const fallback = await this.readForRetention(name, true)
+    return fallback?.etag ?? null
   }
 
   async delete(name: string, etag?: string): Promise<void> {

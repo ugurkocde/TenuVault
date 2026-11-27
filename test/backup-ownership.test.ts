@@ -1149,6 +1149,118 @@ describe("retention verification", () => {
     expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
     expect(calls.slice(beforeResume).filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([expired + BACKUP_OWNER_FILE])
   })
+
+  it("uses HEAD for the replacement guard ETag fallback when listings omit ETags, falling back to GET only when HEAD is unsupported", async () => {
+    const big = "h".repeat(60_000)
+    let savedRef = new Map<string, Buffer>()
+    let rejectHead = false
+    const listWithoutEtags = (url: URL) => {
+      if (url.searchParams.get("comp") === "list" && !url.searchParams.has("delimiter")) {
+        const names = [...savedRef.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+        return new Response(`<Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs>`)
+      }
+    }
+
+    // With HEAD available and a tight byte budget (100 KB), a 60 KB replacement policy is checked via HEAD without a second GET.
+    const first = setup({
+      count: 1,
+      limits: { candidates: 32, requests: 100, bytes: 100_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+        }
+        if (rejectHead && req.method === "HEAD") return new Response(null, { status: 405 })
+        return listWithoutEtags(url)
+      },
+    })
+    savedRef = first.saved
+    first.folder(expired)
+    first.seed(expired + "metadata.json", manifest)
+    const job1 = await complete(first.engine)
+    const policy1 = `${job1.backupFolder}/DeviceConfigurations/Policy 0.json`
+    expect(first.saved.has(expired + "metadata.json")).toBe(false)
+    expect(first.calls.filter(call => call.request.method === "HEAD" && call.name === policy1)).toHaveLength(1)
+    expect(first.calls.filter(call => call.request.method === "GET" && call.name === policy1)).toHaveLength(1)
+
+    // When HEAD returns 405, readEtag probes HEAD once and falls back to GET for remaining replacement files.
+    rejectHead = true
+    const second = setup({
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 300_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: "small" }), new Date())
+        }
+        if (rejectHead && req.method === "HEAD") return new Response(null, { status: 405 })
+        return listWithoutEtags(url)
+      },
+    })
+    savedRef = second.saved
+    second.folder(expired)
+    second.seed(expired + "metadata.json", manifest)
+    await complete(second.engine)
+    expect(second.saved.has(expired + "metadata.json")).toBe(false)
+    expect(second.calls.filter(call => call.request.method === "HEAD")).toHaveLength(1)
+  })
+
+  it.each([false, true])("reserves request budget per replacement file before cleanup so the guard cannot exhaust the budget mid-run (journaled: %s)", async journaled => {
+    let savedRef = new Map<string, Buffer>()
+    const etagOf = (saved: Map<string, Buffer>, name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+    const listWithoutEtags = (url: URL) => {
+      if (url.searchParams.get("comp") === "list" && !url.searchParams.has("delimiter")) {
+        const names = [...savedRef.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+        return new Response(`<Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs>`)
+      }
+    }
+
+    // Anchor has 12 files (10 policies + metadata + owner). Under 31 requests, old reserveDeletes(3 + 1) would enter
+    // cleanup and crash mid-guard with RetentionBudgetError; per-file reservation defers cleanly before cleanup.
+    const tight = setup({
+      count: 10,
+      limits: { candidates: 32, requests: 31, bytes: 200_000 },
+      override: url => listWithoutEtags(url),
+    })
+    savedRef = tight.saved
+    tight.folder(newerExpired)
+    tight.seed(newerExpired + "metadata.json", manifest)
+    tight.folder(expired)
+    tight.seed(expired + "metadata.json", manifest)
+    if (journaled) {
+      const remaining = Object.fromEntries([...tight.saved.keys()].filter(name => name.startsWith(newerExpired)).map(name => [name, etagOf(tight.saved, name)]))
+      tight.progressData.set(`${TENANT}/contoso`, JSON.stringify({
+        reviews: {},
+        deletes: { [newerExpired]: { prefix: newerExpired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+    }
+    const tightJob = await complete(tight.engine)
+    expect(tight.saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(tight.calls.filter(call => call.request.method === "HEAD")).toEqual([])
+    expect(tight.calls.filter(call => call.request.method === "DELETE")).toEqual([])
+    expect(tightJob.log.join("\n")).toContain(`Kept backup ${newerExpired} because retention reached its storage budget`)
+
+    // With budget for candidate 1 plus its per-file replacement guard (68 requests), candidate 2 stops before stealing
+    // candidate 1's guard budget, and candidate 1's guard + deletes finish cleanly.
+    const sufficient = setup({
+      count: 10,
+      limits: { candidates: 32, requests: 68, bytes: 200_000 },
+      override: url => listWithoutEtags(url),
+    })
+    savedRef = sufficient.saved
+    sufficient.folder(newerExpired)
+    sufficient.seed(newerExpired + "metadata.json", manifest)
+    sufficient.folder(expired)
+    sufficient.seed(expired + "metadata.json", manifest)
+    if (journaled) {
+      const remaining = Object.fromEntries([...sufficient.saved.keys()].filter(name => name.startsWith(newerExpired)).map(name => [name, etagOf(sufficient.saved, name)]))
+      sufficient.progressData.set(`${TENANT}/contoso`, JSON.stringify({
+        reviews: {},
+        deletes: { [newerExpired]: { prefix: newerExpired, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+    }
+    await complete(sufficient.engine)
+    expect(sufficient.saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(sufficient.calls.filter(call => call.request.method === "HEAD")).toHaveLength(12)
+  })
 })
 
 describe("retention server time", () => {
