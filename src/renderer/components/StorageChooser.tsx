@@ -28,7 +28,6 @@ interface StorageChooserProps {
   tenantId: string
   clientId: string
   wizardId?: string
-  localOnly?: boolean
   onboarding?: boolean
   initial?: StorageChoice
   savedAzure?: Extract<StorageChoice, { kind: "azure" }>
@@ -64,7 +63,7 @@ export function azureStorageBlocker(state: {
  * Azure choice is complete once access is confirmed: Azure encrypts the backups at rest and the
  * account's role assignments decide who reads them, so no recovery key is involved.
  */
-export function StorageChooser({ tenantId, clientId, wizardId, localOnly, onboarding = false, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
+export function StorageChooser({ tenantId, clientId, wizardId, onboarding = false, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
   const [kind, setKind] = useState<StorageChoice["kind"]>(initialDraft?.kind ?? initial?.kind ?? "local")
   const [settings, setSettings] = useBackupSettings()
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
@@ -253,8 +252,7 @@ export function StorageChooser({ tenantId, clientId, wizardId, localOnly, onboar
           </div>
         )}
       </div>
-      {localOnly && onboarding && <p className="text-center text-xs text-muted-foreground">This connection supports local backups during setup.</p>}
-      {!localOnly && <div className={cn(onboarding ? "rounded-2xl border" : "space-y-3", onboarding && (kind === "azure" ? "border-muted-foreground bg-secondary/60" : "border-border"))}>
+      <div className={cn(onboarding ? "rounded-2xl border" : "space-y-3", onboarding && (kind === "azure" ? "border-muted-foreground bg-secondary/60" : "border-border"))}>
         {option(
           "azure",
           <Cloud className="h-5 w-5" />,
@@ -363,7 +361,7 @@ export function StorageChooser({ tenantId, clientId, wizardId, localOnly, onboar
             )}
           </div>
         )}
-      </div>}
+      </div>
     </div>
   )
 }

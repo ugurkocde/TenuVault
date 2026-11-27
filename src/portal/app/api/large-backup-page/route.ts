@@ -1,3 +1,4 @@
+import { LOCAL_STORAGE_PREFIX } from "../../../../shared/constants"
 import { backupStoragePath } from "../../../../shared/backup-storage"
 import { NextRequest, NextResponse } from "next/server"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
@@ -11,8 +12,9 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const { tenantId, appId, clientSecret, storageAccountName, backupId, baseline, folder } = body
-    if (!tenantId || !appId || !clientSecret || !storageAccountName || !isBackupName(backupId) || !isBackupName(baseline) || typeof folder !== "string") return NextResponse.json({ error: "Choose an inventory and two backups" }, { status: 400 })
-    const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, { method: "POST", body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope: "https://storage.azure.com/.default", grant_type: "client_credentials" }) })
+    const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+    if (!tenantId || (!local && (!appId || !clientSecret)) || !storageAccountName || !isBackupName(backupId) || !isBackupName(baseline) || typeof folder !== "string") return NextResponse.json({ error: "Choose an inventory and two backups" }, { status: 400 })
+    const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, { method: "POST", body: new URLSearchParams({ client_id: appId ?? "", client_secret: clientSecret ?? "", scope: "https://storage.azure.com/.default", grant_type: "client_credentials" }) })
     if (!tokenResponse.ok) throw new Error("Storage sign-in failed")
     const token = (await tokenResponse.json()).access_token
     const readResponse = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${token}` } })

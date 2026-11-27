@@ -1,5 +1,3 @@
-import { StartNowUpgradeLinks } from "./StartNowNotice"
-import { GRAPH_CLI_CLIENT_ID } from "../../shared/tenant-connection"
 import { useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { DOCS_HOME_URL } from "../../shared/constants"
@@ -46,7 +44,6 @@ export function GroupAccessCard({ tenant, context, onRecheck }: { tenant: GroupT
       setChecking(false)
     }
   }
-  if (tenant.appId.toLowerCase() === GRAPH_CLI_CLIENT_ID) return <StartNowUpgradeLinks tenantId={tenant.tenantId.toLowerCase()} />
   return <div className="space-y-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
     <div role="alert" className="space-y-2">
       <h4 className="font-semibold" tabIndex={-1}>Group access is needed to choose groups</h4>

@@ -1,6 +1,5 @@
 import { TenantConnectionSettings } from "../components/TenantConnectionSettings"
-import { StartNowRecovery } from "../components/StartNowRecovery"
-import { GRAPH_CLI_CLIENT_ID, sharedSignInMethod } from "../../shared/tenant-connection"
+import { isTenuVaultApp } from "../../shared/tenant-connection"
 import { IdentityRestoreSafety } from "../components/IdentityRestoreSafety"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
@@ -438,26 +437,21 @@ export function TenantSettings({ active }: { active: boolean }) {
   // The Change storage dialog closes while its section is hidden; its chooser draft lives here so the reopened dialog picks up where the admin left off.
   const [storageDraft, setStorageDraft] = useState<StorageChooserDraft | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [browserSignIn, setBrowserSignIn] = useState<Record<string, string | undefined>>({})
 
   const refresh = () => void bridge.auth.accounts().then(setAccounts)
   useEffect(refresh, [])
 
   const signIn = async (tenant: Tenant) => {
     const { tenantId, appId } = tenant.credentials!
+    if (!appId) return
     setBusy(tenantId)
-    setBrowserSignIn(current => ({ ...current, [tenant.id]: undefined }))
     try {
-      if (sharedSignInMethod(appId) === "tenuvaultApp") {
+      if (isTenuVaultApp(appId)) {
         const outcome = await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
         if ("error" in outcome) throw new Error(outcome.error.message)
         toast("TenuVault app permissions verified.", "success")
       } else {
         const account = await bridge.auth.reauthenticate(tenantId, appId)
-        if ("error" in account) {
-          setBrowserSignIn(current => ({ ...current, [tenant.id]: appId }))
-          return
-        }
         toast(`Signed in as ${account.username}.`, "success")
       }
       refresh()
@@ -496,13 +490,13 @@ export function TenantSettings({ active }: { active: boolean }) {
             {tenants.map((tenant) => {
               const tenantId = tenant.credentials?.tenantId ?? ""
               const account = accounts.find((a) => a.tenantId === tenantId.toLowerCase())
-              const needsBrowserSignIn = tenant.credentials && browserSignIn[tenant.id] === tenant.credentials.appId
+              const hasClientId = Boolean(tenant.credentials?.appId)
               return (
-                <div key={tenant.id} id={`sign-in-${tenantId.toLowerCase()}`} className="flex scroll-mt-4 items-center gap-3 py-4 first:pt-1 last:pb-0">
+                <div key={tenant.id} id={`sign-in-${tenantId.toLowerCase()}`} className="flex scroll-mt-4 items-start gap-3 py-4 first:pt-1 last:pb-0">
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-gray-900">{tenant.name}</p>
                     <p className="truncate text-xs text-gray-500">
-                      {account ? `Signed in as ${account.username}` : "Not signed in"} · Backups: {storageLabel(tenant.resources?.storageAccountName)}
+                      {!hasClientId ? "Sign-in method required" : account ? `Signed in as ${account.username}` : "Not signed in"} · Backups: {storageLabel(tenant.resources?.storageAccountName)}
                     </p>
                     {tenant.credentials && <TenantConnectionSettings
                       key={tenantId}
@@ -514,9 +508,8 @@ export function TenantSettings({ active }: { active: boolean }) {
                         refresh()
                       }}
                     />}
-                    {needsBrowserSignIn && <StartNowRecovery className="mt-3" onRetry={() => void signIn(tenant)} />}
                   </div>
-                  {!needsBrowserSignIn && <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
+                  {hasClientId && <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     {account ? "Sign in again" : "Sign in"}
                   </Button>}
@@ -543,7 +536,6 @@ export function TenantSettings({ active }: { active: boolean }) {
             <StorageChooser
               tenantId={editing.credentials.tenantId}
               clientId={editing.credentials.appId}
-              localOnly={editing.credentials.appId.toLowerCase() === GRAPH_CLI_CLIENT_ID}
               initial={currentChoice(editing)}
               savedAzure={savedAzureStorage(editing)}
               initialDraft={storageDraft ?? undefined}

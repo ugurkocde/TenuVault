@@ -5,7 +5,7 @@ import { BackupCoverage } from "./BackupCoverage"
 import { moduleForFolder } from "../../shared/services/modules"
 import { coverageIssue } from "../../shared/services/backup-coverage"
 import { NoticeCard, noticeActionClass } from "./NoticeCard"
-import { sharedSignInMethod } from "../../shared/tenant-connection"
+import { isTenuVaultApp } from "../../shared/tenant-connection"
 import { bridge } from "../lib/bridge"
 import { settingsHref } from "../lib/settings-section"
 
@@ -28,15 +28,14 @@ export function ServiceBackupNotice({ tenantId, showCoverage = false }: { tenant
     return () => { active = false; generation++; unsubscribe() }
   }, [tenantId])
   if (!report || report.tenantId.toLowerCase() !== tenantId.toLowerCase()) return null
-  const method = sharedSignInMethod(report.clientId)
+  const tenuvaultApp = isTenuVaultApp(report.clientId)
   const services = `${settingsHref("services")}&tenant=${encodeURIComponent(tenantId)}`
   const missing = report.coverage?.flatMap(row => row.folders.filter(folder => coverageIssue(row, folder) === "permission")) ?? []
   const modules = new Set(missing.map(folder => moduleForFolder(folder)?.module.id))
   const module = modules.size === 1 ? modules.values().next().value : undefined
   const access = report.services.find(service => service.id === module)?.access
   const signIn = `sign-in-${tenantId.toLowerCase()}`
-  const accessTarget = method === "graphCli" ? settingsHref("signin", signIn)
-    : method === "tenuvaultApp" && module && access ? `${settingsHref("signin")}&pack=${module}-${access}#${signIn}`
+  const accessTarget = tenuvaultApp && module && access ? `${settingsHref("signin")}&pack=${module}-${access}#${signIn}`
     : services
   return <>
     {showCoverage && report.coverage && <BackupCoverage coverage={report.coverage} emptyLabel="Off"

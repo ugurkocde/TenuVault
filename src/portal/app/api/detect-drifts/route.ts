@@ -12,7 +12,7 @@ import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
 import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
 import { readJsonCapped } from "../../../../shared/capped-body"
-import { MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
+import { LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
 import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftChange, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "../../../../shared/map-limit"
@@ -54,7 +54,8 @@ export async function POST(request: NextRequest) {
     // Change reports document added and deleted items setting by setting; the drift page does not.
     const documentItems = body.documentItems === true
 
-    if (!tenantId || !appId || !clientSecret || !storageAccountName) {
+    const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+    if (!tenantId || (!local && (!appId || !clientSecret)) || !storageAccountName) {
       return NextResponse.json(
         { error: "Missing required parameters" },
         { status: 400 }
@@ -76,8 +77,8 @@ export async function POST(request: NextRequest) {
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: new URLSearchParams({
-          client_id: appId,
-          client_secret: clientSecret,
+          client_id: appId ?? "",
+          client_secret: clientSecret ?? "",
           scope: "https://storage.azure.com/.default",
           grant_type: "client_credentials",
         }),

@@ -173,7 +173,9 @@ function AuditPageContent() {
       return
     }
 
-    if (!selectedTenant.credentials?.tenantId || !selectedTenant.credentials?.appId || !selectedTenant.credentials?.clientSecret || !selectedTenant.resources?.storageAccountName) {
+    const storageName = selectedTenant.resources?.storageAccountName
+    const localStorage = Boolean(storageName?.startsWith("tvlocal-"))
+    if (!selectedTenant.credentials?.tenantId || (!localStorage && (!selectedTenant.credentials?.appId || !selectedTenant.credentials?.clientSecret)) || !storageName) {
       setLoading(false)
       setError("Selected tenant is missing required credentials or resources. Please reconfigure the tenant.")
       return
@@ -236,7 +238,9 @@ function AuditPageContent() {
     const request = startRequest(statsRequest)
     if (!selectedTenant || !allowed) return
 
-    if (!selectedTenant.credentials?.tenantId || !selectedTenant.credentials?.appId || !selectedTenant.credentials?.clientSecret || !selectedTenant.resources?.storageAccountName) {
+    const storageName = selectedTenant.resources?.storageAccountName
+    const localStorage = Boolean(storageName?.startsWith("tvlocal-"))
+    if (!selectedTenant.credentials?.tenantId || (!localStorage && (!selectedTenant.credentials?.appId || !selectedTenant.credentials?.clientSecret)) || !storageName) {
       return
     }
 

@@ -41,7 +41,6 @@ import { tenantPlanName, tenantLicense, tenantPlan, useLicense, formatDateTime }
 import { PlanBadge } from "@desktop/components/UpgradeNote"
 import { FirstBackupHero, quietLink, scheduleHref, useFirstBackupHero } from "~/components/dashboard/first-backup-hero"
 import { TenantTrialLine } from "@desktop/components/TenantTrial"
-import { startNowTenantId } from "@desktop/components/StartNowNotice"
 import { TrialOfferCard } from "@desktop/components/TrialOfferCard"
 import type { Tenant } from "~/contexts/TenantContext"
 import { allows, type Plan } from "../../../../shared/plans"
@@ -253,7 +252,6 @@ function DashboardContent() {
   const license = tenantLicense(licenseStatus, tenantGuid)
   const plan = tenantPlan(license)
   const trial = license?.entitled && license.source === "trial" && !license.trialAcknowledged ? license : null
-  const startNow = !!startNowTenantId(tenant?.credentials)
   const schedule = schedules.find((s) => s.tenantId === tenantGuid)
   const latest = stats?.latestBackup ?? null
   const protectedBackup = stats?.latestCompleteBackup ?? null
@@ -298,7 +296,7 @@ function DashboardContent() {
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8">
-      {showHero && <FirstBackupHero key={tenantGuid} tenantId={tenantGuid} backup={protectedBackup} scheduleAction={scheduleAction} startNow={startNow} dismiss={hero.dismiss} />}
+      {showHero && <FirstBackupHero key={tenantGuid} tenantId={tenantGuid} backup={protectedBackup} scheduleAction={scheduleAction} dismiss={hero.dismiss} />}
       {trial && <TenantTrialLine key={trial.tenantId} tenant={trial} />}
       {/* Header: title and tenant on the left, date and controls on the right */}
       <header className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">

@@ -132,10 +132,11 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
   const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const azurePaused = !!(current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX))
+  const otherPaused = !azurePaused && Boolean(current?.enabled && current.pausedReason)
   const fallbackWeekday = community && current?.frequency === "daily" ? current.fallbackWeekday : undefined
   const nextComputerRuns = useMemo(
-    () => (enabled && !azurePaused ? nextRunsInZone({ frequency: fallbackWeekday === undefined ? frequency : "weekly", time, weekday: fallbackWeekday ?? weekday }, localTimeZone, new Date(), 4) : []),
-    [enabled, frequency, time, weekday, localTimeZone, azurePaused, fallbackWeekday],
+    () => (enabled && !azurePaused && !otherPaused ? nextRunsInZone({ frequency: fallbackWeekday === undefined ? frequency : "weekly", time, weekday: fallbackWeekday ?? weekday }, localTimeZone, new Date(), 4) : []),
+    [enabled, frequency, time, weekday, localTimeZone, azurePaused, otherPaused, fallbackWeekday],
   )
   const bothRunners = !!(current?.enabled && cloud.config?.linked)
 
@@ -200,7 +201,19 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         ) : (
         <>
 
-        {current?.enabled && community && !azurePaused && current.frequency === "daily" && <NoticeCard summary="Runs weekly on Community (daily needs Pro)" />}
+        {current?.enabled && community && !azurePaused && !otherPaused && current.frequency === "daily" && <NoticeCard summary="Runs weekly on Community (daily needs Pro)" />}
+        {otherPaused && current?.pausedReason && (
+          <NoticeCard
+            tone="warning"
+            summary={current.pausedReason}
+            details="Your existing backups stay intact and readable. Scheduled backups will resume automatically once this is resolved."
+            action={
+              <Link to={settingsHref("signin", `sign-in-${tenantId.toLowerCase()}`)} className={noticeActionClass}>
+                Choose a sign-in method
+              </Link>
+            }
+          />
+        )}
         {current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && (
           <NoticeCard summary="Paused: Azure storage needs Pro" action={<Button disabled={saving || !onStorageChange || !tenant?.credentials} onClick={async () => {
               if (!tenant?.credentials || !onStorageChange || !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
@@ -388,7 +401,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           </div>
           <div>
             <dt className="text-xs text-gray-500">Next backup</dt>
-            <dd className="mt-0.5 text-base text-gray-900">{azurePaused ? "Paused: Azure storage needs Pro" : formatWhen(current?.nextRunAt)}</dd>
+            <dd className="mt-0.5 text-base text-gray-900">{azurePaused ? "Paused: Azure storage needs Pro" : current?.pausedReason ?? formatWhen(current?.nextRunAt)}</dd>
           </div>
           <div>
             <dt className="text-xs text-gray-500">{current?.lastStatus === "Cancelled" ? "Last automatic backup cancelled" : current?.lastStatus === "Failed" ? "Last automatic backup attempt failed" : "Last automatic backup"}</dt>

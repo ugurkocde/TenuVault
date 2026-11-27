@@ -252,7 +252,8 @@ export async function POST(request: NextRequest, runStatus?: RunStatus) {
       storageAccountName
     } = body
 
-    if (!tenantId || !appId || !clientSecret || !subscriptionId || !resourceGroupName || !storageAccountName) {
+    const isLocalStorage = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+    if (!tenantId || (!isLocalStorage && (!appId || !clientSecret)) || !subscriptionId || !resourceGroupName || !storageAccountName) {
       return NextResponse.json(
         { error: "Missing required parameters" },
         { status: 400 }
@@ -268,8 +269,8 @@ export async function POST(request: NextRequest, runStatus?: RunStatus) {
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: new URLSearchParams({
-          client_id: appId,
-          client_secret: clientSecret,
+          client_id: appId ?? "",
+          client_secret: clientSecret ?? "",
           scope: "https://storage.azure.com/.default",
           grant_type: "client_credentials",
         }),

@@ -6,28 +6,27 @@ import type { ConnectionHealthReport } from "../../shared/connection-health/mode
 import { moduleForFolder, MODULE_BY_ID, type ModuleId } from "../../shared/services/modules"
 import { missingPackScopes, servicePack } from "../../shared/services/permission-packs"
 import { backupServiceForFolder, BACKUP_SERVICES } from "../../shared/services/presentation"
-import { sharedSignInMethod } from "../../shared/tenant-connection"
+import { isTenuVaultApp } from "../../shared/tenant-connection"
 import { bridge } from "../lib/bridge"
 import { settingsHref } from "../lib/settings-section"
 import { NoticeCard, noticeActionClass } from "./NoticeCard"
 import { PermissionRoutes } from "./ServicesSettings"
-import { StartNowUpgradeLinks } from "./StartNowNotice"
 import { TenuVaultConsent } from "./TenuVaultConsent"
 
 type Credentials = { tenantId: string; appId: string }
-type AccessIssue = { id: ModuleId; label: string; missing: string[]; method: "graphCli" | "tenuvaultApp" | "ownApp"; enabled?: boolean; areas?: string[] }
+type AccessIssue = { id: ModuleId; label: string; missing: string[]; method: "tenuvaultApp" | "ownApp"; enabled?: boolean; areas?: string[] }
 
 export function useRestoreAccess(credentials: Credentials | undefined, active: boolean) {
   const tenantId = credentials?.tenantId.toLowerCase()
   const clientId = credentials?.appId.toLowerCase()
-  const method = sharedSignInMethod(clientId ?? null) ?? "ownApp"
+  const method = isTenuVaultApp(clientId) ? "tenuvaultApp" : "ownApp"
   const [report, setReport] = useState<ConnectionHealthReport | null>(null)
   const [verified, setVerified] = useState<{ tenantId: string; scopes: string[] } | null>(null)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState("")
   const generation = useRef(0)
   const refresh = useCallback(async (again = false) => {
-    if (!tenantId || !clientId || method === "graphCli" || !bridge.health?.check) return
+    if (!tenantId || !clientId || !bridge.health?.check) return
     const sent = ++generation.current
     setChecking(true)
     setError("")
@@ -62,7 +61,6 @@ export function useRestoreAccess(credentials: Credentials | undefined, active: b
     if (!entry || !type || ["none", "metadata"].includes(restoreCapability(type))) return
     const id = entry.module.id
     const label = BACKUP_SERVICES.find(service => service.id === backupServiceForFolder(folder))?.label ?? entry.module.label
-    if (method === "graphCli") return { id, label, missing: [], method }
     if (method === "tenuvaultApp" && current && sharedScopes) {
       if (entry.part.restore.delegated === "unsupported") return
       const service = current.services.find(service => service.id === id)
@@ -82,7 +80,6 @@ export function useRestoreAccess(credentials: Credentials | undefined, active: b
     for (const folder of new Set(folders)) {
       const issue = issueFor(folder)
       if (!issue) continue
-      if (issue.method === "graphCli") return [issue]
       const previous = issues.get(issue.id)
       issues.set(issue.id, previous ? { ...issue, missing: [...new Set([...previous.missing, ...issue.missing])] } : issue)
     }
@@ -100,7 +97,6 @@ export function RestoreAccess({ credentials, issues, checking, error, onCheck }:
   onCheck: () => Promise<void> | void
 }) {
   const { tenantId, appId: clientId } = credentials
-  if (issues[0]?.method === "graphCli") return <StartNowUpgradeLinks tenantId={tenantId.toLowerCase()} message="Start now is read-only. Restore needs a different sign-in." />
   const services = [...new Set(issues.map(issue => issue.label))]
   const accessLink = issues.every(issue => issue.method === "tenuvaultApp" && issue.enabled)
     ? settingsHref("signin", `sign-in-${tenantId.toLowerCase()}`)

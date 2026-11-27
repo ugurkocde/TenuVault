@@ -484,7 +484,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, plan, communit
     if (backupOnly) return backupOnly
     const issue = access.issueFor(item.folder)
     // Backup access in the source is enough when the selected policies will be copied elsewhere.
-    if (issue && (issue.method === "graphCli" || !canCopyToTenants || !copyCandidates.length)) return "Restore access is required."
+    if (issue && (!canCopyToTenants || !copyCandidates.length)) return "Restore access is required."
     return mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
   }
 

@@ -1,3 +1,4 @@
+import { LOCAL_STORAGE_PREFIX } from "../../../../../shared/constants"
 import { isGuid } from "../../../../../shared/security"
 import { mainAuditSink } from "../../../../../main/api/audit-sink"
 import { type NextRequest, NextResponse } from "next/server"
@@ -108,7 +109,8 @@ export async function POST(request: NextRequest) {
       exportOptions
     } = body
 
-    if (!tenantId || !appId || !clientSecret || !storageAccountName || !exportOptions) {
+    const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+    if (!tenantId || (!local && (!appId || !clientSecret)) || !storageAccountName || !exportOptions) {
       return NextResponse.json(
         { error: "Missing required parameters" },
         { status: 400 }
@@ -119,7 +121,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get access token for Azure Storage
-    const accessToken = await getAccessToken(tenantId, appId, clientSecret)
+    const accessToken = await getAccessToken(tenantId, appId ?? "", clientSecret ?? "")
 
     // Create storage service
     const storageService = new AuditStorageService({

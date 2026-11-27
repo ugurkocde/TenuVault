@@ -1,18 +1,20 @@
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import type { PackConsentAction, PackConsentPlan, PackConsentResult } from "../../shared/pack-consent"
-import { GRAPH_CLI_UPGRADE, type ConnectionSwitchResult } from "../../shared/tenant-connection"
+import { TENUVAULT_APP_UNAVAILABLE, type ConnectionSwitchResult } from "../../shared/tenant-connection"
 import type { ModuleId } from "../../shared/services/modules"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
 
-export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack, onChanged, restore, onRestoreVerified, storage }: {
+export function TenuVaultConsent({ tenantId, plan, active, label, variant = "outline", icon, initialPack, onChanged, restore, onRestoreVerified, storage }: {
   tenantId: string
   storage?: { wizardId?: string; onVerified: () => void }
   plan: PackConsentPlan
   active: boolean
-  upgrade?: boolean
+  label?: string
+  variant?: "default" | "outline"
+  icon?: ReactNode
   restore?: { id: ModuleId; label: string }
   onRestoreVerified?: () => void
   initialPack?: string
@@ -46,7 +48,7 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
     try {
       const fresh = restore || storage ? plan : await bridge.auth.packConsentPlan(tenantId)
       if (!fresh?.packs.length) {
-        toast("TenuVault app sign-in is currently unavailable.", "error")
+        toast(TENUVAULT_APP_UNAVAILABLE, "error")
         return
       }
       setCurrentPlan(fresh)
@@ -114,8 +116,9 @@ export function TenuVaultConsent({ tenantId, plan, active, upgrade, initialPack,
   }
 
   return <>
-    <Button variant="outline" size="sm" disabled={busy} onClick={() => void openPlan()}>
-      {storage ? "Review Azure permission packs" : restore ? `Allow restore for ${restore.label}` : active ? "Review permission packs" : upgrade ? GRAPH_CLI_UPGRADE : "Use TenuVault app"}
+    <Button variant={variant} size="sm" disabled={busy} onClick={() => void openPlan()}>
+      {icon}
+      {label ?? (storage ? "Review Azure permission packs" : restore ? `Allow restore for ${restore.label}` : active ? "Review permission packs" : "Use TenuVault app")}
     </Button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">

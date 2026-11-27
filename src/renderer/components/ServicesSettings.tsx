@@ -1,9 +1,8 @@
 import { expandedEntraScope } from "../../shared/intune/entra-scope"
 import { privilegedRestoreEnabled } from "../../shared/intune/directory-review-folders"
 import { NoticeCard, noticeActionClass } from "./NoticeCard"
-import { BackupCoverage } from "./BackupCoverage"
 import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
-import { needsAccessText, StartNowAccessHelp } from "./BackupAccessHelp"
+import { needsAccessText } from "./BackupAccessHelp"
 import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
 import { servicesStatusKey } from "../features/notifications/optional-permissions"
 import { ApplicationRestoreDisclosure } from "./ApplicationRestoreDisclosure"
@@ -19,7 +18,6 @@ import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import type { ServicesStatus } from "../../shared/ipc"
 import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
 import { PERSONAL_DATA } from "../../shared/services/onboarding"
-import { graphCliCoverage } from "../../shared/services/graph-cli-coverage"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
 import { MODULE_BY_ID, entraApiPermissionsUrl } from "../../shared/services/modules"
 import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
@@ -78,14 +76,10 @@ export function PermissionRoutes({ report, missing, inApp = false, restoring = f
   </div>
 }
 
-function causeText(cause: keyof typeof HEALTH_CAUSE_TEXT, readOnly?: boolean): string {
-  return readOnly && cause === "permission" ? "Start now lacks a required permission. Change sign-in method for more coverage." : HEALTH_CAUSE_TEXT[cause]
-}
-
-function Verification({ value, readOnly }: { value: AreaHealth["verified"]; readOnly?: boolean }) {
+function Verification({ value }: { value: AreaHealth["verified"] }) {
   return <div className="space-y-1 text-xs text-gray-600">
     <p>{verificationText(value)}</p>
-    {value.cause && <p>{causeText(value.cause, readOnly)}</p>}
+    {value.cause && <p>{HEALTH_CAUSE_TEXT[value.cause]}</p>}
   </div>
 }
 
@@ -105,14 +99,14 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
     {service.id === "entra" && area.id === "governance" && area.hasTypes && <p className="text-xs text-gray-600">{expandedEntraScope ? "Access packages, review definitions, lifecycle workflows and terms of use. PDFs, review decisions and workflow history are excluded." : "Agreement settings and file metadata. PDFs and individual acceptances are excluded."}</p>}
     {privilegedRestoreEnabled && service.id === "entra" && area.id === "applications" && <ApplicationRestoreDisclosure />}
     {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
-    <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: {deferred ? "Available in a later version" : report.readOnly ? "Unavailable with Start now" : <PermissionState state={area.restore} />}.</p>
-    {!deferred && !report.readOnly && area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
-    {!area.hasTypes ? <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : area.enabled ? <Verification value={area.verified} readOnly={report.readOnly} /> : <p className="text-xs text-gray-500">Not included in backups.</p>}
+    <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: {deferred ? "Available in a later version" : <PermissionState state={area.restore} />}.</p>
+    {!deferred && area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
+    {!area.hasTypes ? <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : area.enabled ? <Verification value={area.verified} /> : <p className="text-xs text-gray-500">Not included in backups.</p>}
     {area.losses.length > 0 && <NoticeCard summary={`Backup access was lost for ${new Set(area.losses.map(loss => loss.folder)).size} types.`}
       details={<ul className="space-y-1">{area.losses.map(loss => <li key={`${loss.mode}/${loss.folder}`}>
-        {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {causeText(loss.cause, report.readOnly && loss.mode === "delegated")}
+        {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {HEALTH_CAUSE_TEXT[loss.cause]}
       </li>)}</ul>} />}
-    {!report.readOnly && area.enabled && area.missing.length > 0 && <PermissionRoutes inApp report={report} missing={area.missing} />}
+    {area.enabled && area.missing.length > 0 && <PermissionRoutes inApp report={report} missing={area.missing} />}
   </div>
 }
 
@@ -137,27 +131,27 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
     {readerOnly && <NoticeCard className="mt-3" summary="Only the Backup Reader can back up this service."
       details="Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it." />}
     {needsAccess && coverage && <NoticeCard className="mt-3" summary={needsAccessText([label])}
-      action={(report.readOnly || report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID) &&
+      action={report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID &&
         <Link className={noticeActionClass} to={signInSettings}>Review sign-in options</Link>}
       details={<>
         <p>Your choice is saved. Backups skip this service until it can be read.</p>
-        {report.readOnly ? <StartNowAccessHelp /> : <p>Ask a Microsoft administrator to approve backup access.</p>}
+        <p>Ask a Microsoft administrator to approve backup access.</p>
         <p className="font-medium">Areas needing access</p>
         <ul className="list-disc pl-4">{backupAreaCoverage(coverage).missing.map(area => <li key={area}>{area}</li>)}</ul>
       </>} />}
     <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
     <div className="mt-3 space-y-1">
-      <p className="text-xs text-gray-600">Backup: <PermissionState state={service.permissions} />. Restore: {report.readOnly ? "Unavailable with Start now" : <PermissionState state={restore} />}.</p>
-      {!report.readOnly && service.enabled && service.permissions === "present" && service.access === "restore" && service.missing.length > 0 && <p className="text-sm text-gray-600">Backup permissions are present. Restore needs: {service.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
+      <p className="text-xs text-gray-600">Backup: <PermissionState state={service.permissions} />. Restore: <PermissionState state={restore} />.</p>
+      {service.enabled && service.permissions === "present" && service.access === "restore" && service.missing.length > 0 && <p className="text-sm text-gray-600">Backup permissions are present. Restore needs: {service.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
       {!service.enabled && <p className="text-sm text-gray-600">Off. New manual and scheduled backups leave out this service.</p>}
-      {!service.hasTypes ? <p className="text-sm text-gray-600">This version has no backup types for {service.label} yet. Turning it on saves your choice; it does not back up these areas yet.</p> : service.enabled ? <Verification value={service.verified} readOnly={report.readOnly} /> : null}
+      {!service.hasTypes ? <p className="text-sm text-gray-600">This version has no backup types for {service.label} yet. Turning it on saves your choice; it does not back up these areas yet.</p> : service.enabled ? <Verification value={service.verified} /> : null}
       {losses.length > 0 && <p className="text-sm text-amber-800">{losses.some(loss => loss.mode === "app-only") ? "The Backup Reader lost access, even if your sign-in verified a backup." : "Your sign-in lost access."} See the affected areas below.</p>}
       {conditionalAccess && <p className="text-xs text-gray-600">Conditional Access: {conditionalAccess.enabled ? "On" : "Off"}, managed under Areas and access.</p>}
     </div>
-    {!report.readOnly && service.enabled && service.missing.length > 0 && <div className="mt-3"><PermissionRoutes inApp report={report} missing={service.missing} /></div>}
+    {service.enabled && service.missing.length > 0 && <div className="mt-3"><PermissionRoutes inApp report={report} missing={service.missing} /></div>}
     <details className="mt-3" data-service-details>
       <summary className="cursor-pointer text-sm font-medium text-gray-700">Areas and access ({service.areas.length}{conditionalAccess ? " + Conditional Access" : ""})</summary>
-      {!report.readOnly && <div data-no-select className="my-3 space-y-1 text-xs text-gray-600">
+      <div data-no-select className="my-3 space-y-1 text-xs text-gray-600">
         <label className="flex flex-wrap items-center gap-2">Access to request
           <select aria-label={`${label} access to request`} className="rounded-lg border border-border bg-card p-2 text-foreground" disabled={busy} value={service.access} onChange={event => run(() => bridge.services.setAccess(report.tenantId, service.id, event.target.value as "backup" | "restore"))}>
             <option value="backup">Backup</option><option value="restore">Backup and restore</option>
@@ -165,18 +159,17 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
         </label>
         <p>This choice names the permissions to request. It grants nothing and does not block a restore your sign-in allows.</p>
         {!privilegedRestoreEnabled && service.id === "entra" && <p>Restore for app registrations, enterprise apps, directory roles, PIM and administrative units comes in a later version.</p>}
-      </div>}
+      </div>
       {conditionalAccess && <Service service={conditionalAccess} report={report} busy={busy} toggle={toggle} run={run} />}
       {service.areas.map(area => <Area key={area.id} area={area} service={service} report={report} busy={busy} run={run} />)}
     </details>
   </section>
 }
 
-function SignInState({ label, state, storage = false, readOnly }: { label: string; state: SignInHealth; storage?: boolean; readOnly?: boolean }) {
-  const needsDifferentMethod = readOnly && ["consentMissing", "registrationNotFoundInTenant", "servicePrincipalMissing"].includes(state.state)
+function SignInState({ label, state, storage = false }: { label: string; state: SignInHealth; storage?: boolean }) {
   return <div className="min-w-0 rounded-xl bg-muted p-3">
     <h3 className="text-sm font-medium text-gray-900">{label}</h3>
-    <p className="mt-1 text-xs text-gray-600">{needsDifferentMethod ? "Start now is unavailable in this tenant. Change sign-in method to continue." : (storage ? STORAGE_HEALTH_TEXT : SIGN_IN_HEALTH_TEXT)[state.state]}</p>
+    <p className="mt-1 text-xs text-gray-600">{(storage ? STORAGE_HEALTH_TEXT : SIGN_IN_HEALTH_TEXT)[state.state]}</p>
     {state.checkedAt && <p className="mt-1 text-xs text-gray-500">Checked {healthDate(state.checkedAt)}</p>}
     {state.code && <p className="mt-1 break-words text-xs text-gray-600">{state.code}{state.link && <>: <a href={state.link} target="_blank" rel="noreferrer" className="underline">Microsoft's description</a></>}</p>}
     {state.state !== "healthy" && state.state !== "local" && <Link className="mt-2 inline-block text-xs font-medium text-blue-700 underline" to={settingsHref(storage ? "storage" : "signin")}>{storage ? "Open storage settings" : "Open sign-in settings"}</Link>}
@@ -276,21 +269,14 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
     {busy && <p role="status" className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />Checking connection health...</p>}
     {error && <p role="alert" className="text-sm text-red-700">Connection health could not be checked: {error} Select Check again.</p>}
     {report && active && <>
-      {report.readOnly && <section className="space-y-2" aria-label="Start now backup coverage">
-        <h3 className="text-sm font-medium">Backup coverage from granted scopes</h3>
-        <BackupCoverage coverage={graphCliCoverage(report.granted ? new Set(report.granted) : undefined)} />
-        <p className="text-xs text-gray-600">Your Microsoft role and service licenses can limit what a backup reads.</p>
-      </section>}
       <div className="grid gap-2 sm:grid-cols-3">
-        <SignInState label="Microsoft Graph sign-in" state={report.graph} readOnly={report.readOnly} />
+        <SignInState label="Microsoft Graph sign-in" state={report.graph} />
         <div className="min-w-0 rounded-xl bg-muted p-3"><h3 className="text-sm font-medium text-gray-900">Backup Reader</h3>
-          {report.readOnly ? <p className="mt-1 text-xs text-gray-600">Scheduled backups use your Start now sign-in. To use a Backup Reader, change the sign-in method.</p> : <>
-            <p className="mt-1 text-xs text-gray-600">{READER_HEALTH_TEXT[report.reader.state]}</p>
-            {report.reader.notAfter && <p className="mt-1 text-xs text-gray-500">Certificate expires {healthDate(report.reader.notAfter)}{report.reader.daysLeft !== undefined ? ` (${report.reader.daysLeft} days left)` : ""}.</p>}
-            {report.reader.code && <p className="mt-1 text-xs text-gray-600">{report.reader.code}{report.reader.link && <>: <a className="underline" href={report.reader.link} target="_blank" rel="noreferrer">Microsoft's description</a></>}</p>}
-            {report.reader.roleChange && <p className="mt-1 break-words text-xs text-gray-600">Added: {report.reader.roleChange.added.join(", ") || "none"}. Removed: {report.reader.roleChange.removed.join(", ") || "none"}.</p>}
-            <Link className="mt-2 inline-block text-xs font-medium text-blue-700 underline" to={settingsHref("background")}>Open Backup Reader settings</Link>
-          </>}
+          <p className="mt-1 text-xs text-gray-600">{READER_HEALTH_TEXT[report.reader.state]}</p>
+          {report.reader.notAfter && <p className="mt-1 text-xs text-gray-500">Certificate expires {healthDate(report.reader.notAfter)}{report.reader.daysLeft !== undefined ? ` (${report.reader.daysLeft} days left)` : ""}.</p>}
+          {report.reader.code && <p className="mt-1 text-xs text-gray-600">{report.reader.code}{report.reader.link && <>: <a className="underline" href={report.reader.link} target="_blank" rel="noreferrer">Microsoft's description</a></>}</p>}
+          {report.reader.roleChange && <p className="mt-1 break-words text-xs text-gray-600">Added: {report.reader.roleChange.added.join(", ") || "none"}. Removed: {report.reader.roleChange.removed.join(", ") || "none"}.</p>}
+          <Link className="mt-2 inline-block text-xs font-medium text-blue-700 underline" to={settingsHref("background")}>Open Backup Reader settings</Link>
         </div>
         <SignInState label="Backup storage" state={report.storage} storage />
       </div>
@@ -301,7 +287,7 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
         const service = report.services.find(entry => entry.id === id)
         return service && <Service key={service.id} service={service} conditionalAccess={service.id === "entra" ? report.services.find(entry => entry.id === "conditionalAccess") : undefined} report={report} busy={busy} toggle={(service, enabled) => void toggle(service, enabled)} run={action => void run(action)} />
       })}
-      {!report.readOnly && <OptionalPermissions tenantId={tenantId} entries={optionalPermissionStatus(report.granted ? { kind: "delegated", permissions: new Set(report.granted) } : undefined)} clientId={clientId} checking={busy} />}
+      <OptionalPermissions tenantId={tenantId} entries={optionalPermissionStatus(report.granted ? { kind: "delegated", permissions: new Set(report.granted) } : undefined)} clientId={clientId} checking={busy} />
     </>}
   </div>
 }

@@ -52,6 +52,7 @@ import { useScoreInvalidation } from "../features/scores/invalidate"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
 import { setupCallUrl } from "../../shared/setup-call"
 import { SignInBanner } from "./SignInBanner"
+import { ChooseSignInMethodBanner } from "./ChooseSignInMethodCard"
 import { SupportDialog } from "./SupportDialog"
 import { FeedbackDialog } from "./FeedbackDialog"
 import { feedbackPageLabel, type FeedbackSnapshot } from "../../shared/feedback"
@@ -663,6 +664,7 @@ export function DesktopLayout() {
         {!appBackupPage && <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/portal/dashboard" && pathname !== "/license"} />}
         {!appBackupPage && !trialEndVisible(licenseStatus) && <CommunityChoiceBanner />}
         {!appBackupPage && !focus && <LicenseBanner />}
+        {!focus && <ChooseSignInMethodBanner />}
         {!focus && <SignInBanner hidden={appBackupPage} />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}

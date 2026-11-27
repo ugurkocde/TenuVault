@@ -2,8 +2,7 @@ import { NoticeCard } from "../components/NoticeCard"
 import { OnboardingHeading, onboardingCard, onboardingLink, onboardingPrimary } from "../components/OnboardingCard"
 import { OnboardingSignIn, type MethodAvailability } from "../components/OnboardingSignIn"
 import { BrowserSignInWait, OtherTenant } from "../components/OnboardingConnection"
-import { StartNowRecovery } from "../components/StartNowRecovery"
-import { GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED, GRAPH_CLI_SIGN_IN_REQUIREMENTS, type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
+import { type BackupScopeCoverage, type SignInMethod, type WizardSignInResult } from "../../shared/tenant-connection"
 import { MODULES } from "../../shared/services/modules"
 import { typeForFolder } from "../../shared/intune/registry"
 import { BACKUP_SERVICES } from "../../shared/services/presentation"
@@ -12,14 +11,13 @@ import { serializeTenants } from "~/lib/tenant-state"
 import { PermissionRoutes, Switch } from "../components/ServicesSettings"
 import { choiceLabel, DEFAULT_ONBOARDING_CHOICE, ONBOARDING_ENTRA_CHOICE, hasOnboardingBackups } from "../../shared/services/onboarding"
 import { graphPermissions, missingForChoice, type PermissionChoice } from "../../shared/services/manifest"
-import { chosenBackupCoverage } from "../../shared/services/graph-cli-coverage"
-import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
-import { listNames, needsAccessText, StartNowAccessHelp } from "../components/BackupAccessHelp"
+import { backupAreaCoverage, chosenBackupCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
+import { listNames, needsAccessText } from "../components/BackupAccessHelp"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
-import { AlertTriangle, ArrowLeft, ArrowRight, Ban, CheckCircle2, Cloud, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ScanSearch, XCircle, Zap } from "lucide-react"
+import { AlertTriangle, ArrowLeft, ArrowRight, Ban, CheckCircle2, Cloud, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ScanSearch, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants } from "~/contexts/TenantContext"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
@@ -72,7 +70,7 @@ type JobStatus = BackupJobDisplay
 type Step = -2 | 0 | 1 | 2 | 3 | 4
 type PermissionResult = { missing: string[]; error?: string; coverage?: BackupScopeCoverage[] }
 
-const EMPTY_METHODS: MethodAvailability = { graphCli: null, tenuvaultApp: null }
+const EMPTY_METHODS: MethodAvailability = { tenuvaultApp: null }
 
 /** The first backup's state: running, completed, cancelled by the user (grey) or failed. */
 export function JobStateIcon({ job }: { job: Pick<JobStatus, "isComplete" | "isSuccessful" | "status" | "progressMessage" | "results"> }) {
@@ -106,10 +104,6 @@ export default function OnboardingPage() {
   const [publicError, setPublicError] = useState("")
   const [sharedSignIn, setSharedSignIn] = useState<WizardSignInResult | null>(null)
   const [retryTenant, setRetryTenant] = useState<string>()
-  const [publicCode, setPublicCode] = useState("")
-  const needsBrowserSignIn = method === "graphCli" && publicCode === GRAPH_CLI_BROWSER_SIGN_IN_REQUIRED
-  // Start now cannot work in this tenant (for example no existing grant): trying again cannot help, so the next step is another method.
-  const startNowRefused = method === "graphCli" && Boolean(publicCode) && !needsBrowserSignIn && publicCode !== "AADSTS65004" && publicCode !== "cancelled"
   const [consentBusy, setConsentBusy] = useState<"open" | "handoff" | null>(null)
   const [consentStatus, setConsentStatus] = useState("")
   const sharedDraft = useRef<string | undefined>(undefined)
@@ -190,7 +184,6 @@ export default function OnboardingPage() {
         if (current) setAvailable(previous => ({ ...previous, [key]: enabled }))
       })
     }
-    check("graphCli", bridge.auth.graphCliAvailable)
     check("tenuvaultApp", bridge.auth.tenuvaultAppAvailable)
     return () => { current = false }
   }, [step])
@@ -473,7 +466,6 @@ export default function OnboardingPage() {
     setChoice(null)
     setAddError(null)
     setPublicError("")
-    setPublicCode("")
     setConsentStatus("")
     setRetryTenant(undefined)
     setPublicTenant("")
@@ -499,7 +491,6 @@ export default function OnboardingPage() {
     setAddError(null)
     setMethod(next)
     setRetryTenant(undefined)
-    setPublicCode("")
     setConsentStatus("")
     setPublicTenant("")
     setFields({ tenant: "", clientId: "", displayName: "" })
@@ -527,7 +518,6 @@ export default function OnboardingPage() {
     if (account) { setRetryTenant(account.tenantId); setPublicTenant(account.tenantId) }
     setPublicBusy(true)
     setPublicError("")
-    setPublicCode("")
     setConsentStatus("")
     try {
       const outcome = await bridge.auth.wizardStage(tenant, method, services)
@@ -536,9 +526,7 @@ export default function OnboardingPage() {
         return
       }
       if ("error" in outcome) {
-        const declined = method === "graphCli" && (outcome.error.code === "AADSTS65004" || outcome.error.code === "cancelled")
-        setPublicCode(outcome.error.code)
-        setPublicError(declined ? "Sign-in was cancelled in the browser." : outcome.error.message.replace(/(?:permission )?\bpacks?\b/gi, "permissions").replace(" in Sign-in and access.", "."))
+        setPublicError(outcome.error.message.replace(/(?:permission )?\bpacks?\b/gi, "permissions").replace(" in Sign-in and access.", "."))
       } else signedInShared(outcome.result)
     } catch {
       if (mounted.current && startedIn === currentAttempt.current) setPublicError("Could not finish signing in. Try again.")
@@ -907,39 +895,28 @@ export default function OnboardingPage() {
 
           {step === 1 && method !== "ownApp" && (
             <div className="space-y-4 text-center">
-              <OnboardingHeading id="setup-step-1" title={needsBrowserSignIn ? "Sign in to Microsoft first" : "Sign in with Microsoft"} icon={method === "graphCli" ? <Zap /> : <Cloud />}
-                subtitle={publicBusy || consentBusy === "open" || needsBrowserSignIn ? undefined : method === "graphCli"
-                  ? "Use existing read access. Nothing is created in your tenant."
-                  : "An admin approves read access for TenuVault once."} />
-              {publicError && !needsBrowserSignIn && <div role="alert" className={cn("space-y-1 text-sm", startNowRefused ? "text-foreground" : "text-red-700")}>
+              <OnboardingHeading id="setup-step-1" title="Sign in with Microsoft" icon={<Cloud />}
+                subtitle={publicBusy || consentBusy === "open" ? undefined : "An admin approves read access for TenuVault once."} />
+              {publicError && <div role="alert" className="space-y-1 text-sm text-red-700">
                 <p>{publicError}</p>
-                {method === "graphCli" && publicCode.startsWith("AADSTS") && !publicError.includes(publicCode) && <p className="text-xs">{publicCode}</p>}
               </div>}
               {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
               {publicBusy || consentBusy === "open"
                 ? <BrowserSignInWait kind={consentBusy === "open" ? "consent" : "signin"} cancel={() => void bridge.auth.cancelSignIn()} />
-                : needsBrowserSignIn ? <>
-                  <StartNowRecovery centered buttonClassName={onboardingPrimary} onRetry={() => void signInShared()} />
-                  <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={false} expectedTenant={retryTenant} />
-                </> : startNowRefused ? <>
-                  <Button className={onboardingPrimary} onClick={() => void chooseMethod("ownApp")}>Use your own app registration</Button>
-                  <div><button type="button" className={onboardingLink} onClick={() => void signInShared()}>Try again</button></div>
-                  <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={false} expectedTenant={retryTenant} />
-                </> : <>
+                : <>
                   <Button className={onboardingPrimary} disabled={Boolean(consentBusy)} onClick={() => void signInShared()}>
                     <span aria-hidden="true" className="grid size-4 grid-cols-2 gap-0.5"><span className="bg-[#f25022]" /><span className="bg-[#7fba00]" /><span className="bg-[#00a4ef]" /><span className="bg-[#ffb900]" /></span>
                     {publicError ? "Try again" : "Sign in with Microsoft"}
                   </Button>
-                  {method === "graphCli" && <p className="mx-auto max-w-md text-xs text-muted-foreground">{GRAPH_CLI_SIGN_IN_REQUIREMENTS}</p>}
-                  {method === "tenuvaultApp" && <div><button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("handoff")}>Send to my admin</button></div>}
+                  <div><button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("handoff")}>Send to my admin</button></div>
                   <OtherTenant tenant={publicTenant} onChange={setPublicTenant} disabled={Boolean(consentBusy)} expectedTenant={retryTenant} />
-                  {method === "tenuvaultApp" && <details className="space-y-3" open={publicError ? true : undefined}>
+                  <details className="space-y-3" open={publicError ? true : undefined}>
                     <summary className={cn("cursor-pointer", onboardingLink)}>Permissions an admin will approve ({appPermissions.length})</summary>
                     <ul className="max-h-40 overflow-auto break-words rounded-xl bg-secondary p-3 text-left text-xs">
                       {appPermissions.map(scope => <li key={scope}>{scope}</li>)}
                     </ul>
                     <button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("open")}>Open admin consent</button>
-                  </details>}
+                  </details>
                 </>}
               {consentStatus && <p role="status" className="text-sm text-muted-foreground">{consentStatus}</p>}
             </div>
@@ -1058,7 +1035,6 @@ export default function OnboardingPage() {
                 <div className="flex flex-col items-center gap-3" aria-label="Check actions">
                   {!nothingReadable && account && <Button className={onboardingPrimary} onClick={continueToStorage}>{!checkPassed && readable.length ? `Continue with ${names}` : "Continue"}</Button>}
                   {nothingReadable && <>
-                    {method === "graphCli" && <Button className={onboardingPrimary} onClick={() => void chooseMethod("ownApp")}>Use your own app registration</Button>}
                     {method === "tenuvaultApp" && <Button className={onboardingPrimary} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("open")}>Open admin consent</Button>}
                     {method === "ownApp" && <Button className={onboardingPrimary} onClick={() => void copyAdminInstructions()}>Copy instructions for my admin</Button>}
                     <button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={checkAgain}>Check again</button>
@@ -1075,14 +1051,9 @@ export default function OnboardingPage() {
                     {gaps.length > 0 && <ul className="space-y-2" aria-label="Areas needing access">
                       {gaps.map(service => <li key={service.label}><span className="font-medium">{service.label} ({service.missing.length})</span><p>{service.missing.join(", ")}</p></li>)}
                     </ul>}
-                    {method === "graphCli" && <StartNowAccessHelp />}
                     {method === "tenuvaultApp" && <p>Ask a Microsoft administrator to approve backup access, then check again.</p>}
                     {method === "ownApp" && <p>Ask your Microsoft administrator to add access to this app registration.</p>}
                     <div className="flex flex-wrap gap-x-4 gap-y-2">
-                      {method === "graphCli" && <>
-                        {!nothingReadable && <button type="button" className={onboardingLink} onClick={() => void chooseMethod("ownApp")}>Use your own app registration</button>}
-                        {available.tenuvaultApp === true && <button type="button" className={onboardingLink} onClick={() => void chooseMethod("tenuvaultApp")}>Use the TenuVault app</button>}
-                      </>}
                       {!nothingReadable && method === "ownApp" && <button type="button" className={onboardingLink} onClick={() => void copyAdminInstructions()}>Copy instructions for my admin</button>}
                       {method === "tenuvaultApp" && <>
                         {!nothingReadable && <button type="button" className={onboardingLink} disabled={Boolean(consentBusy)} onClick={() => void adminConsent("open")}>Open admin consent</button>}
@@ -1118,7 +1089,6 @@ export default function OnboardingPage() {
                 tenantId={account.tenantId}
                 clientId={account.clientId}
                 wizardId={sharedSignIn?.id}
-                localOnly={method === "graphCli"}
                 onboarding
                 initial={setup && setup.connection.tenantId === account.tenantId.toLowerCase() ? setup.connection.storage : undefined}
                 onChange={setChoice}

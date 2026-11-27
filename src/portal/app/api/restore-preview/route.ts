@@ -11,8 +11,8 @@ import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
 import { checksRestorePermission, restorePermissionBlocker } from "../../../../shared/services/modules"
 import { grantedPermissions } from "../../../../shared/services/token"
+import { LOCAL_STORAGE_PREFIX } from "../../../../shared/constants"
 import { isLegacySealedError } from "../../../../shared/legacy-sealed"
-import { sharedSignInMethod } from "../../../../shared/tenant-connection"
 
 const MAX_ITEMS = 2000
 const CONCURRENCY = 6
@@ -56,7 +56,8 @@ export async function POST(request: NextRequest) {
   const { tenantId, appId, clientSecret, storageAccountName, backupId, paths, live } = body as {
     tenantId?: string; appId?: string; clientSecret?: string; storageAccountName?: string; backupId?: string; paths?: unknown; live?: unknown
   }
-  if (!tenantId || !appId || !clientSecret || !storageAccountName || !backupId || !/^[a-zA-Z0-9_-]+$/.test(backupId)) {
+  const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+  if (!tenantId || (!local && (!appId || !clientSecret)) || !storageAccountName || !backupId || !/^[a-zA-Z0-9_-]+$/.test(backupId)) {
     return NextResponse.json({ error: "Missing required parameters" }, { status: 400 })
   }
   if (!Array.isArray(paths) || paths.length > MAX_ITEMS || !paths.every((path) => validPolicyPath(path, backupId))) {
@@ -64,16 +65,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const startNow = sharedSignInMethod(appId) === "graphCli"
+    const client = appId ?? ""
+    const secret = clientSecret ?? ""
     const reviewable = paths.filter(path => !backupOnlyRestoreMessage(String(path).split("/")[1] ?? ""))
     const [storageToken, graphToken] = await Promise.all([
-      token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
+      token(tenantId, client, secret, "https://storage.azure.com/.default"),
       // Check the app registration's permissions for these folders even without a live comparison.
-      live === true && reviewable.length > 0
-        ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
-        : !startNow && reviewable.some((path) => checksRestorePermission(String(path).split("/")[1] ?? ""))
+      live === true && reviewable.length > 0 && client && secret
+        ? token(tenantId, client, secret, "https://graph.microsoft.com/.default")
+        : client && secret && reviewable.some((path) => checksRestorePermission(String(path).split("/")[1] ?? ""))
           // Without the token the restore still checks the permission before its first write.
-          ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => "")
+          ? token(tenantId, client, secret, "https://graph.microsoft.com/.default").catch(() => "")
           : Promise.resolve(""),
     ])
     const granted = grantedPermissions(graphToken)
@@ -83,7 +85,7 @@ export async function POST(request: NextRequest) {
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     // A backup that records no tenant cannot change live policies; it can still be restored as a copy.
     const ownership = owned.owned ? undefined : UNTAGGED_BACKUP
-    const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
+    const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, client, secret, "https://graph.microsoft.com/.default", true) })
 
     const preview = async (path: string): Promise<PreviewItem> => {
       const folder = path.split("/")[1] ?? ""
@@ -132,7 +134,7 @@ export async function POST(request: NextRequest) {
       while (next < paths.length) {
         const index = next++
         const path = paths[index] as string
-        try { items[index] = withPermission(await preview(path), granted, appId) }
+        try { items[index] = withPermission(await preview(path), granted, client) }
         catch (error) {
           // A backup sealed by an earlier version says which key it needs.
           const sealed = isLegacySealedError(error) ? (error as Error).message : null

@@ -8,7 +8,7 @@ import { readJsonCapped } from "../../../../shared/capped-body"
 import { decodeXml } from "~/lib/storage/list"
 import { isSafeArchivePath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
-import { BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
+import { BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
 import { readBytesCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
 import { readOwnedBackup, type BackupOwnerRead } from "~/lib/policies/backup-owner"
@@ -41,8 +41,8 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
-        client_id: appId,
-        client_secret: clientSecret,
+        client_id: appId ?? "",
+        client_secret: clientSecret ?? "",
         scope: "https://storage.azure.com/.default",
         grant_type: "client_credentials",
       }),
@@ -73,7 +73,8 @@ export async function POST(request: NextRequest) {
       backupId
     } = body
 
-    if (!tenantId || !appId || !clientSecret || !storageAccountName || !backupId) {
+    const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+    if (!tenantId || (!local && (!appId || !clientSecret)) || !storageAccountName || !backupId) {
       return NextResponse.json(
         { error: "Missing required parameters" },
         { status: 400 }

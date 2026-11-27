@@ -1,3 +1,4 @@
+import { LOCAL_STORAGE_PREFIX } from "../../../../shared/constants"
 import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
@@ -21,14 +22,15 @@ const BACKUP_ID = /^backup-(?:large-)?\d{4}-\d{2}-\d{2}-\d{6}$/
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const { tenantId, appId, clientSecret, storageAccountName, backupId } = body as Record<string, string | undefined>
-  if (!tenantId || !appId || !clientSecret || !storageAccountName || !backupId || !BACKUP_ID.test(backupId)) {
+  const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+  if (!tenantId || (!local && (!appId || !clientSecret)) || !storageAccountName || !backupId || !BACKUP_ID.test(backupId)) {
     return NextResponse.json({ error: "Missing required parameters" }, { status: 400 })
   }
 
   const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope: "https://storage.azure.com/.default", grant_type: "client_credentials" }),
+    body: new URLSearchParams({ client_id: appId ?? "", client_secret: clientSecret ?? "", scope: "https://storage.azure.com/.default", grant_type: "client_credentials" }),
   })
   if (!tokenResponse.ok) return NextResponse.json({ error: "Failed to authenticate with Azure", details: await tokenResponse.text() }, { status: 401 })
   const accessToken = (await tokenResponse.json()).access_token as string

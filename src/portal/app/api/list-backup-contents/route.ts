@@ -1,3 +1,4 @@
+import { LOCAL_STORAGE_PREFIX } from "../../../../shared/constants"
 import { isBearerToken } from "../../../../shared/security"
 import { signInLogCode } from "../../../../shared/sign-in-errors"
 import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
@@ -41,7 +42,8 @@ export async function POST(request: NextRequest) {
       backupId
     } = body
 
-    if (!tenantId || !appId || !clientSecret || !subscriptionId || !resourceGroupName || !storageAccountName || !backupId) {
+    const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+    if (!tenantId || (!local && (!appId || !clientSecret)) || !subscriptionId || !resourceGroupName || !storageAccountName || !backupId) {
       return NextResponse.json(
         { error: "Missing required parameters" },
         { status: 400 }
@@ -61,8 +63,8 @@ export async function POST(request: NextRequest) {
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: new URLSearchParams({
-          client_id: appId,
-          client_secret: clientSecret,
+          client_id: appId ?? "",
+          client_secret: clientSecret ?? "",
           scope: "https://storage.azure.com/.default",
           grant_type: "client_credentials",
         }),

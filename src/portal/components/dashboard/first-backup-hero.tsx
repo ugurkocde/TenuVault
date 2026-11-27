@@ -2,7 +2,6 @@ import { useEffect, useId, useState } from "react"
 import { Link } from "react-router-dom"
 import { CalendarClock, Check, X } from "lucide-react"
 import { Button } from "~/components/ui/button"
-import { settingsHref } from "@desktop/lib/settings-section"
 import { MODULE_BY_ID } from "../../../shared/services/modules"
 import type { DashboardBackup } from "~/hooks/dashboard/useDashboardStats"
 
@@ -25,16 +24,13 @@ export function useFirstBackupHero(tenantId: string, successes: number) {
   }
 }
 
-export function FirstBackupHero({ tenantId, backup, scheduleAction, startNow, dismiss }: {
+export function FirstBackupHero({ backup, scheduleAction, dismiss }: {
   tenantId: string
   backup: DashboardBackup
   scheduleAction: string | null
-  startNow: boolean
   dismiss: () => void
 }) {
   const title = useId()
-  const coverageKey = `tenuvault:dashboard:start-now-coverage:${tenantId}`
-  const [coverageDismissed, setCoverageDismissed] = useState(() => globalThis.window?.localStorage.getItem(coverageKey) === "1")
   const services = (backup.capturedServices ?? []).flatMap(id => MODULE_BY_ID.get(id)?.label ?? [])
   const serviceList = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(services)
   const count = backup.policiesBackedUp
@@ -53,16 +49,6 @@ export function FirstBackupHero({ tenantId, backup, scheduleAction, startNow, di
         </Button>
         {scheduleAction && <Link to={viewHref} className={quietLink}>View backup</Link>}
       </div>
-      {startNow && !coverageDismissed && (
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-t border-gray-100 pt-3 text-sm text-gray-600" data-no-select>
-          <span>Start now backs up what your sign-in can read.</span>
-          <Link to={settingsHref("services")} className={quietLink}>Add more coverage</Link>
-          <Button type="button" variant="ghost" size="icon" aria-label="Dismiss coverage message" className="size-7 rounded-full" onClick={() => {
-            localStorage.setItem(coverageKey, "1")
-            setCoverageDismissed(true)
-          }}><X aria-hidden /></Button>
-        </div>
-      )}
     </section>
   )
 }

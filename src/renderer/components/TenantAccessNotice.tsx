@@ -8,7 +8,7 @@ import { settingsHref } from '../lib/settings-section'
 export function TenantAccessNotice() {
   const { selectedTenant } = useSelectedTenant()
   const { status } = useLicense()
-  if (!selectedTenant || !status) return null
+  if (!selectedTenant || !status || !selectedTenant.credentials?.appId) return null
   const license = tenantLicense(status, selectedTenant.credentials?.tenantId)
   if (license?.signedIn && tenantPlan(license)) return null
   return <NoticeCard className="mx-6 mt-5 lg:mx-8"
