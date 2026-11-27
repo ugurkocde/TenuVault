@@ -27,6 +27,10 @@ export class RetentionBudget {
 
   constructor(readonly limits: RetentionLimits) {}
 
+  get exhausted(): boolean {
+    return this.bytes >= this.limits.bytes || this.requests + this.reserved >= this.limits.requests
+  }
+
   reserveDeletes(count: number): void {
     const reserve = count * REQUEST_ATTEMPTS
     if (this.requests + this.reserved + reserve > this.limits.requests) throw new RetentionBudgetError()

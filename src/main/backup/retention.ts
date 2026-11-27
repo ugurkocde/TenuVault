@@ -185,22 +185,26 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   let kept = 0
   let unowned = 0
   let visiting: string | undefined
+  let lastDiscovered: string | undefined
+  let discoveryBudgetPrefix: string | undefined
   let lastCompleted: string | undefined
   let madeProgress = false
   const unreadableThisRun = new Set<string>()
-  const handleUnreadable = (prefix: string, error: unknown): boolean => {
+  const handleUnreadable = (prefix: string, error: unknown): void => {
     const progress = state.reviews[prefix] ??= { files: {}, attempts: 0 }
     progress.failures = (progress.failures ?? 0) + 1
     const reason = error instanceof Error ? error.message : String(error)
     progress.reason = reason
-    if (progress.failures < UNREADABLE_ATTEMPTS) {
-      save()
-      return false
-    }
     shared = true
     warning = true
     unreadableThisRun.add(prefix)
-    notice(unreadableWarning(prefix, progress.failures, reason), "warning")
+    const detail = reason.replace(/\.$/, "")
+    notice(
+      progress.failures >= UNREADABLE_ATTEMPTS
+        ? unreadableWarning(prefix, progress.failures, reason)
+        : `Kept backup ${prefix} because it could not be verified: ${detail}.`,
+      "warning",
+    )
     for (let index = plan.length - 1; index >= 0; index--) {
       const entry = plan[index]!
       if (entry.untagged) {
@@ -211,7 +215,6 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         kept++
       }
     }
-    return true
   }
   try {
     for (const backup of candidates) {
@@ -219,8 +222,9 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       if (prefix === anchorPrefix) continue
       visiting = prefix
       if (unreadableAnchor && prefix === unreadableAnchor.prefix) {
-        if (handleUnreadable(prefix, unreadableAnchor.error)) continue
-        throw unreadableAnchor.error
+        handleUnreadable(prefix, unreadableAnchor.error)
+        lastDiscovered = prefix
+        continue
       }
       const roots = new Map<string, RetentionBlob>()
       try {
@@ -236,6 +240,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           delete state.reviews[prefix]
           shared = true
           if (backup.time < cutoff) unowned++
+          lastDiscovered = prefix
           continue
         }
         if (manifest.kind !== "found" || manifest.metadata.Items === undefined) {
@@ -244,13 +249,29 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
             notice(`Kept backup ${prefix} because it has no manifest item list.`, "warning")
             warning = true
           }
+          lastDiscovered = prefix
           continue
         }
         reviewed.push({ backup, metadata: manifest.metadata, roots, untagged: ownership.kind === "untagged" })
+        lastDiscovered = prefix
       } catch (error) {
-        if (isCandidateUnreadable(error) && handleUnreadable(prefix, error)) continue
+        if (error instanceof RetentionBudgetError) {
+          discoveryBudgetPrefix = prefix
+          shared = true
+          break
+        }
+        if (isCandidateUnreadable(error)) {
+          handleUnreadable(prefix, error)
+          lastDiscovered = prefix
+          continue
+        }
         throw error
       }
+    }
+
+    if (discoveryBudgetPrefix && (budget.exhausted || !reviewed.length)) {
+      visiting = discoveryBudgetPrefix
+      throw new RetentionBudgetError()
     }
 
     for (const { backup: { prefix, time }, metadata, roots, untagged } of reviewed) {
@@ -283,12 +304,18 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         lastCompleted = prefix
       } catch (error) {
         if (Object.keys(progress.files).length > beforeFiles) madeProgress = true
-        if (isCandidateUnreadable(error) && handleUnreadable(prefix, error)) {
+        if (isCandidateUnreadable(error)) {
+          handleUnreadable(prefix, error)
           lastCompleted = prefix
           continue
         }
         throw error
       }
+    }
+    if (discoveryBudgetPrefix) {
+      visiting = discoveryBudgetPrefix
+      lastCompleted = lastDiscovered
+      throw new RetentionBudgetError()
     }
     for (const backup of older) {
       if (unreadableThisRun.has(backup.prefix)) continue
@@ -323,6 +350,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       if (progress.attempts >= 3) notice(`Retention repeatedly deferred backup ${visiting}. Review its storage size and the backup log.`, "warning")
     }
     if (lastCompleted) advance(lastCompleted)
+    else if (discoveryBudgetPrefix && lastDiscovered && !madeProgress) advance(lastDiscovered)
     else if (madeProgress || visiting !== candidates[0]?.prefix) save()
     else advance(visiting)
   }

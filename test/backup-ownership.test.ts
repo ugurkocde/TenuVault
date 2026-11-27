@@ -206,9 +206,9 @@ describe("backup folder ownership", () => {
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
   })
 
-  it("keeps all candidates when an older backup uses another key", async () => {
+  it("keeps an older backup sealed with another key and still removes independently verified owned backups", async () => {
     const { engine, saved, seed, folder } = setup()
-    const plain = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/", unopenable = "backup-2026-08-03-020000/"
+    const plain = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/", unopenable = "backup-2026-08-03-020000/", untagged = "backup-2026-08-04-020000/"
     const manifest = { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } }
     folder(plain)
     seed(`${plain}metadata.json`, manifest)
@@ -216,9 +216,13 @@ describe("backup folder ownership", () => {
     seed(`${legacy}metadata.json`, manifest, true)
     folder(unopenable, owner, true)
     seed(`${unopenable}metadata.json`, manifest, true, Buffer.alloc(32, 9))
-    const kept = [...saved.entries()]
+    folder(untagged, null)
+    seed(`${untagged}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
+    const kept = [...saved.entries()].filter(([name]) => name.startsWith(unopenable) || name.startsWith(untagged))
     const job = await complete(engine)
     for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
+    expect([...saved.keys()].some(name => name.startsWith(plain))).toBe(false)
+    expect([...saved.keys()].some(name => name.startsWith(legacy))).toBe(false)
     expect(job.log.join("\n")).toContain(LEGACY_SEALED_MESSAGE)
   })
 
@@ -281,17 +285,20 @@ describe("backup folder ownership", () => {
     expect(saved.has(`${abandoned}${BACKUP_OWNER_FILE}`)).toBe(true)
   })
 
-  it("keeps an untagged backup whose marker is oversized, reads it only to the cap, and keeps other candidates", async () => {
+  it("keeps an untagged backup whose marker is oversized, reads it only to the cap, protects untagged backups, and cleans up verified owned candidates", async () => {
     const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
-    const oversized = "backup-2026-08-01-020000/", ours = "backup-2026-08-02-020000/"
+    const oversized = "backup-2026-08-01-020000/", ours = "backup-2026-08-02-020000/", untagged = "backup-2026-08-03-020000/"
     const { engine, saved, seed, folder } = setup({ override: (url, sent) => sent.method === "GET" && url.pathname.endsWith(`${oversized}${BACKUP_OWNER_FILE}`) ? new Response(big.body) : undefined })
     seed(`${oversized}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     folder(oversized)
     seed(`${ours}metadata.json`, { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
     folder(ours)
+    seed(`${untagged}metadata.json`, { Status: "Success", Items: indexed, Scope: { Excluded: request.scope.excluded } })
+    folder(untagged, null)
     const job = await complete(engine)
     expect(saved.has(`${oversized}metadata.json`)).toBe(true)
-    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(true)
+    expect(saved.has(`${untagged}metadata.json`)).toBe(true)
+    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
     expect(job.log.join("\n")).toContain("is larger than the 32 MiB TenuVault reads")
     expect(big.pulled()).toBeLessThan(40)
   })
@@ -358,8 +365,11 @@ describe("retention verification", () => {
   const manifest = { TenantId: TENANT, Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } }
 
   it.each(["missing", "policy ID", "snapshot hash", "sha256", "unlisted", "wrong key"])(
-    "keeps every candidate when verification detects %s", async fault => {
+    "keeps the failing candidate and untagged backups when verification detects %s while removing independently verified owned candidates", async fault => {
       const { engine, saved, calls, seed, folder } = setup()
+      const untagged = "backup-2026-08-03-020000/"
+      folder(untagged, null)
+      seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
       folder(newerExpired)
       seed(newerExpired + "metadata.json", manifest)
       folder(expired)
@@ -378,8 +388,11 @@ describe("retention verification", () => {
       if (fault === "wrong key") seed(policy, oldItem, true, Buffer.alloc(32, 9))
       seed(expired + "metadata.json", { ...manifest, Items: { "DeviceConfigurations/old": item } })
       const job = await complete(engine)
-      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
-      expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      expect(saved.has(untagged + "metadata.json")).toBe(true)
+      expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+      expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(expired))).toBe(false)
+      expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(untagged))).toBe(false)
       expect(job.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("could not be verified") }))
     },
   )
@@ -392,11 +405,12 @@ describe("retention verification", () => {
     folder(expired)
     seed(expired + "metadata.json", manifest)
     await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
     await vi.advanceTimersByTimeAsync(1_000)
     await complete(engine)
-    expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
     expect(saved.has(newerExpired + "metadata.json")).toBe(true)
-    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(newerExpired))).toBe(false)
   })
 
   it("keeps expired legacy backups with readable metadata but no item list", async () => {
@@ -471,7 +485,7 @@ describe("retention verification", () => {
     await vi.advanceTimersByTimeAsync(1_000)
     await complete(engine)
     expect(saved.has(newerExpired + "metadata.json")).toBe(changeKey)
-    expect(saved.has(expired + "metadata.json")).toBe(changeKey)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
     expect(calls.filter(call => call.name === firstName && call.request.method === "GET")).toHaveLength(changeKey ? 2 : 1)
   })
 
@@ -541,18 +555,22 @@ describe("retention verification", () => {
     expect(saved.has(expired + "metadata.json")).toBe(true)
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(1)
     // Tampering with the already-verified file changes its ETag and must invalidate the saved receipt.
+    // The run detects the tamper, falls back to freshly verifying the new newest backup, and deletes expired.
     const original = saved.get(firstPolicy)!
     seed(firstPolicy, { id: "p0", description: "tampered" })
     await vi.advanceTimersByTimeAsync(1_000)
     const tamperedJob = await complete(engine)
-    expect(saved.has(expired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(2)
     expect(tamperedJob.results?.notices).toContainEqual(expect.objectContaining({ level: "warning", message: expect.stringContaining("hash does not match") }))
-    // Restoring the original bytes makes the receipt match again on the next run.
+    // Restoring the original bytes makes the receipt match again on the next run without re-reading firstPolicy.
+    const anotherExpired = "backup-2026-07-15-020000/"
+    folder(anotherExpired)
+    seed(anotherExpired + "metadata.json", manifest)
     saved.set(firstPolicy, original)
     await vi.advanceTimersByTimeAsync(1_000)
     await complete(engine)
-    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(saved.has(anotherExpired + "metadata.json")).toBe(false)
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(2)
   })
 
@@ -670,30 +688,37 @@ describe("retention verification", () => {
     expect(saved.has(expired + "metadata.json")).toBe(false)
   })
 
-  it("keeps an unreadable candidate after 3 consecutive failures with a persistent warning and cleans up other owned candidates", async () => {
+  it("keeps an unreadable candidate, cleans up other owned candidates immediately, and escalates to a persistent warning after 3 consecutive failures", async () => {
     const { engine, saved, calls, seed, folder } = setup()
     folder(newerExpired)
     saved.delete(newerExpired + "DeviceConfigurations/Old.json")
     seed(newerExpired + "metadata.json", manifest)
     folder(expired)
     seed(expired + "metadata.json", manifest)
-    // Attempts 1 and 2 abort and delete nothing.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await complete(engine)
-      expect(saved.has(newerExpired + "metadata.json")).toBe(true)
-      expect(saved.has(expired + "metadata.json")).toBe(true)
-      await vi.advanceTimersByTimeAsync(1_000)
-    }
-    // Attempt 3 keeps the unreadable candidate, emits a warning naming it, and deletes the verified owned candidate.
-    const third = await complete(engine)
+    // Attempt 1 keeps the unreadable candidate with a warning and deletes the verified owned candidate.
+    const first = await complete(engine)
     expect(saved.has(newerExpired + "metadata.json")).toBe(true)
     expect(saved.has(expired + "metadata.json")).toBe(false)
     expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(newerExpired))).toBe(false)
-    expect(third.results?.notices).toContainEqual(expect.objectContaining({
+    expect(first.results?.notices).toContainEqual(expect.objectContaining({
       level: "warning",
       message: expect.stringContaining(newerExpired),
     }))
-    // The warning persists on later runs while the unreadable candidate remains, and newer expiries still clean up.
+    expect(first.log.join("\n")).not.toContain("consecutive failed attempts")
+    // Attempt 2 keeps the unreadable candidate without escalating yet.
+    await vi.advanceTimersByTimeAsync(1_000)
+    const second = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(second.log.join("\n")).not.toContain("consecutive failed attempts")
+    // Attempt 3 escalates to the persistent 3-attempt warning.
+    await vi.advanceTimersByTimeAsync(1_000)
+    const third = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(third.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining("3 consecutive failed attempts"),
+    }))
+    // The persistent warning continues on later runs while the unreadable candidate remains, and newer expiries still clean up.
     const anotherExpired = "backup-2026-07-15-020000/"
     folder(anotherExpired)
     seed(anotherExpired + "metadata.json", manifest)
@@ -703,7 +728,7 @@ describe("retention verification", () => {
     expect(saved.has(anotherExpired + "metadata.json")).toBe(false)
     expect(fourth.results?.notices).toContainEqual(expect.objectContaining({
       level: "warning",
-      message: expect.stringContaining(newerExpired),
+      message: expect.stringContaining("consecutive failed attempts"),
     }))
     // Once repaired, the warning clears and the candidate ages out normally.
     seed(newerExpired + "DeviceConfigurations/Old.json", oldItem)
@@ -713,7 +738,7 @@ describe("retention verification", () => {
     expect(fifth.results?.notices?.some(notice => notice.level === "warning" && notice.message.includes(newerExpired))).toBe(false)
   })
 
-  it("keeps untagged backups and deletes only verified owned backups after 3 consecutive failures on a damaged manifest", async () => {
+  it("keeps untagged backups and deletes only verified owned backups when a damaged manifest sits in discovery", async () => {
     const { engine, saved, calls, seed, folder } = setup()
     const damaged = "backup-2026-08-03-020000/"
     const untagged = "backup-2026-08-02-020000/"
@@ -723,24 +748,19 @@ describe("retention verification", () => {
     seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
     folder(expired)
     seed(expired + "metadata.json", manifest)
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await complete(engine)
-      expect(saved.has(expired + "metadata.json")).toBe(true)
-      await vi.advanceTimersByTimeAsync(1_000)
-    }
-    const third = await complete(engine)
+    const first = await complete(engine)
     expect(saved.has(damaged + "metadata.json")).toBe(true)
     expect(saved.has(untagged + "metadata.json")).toBe(true)
     expect(saved.has(expired + "metadata.json")).toBe(false)
     expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(damaged))).toBe(false)
     expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(untagged))).toBe(false)
-    expect(third.results?.notices).toContainEqual(expect.objectContaining({
+    expect(first.results?.notices).toContainEqual(expect.objectContaining({
       level: "warning",
       message: expect.stringContaining(damaged),
     }))
   })
 
-  it("drops an earlier untagged candidate from the delete plan if a later candidate fails verification on its 3rd attempt", async () => {
+  it("drops an earlier untagged candidate from the delete plan if a later candidate fails verification", async () => {
     const { engine, saved, calls, seed, folder } = setup()
     const untagged = "backup-2026-08-03-020000/"
     folder(untagged, null)
@@ -750,18 +770,12 @@ describe("retention verification", () => {
     seed(newerExpired + "metadata.json", manifest)
     folder(expired)
     seed(expired + "metadata.json", manifest)
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await complete(engine)
-      expect(saved.has(untagged + "metadata.json")).toBe(true)
-      expect(saved.has(expired + "metadata.json")).toBe(true)
-      await vi.advanceTimersByTimeAsync(1_000)
-    }
-    const third = await complete(engine)
+    const first = await complete(engine)
     expect(saved.has(untagged + "metadata.json")).toBe(true)
     expect(saved.has(newerExpired + "metadata.json")).toBe(true)
     expect(saved.has(expired + "metadata.json")).toBe(false)
     expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(untagged))).toBe(false)
-    expect(third.results?.notices).toContainEqual(expect.objectContaining({
+    expect(first.results?.notices).toContainEqual(expect.objectContaining({
       level: "warning",
       message: expect.stringContaining(newerExpired),
     }))
@@ -779,21 +793,23 @@ describe("retention verification", () => {
     folder(newerExpired)
     saved.delete(newerExpired + "DeviceConfigurations/Old.json")
     seed(newerExpired + "metadata.json", manifest)
-    folder(expired)
-    seed(expired + "metadata.json", manifest)
     for (let attempt = 0; attempt < 2; attempt++) {
-      await complete(engine)
-      expect(saved.has(expired + "metadata.json")).toBe(true)
+      const run = await complete(engine)
+      expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+      expect(run.log.join("\n")).not.toContain("consecutive failed attempts")
       await vi.advanceTimersByTimeAsync(1_000)
     }
-    // A transient 500 must not count as the 3rd unreadable failure.
+    // A transient 500 must not count as the 3rd unreadable failure and must stop the run.
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
     failWithServerError = true
     const transientJob = engine.start(request)
     await vi.advanceTimersByTimeAsync(30_000)
     await engine.waitForJob(transientJob)
     expect(transientJob.status).toBe("Completed")
     expect(saved.has(expired + "metadata.json")).toBe(true)
-    // Once storage answers again, the 3rd unreadable verification failure skips the broken backup and cleans up the owned one.
+    expect(transientJob.log.join("\n")).not.toContain("consecutive failed attempts")
+    // Once storage answers again, the 3rd unreadable verification failure emits the persistent warning and cleans up expired.
     failWithServerError = false
     await vi.advanceTimersByTimeAsync(1_000)
     const fourth = await complete(engine)
@@ -801,8 +817,38 @@ describe("retention verification", () => {
     expect(saved.has(expired + "metadata.json")).toBe(false)
     expect(fourth.results?.notices).toContainEqual(expect.objectContaining({
       level: "warning",
-      message: expect.stringContaining(newerExpired),
+      message: expect.stringContaining("3 consecutive failed attempts"),
     }))
+  })
+
+  it("persists discovery progress when candidate metadata reads exhaust the byte budget and continues after the last discovered candidate", async () => {
+    const c0 = "backup-2026-08-03-020000/"
+    const c1 = "backup-2026-08-02-020000/"
+    const c2 = "backup-2026-08-01-020000/"
+    const padded = { ...manifest, Notes: "m".repeat(42_000) }
+    const { engine, saved, calls, seed, folder } = setup({ limits: { candidates: 32, requests: 100, bytes: 100_000 } })
+    for (const prefix of [c0, c1, c2]) {
+      folder(prefix)
+      seed(prefix + "metadata.json", padded)
+    }
+    // Run 1 discovers c0 and c1 (~85 KB) then hits the byte budget reading c2's metadata.
+    const first = await complete(engine)
+    expect(first.log.join("\n")).toContain("reached its storage budget")
+    expect(saved.has(c0 + "metadata.json")).toBe(true)
+    expect(saved.has(c1 + "metadata.json")).toBe(true)
+    expect(saved.has(c2 + "metadata.json")).toBe(true)
+    const beforeRun2 = calls.length
+    // Run 2 continues after c1 (starts directly at c2 without re-reading c0 or c1) and deletes c2.
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    const run2Reads = calls.slice(beforeRun2).filter(call => call.request.method === "GET").map(call => call.name)
+    expect(run2Reads.some(name => name.startsWith(c0) || name.startsWith(c1))).toBe(false)
+    expect(saved.has(c2 + "metadata.json")).toBe(false)
+    // Run 3 wraps around and deletes c0 and c1 now that c2 is gone.
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect(saved.has(c0 + "metadata.json")).toBe(false)
+    expect(saved.has(c1 + "metadata.json")).toBe(false)
   })
 })
 
