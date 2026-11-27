@@ -5,7 +5,7 @@ import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } f
 import type { BigIntStats } from "node:fs"
 import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises"
 import { hostname } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join, resolve, win32 } from "node:path"
 import { promisify } from "node:util"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
@@ -337,7 +337,7 @@ export function createProcessInfoReader(options: {
       }
       if (platform === "darwin") {
         try {
-          const { stdout } = await runExec("ps", ["-o", "lstart=", "-p", String(pid)], {
+          const { stdout } = await runExec("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
             env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
             timeout: PROCESS_START_TIMEOUT_MS,
             windowsHide: true,
@@ -354,7 +354,7 @@ export function createProcessInfoReader(options: {
       if (platform === "win32") {
         try {
           const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p -and $p.CreationDate) { $p.CreationDate.ToUniversalTime().ToString('O') }`
-          const { stdout } = await runExec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+          const { stdout } = await runExec(windowsPowerShellPath(), ["-NoProfile", "-NonInteractive", "-Command", script], {
             timeout: PROCESS_START_TIMEOUT_MS,
             windowsHide: true,
           })
@@ -1081,13 +1081,20 @@ export class LocalBlobStore {
         this.hardLinks = false
       }
     }
-    await (await open(lockPath, "wx", 0o600)).close()
+    // Without hard links (for example exFAT drives), create the lock exclusively and write the record into the
+    // same handle. A crash in the short gap between create and write leaves an empty lock, which retention reports
+    // with the named manual warning; backups and restores are never blocked by it.
+    const record = await readFile(tmpPath)
+    const handle = await open(lockPath, "wx", 0o600)
     try {
-      await rename(tmpPath, lockPath)
+      await handle.writeFile(record)
+      await handle.sync()
     } catch (error) {
+      await handle.close().catch(() => undefined)
       await rm(lockPath, { force: true }).catch(() => undefined)
       throw error
     }
+    await handle.close()
   }
 
   /**
@@ -1848,6 +1855,12 @@ interface BodyDamage {
 }
 
 /** Errors of a file system that has no hard links. */
+/** Absolute path to Windows PowerShell, so the process-start reader never resolves powershell.exe through PATH. */
+function windowsPowerShellPath(): string {
+  const root = process.env.SystemRoot || process.env.windir || "C:\\Windows"
+  return win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+}
+
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])
 
 /** Errors of a file system or folder that does not support exclusive lock files. */

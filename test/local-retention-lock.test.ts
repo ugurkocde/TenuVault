@@ -267,7 +267,7 @@ describe("round 4 local retention lock hardening", () => {
     const winOwnStart = await winReader.readProcessStart(process.pid)
     expect(winOwnStart).toBe("wmi:2026-11-27T11:00:00.000Z")
     expect(processStartKind(winOwnStart!)).toBe("wmi")
-    expect(winCalls[0]!.file).toBe("powershell.exe")
+    expect(winCalls[0]!.file).toMatch(/System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/)
     expect(winCalls[0]!.args).toContain("-NoProfile")
     expect(winCalls[0]!.timeout).toBeGreaterThan(0)
 
@@ -311,7 +311,7 @@ describe("round 4 local retention lock hardening", () => {
     expect(parseDarwinPsStart("Fri Nov 27 10:00:00 2026\n")).toBe(expectedDarwin5151)
     const darwinOwnStart = await darwinReader.readProcessStart(process.pid)
     expect(darwinOwnStart).toBe(`ps:${Math.floor(Date.UTC(2026, 10, 27, 11, 0, 0) / 1000)}`)
-    expect(darwinCalls[0]!.file).toBe("ps")
+    expect(darwinCalls[0]!.file).toBe("/bin/ps")
     expect(darwinCalls[0]!.args).toEqual(["-o", "lstart=", "-p", String(process.pid)])
     expect(darwinCalls[0]!.env?.LC_ALL).toBe("C")
 
