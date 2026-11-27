@@ -22,7 +22,7 @@ export function wasDeleteConfirmedUnchanged(error: unknown): boolean {
 
 /** Lease acquisition or renewal failed (conflict, missing permission, or storage error). */
 export class BlobLeaseError extends FetchApplicationError {
-  constructor(cause: unknown) {
+  constructor(cause: unknown, readonly status?: number, readonly code?: string) {
     super(cause)
     this.name = "BlobLeaseError"
   }
@@ -214,13 +214,13 @@ export class BlobWriter {
   }
 
   /** Renews an active blob lease outside the retention request budget. */
-  async renewLease(name: string, leaseId: string): Promise<void> {
-    await this.withoutBudget().renewLeaseAt(`${backupStoragePath(name)}?comp=lease`, leaseId)
+  async renewLease(name: string, leaseId: string, signal?: AbortSignal): Promise<void> {
+    await this.withoutBudget().renewLeaseAt(`${backupStoragePath(name)}?comp=lease`, leaseId, undefined, signal)
   }
 
   /** Best-effort release of a blob lease. Never throws through the retention budget or aborted job circuit. */
-  async releaseLease(name: string, leaseId: string): Promise<void> {
-    await this.releaseLeaseAt(`${backupStoragePath(name)}?comp=lease`, leaseId)
+  async releaseLease(name: string, leaseId: string, signal?: AbortSignal): Promise<void> {
+    await this.releaseLeaseAt(`${backupStoragePath(name)}?comp=lease`, leaseId, signal)
   }
 
   /** Acquires a finite container lease (used for the local cross-process retention lock file). */
@@ -229,13 +229,20 @@ export class BlobWriter {
   }
 
   /** Renews a container lease outside the retention request budget. */
-  async renewContainerLease(leaseId: string, container = BACKUP_CONTAINER, durationSeconds = 60): Promise<void> {
-    await this.withoutBudget().renewLeaseAt(`${container}?restype=container&comp=lease`, leaseId, durationSeconds)
+  async renewContainerLease(leaseId: string, container = BACKUP_CONTAINER, durationSeconds = 60, signal?: AbortSignal): Promise<void> {
+    await this.withoutBudget().renewLeaseAt(`${container}?restype=container&comp=lease`, leaseId, durationSeconds, signal)
   }
 
   /** Best-effort release of a container lease. */
-  async releaseContainerLease(leaseId: string, container = BACKUP_CONTAINER): Promise<void> {
-    await this.releaseLeaseAt(`${container}?restype=container&comp=lease`, leaseId)
+  async releaseContainerLease(leaseId: string, container = BACKUP_CONTAINER, signal?: AbortSignal): Promise<void> {
+    await this.releaseLeaseAt(`${container}?restype=container&comp=lease`, leaseId, signal)
+  }
+
+  private async leaseResponseCode(response: Response): Promise<string | undefined> {
+    const header = response.headers.get("x-ms-error-code") ?? undefined
+    if (header) return header
+    const text = await response.clone().text().catch(() => "")
+    return /<Code>([^<]+)<\/Code>/.exec(text)?.[1]
   }
 
   private async acquireLeaseAt(path: string, durationSeconds: number): Promise<string> {
@@ -249,12 +256,15 @@ export class BlobWriter {
           "x-ms-proposed-lease-id": proposedId,
         },
       }, async (response, _signal, ambiguous) => {
-        void response.body?.cancel().catch(() => undefined)
-        if (response.ok) return response.headers.get("x-ms-lease-id") || proposedId
+        if (response.ok) {
+          void response.body?.cancel().catch(() => undefined)
+          return response.headers.get("x-ms-lease-id") || proposedId
+        }
         if (ambiguous && response.status === 409) {
           await this.releaseLeaseAt(path, proposedId).catch(() => undefined)
         }
-        throw new BlobLeaseError(await storageFailure(response, this.account))
+        const code = await this.leaseResponseCode(response)
+        throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code)
       })
     } catch (error) {
       if (this.network?.signal.aborted) throw error
@@ -263,36 +273,45 @@ export class BlobWriter {
     }
   }
 
-  private async renewLeaseAt(path: string, leaseId: string, durationSeconds?: number): Promise<void> {
+  private async renewLeaseAt(path: string, leaseId: string, durationSeconds?: number, signal?: AbortSignal): Promise<void> {
     try {
       await this.request(path, {
         method: "PUT",
+        ...(signal ? { signal } : {}),
         headers: {
           "x-ms-lease-action": "renew",
           "x-ms-lease-id": leaseId,
           ...(durationSeconds !== undefined ? { "x-ms-lease-duration": String(durationSeconds) } : {}),
         },
       }, async (response) => {
-        void response.body?.cancel().catch(() => undefined)
-        if (!response.ok) throw new BlobLeaseError(await storageFailure(response, this.account))
+        if (response.ok) {
+          void response.body?.cancel().catch(() => undefined)
+          return
+        }
+        const code = await this.leaseResponseCode(response)
+        throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code)
       })
     } catch (error) {
-      if (this.network?.signal.aborted) throw error
+      if (this.network?.signal.aborted || signal?.aborted) throw error
       if (error instanceof BlobLeaseError) throw error
       throw new BlobLeaseError(error)
     }
   }
 
-  private async releaseLeaseAt(path: string, leaseId: string): Promise<void> {
+  private async releaseLeaseAt(path: string, leaseId: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new RequestTimeoutError("Lease release timed out.")), LEASE_RELEASE_TIMEOUT_MS)
     timer.unref?.()
+    const effective = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal
     try {
-      const token = await withAbort(this.token, controller.signal)
-      const response = await this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
+      const pendingToken = this.token()
+      void pendingToken.catch(() => undefined)
+      const token = await withAbort(() => pendingToken, effective)
+      const pendingFetch = this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
         method: "PUT",
         ...(this.budget ? { redirect: "error" as const } : {}),
-        signal: controller.signal,
+        signal: effective,
         headers: {
           "x-ms-lease-action": "release",
           "x-ms-lease-id": leaseId,
@@ -301,6 +320,8 @@ export class BlobWriter {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       })
+      void pendingFetch.catch(() => undefined)
+      const response = await withAbort(() => pendingFetch, effective)
       void response.body?.cancel().catch(() => undefined)
     } finally {
       clearTimeout(timer)

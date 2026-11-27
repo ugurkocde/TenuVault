@@ -4,7 +4,7 @@ import { LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobLeaseUnsupportedError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -196,17 +196,17 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
         const durationSec = Number(request.headers.get("x-ms-lease-duration") ?? "60")
         const durationMs = Number.isFinite(durationSec) && durationSec > 0 ? durationSec * 1000 : 60_000
         if (action === "acquire") {
-          const leaseId = await store.acquireRetentionLock(durationMs, request.headers.get("x-ms-proposed-lease-id") ?? undefined)
+          const leaseId = await store.acquireRetentionLock(account, container, durationMs, request.headers.get("x-ms-proposed-lease-id") ?? undefined)
           return new Response(null, { status: 201, headers: { "x-ms-lease-id": leaseId } })
         }
         const leaseId = request.headers.get("x-ms-lease-id") ?? ""
         if (!leaseId) return error(400, "MissingRequiredHeader", "x-ms-lease-id is required.")
         if (action === "renew") {
-          await store.renewRetentionLock(leaseId, durationMs)
+          await store.renewRetentionLock(account, container, leaseId, durationMs)
           return new Response(null, { status: 200, headers: { "x-ms-lease-id": leaseId } })
         }
         if (action === "release") {
-          await store.releaseRetentionLock(leaseId)
+          await store.releaseRetentionLock(account, container, leaseId)
           return new Response(null, { status: 200 })
         }
         return error(400, "InvalidHeaderValue", `Unsupported lease action: ${action}`)
@@ -316,6 +316,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       ? { "x-tenuvault-delete-unchanged": "1" }
       : undefined
     if (caught instanceof BlobLeaseConflictError) return error(409, "LeaseAlreadyPresent", caught.message)
+    if (caught instanceof BlobLeaseUnsupportedError) return error(409, "LeaseUnavailable", caught.message)
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.", unchanged)
     if (caught instanceof BlobQuarantinedError) return error(412, "BlobQuarantined", caught.message)
     if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.", unchanged)

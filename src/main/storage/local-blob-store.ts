@@ -168,6 +168,7 @@ export class BlobConditionNotMetError extends Error {}
 export class BlobQuarantinedError extends BlobConditionNotMetError {}
 export class BlobDeleteInterruptedError extends Error {}
 export class BlobLeaseConflictError extends Error {}
+export class BlobLeaseUnsupportedError extends Error {}
 
 export class IncompleteInventoryError extends Error {
   /** The backup folder that is unavailable, when the error is about one backup. */
@@ -656,24 +657,31 @@ export class LocalBlobStore {
     }
   }
 
-  /** Acquires a cross-process retention lock file in the backup root. */
-  async acquireRetentionLock(durationMs = 60_000, proposedId?: string): Promise<string> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const lockPath = join(this.root, RETENTION_LOCK_FILE)
+  /** Acquires a cross-process retention lock file scoped to one container directory. */
+  async acquireRetentionLock(account: string, container: string, durationMs = 60_000, proposedId?: string): Promise<string> {
+    const dir = this.dir(account, container)
+    await mkdir(dir, { recursive: true, mode: 0o700 })
+    const lockPath = join(dir, RETENTION_LOCK_FILE)
     const id = proposedId || randomBytes(16).toString("hex")
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const handle = await open(lockPath, "wx", 0o600)
         try {
-          await handle.writeFile(JSON.stringify({ id, pid: process.pid, expiresAt: Date.now() + durationMs }))
+          await handle.writeFile(JSON.stringify({ id, pid: process.pid, durationMs, expiresAt: Date.now() + durationMs }))
           await handle.sync()
         } finally {
           await handle.close()
         }
         return id
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-        if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath))) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== "EEXIST") {
+          if (code && UNSUPPORTED_LOCK_ERRORS.has(code)) {
+            throw new BlobLeaseUnsupportedError(`The backup folder does not support the local retention lock (${code}).`, { cause: error })
+          }
+          throw error
+        }
+        if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath, durationMs))) {
           throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
         }
       }
@@ -681,17 +689,23 @@ export class LocalBlobStore {
     throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
   }
 
-  private async reclaimStaleRetentionLock(lockPath: string): Promise<boolean> {
+  private async reclaimStaleRetentionLock(lockPath: string, defaultDurationMs = 60_000): Promise<boolean> {
     try {
       const info = await lstat(lockPath, { bigint: true })
       if (!info.isFile()) return false
       const raw = await readFile(lockPath, "utf8")
+      const now = Date.now()
       let expired = false
       try {
-        const parsed = JSON.parse(raw) as { expiresAt?: unknown }
-        expired = typeof parsed?.expiresAt === "number" && Number.isFinite(parsed.expiresAt) && parsed.expiresAt <= Date.now()
+        const parsed = JSON.parse(raw) as { expiresAt?: unknown; durationMs?: unknown }
+        const lockDurationMs = typeof parsed?.durationMs === "number" && Number.isFinite(parsed.durationMs) && parsed.durationMs > 0
+          ? parsed.durationMs
+          : defaultDurationMs
+        const wallExpired = typeof parsed?.expiresAt === "number" && Number.isFinite(parsed.expiresAt) && parsed.expiresAt <= now
+        const mtimeExpired = now - Number(info.mtimeMs) >= lockDurationMs
+        expired = wallExpired || mtimeExpired
       } catch {
-        expired = Date.now() - Number(info.mtimeMs) >= RETENTION_LOCK_UNREADABLE_GRACE_MS
+        expired = now - Number(info.mtimeMs) >= RETENTION_LOCK_UNREADABLE_GRACE_MS
       }
       if (!expired) return false
       const aside = `${lockPath}.${randomBytes(4).toString("hex")}.stale`
@@ -709,15 +723,15 @@ export class LocalBlobStore {
     }
   }
 
-  async renewRetentionLock(id: string, durationMs = 60_000): Promise<void> {
-    const lockPath = join(this.root, RETENTION_LOCK_FILE)
+  async renewRetentionLock(account: string, container: string, id: string, durationMs = 60_000): Promise<void> {
+    const lockPath = join(this.dir(account, container), RETENTION_LOCK_FILE)
     let handle: Awaited<ReturnType<typeof open>> | undefined
     try {
       handle = await open(lockPath, "r+")
       const raw = await handle.readFile("utf8")
       const parsed = JSON.parse(raw) as { id?: unknown }
       if (parsed?.id !== id) throw new BlobLeaseConflictError("The local retention lock is no longer held.")
-      const payload = Buffer.from(JSON.stringify({ id, pid: process.pid, expiresAt: Date.now() + durationMs }))
+      const payload = Buffer.from(JSON.stringify({ id, pid: process.pid, durationMs, expiresAt: Date.now() + durationMs }))
       await handle.truncate(0)
       await handle.write(payload, 0, payload.length, 0)
       await handle.sync()
@@ -729,8 +743,8 @@ export class LocalBlobStore {
     }
   }
 
-  async releaseRetentionLock(id: string): Promise<void> {
-    const lockPath = join(this.root, RETENTION_LOCK_FILE)
+  async releaseRetentionLock(account: string, container: string, id: string): Promise<void> {
+    const lockPath = join(this.dir(account, container), RETENTION_LOCK_FILE)
     try {
       const raw = await readFile(lockPath, "utf8")
       const parsed = JSON.parse(raw) as { id?: unknown }
@@ -1248,6 +1262,9 @@ interface BodyDamage {
 
 /** Errors of a file system that has no hard links. */
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])
+
+/** Errors of a file system or folder that does not support exclusive lock files. */
+const UNSUPPORTED_LOCK_ERRORS = new Set(["EOPNOTSUPP", "ENOTSUP", "ENOSYS", "EPERM", "EACCES", "EROFS", "EINVAL"])
 
 /** Derived file names remembered at most, so a very large folder does not grow the cache without bound. */
 const FILE_NAME_CACHE_LIMIT = 200_000

@@ -1784,7 +1784,7 @@ describe("deletion journal tampering and binding guards", () => {
       await store.put(account, BACKUP_CONTAINER, `${older}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
       await store.put(account, BACKUP_CONTAINER, `${older}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
       await store.put(account, BACKUP_CONTAINER, `${older}metadata.json`, Buffer.from(JSON.stringify(COMPLETE_MANIFEST)), "application/json")
-      const lockId = await other.acquireRetentionLock(60_000)
+      const lockId = await other.acquireRetentionLock(account, BACKUP_CONTAINER, 60_000)
       let clock = NOW
       const fetchImpl: typeof fetch = async (input, init) => {
         const req = new Request(input, init)
@@ -1799,14 +1799,14 @@ describe("deletion journal tampering and binding guards", () => {
       expect(blocked.log.join("\n")).toContain("local retention lock could not be acquired")
       expect(await store.list(account, BACKUP_CONTAINER, older)).toHaveLength(3)
 
-      await other.releaseRetentionLock(lockId)
+      await other.releaseRetentionLock(account, BACKUP_CONTAINER, lockId)
       clock = new Date(NOW.getTime() + 5_000)
       const eng2 = createEngine()
       const unblocked = await eng2.waitForJob(eng2.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE }))
       expect(unblocked.status).toBe("Completed")
       expect(await store.list(account, BACKUP_CONTAINER, older)).toEqual([])
-      const reacquired = await other.acquireRetentionLock(60_000)
-      await other.releaseRetentionLock(reacquired)
+      const reacquired = await other.acquireRetentionLock(account, BACKUP_CONTAINER, 60_000)
+      await other.releaseRetentionLock(account, BACKUP_CONTAINER, reacquired)
     }
   })
 })
