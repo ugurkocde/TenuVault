@@ -36,6 +36,8 @@ import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
 import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
 
+class RetentionClockError extends Error {}
+
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
  *
@@ -1290,7 +1292,9 @@ export class BackupEngine {
         if (unreadableOlder || unreadableLarge || deletionWarnings) retentionWarnings++
       } catch (error) {
         retentionWarnings++
-        if (error instanceof RetentionBudgetError) {
+        if (error instanceof RetentionClockError) {
+          this.write(job, error.message, "warning")
+        } else if (error instanceof RetentionBudgetError) {
           this.write(job, "Retention reached its storage budget. Older backups will be reconsidered on the next run.", "warning")
         } else if (signal.aborted || Date.now() >= deadline) {
           this.write(job, "Retention was interrupted; older backups are cleaned up on the next run", "warning")
@@ -1377,12 +1381,13 @@ export class BackupEngine {
   private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, written: Record<string, unknown> | null, pending: Array<() => Promise<number>>, signal: AbortSignal, limits?: RetentionLimits, mixed = false, writtenCompanion?: Record<string, unknown> | null): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
-    const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
+    const now = this.now().getTime()
+    const cutoff = now - days * 86400_000
     const metered = () => limits ? storage.withBudget(new RetentionBudget(limits)) : storage
     const discovery = metered()
     // Large discovery lists only root records, not the flat inventory of policy and relationship blobs.
-    const ordinary = isLargeBackup(current) ? { prefixes: [] } : await discovery.list("backup-", "/")
-    const large = isLargeBackup(current) ? await discovery.list("backup-large-", "/", LARGE_BACKUP_CONTAINER, true) : { blobs: [], prefixes: [] }
+    const ordinary = isLargeBackup(current) ? { prefixes: [], newestLastModified: 0 } : await discovery.list("backup-", "/")
+    const large = isLargeBackup(current) ? await discovery.list("backup-large-", "/", LARGE_BACKUP_CONTAINER, true) : { blobs: [], prefixes: [], newestLastModified: 0 }
     const largePrefixes = [...new Set([...large.prefixes, ...large.blobs.map(name => `${name.split("/")[0]}/`)])].filter(isLargeBackup)
     const prefixes = [...ordinary.prefixes, ...largePrefixes]
     const allBackups = [...new Set(prefixes)]
@@ -1394,6 +1399,11 @@ export class BackupEngine {
       })
       .filter((backup) => backup !== null)
       .sort((a, b) => b.time - a.time)
+
+    const currentTime = Date.parse(parseBackupName(current)?.timestamp ?? "")
+    if (currentTime > now || (allBackups[0]?.time ?? 0) > now) {
+      throw new RetentionClockError("Retention was skipped because this device's clock is earlier than the newest backup. Check the device clock before the next backup.")
+    }
 
     const cursorKey = `${job.tenantId}/${job.storageAccountName}/${isLargeBackup(current)}`
     const persisted = this.deps.retentionProgress
@@ -1486,11 +1496,14 @@ export class BackupEngine {
     if (!currentManifest) throw new Error("The latest backup has no readable manifest")
     const covered = completeFolders(currentManifest)
     const currentCompanion = currentManifest.CompanionBackup
+    let newestLastModified = Math.max(ordinary.newestLastModified, large.newestLastModified)
     try {
-      await verifyHalf(latest, `${current}/`, currentManifest)
+      const currentHalf = await verifyHalf(latest, `${current}/`, currentManifest)
+      newestLastModified = Math.max(newestLastModified, currentHalf.newestLastModified)
       if (typeof currentCompanion === "string" && isLargeBackup(currentCompanion) && writtenCompanion && completeHalf(writtenCompanion)) {
         if (!matchingCompanions(current, currentManifest, currentCompanion, writtenCompanion)) throw new Error("The latest backup's companion does not match")
-        await verifyHalf(reference(), `${currentCompanion}/`, writtenCompanion)
+        const companionHalf = await verifyHalf(reference(), `${currentCompanion}/`, writtenCompanion)
+        newestLastModified = Math.max(newestLastModified, companionHalf.newestLastModified)
         for (const folder of completeFolders(writtenCompanion)) covered.add(folder)
       }
       delete state.latestAttempts
@@ -1521,8 +1534,11 @@ export class BackupEngine {
       this.write(job, budgetReached ? `Kept backup ${prefix} because retention reached its storage budget while reviewing it.`
         : `Kept backup ${prefix} because a file could not be verified: ${reason}`, "warning")
     }
-    const verify = (writer: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) =>
-      verifyHalf(writer, prefix, manifest, listing, expectedOwner, limits ? review(prefix) : undefined)
+    const verify = async (writer: BlobWriter, prefix: string, manifest: Record<string, unknown> | null, listing?: VerifiedHalf["listing"], expectedOwner?: OwnershipFile) => {
+      const half = await verifyHalf(writer, prefix, manifest, listing, expectedOwner, limits ? review(prefix) : undefined)
+      newestLastModified = Math.max(newestLastModified, half.newestLastModified)
+      return half
+    }
     const deletionWriter = (count: number) => {
       if (!limits) return storage
       const budget = new RetentionBudget(limits)
@@ -1624,6 +1640,10 @@ export class BackupEngine {
       } catch (error) {
         keptForReview(backup.prefix, error)
       }
+    }
+
+    if (limits && newestLastModified > 0 && now - newestLastModified > 86400_000) {
+      throw new RetentionClockError("Retention was skipped because this device's clock is more than one day ahead of the latest Azure storage timestamp. Check the device clock before the next backup.")
     }
 
     // Another half may still detect a manifest mismatch and veto this run's removals.

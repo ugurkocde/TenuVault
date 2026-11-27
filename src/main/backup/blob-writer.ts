@@ -9,15 +9,16 @@ import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { RetentionBudget } from "./retention-budget"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, DeleteConditionError, ImmutableBlobError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, DeleteConditionError, ImmutableBlobError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
-export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; sha256: string }
+export interface RetentionBlob { value: unknown; etag: string; authenticated: boolean; sha256: string; lastModified: number }
 
 export interface BlobListing {
   blobs: string[]
   prefixes: string[]
   sizes: Map<string, number>
   etags: Map<string, string>
+  newestLastModified: number
 }
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
@@ -95,6 +96,7 @@ export class BlobWriter {
     const sizes = new Map<string, number>()
     const etags = new Map<string, string>()
     const prefixes: string[] = []
+    let newestLastModified = 0
     let marker = ""
     const seen = new Set<string>()
     do {
@@ -114,6 +116,8 @@ export class BlobWriter {
         blobs.push(name)
         const size = /<Content-Length>(\d+)<\/Content-Length>/.exec(properties)?.[1]
         if (size !== undefined) sizes.set(name, Number(size))
+        const modified = Date.parse(/<Last-Modified>([^<]+)<\/Last-Modified>/.exec(properties)?.[1] ?? "")
+        if (Number.isFinite(modified)) newestLastModified = Math.max(newestLastModified, modified)
         const raw = /<Etag>([^<]+)<\/Etag>/i.exec(properties)?.[1]
         if (raw) {
           const etag = decode(raw)
@@ -125,7 +129,7 @@ export class BlobWriter {
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes, sizes, etags }
+    return { blobs, prefixes, sizes, etags, newestLastModified }
   }
 
   /** Root records and payload together, for deletion after ownership has been checked. */
@@ -138,6 +142,7 @@ export class BlobWriter {
       prefixes: [],
       sizes: new Map([...roots.sizes, ...payload.sizes]),
       etags: new Map([...roots.etags, ...payload.etags]),
+      newestLastModified: Math.max(roots.newestLastModified, payload.newestLastModified),
     }
   }
 
@@ -170,7 +175,8 @@ export class BlobWriter {
       try {
         const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
         if (!value || typeof value !== "object") throw new Error("Expected JSON data")
-        return { value, etag, authenticated: wasBackupReadAuthenticated(response), sha256: createHash("sha256").update(bytes).digest("hex") }
+        return { value, etag, authenticated: wasBackupReadAuthenticated(response), sha256: createHash("sha256").update(bytes).digest("hex"),
+          lastModified: Date.parse(response.headers.get("last-modified") ?? "") }
       } catch (error) {
         throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`, { cause: error }))
       }
@@ -240,7 +246,7 @@ export class BlobWriter {
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
         if (path.startsWith(`${LARGE_BACKUP_CONTAINER}/`) || path.startsWith(`${LARGE_BACKUP_CONTAINER}?`)) {
-          if (error instanceof StorageError && !(error instanceof BlobClaimError) && !(error instanceof ProtectedBlobError)) throw new LargeStorageError(response?.status, { cause: error })
+          if (error instanceof StorageError && !(error instanceof BlobClaimError) && !(error instanceof InventoryDamagedError)) throw new LargeStorageError(response?.status, { cause: error })
         }
         if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError)) {
           this.network?.authFailed("backup storage", response.status, error instanceof Error ? error.message : String(error))

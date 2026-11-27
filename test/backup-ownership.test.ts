@@ -420,6 +420,35 @@ describe("verified retention coverage", () => {
     }
   })
 
+  it("skips cleanup when the device clock is earlier than a stored backup", async () => {
+    const { engine, saved, calls, seed, folder } = setup()
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    seed("backup-2026-10-12-120001/metadata.json", completeManifest)
+    const job = await complete(engine)
+    expect(job.log.join("\n")).toContain("clock is earlier than the newest backup")
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+  })
+
+  it.each([0, 1000])("uses Azure Last-Modified for the one-day clock guard (%s ms beyond the limit)", async excess => {
+    const latest = new Date(now.getTime() - 86400_000 - excess).toUTCString()
+    const { engine, saved, calls, seed, folder } = setup({ override: (url, sent) => {
+      if (sent.method === "GET" && url.pathname.endsWith("backup-2026-10-12-120000/metadata.json")) {
+        return new Response(new Uint8Array(saved.get("backup-2026-10-12-120000/metadata.json")!),
+          { headers: { etag: '"fixture"', "last-modified": latest } })
+      }
+    } })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    const job = await complete(engine)
+    expect(job.log.join("\n").includes("clock is more than one day ahead")).toBe(excess > 0)
+    expect(saved.has(`${older}metadata.json`)).toBe(excess > 0)
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(excess === 0)
+  })
+
   it.each(["requests", "bytes"] as const)("keeps the expired backup when the %s budget is exhausted", async limit => {
     const limits = { candidates: 4, requests: 100, bytes: 100_000, [limit]: limit === "requests" ? 5 : 200 }
     const { engine, saved, calls, seed, folder } = setup({ limits })
