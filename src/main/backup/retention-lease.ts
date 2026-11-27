@@ -219,7 +219,8 @@ export function createRetentionLeaseManager(): RetentionLeaseManager {
 }
 
 export function leaseFailureKey(local: boolean, error: BlobLeaseError): string | undefined {
-  if (local) return "local:lock"
+  // A lock held by another running instance is temporary; only a folder that cannot hold the lock is permanent.
+  if (local) return error.code === "LeaseUnavailable" ? "local:lock" : undefined
   if (error.status === 403) return `azure:403:${error.code ?? ""}`
   return undefined
 }
