@@ -1,13 +1,24 @@
 import { spawnSync } from "node:child_process"
 import { createHash, randomBytes } from "node:crypto"
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import * as fsPromises from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
+import { BlobWriter } from "../src/main/backup/blob-writer"
+import { type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { BlobLeaseConflictError, BlobProtectedError, LocalBlobStore } from "../src/main/storage/local-blob-store"
+import {
+  BlobLeaseConflictError,
+  BlobProtectedError,
+  createProcessInfoReader,
+  LocalBlobStore,
+  parseDarwinPsStart,
+  parseWindowsCreationDate,
+  processStartKind,
+  type ProcessInfoReader,
+} from "../src/main/storage/local-blob-store"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
@@ -15,7 +26,13 @@ import { withServerDate } from "./helpers"
 
 vi.mock("node:fs/promises", async original => {
   const actual = await original<typeof import("node:fs/promises")>()
-  return { ...actual, rename: vi.fn(actual.rename) }
+  return {
+    ...actual,
+    rename: vi.fn(actual.rename),
+    link: vi.fn(actual.link),
+    open: vi.fn(actual.open),
+    readFile: vi.fn(actual.readFile),
+  }
 })
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -215,6 +232,397 @@ describe("local retention lock races and ownership checks", () => {
     }
 
     await expect(storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json"))
+      .resolves.toBeDefined()
+  })
+})
+
+function memoryProgress(): RetentionProgressStore {
+  const data = new Map<string, string>()
+  return {
+    get: key => data.get(key) ?? null,
+    set: (key, value) => { data.set(key, value) },
+    delete: key => { data.delete(key) },
+  }
+}
+
+async function seedOldLocalBackup(store: LocalBlobStore, prefix: string): Promise<void> {
+  await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+  await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+  await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+}
+
+describe("round 4 local retention lock hardening", () => {
+  it("P1: reads win32 and darwin process start tokens with explicit kinds, detects PID reuse, and preserves matching live holders", async () => {
+    const winCalls: Array<{ file: string; args: string[]; timeout?: number }> = []
+    const winReader = createProcessInfoReader({
+      platform: "win32",
+      isPidAlive: () => true,
+      execFile: async (file, args, options) => {
+        winCalls.push({ file, args, timeout: options.timeout })
+        if (args.join(" ").includes("ProcessId=4242")) return { stdout: "2026-11-27T10:00:00.1234567Z\r\n" }
+        return { stdout: "2026-11-27T11:00:00.0000000Z\r\n" }
+      },
+    })
+    expect(parseWindowsCreationDate("2026-11-27T10:00:00.1234567Z\r\n")).toBe("wmi:2026-11-27T10:00:00.123Z")
+    const winOwnStart = await winReader.readProcessStart(process.pid)
+    expect(winOwnStart).toBe("wmi:2026-11-27T11:00:00.000Z")
+    expect(processStartKind(winOwnStart!)).toBe("wmi")
+    expect(winCalls[0]!.file).toBe("powershell.exe")
+    expect(winCalls[0]!.args).toContain("-NoProfile")
+    expect(winCalls[0]!.timeout).toBeGreaterThan(0)
+
+    const rootWin = mkdtempSync(join(tmpdir(), "tv-lock-win32-")); roots.push(rootWin)
+    const winStore = new LocalBlobStore(rootWin, [MASTER], undefined, undefined, winReader)
+    await winStore.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const winLockPath = join(rootWin, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+
+    const heldWin = await winStore.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(winLockPath, "utf8")).processStart).toBe("wmi:2026-11-27T11:00:00.000Z")
+    await winStore.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, heldWin)
+
+    writeFileSync(winLockPath, JSON.stringify({
+      id: "win-reused", host: hostname(), pid: 4242, processStart: "wmi:2026-11-27T08:00:00.000Z", app: "TenuVault",
+    }))
+    const reclaimedWin = await winStore.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(winLockPath, "utf8")).id).toBe(reclaimedWin)
+    await winStore.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, reclaimedWin)
+
+    writeFileSync(winLockPath, JSON.stringify({
+      id: "win-live", host: hostname(), pid: 4242, processStart: "wmi:2026-11-27T10:00:00.123Z", app: "TenuVault",
+    }))
+    await expect(winStore.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toMatchObject({
+      code: "LeaseAlreadyPresent",
+      lockPath: winLockPath,
+      holderId: "win-live",
+      message: expect.stringContaining("Another TenuVault instance"),
+    })
+
+    const darwinCalls: Array<{ file: string; args: string[]; env?: NodeJS.ProcessEnv }> = []
+    const darwinReader = createProcessInfoReader({
+      platform: "darwin",
+      isPidAlive: () => true,
+      execFile: async (file, args, options) => {
+        darwinCalls.push({ file, args, env: options.env })
+        if (args.includes("5151")) return { stdout: "Fri Nov 27 10:00:00 2026\n" }
+        return { stdout: "Fri Nov 27 11:00:00 2026\n" }
+      },
+    })
+    const expectedDarwin5151 = `ps:${Math.floor(Date.UTC(2026, 10, 27, 10, 0, 0) / 1000)}`
+    expect(parseDarwinPsStart("Fri Nov 27 10:00:00 2026\n")).toBe(expectedDarwin5151)
+    const darwinOwnStart = await darwinReader.readProcessStart(process.pid)
+    expect(darwinOwnStart).toBe(`ps:${Math.floor(Date.UTC(2026, 10, 27, 11, 0, 0) / 1000)}`)
+    expect(darwinCalls[0]!.file).toBe("ps")
+    expect(darwinCalls[0]!.args).toEqual(["-o", "lstart=", "-p", String(process.pid)])
+    expect(darwinCalls[0]!.env?.LC_ALL).toBe("C")
+
+    const rootMac = mkdtempSync(join(tmpdir(), "tv-lock-darwin-")); roots.push(rootMac)
+    const macStore = new LocalBlobStore(rootMac, [MASTER], undefined, undefined, darwinReader)
+    await macStore.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const macLockPath = join(rootMac, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+
+    writeFileSync(macLockPath, JSON.stringify({
+      id: "mac-reused", host: hostname(), pid: 5151, processStart: "ps:1700000000", app: "TenuVault",
+    }))
+    const reclaimedMac = await macStore.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(macLockPath, "utf8")).id).toBe(reclaimedMac)
+    await macStore.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, reclaimedMac)
+  })
+
+  it("P1 & P3.1: unobservable start or token kind mismatch warns with lockPath, never reclaims, escalates after 3 runs, and leaves backups/restores working", async () => {
+    const rootMismatch = mkdtempSync(join(tmpdir(), "tv-lock-kind-mismatch-")); roots.push(rootMismatch)
+    const linuxReader: ProcessInfoReader = {
+      isPidAlive: () => true,
+      readProcessStart: async () => "proc:boot-1:99999",
+    }
+    const mismatchStore = new LocalBlobStore(rootMismatch, [MASTER], undefined, undefined, linuxReader)
+    await mismatchStore.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const mismatchLockPath = join(rootMismatch, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+    const wmiLock = JSON.stringify({
+      id: "cross-kind", host: hostname(), pid: 7777, processStart: "wmi:2026-11-27T10:00:00.000Z", app: "TenuVault",
+    })
+    writeFileSync(mismatchLockPath, wmiLock)
+    await expect(mismatchStore.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toMatchObject({
+      code: "RetentionLockManualIntervention",
+      lockPath: mismatchLockPath,
+      message: expect.stringContaining(mismatchLockPath),
+    })
+    expect(readFileSync(mismatchLockPath, "utf8")).toBe(wmiLock)
+
+    const rootUnobs = mkdtempSync(join(tmpdir(), "tv-lock-unobservable-")); roots.push(rootUnobs)
+    const failingReader = createProcessInfoReader({
+      platform: "win32",
+      isPidAlive: () => true,
+      execFile: async () => {
+        const err = new Error("Command timed out") as Error & { killed?: boolean }
+        err.killed = true
+        throw err
+      },
+    })
+    const store = new LocalBlobStore(rootUnobs, [MASTER], undefined, undefined, failingReader)
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const oldPrefix = "backup-2026-08-01-020000/"
+    await seedOldLocalBackup(store, oldPrefix)
+    const lockPath = join(rootUnobs, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+    const stuckLock = JSON.stringify({
+      id: "unobs-id", host: hostname(), pid: 8888, processStart: "wmi:2026-11-27T09:00:00.000Z", app: "TenuVault",
+    })
+    writeFileSync(lockPath, stuckLock)
+
+    const progress = memoryProgress()
+    let clock = new Date(NOW.getTime())
+    const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, req)
+      return withServerDate(Response.json({ value: [] }), clock)
+    }
+    const runOnce = async () => {
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress: progress, now: () => clock })
+      const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+      await engine.waitForJob(job)
+      expect(job.status).toBe("Completed")
+      clock = new Date(clock.getTime() + 2_000)
+      return job
+    }
+
+    const run1 = await runOnce()
+    expect(run1.log.join("\n")).toContain(lockPath)
+    expect(run1.log.join("\n")).toContain("Delete it only if no other computer is running TenuVault")
+    expect(run1.log.join("\n")).not.toContain("3 consecutive runs")
+    const run2 = await runOnce()
+    expect(run2.log.join("\n")).not.toContain("3 consecutive runs")
+    const run3 = await runOnce()
+    expect(run3.log.join("\n")).toContain("3 consecutive runs")
+    expect(run3.log.join("\n")).toContain(lockPath)
+    expect(readFileSync(lockPath, "utf8")).toBe(stuckLock)
+    const restored = await store.get(ACCOUNT, BACKUP_CONTAINER, `${oldPrefix}metadata.json`)
+    expect(restored.data.length).toBeGreaterThan(0)
+  })
+
+  it("P1 rule 3: live matching holder stays temporary on runs 1-2 and escalates with lockPath after 3 consecutive runs seeing the same holder", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-lock-stuck-live-")); roots.push(root)
+    const liveReader: ProcessInfoReader = {
+      isPidAlive: () => true,
+      readProcessStart: async () => "proc:boot-live:12345",
+    }
+    const store = new LocalBlobStore(root, [MASTER], undefined, undefined, liveReader)
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    await seedOldLocalBackup(store, "backup-2026-08-01-020000/")
+    const lockPath = join(root, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
+    writeFileSync(lockPath, JSON.stringify({
+      id: "same-live-holder", host: hostname(), pid: 9999, processStart: "proc:boot-live:12345", app: "TenuVault",
+    }))
+
+    const progress = memoryProgress()
+    let clock = new Date(NOW.getTime())
+    const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, req)
+      return withServerDate(Response.json({ value: [] }), clock)
+    }
+    const runOnce = async () => {
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress: progress, now: () => clock })
+      const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+      await engine.waitForJob(job)
+      expect(job.status).toBe("Completed")
+      clock = new Date(clock.getTime() + 2_000)
+      return job
+    }
+
+    const run1 = await runOnce()
+    expect(run1.log.join("\n")).toContain("Another TenuVault instance is currently running retention")
+    expect(run1.log.join("\n")).not.toContain("3 consecutive runs")
+    const run2 = await runOnce()
+    expect(run2.log.join("\n")).not.toContain("3 consecutive runs")
+    const run3 = await runOnce()
+    expect(run3.log.join("\n")).toContain("3 consecutive runs")
+    expect(run3.log.join("\n")).toContain(lockPath)
+  })
+
+  it("P2: writes lock atomically via temp+fsync+link, re-reads unparseable lock once before warning, and handles legacy 0.5.3 locks", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-lock-p2-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(dir, ".tenuvault-retention.lock")
+
+    vi.mocked(fsPromises.open).mockClear()
+    vi.mocked(fsPromises.link).mockClear()
+    let linkedPayload = ""
+    vi.mocked(fsPromises.link).mockImplementationOnce(async (existingPath, newPath) => {
+      linkedPayload = readFileSync(String(existingPath), "utf8")
+      return actual.link(existingPath, newPath)
+    })
+    const atomicId = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(vi.mocked(fsPromises.open).mock.calls.some(([p, flags]) => String(p) === lockPath && flags === "wx")).toBe(false)
+    expect(vi.mocked(fsPromises.link)).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(linkedPayload).id).toBe(atomicId)
+    expect(readdirSync(dir).filter(f => f.endsWith(".tmp"))).toEqual([])
+    await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, atomicId)
+
+    writeFileSync(lockPath, "")
+    let readCount = 0
+    vi.mocked(fsPromises.readFile).mockImplementation((async (p: Parameters<typeof fsPromises.readFile>[0], options?: Parameters<typeof fsPromises.readFile>[1]) => {
+      if (String(p) === lockPath) {
+        readCount++
+        if (readCount === 1) return ""
+        rmSync(lockPath, { force: true })
+        const missing = Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+        throw missing
+      }
+      return options === undefined ? actual.readFile(p) : actual.readFile(p, options)
+    }) as typeof fsPromises.readFile)
+    try {
+      const afterTransientEmpty = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+      expect(readCount).toBe(2)
+      await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, afterTransientEmpty)
+    } finally {
+      vi.mocked(fsPromises.readFile).mockImplementation(actual.readFile)
+    }
+
+    writeFileSync(lockPath, "{broken")
+    let brokenReads = 0
+    vi.mocked(fsPromises.readFile).mockImplementation((async (p: Parameters<typeof fsPromises.readFile>[0], options?: Parameters<typeof fsPromises.readFile>[1]) => {
+      if (String(p) === lockPath) brokenReads++
+      return options === undefined ? actual.readFile(p) : actual.readFile(p, options)
+    }) as typeof fsPromises.readFile)
+    try {
+      await expect(store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toMatchObject({
+        code: "RetentionLockManualIntervention",
+        lockPath,
+        message: expect.stringContaining(lockPath),
+      })
+      expect(brokenReads).toBe(2)
+    } finally {
+      vi.mocked(fsPromises.readFile).mockImplementation(actual.readFile)
+    }
+    rmSync(lockPath, { force: true })
+
+    writeFileSync(lockPath, JSON.stringify({ id: "legacy-expired", pid: process.pid, durationMs: 60_000, expiresAt: Date.now() - 10_000 }))
+    const reclaimedLegacy = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+    expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedLegacy)
+    await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, reclaimedLegacy)
+
+    const liveLegacy = JSON.stringify({ id: "legacy-active", pid: process.pid, durationMs: 60_000, expiresAt: Date.now() + 60_000 })
+    writeFileSync(lockPath, liveLegacy)
+    await expect(store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toMatchObject({
+      code: "RetentionLockManualIntervention",
+      lockPath,
+      message: expect.stringContaining(lockPath),
+    })
+    expect(readFileSync(lockPath, "utf8")).toBe(liveLegacy)
+  })
+
+  it("P3.2: recoverRetired skips quarantined files under a protected prefix and recovers them after protection is released", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retired-guard-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const repPrefix = "backup-2026-10-12-120000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"ok":true}'), "application/json")
+    const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
+    expect(tvbFile).toBeTruthy()
+
+    const retiredDir = join(dir, ".retired-test123")
+    mkdirSync(retiredDir)
+    renameSync(join(dir, tvbFile), join(retiredDir, tvbFile))
+    const stampPath = join(retiredDir, ".quarantined")
+    writeFileSync(stampPath, "")
+    const oldTime = (Date.now() - 120_000) / 1000
+    utimesSync(stampPath, oldTime, oldTime)
+    utimesSync(retiredDir, oldTime, oldTime)
+
+    const lockId = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [repPrefix])
+    try {
+      await store.list(ACCOUNT, BACKUP_CONTAINER)
+      expect(existsSync(join(dir, tvbFile))).toBe(false)
+      expect(existsSync(join(retiredDir, tvbFile))).toBe(true)
+    } finally {
+      await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
+    }
+
+    const listedAfter = await store.list(ACCOUNT, BACKUP_CONTAINER)
+    expect(existsSync(join(dir, tvbFile))).toBe(true)
+    expect(existsSync(retiredDir)).toBe(false)
+    expect(listedAfter.map(b => b.name)).toContain(`${repPrefix}metadata.json`)
+  })
+
+  it("P3.3: retries local container lock release once and always clears in-process write guard even if release fails before store runs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-guard-leak-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(dir, ".tenuvault-retention.lock")
+    const repPrefix = "backup-2026-10-12-120000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":1}'), "application/json")
+
+    let releaseAttempts = 0
+    const retryWriter = new BlobWriter(async (input, init) => {
+      const req = new Request(input, init)
+      if (req.headers.get("x-ms-lease-action") === "release") {
+        releaseAttempts++
+        if (releaseAttempts === 1) throw new Error("Simulated transient release failure")
+      }
+      return handleLocalBlobRequest(store, req)
+    }, ACCOUNT, async () => "token")
+    const retryLockId = await retryWriter.acquireContainerLease(BACKUP_CONTAINER, [repPrefix])
+    await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json"))
+      .rejects.toBeInstanceOf(BlobProtectedError)
+    await retryWriter.releaseContainerLease(retryLockId, BACKUP_CONTAINER)
+    expect(releaseAttempts).toBe(2)
+    expect(existsSync(lockPath)).toBe(false)
+    await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json"))
+      .resolves.toBeDefined()
+
+    let failedReleaseAttempts = 0
+    const failingWriter = new BlobWriter(async (input, init) => {
+      const req = new Request(input, init)
+      if (req.headers.get("x-ms-lease-action") === "release") {
+        failedReleaseAttempts++
+        throw new Error("Simulated release timeout before store")
+      }
+      return handleLocalBlobRequest(store, req)
+    }, ACCOUNT, async () => "token")
+    const leakLockId = await failingWriter.acquireContainerLease(BACKUP_CONTAINER, [repPrefix])
+    await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":3}'), "application/json"))
+      .rejects.toBeInstanceOf(BlobProtectedError)
+    await expect(failingWriter.releaseContainerLease(leakLockId, BACKUP_CONTAINER)).rejects.toThrow(/Simulated release timeout/)
+    expect(failedReleaseAttempts).toBe(2)
+    expect(existsSync(lockPath)).toBe(true)
+    await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":3}'), "application/json"))
+      .resolves.toBeDefined()
+    rmSync(lockPath, { force: true })
+
+    await seedOldLocalBackup(store, "backup-2026-08-01-020000/")
+    let engineReleaseAttempts = 0
+    const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+    const engine = new BackupEngine({
+      fetch: async (input, init) => {
+        const req = new Request(input, init)
+        const url = new URL(req.url)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
+        if (req.headers.get("x-ms-lease-action") === "release") {
+          engineReleaseAttempts++
+          throw new Error("Release aborted before store")
+        }
+        return handleLocalBlobRequest(store, req)
+      },
+      getToken: async () => "token",
+      retentionDays: () => 30,
+      now: () => NOW,
+    })
+    const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Completed")
+    expect(engineReleaseAttempts).toBe(2)
+    const backups = (await store.list(ACCOUNT, BACKUP_CONTAINER)).map(b => b.name)
+    const anchorMetadata = backups.find(n => n.startsWith("backup-2026-10-12-") && n.endsWith("/metadata.json"))!
+    expect(anchorMetadata).toBeTruthy()
+    await expect(store.put(ACCOUNT, BACKUP_CONTAINER, anchorMetadata, Buffer.from('{"unlocked":true}'), "application/json"))
       .resolves.toBeDefined()
   })
 })

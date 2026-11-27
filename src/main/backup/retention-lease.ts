@@ -218,14 +218,30 @@ export function createRetentionLeaseManager(): RetentionLeaseManager {
 }
 
 export function leaseFailureKey(local: boolean, error: BlobLeaseError): string | undefined {
-  // A lock held by another running instance is temporary; only a folder that cannot hold the lock is permanent.
-  if (local) return error.code === "LeaseUnavailable" ? "local:lock" : undefined
+  if (local) {
+    if (error.code === "LeaseUnavailable") return "local:lock"
+    if (error.code === "RetentionLockManualIntervention") {
+      return error.lockPath ? `local:manual:${error.lockPath}` : "local:manual"
+    }
+    if (error.code === "LeaseAlreadyPresent" && error.lockHolder) {
+      return `local:holder:${error.lockPath ?? ""}:${error.lockHolder}`
+    }
+    return undefined
+  }
   if (error.status === 403) return `azure:403:${error.code ?? ""}`
   return undefined
 }
 
-export function permanentLeaseFailureWarning(local: boolean, consecutiveRuns: number): string {
+export function permanentLeaseFailureWarning(local: boolean, consecutiveRuns: number, error?: BlobLeaseError): string {
   if (local) {
+    if (error?.code === "RetentionLockManualIntervention") {
+      const pathDetail = error.lockPath ? ` (${error.lockPath})` : ""
+      return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because the local retention lock${pathDetail} requires manual inspection. Delete the lock file only if no other computer is running TenuVault on this backup folder.`
+    }
+    if (error?.code === "LeaseAlreadyPresent" && error.lockHolder) {
+      const pathDetail = error.lockPath ? ` (${error.lockPath})` : ""
+      return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because the same local retention lock${pathDetail} is still held by another TenuVault instance. Check whether another TenuVault process is stuck, and delete the lock file only if no other computer is running TenuVault on this backup folder.`
+    }
     return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because the backup folder does not support the local retention lock. Check folder permissions or move local backups to a folder that supports exclusive lock files.`
   }
   return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because Azure Storage refused blob leases (HTTP 403). Blob leases require the "Storage Blob Data Contributor" role or the Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write permission.`

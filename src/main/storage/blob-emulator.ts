@@ -326,9 +326,11 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       : undefined
     if (caught instanceof BlobProtectedError) return error(409, "BackupProtectedByRetention", caught.message, unchanged)
     if (caught instanceof BlobLeaseConflictError) {
-      return method === "DELETE"
-        ? error(412, "RetentionLockLost", caught.message, unchanged)
-        : error(409, "LeaseAlreadyPresent", caught.message)
+      if (method === "DELETE") return error(412, "RetentionLockLost", caught.message, unchanged)
+      const headers: Record<string, string> = {}
+      if (caught.lockPath) headers["x-tenuvault-lock-path"] = encodeURIComponent(caught.lockPath)
+      if (caught.holderId) headers["x-tenuvault-lock-holder"] = encodeURIComponent(caught.holderId)
+      return error(409, caught.code ?? "LeaseAlreadyPresent", caught.message, Object.keys(headers).length ? headers : undefined)
     }
     if (caught instanceof BlobLeaseUnsupportedError) return error(409, "LeaseUnavailable", caught.message)
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.", unchanged)

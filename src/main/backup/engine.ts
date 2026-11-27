@@ -26,6 +26,7 @@ import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
 import { GRAPH, BlobClaimError, DeleteConditionError, ImmutableBlobError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, providerErrorCode, providerStatus, withAbort, withRequestTimeout } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
+import { releaseLocalRetentionGuard } from "../storage/local-blob-store"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
 import { GraphResponseValidationError } from "../../shared/graph-response-validation"
@@ -2489,6 +2490,7 @@ export class BackupEngine {
       let completedPlan = !replacementChangedDuringRun
       let leaseAcquiredThisRun = false
       let leaseFailureKeyThisRun: string | undefined
+      let leaseFailureErrorThisRun: BlobLeaseError | undefined
       let hadLeaseAcquireFailure = false
       const localStorage = isLocalAccount(job.storageAccountName)
       const lockContainer = isLargeBackup(current) ? LARGE_BACKUP_CONTAINER : BACKUP_CONTAINER
@@ -2513,7 +2515,11 @@ export class BackupEngine {
             } catch (error) {
               if (!(error instanceof BlobLeaseError)) throw error
               hadLeaseAcquireFailure = true
-              leaseFailureKeyThisRun ??= leaseFailureKey(true, error)
+              const failureKey = leaseFailureKey(true, error)
+              if (!leaseFailureKeyThisRun && failureKey) {
+                leaseFailureKeyThisRun = failureKey
+                leaseFailureErrorThisRun = error
+              }
               warnings++
               this.write(job, `Kept backup ${primaryPrefix} because the local retention lock could not be acquired: ${error.message.replace(/\.$/, "")}.`, "warning")
               completedPlan = false
@@ -2537,7 +2543,11 @@ export class BackupEngine {
             } catch (error) {
               if (!(error instanceof BlobLeaseError)) throw error
               hadLeaseAcquireFailure = true
-              leaseFailureKeyThisRun ??= leaseFailureKey(false, error)
+              const failureKey = leaseFailureKey(false, error)
+              if (!leaseFailureKeyThisRun && failureKey) {
+                leaseFailureKeyThisRun = failureKey
+                leaseFailureErrorThisRun = error
+              }
               warnings++
               this.write(job, `Kept backup ${primaryPrefix} because replacement backups could not be leased before deletion: ${error.message.replace(/\.$/, "")}.`, "warning")
               completedPlan = false
@@ -2651,10 +2661,14 @@ export class BackupEngine {
           }
         } finally {
           for (const [container, lockId] of localLocks) {
-            const releaseWarning = await storage.releaseContainerLease(lockId, container).catch(() => undefined)
-            if (releaseWarning) {
-              warnings++
-              this.write(job, releaseWarning, "warning")
+            try {
+              const releaseWarning = await storage.releaseContainerLease(lockId, container).catch(() => undefined)
+              if (releaseWarning) {
+                warnings++
+                this.write(job, releaseWarning, "warning")
+              }
+            } finally {
+              releaseLocalRetentionGuard(lockId)
             }
           }
           if (leaseManager) await leaseManager.cleanup()
@@ -2672,7 +2686,7 @@ export class BackupEngine {
         saveProgress()
         if (count >= PERMANENT_LEASE_FAILURE_RUNS) {
           warnings++
-          this.write(job, permanentLeaseFailureWarning(localStorage, count), "warning")
+          this.write(job, permanentLeaseFailureWarning(localStorage, count, leaseFailureErrorThisRun), "warning")
         }
       } else if (hadLeaseAcquireFailure && state.leaseFailures) {
         delete state.leaseFailures
