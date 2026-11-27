@@ -1443,7 +1443,7 @@ export class BackupEngine {
     const noteRepeatedFailure = (prefix: string) => {
       const progress = review(prefix)
       progress.attempts++
-      if (progress.attempts >= 3) this.write(job, `Retention has repeatedly kept backup ${prefix} because it could not finish verification. Review its storage and the backup log.`, "warning")
+      if (progress.attempts >= 3) this.write(job, `Retention has repeatedly kept backup ${prefix} because it could not finish its retention review. Review its storage and the backup log.`, "warning")
     }
     const unreadable = new Set<number>()
     let unreadableReason = ""
@@ -1601,8 +1601,9 @@ export class BackupEngine {
           if (!verified || [...verified.counts.keys()].some(folder => uncovered.has(folder) || !typeForFolder(folder))) {
             remnants.kept++; remnants.keptBytes += bytes; continue
           }
-          review(backup.prefix).attempts = 0
-          plan.push({ halves: [verified], prefixes: [backup.prefix], remnant: true, writer: deletionWriter(verified.blobs.size) })
+          const deletion = deletionWriter(verified.blobs.size)
+          if (limits) review(backup.prefix).attempts = 0
+          plan.push({ halves: [verified], prefixes: [backup.prefix], remnant: true, writer: deletion })
           continue
         }
         if (!metadata || !entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
@@ -1628,20 +1629,21 @@ export class BackupEngine {
         ))
         const verified = await verify(writer, backup.prefix, metadata, undefined, entry.claim)
         const other = companion && await verify(metered(), `${companionId}/`, companion)
-        if (limits) review(backup.prefix).attempts = 0
         const coverage = providesCoverage.filter(folder => {
           const inventory = other && companion && restorableFolders(companion).has(folder) ? companion : metadata
           return inventory.Items !== undefined || inventory.ItemCounts !== undefined || inventory.LargeItems !== undefined || Array.isArray(inventory.Outcomes)
         })
         for (const folder of coverage) uncovered.delete(folder)
-        if (!expired) continue
-        const payloadFolders = [...verified.counts.keys(), ...(other ? other.counts.keys() : [])]
-        if (providesCoverage.length || payloadFolders.some(folder => uncovered.has(folder) || !typeForFolder(folder))) {
-          kept++
-          continue
+        if (expired) {
+          const payloadFolders = [...verified.counts.keys(), ...(other ? other.counts.keys() : [])]
+          if (providesCoverage.length || payloadFolders.some(folder => uncovered.has(folder) || !typeForFolder(folder))) kept++
+          else {
+            const deletion = deletionWriter(verified.blobs.size + (other ? other.blobs.size : 0))
+            plan.push({ halves: other ? [verified, other] : [verified], prefixes: other ? [backup.prefix, `${companionId}/`] : [backup.prefix],
+              remnant: false, writer: deletion })
+          }
         }
-        plan.push({ halves: other ? [verified, other] : [verified], prefixes: other ? [backup.prefix, `${companionId}/`] : [backup.prefix],
-          remnant: false, writer: deletionWriter(verified.blobs.size + (other ? other.blobs.size : 0)) })
+        if (limits) review(backup.prefix).attempts = 0
       } catch (error) {
         keptForReview(backup.prefix, error)
       }

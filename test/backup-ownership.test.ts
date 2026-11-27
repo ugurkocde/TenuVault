@@ -463,6 +463,21 @@ describe("verified retention coverage", () => {
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
   })
 
+  it("escalates when a verified candidate repeatedly exceeds its delete request budget", async () => {
+    const { engine, saved, calls, seed, folder } = setup({ limits: { candidates: 4, requests: 8, bytes: 100_000 } })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, completeManifest)
+    for (let run = 1; run <= 3; run++) {
+      const job = await complete(engine)
+      expect(job.log.join("\n")).toContain("reached its storage budget")
+      expect(job.log.join("\n").includes("Retention has repeatedly kept")).toBe(run === 3)
+      await vi.advanceTimersByTimeAsync(1000)
+    }
+    expect(saved.has(`${older}metadata.json`)).toBe(true)
+    expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
+  })
+
   it("keeps an oversized candidate and resumes with smaller older backups", async () => {
     const { engine, saved, seed, folder } = setup({ limits: { candidates: 8, requests: 100, bytes: 32_000 } })
     const older = "backup-2026-08-01-020000/", oversized = "backup-2026-09-01-020000/"
