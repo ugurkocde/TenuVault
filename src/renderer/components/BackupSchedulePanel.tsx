@@ -29,6 +29,7 @@ import { CloudBackupSettings } from "./CloudBackupSettings"
 import { StorageChooser, type StorageChooserDraft } from "./StorageChooser"
 import { DEFAULT_SELECTION, type ServiceSelection } from "../../shared/services/modules"
 import { describeScope, includedTypes, normalizeScope, type BackupScope } from "../../shared/intune/scope"
+import { connectionNeedsMethod, type TenantConnection } from "../../shared/tenant-connection"
 
 const REFUSALS_SHOWN = 5
 
@@ -75,6 +76,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const [prefsSaveError, setPrefsSaveError] = useState<string | null>(null)
   const [runner, setRunner] = useState<{ installed: boolean } | null>(null)
   const [readerState, setReaderState] = useState<BackupReaderState | null>(null)
+  const [connection, setConnection] = useState<TenantConnection | null>(null)
   const [timeError, setTimeError] = useState(false)
   const timeInput = useRef<HTMLInputElement>(null)
 
@@ -85,6 +87,22 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   useEffect(loadPrefs, [])
   useEffect(() => void bridge.backgroundLaunch.status().then(setRunner).catch(() => undefined), [])
   useEffect(() => void bridge.backupReader.status(tenantId).then(setReaderState).catch(() => undefined), [tenantId])
+  useEffect(() => {
+    let active = true
+    const load = () => {
+      const fetchConnection = bridge.auth?.connection
+      if (!fetchConnection) return
+      void fetchConnection(tenantId).then(
+        (value) => { if (active) setConnection(value) },
+        () => { if (active) setConnection(null) },
+      )
+    }
+    load()
+    const unsubscribe = bridge.auth?.onAccountsChanged?.((changed) => {
+      if (changed.toLowerCase() === tenantId.toLowerCase()) load()
+    })
+    return () => { active = false; unsubscribe?.() }
+  }, [tenantId])
   useEffect(() => {
     const draft = drafts.get(tenantId)
     setEnabled(draft?.enabled ?? current?.enabled ?? false)
@@ -132,6 +150,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
   const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const azurePaused = !!(current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX))
+  const needsMethod = connectionNeedsMethod(connection) || Boolean(current?.pausedReason?.includes("Choose a sign-in method"))
   const otherPaused = !azurePaused && Boolean(current?.enabled && current.pausedReason)
   const fallbackWeekday = community && current?.frequency === "daily" ? current.fallbackWeekday : undefined
   const nextComputerRuns = useMemo(
@@ -363,7 +382,11 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           <div>
             <dt className="text-xs text-gray-500">Scheduled backups run as</dt>
             <dd className="mt-0.5 text-base text-gray-900">
-              {scheduledIdentity(readerState?.reader ?? null) === "reader" ? (
+              {needsMethod ? (
+                <Link to={settingsHref("signin", `sign-in-${tenantId.toLowerCase()}`)} className="underline decoration-gray-400 underline-offset-4 hover:text-gray-700">
+                  Choose a sign-in method
+                </Link>
+              ) : scheduledIdentity(readerState?.reader ?? null) === "reader" ? (
                 <>
                   Backup Reader (read-only)
                   <span className="block text-xs text-gray-500">

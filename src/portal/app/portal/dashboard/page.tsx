@@ -45,7 +45,9 @@ import { TrialOfferCard } from "@desktop/components/TrialOfferCard"
 import type { Tenant } from "~/contexts/TenantContext"
 import { allows, type Plan } from "../../../../shared/plans"
 import { describeSchedule, formatWhen, useSchedules } from "@desktop/lib/schedules"
+import { settingsHref } from "@desktop/lib/settings-section"
 import type { SignedInAccount } from "../../../../shared/ipc"
+import { connectionNeedsMethod, type TenantConnection } from "../../../../shared/tenant-connection"
 
 // Simple time ago formatter to avoid date-fns issues
 function formatDistanceToNow(
@@ -199,6 +201,7 @@ function DashboardContent() {
   const [relativeNow, setRelativeNow] = useState(() => Date.now())
   const [accounts, setAccounts] = useState<SignedInAccount[] | null>(null)
   const [accountsError, setAccountsError] = useState<string | null>(null)
+  const [connection, setConnection] = useState<TenantConnection | null>(null)
   useEffect(() => {
     const interval = window.setInterval(() => setRelativeNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
@@ -211,6 +214,23 @@ function DashboardContent() {
   // The dashboard follows the tenant switcher; before a choice is stored it shows the first tenant.
   const tenant = selectedTenant ?? tenants[0]
   const tenantGuid = tenant?.credentials?.tenantId?.toLowerCase() ?? ""
+  useEffect(() => {
+    if (!tenantGuid) { setConnection(null); return }
+    let active = true
+    const load = () => {
+      const fetchConnection = bridge.auth?.connection
+      if (!fetchConnection) return
+      void fetchConnection(tenantGuid).then(
+        (value) => { if (active) setConnection(value) },
+        () => { if (active) setConnection(null) },
+      )
+    }
+    load()
+    const unsubscribe = bridge.auth?.onAccountsChanged?.((changed) => {
+      if (changed.toLowerCase() === tenantGuid) load()
+    })
+    return () => { active = false; unsubscribe?.() }
+  }, [tenantGuid])
   const { schedules, loading: schedulesLoading, error: schedulesError, reload: reloadSchedules } = useSchedules()
   const { status: licenseStatus } = useLicense()
   const { activeJobs } = useBackupProgress()
@@ -253,6 +273,9 @@ function DashboardContent() {
   const plan = tenantPlan(license)
   const trial = license?.entitled && license.source === "trial" && !license.trialAcknowledged ? license : null
   const schedule = schedules.find((s) => s.tenantId === tenantGuid)
+  const needsMethod = connectionNeedsMethod(connection)
+  const methodPaused = needsMethod || Boolean(schedule?.pausedReason?.includes("Choose a sign-in method"))
+  const schedulePaused = Boolean(schedule?.enabled && (methodPaused || schedule.pausedReason))
   const latest = stats?.latestBackup ?? null
   const protectedBackup = stats?.latestCompleteBackup ?? null
   const showHero = hero.visible && !!protectedBackup
@@ -289,7 +312,7 @@ function DashboardContent() {
     return <DashboardEmptyState />
   }
 
-  const signInAction = () => router.push("/portal/settings?section=signin")
+  const signInAction = () => router.push(needsMethod && tenantGuid ? settingsHref("signin", `sign-in-${tenantGuid}`) : "/portal/settings?section=signin")
   const policyItems = protectedBackup?.policies
     ? policyTypeLabels.map(([key, label]) => ({ label, value: protectedBackup.policies?.[key] ?? 0 }))
     : null
@@ -413,7 +436,9 @@ function DashboardContent() {
               </>
             )}
             <div className="mt-auto flex flex-wrap items-center gap-2 pt-6">
-              {!account && accounts !== null ? (
+              {needsMethod ? (
+                <Button variant={showHero ? "outline" : "default"} className={showHero ? undefined : "bg-blue-600 text-white hover:bg-blue-700"} onClick={signInAction}>Choose a sign-in method</Button>
+              ) : !account && accounts !== null ? (
                 <Button variant={showHero ? "outline" : "default"} className={showHero ? undefined : "bg-blue-600 text-white hover:bg-blue-700"} onClick={signInAction}>Sign in</Button>
               ) : (
                 <Button variant={showHero ? "outline" : "default"} className={showHero ? undefined : "bg-blue-600 text-white hover:bg-blue-700"} onClick={() => router.push("/portal/backup")}>
@@ -459,7 +484,7 @@ function DashboardContent() {
         <Tile aria-label="Next Backup" className={showHero ? "lg:max-xl:p-4" : undefined}>
           <div className="flex items-start justify-between gap-3">
             <TileIcon icon={CalendarClock} />
-            {schedulesLoading ? null : schedulesError ? <Chip tone="warning">Unknown</Chip> : schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
+            {schedulesLoading ? null : schedulesError ? <Chip tone="warning">Unknown</Chip> : schedulePaused ? <Chip>Paused</Chip> : schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
           </div>
           <TileLabel className="mt-6">Next Backup</TileLabel>
           <ServiceBackupNotice tenantId={tenantGuid} />
@@ -468,6 +493,10 @@ function DashboardContent() {
               <BigValue className="mt-1">Unavailable</BigValue>
               <p className="mt-1 text-sm text-gray-500" title={schedulesError}>Schedules could not be loaded. Refresh the dashboard to try again.</p>
             </>
+          ) : schedulePaused ? (
+            <p className="mt-1 text-sm text-gray-500">
+              {methodPaused ? "Paused until you choose a sign-in method" : schedule?.pausedReason}
+            </p>
           ) : schedule?.enabled ? (
             <>
               <BigValue className={cn("mt-1", showHero && "lg:max-xl:text-xl")}>{nextIn ?? "Not scheduled"}</BigValue>

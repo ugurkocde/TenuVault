@@ -56,6 +56,11 @@ describe("0.6 Start now removal UI", () => {
     expect(cards.map(card => card.getAttribute("data-sign-in-method"))).toEqual(["tenuvaultApp", "ownApp"])
     expect(cards[0]?.textContent).toContain("Recommended")
     expect(cards[0]?.disabled).toBe(false)
+    expect(cards[0]?.getAttribute("data-selected")).toBe("true")
+    expect(cards[0]?.className.split(/\s+/)).toContain("border-muted-foreground")
+    expect(cards[1]?.getAttribute("data-selected")).toBeNull()
+    expect(cards[1]?.className.split(/\s+/)).toContain("border-border")
+    expect(cards[1]?.className.split(/\s+/)).not.toContain("border-muted-foreground")
     expect(enabled.textContent).not.toContain("Start now")
 
     const disabled = mount(createElement(OnboardingSignIn, {
@@ -66,6 +71,18 @@ describe("0.6 Start now removal UI", () => {
     const disabledCards = [...disabled.querySelectorAll<HTMLButtonElement>("[data-sign-in-method]")]
     expect(disabledCards.map(card => card.disabled)).toEqual([true, false])
     expect(disabledCards[0]?.textContent).toContain(TENUVAULT_APP_UNAVAILABLE)
+    expect(disabledCards[0]?.getAttribute("data-selected")).toBeNull()
+    expect(disabledCards[0]?.className.split(/\s+/)).toContain("border-border")
+    expect(disabledCards[1]?.getAttribute("data-selected")).toBe("true")
+    expect(disabledCards[1]?.className.split(/\s+/)).toContain("border-muted-foreground")
+
+    const pending = mount(createElement(OnboardingSignIn, {
+      available: { tenuvaultApp: null },
+      choice: { intune: { access: "backup" } },
+      onChoose,
+    }))
+    const pendingCards = [...pending.querySelectorAll<HTMLButtonElement>("[data-sign-in-method]")]
+    expect(pendingCards.map(card => card.getAttribute("data-selected"))).toEqual([null, null])
   })
 
   it("renders the compact Choose a sign-in method card with both options and kill-switch fallback", async () => {

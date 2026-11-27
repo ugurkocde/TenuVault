@@ -34,9 +34,14 @@ export function OnboardingSignIn({ available, choice, onChoose }: { available: M
         const enabled = id === "ownApp" || available[id] === true
         const pending = id === "tenuvaultApp" && available[id] === null
         const recommended = id === "tenuvaultApp" && !tenuvaultUnavailable
-        return <button key={id} data-sign-in-method={id} type="button" aria-label={`Choose ${title}`} aria-describedby={`setup-method-${id}`}
+        const selected = (id === "tenuvaultApp" && available.tenuvaultApp === true) || (id === "ownApp" && tenuvaultUnavailable)
+        return <button key={id} data-sign-in-method={id} data-selected={selected ? "true" : undefined} type="button" aria-label={`Choose ${title}`} aria-describedby={`setup-method-${id}`}
           disabled={!enabled} onClick={() => onChoose(id)}
-          className={cn("flex min-w-0 flex-col items-start gap-3 rounded-2xl border border-border bg-background p-5 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring", enabled ? "hover:border-muted-foreground hover:bg-secondary/60" : "opacity-60")}>
+          className={cn(
+            "flex min-w-0 flex-col items-start gap-3 rounded-2xl border bg-background p-5 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+            selected ? "border-muted-foreground" : "border-border",
+            enabled ? (selected ? "hover:border-foreground hover:bg-secondary/60" : "hover:border-muted-foreground hover:bg-secondary/60") : "opacity-60",
+          )}>
           <div className="flex w-full items-center justify-between gap-2">
             <span className="flex size-11 items-center justify-center rounded-full bg-secondary text-foreground"><Icon className="size-5" aria-hidden="true" /></span>
             {recommended && <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-foreground">Recommended</span>}
