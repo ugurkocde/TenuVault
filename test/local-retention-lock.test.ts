@@ -15,6 +15,7 @@ import {
   BlobProtectedError,
   compareProcessStart,
   createProcessInfoReader,
+  IncompleteInventoryError,
   LocalBlobStore,
   parseDarwinPsStart,
   parseWindowsCreationDate,
@@ -1660,6 +1661,362 @@ describe("round 7 findings", () => {
       await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}check.json`, Buffer.from("{}"), "application/json")).resolves.toBeDefined()
     } finally {
       nowSpy.mockRestore()
+    }
+  })
+})
+
+describe("round 8 findings", () => {
+  it("P2.1: removes our own partial live file on copy error during recovery so the next scan retries cleanly, but keeps live if another writer replaced it", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-partial-clean-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const prefix = "backup-2026-10-12-120000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","round":8}'), "application/json")
+    const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
+    const livePath = join(dir, tvbFile)
+    const fullBytes = readFileSync(livePath)
+    const oldTime = (Date.now() - 120_000) / 1000
+
+    const retired = join(dir, ".retired-err1")
+    const held = join(retired, tvbFile)
+    mkdirSync(retired)
+    renameSync(livePath, held)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    let failWrite = true
+    vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
+      const handle = await actual.open(file, flags as never, mode as never)
+      if (String(file) === livePath && String(flags).startsWith("wx") && failWrite) {
+        const realWriteFile = handle.writeFile.bind(handle)
+        handle.writeFile = (async (data: Parameters<typeof handle.writeFile>[0]) => {
+          const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as Uint8Array)
+          await realWriteFile(buf.subarray(0, Math.floor(buf.length / 2)))
+          throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" })
+        }) as typeof handle.writeFile
+      }
+      return handle
+    })
+    try {
+      // First scan hits a mid-copy write error -> our partial live file is removed and held stays intact.
+      const firstDamage = await store.damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(firstDamage.files).toHaveLength(1)
+      expect(existsSync(livePath)).toBe(false)
+      expect(existsSync(held)).toBe(true)
+
+      // Next scan retries cleanly and restores the backup with no damage left behind.
+      failWrite = false
+      vi.mocked(fsPromises.open).mockImplementation(actual.open)
+      const secondDamage = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(secondDamage.files).toEqual([])
+      expect(secondDamage.unavailable.size).toBe(0)
+      expect(existsSync(held)).toBe(false)
+      expect(readFileSync(livePath).equals(fullBytes)).toBe(true)
+
+      // Subcase: if another writer replaces live (different inode) before cleanup runs, live must NOT be removed.
+      const retired2 = join(dir, ".retired-err2")
+      const held2 = join(retired2, tvbFile)
+      mkdirSync(retired2)
+      renameSync(livePath, held2)
+      writeFileSync(join(retired2, ".quarantined"), "")
+      utimesSync(join(retired2, ".quarantined"), oldTime, oldTime)
+      utimesSync(retired2, oldTime, oldTime)
+
+      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
+        const handle = await actual.open(file, flags as never, mode as never)
+        if (String(file) === livePath && String(flags).startsWith("wx")) {
+          handle.writeFile = (async () => {
+            const replacement = join(dir, `${tvbFile}.other.tmp`)
+            writeFileSync(replacement, Buffer.from("concurrent-writer-data"))
+            renameSync(replacement, livePath)
+            throw Object.assign(new Error("I/O error"), { code: "EIO" })
+          }) as typeof handle.writeFile
+        }
+        return handle
+      })
+      await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(existsSync(livePath)).toBe(true)
+      expect(readFileSync(livePath).toString()).toBe("concurrent-writer-data")
+      expect(existsSync(held2)).toBe(true)
+    } finally {
+      vi.mocked(fsPromises.open).mockImplementation(actual.open)
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+
+  it("P2.2: conflict warning and delete-blocked error name both paths with plain resolution steps, and deleting partial live restores the backup on next scan", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-resolve-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const backupId = "backup-2026-08-01-020000"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+
+    const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
+    const payloadFile = entries.get(`${backupId}/DeviceConfigurations/Old.json`)!.file
+    const livePath = join(dir, payloadFile)
+    const fullBytes = readFileSync(livePath)
+    const retired = join(dir, ".retired-conflict1")
+    const heldPath = join(retired, payloadFile)
+    const oldTime = (Date.now() - 120_000) / 1000
+    mkdirSync(retired)
+    renameSync(livePath, heldPath)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+    // Crash mid-copy left a smaller partial file at livePath.
+    writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
+
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    try {
+      const fresh = new LocalBlobStore(root, [MASTER])
+      const damage = await fresh.damage(ACCOUNT, BACKUP_CONTAINER)
+      const conflictEntry = damage.files.find(f => f.file === `.retired-conflict1/${payloadFile}`)
+      expect(conflictEntry).toBeDefined()
+      const expectedStep = `Close TenuVault on every computer that uses this backup folder. If the file at ${livePath} is smaller than the file at ${heldPath}, delete the file at ${livePath}. TenuVault restores it from ${heldPath} on the next start. Otherwise contact support and keep both files.`
+      expect(conflictEntry!.reason).toContain(expectedStep)
+
+      await expect(fresh.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedStep)
+      await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedStep)
+
+      // Follow the plain instruction: delete the smaller partial live file and rescan.
+      rmSync(livePath)
+      const afterDelete = new LocalBlobStore(root, [MASTER])
+      const resolvedDamage = await afterDelete.damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(resolvedDamage.files).toEqual([])
+      expect(resolvedDamage.unavailable.size).toBe(0)
+      expect(existsSync(heldPath)).toBe(false)
+      expect(existsSync(retired)).toBe(false)
+      expect((await afterDelete.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`)).data.toString()).toBe(JSON.stringify(OLD_ITEM))
+      expect((await afterDelete.list(ACCOUNT, BACKUP_CONTAINER, `${backupId}/`)).length).toBe(3)
+    } finally {
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+
+  it("P2.4: scopes recovery-conflict delete blocks to the conflicted backup while keeping unrelated backups, restores, imports, and retention working", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-scoped-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+
+    const oldCovered = "backup-2026-08-01-020000"
+    const oldUncovered = "backup-2026-08-05-020000"
+    const conflicted = "backup-2026-09-25-020000"
+    const complianceItem = { id: "comp-1" }
+    const complianceManifest = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["CompliancePolicies"] },
+      Items: {
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(complianceItem), sha256: sha256(complianceItem) },
+      },
+      ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+    }
+
+    // 1. Expired backup holding only DeviceConfigurations (covered by the new run).
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+
+    // 2. Expired backup holding CompliancePolicies (only the conflicted backup newer than it has CompliancePolicies).
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/CompliancePolicies/Comp.json`, Buffer.from(JSON.stringify(complianceItem)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/metadata.json`, Buffer.from(JSON.stringify(complianceManifest)), "application/json")
+
+    // 3. Newer backup holding CompliancePolicies that suffers an exFAT partial-copy recovery conflict.
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/CompliancePolicies/Comp.json`, Buffer.from(JSON.stringify(complianceItem)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/metadata.json`, Buffer.from(JSON.stringify(complianceManifest)), "application/json")
+
+    const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
+    const conflictFile = entries.get(`${conflicted}/CompliancePolicies/Comp.json`)!.file
+    const livePath = join(dir, conflictFile)
+    const fullBytes = readFileSync(livePath)
+    const retired = join(dir, ".retired-scope1")
+    const heldPath = join(retired, conflictFile)
+    const oldTime = (Date.now() - 120_000) / 1000
+    mkdirSync(retired)
+    renameSync(livePath, heldPath)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+    writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
+
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    try {
+      const fresh = new LocalBlobStore(root, [MASTER])
+
+      // Direct deletes touching the conflicted backup (either as target or as expected replacement) fail closed with both paths.
+      await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/metadata.json`)).rejects.toThrow(IncompleteInventoryError)
+      await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/metadata.json`, {
+        expectedReplacements: [{ prefix: `${conflicted}/`, blobs: { [`${conflicted}/metadata.json`]: '"etag"' } }],
+      })).rejects.toThrow(livePath)
+
+      // Healthy backups remain readable and new puts/imports work.
+      expect((await fresh.get(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/CompliancePolicies/Comp.json`)).data.toString()).toBe(JSON.stringify(complianceItem))
+      const imported = "backup-2026-10-01-020000"
+      await fresh.put(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+      expect((await fresh.get(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`)).data.toString()).toBe('{"Status":"Success"}')
+      await fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`)
+
+      // End-to-end BackupEngine run covering only DeviceConfigurations:
+      // - oldCovered IS removed (covered by the healthy new backup)
+      // - oldUncovered is KEPT (conflicted backup cannot supply CompliancePolicies coverage)
+      // - conflicted is KEPT with a warning naming both paths and plain steps
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const req = new Request(input, init)
+        const url = new URL(req.url)
+        if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), NOW)
+        return handleLocalBlobRequest(fresh, req)
+      }
+      const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+      const engine = new BackupEngine({
+        fetch: fetchImpl,
+        getToken: async () => "token",
+        retentionDays: () => 30,
+        now: () => NOW,
+      })
+      const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+      await engine.waitForJob(job)
+      expect(job.status).toBe("Completed")
+      const log = job.log.join("\n")
+      expect(log).toContain(livePath)
+      expect(log).toContain(heldPath)
+      expect(log).toContain("Close TenuVault on every computer that uses this backup folder.")
+      expect(await fresh.list(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/`)).toEqual([])
+      expect((await fresh.list(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/`)).length).toBe(3)
+      expect(existsSync(heldPath)).toBe(true)
+
+      // Mixed damage (conflict + unrelated corrupted file) still blocks all deletes in the folder.
+      const otherFile = entries.get(`${oldUncovered}/CompliancePolicies/Comp.json`)!.file
+      const damaged = Buffer.from(readFileSync(join(dir, otherFile)))
+      damaged[6] = damaged[6]! ^ 0xff
+      writeFileSync(join(dir, otherFile), damaged)
+      const mixedStore = new LocalBlobStore(root, [MASTER])
+      await expect(mixedStore.delete(ACCOUNT, BACKUP_CONTAINER, "backup-2026-10-12-120000/metadata.json")).rejects.toThrow("Nothing in the backup folder is deleted")
+    } finally {
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+
+  it("4722441339: literal interleaving where createNew creates a 0-byte live claim, recovery starts, and the new file is published leaves live untouched and keeps held", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-interleave-")); roots.push(root)
+    const storeSetup = new LocalBlobStore(root, [MASTER])
+    const storeWriter = new LocalBlobStore(root, [MASTER])
+    const storeRecovery = new LocalBlobStore(root, [MASTER])
+    await storeSetup.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const prefix = "backup-2026-10-12-120000/"
+    await storeSetup.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","v":"held"}'), "application/json")
+    const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
+    const livePath = join(dir, tvbFile)
+    const heldBytes = readFileSync(livePath)
+
+    // Move original file into an aged quarantine so livePath is free for createNew.
+    const retired = join(dir, ".retired-race1")
+    const heldPath = join(retired, tvbFile)
+    const oldTime = (Date.now() - 120_000) / 1000
+    mkdirSync(retired)
+    renameSync(livePath, heldPath)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+
+    let claimCreated!: () => void
+    const onClaimCreated = new Promise<void>(resolve => { claimCreated = resolve })
+    let allowPublish!: () => void
+    const waitPublish = new Promise<void>(resolve => { allowPublish = resolve })
+    let recoveryHitLive!: () => void
+    const onRecoveryHitLive = new Promise<void>(resolve => { recoveryHitLive = resolve })
+    let allowRecoveryContinue!: () => void
+    const waitRecoveryContinue = new Promise<void>(resolve => { allowRecoveryContinue = resolve })
+
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+      if (String(to) === livePath && String(from).endsWith(".tmp")) {
+        claimCreated()
+        await waitPublish
+      }
+      return actual.rename(from, to)
+    })
+    vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
+      if (String(file) === livePath && String(flags) === "wx+") {
+        try {
+          return await actual.open(file, flags as never, mode as never)
+        } catch (error) {
+          recoveryHitLive()
+          await waitRecoveryContinue
+          throw error
+        }
+      }
+      return actual.open(file, flags as never, mode as never)
+    })
+
+    try {
+      // Stage the aged quarantine folder outside dir while storeWriter runs entries(),
+      // pause at claimCreated (0-byte livePath exists), then move retired into place and start storeRecovery.
+      const stagedRetired = join(root, ".retired-race1")
+      renameSync(retired, stagedRetired)
+
+      const newPayload = '{"Status":"Success","v":"published-by-createNew"}'
+      const putPromise = storeWriter.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from(newPayload), "application/json", true)
+      await onClaimCreated
+      // Right now createNew has created the 0-byte claim at livePath and has not renamed tmp onto it yet.
+      expect(existsSync(livePath)).toBe(true)
+      expect(readFileSync(livePath).length).toBe(0)
+
+      // Place the aged quarantine folder in dir and start recovery while livePath is the 0-byte claim.
+      renameSync(stagedRetired, retired)
+      utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+      utimesSync(retired, oldTime, oldTime)
+      const recoveryPromise = storeRecovery.damage(ACCOUNT, BACKUP_CONTAINER)
+      await onRecoveryHitLive
+
+      // Now the writer publishes its completed file onto livePath, and recovery resumes.
+      allowPublish()
+      await putPromise
+      allowRecoveryContinue()
+      const damage = await recoveryPromise
+
+      // Assert: published file is completely untouched, held copy is kept, and conflict names both paths.
+      expect(existsSync(heldPath)).toBe(true)
+      expect(readFileSync(heldPath).equals(heldBytes)).toBe(true)
+      expect(damage.files.some(f => f.file === `.retired-race1/${tvbFile}` && f.reason.includes(heldPath) && f.reason.includes(livePath))).toBe(true)
+      // Remove the held folder to verify livePath holds the exact untouched published blob.
+      rmSync(retired, { recursive: true, force: true })
+      const verifyStore = new LocalBlobStore(root, [MASTER])
+      expect((await verifyStore.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe(newPayload)
+    } finally {
+      allowPublish()
+      allowRecoveryContinue()
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      vi.mocked(fsPromises.open).mockImplementation(actual.open)
+    }
+  })
+
+  it("P3.2: escalated reclaim gate warnings name the gate file rather than the lock file with safe stop instructions", () => {
+    const gatePath = "/backups/.tenuvault-retention.lock.reclaim"
+    const manual = permanentLeaseFailureWarning(true, 3, new BlobLeaseError(new Error("gate"), 409, "RetentionLockManualIntervention", gatePath))
+    const sameHolder = permanentLeaseFailureWarning(true, 3, new BlobLeaseError(new Error("gate-held"), 409, "LeaseAlreadyPresent", gatePath, "holder-gate"))
+    for (const msg of [manual, sameHolder]) {
+      expect(msg).toContain(gatePath)
+      expect(msg).toContain("gate file")
+      expect(msg).not.toContain("Delete the lock file")
+      expect(msg).not.toContain("delete the lock file")
+      expect(msg).toContain("Stop any TenuVault process on this computer that uses this backup folder")
+      expect(msg).toContain("no other computer is running TenuVault on this backup folder")
     }
   })
 })

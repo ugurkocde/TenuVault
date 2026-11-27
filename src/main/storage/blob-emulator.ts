@@ -307,7 +307,11 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     // Damaged files: retrying cannot help, so this is not a 5xx that clients retry. BackupUnavailable
     // is about one backup; InventoryIncomplete covers the rest, such as a blob that may be in a file
     // that could not be traced, or a delete refused while damage is present.
-    if (caught instanceof IncompleteInventoryError) return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message, unchanged)
+    if (caught instanceof IncompleteInventoryError) {
+      const headers: Record<string, string> = { ...unchanged }
+      if (caught.backup && caught.recoveryConflict) headers["x-tenuvault-recovery-conflict"] = "1"
+      return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message, Object.keys(headers).length ? headers : undefined)
+    }
     if (caught instanceof BlobNotFoundError) {
       return (await store.containerExists(account, container))
         ? error(404, "BlobNotFound", "The specified blob does not exist.", unchanged)

@@ -17,6 +17,7 @@ const UNREADABLE_ATTEMPTS = 3
 
 function isCandidateUnreadable(error: unknown): boolean {
   if (error instanceof RetentionVerificationError) return true
+  if (error instanceof InventoryDamagedError && error.recoveryConflict) return true
   return error instanceof FetchApplicationError
     && !(error instanceof RetentionBudgetError)
     && !(error instanceof FetchPreconditionError)
@@ -335,7 +336,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       const verified = await verifyBackup(storage, replacementPrefix, manifest.metadata, freshRoots, listing, keyFingerprint)
       return { identities: verified.identities, covers: verified.covers }
     } catch (error) {
-      if (error instanceof RetentionBudgetError || error instanceof InventoryDamagedError) throw error
+      if (error instanceof RetentionBudgetError || (error instanceof InventoryDamagedError && !error.recoveryConflict)) throw error
       if (isCandidateUnreadable(error) || error instanceof StorageError) return null
       throw error
     }

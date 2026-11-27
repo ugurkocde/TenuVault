@@ -121,7 +121,16 @@ The **TenuVault Backup Writer** role can overwrite existing blobs in `intune-bac
 
 ### Recover files from interrupted cleanup
 
-Local cleanup moves files into a temporary `.retired-…` folder on the same drive and checks their identity there. On a later scan, TenuVault lets active cleanup settle for at least one minute, then restores a held file if its original path is free. If that path is occupied or the file cannot be verified, TenuVault reports the held file and leaves it in place. Close TenuVault and copy the backup folder, including the quarantine folder, before inspecting held and live files. Preserve both copies if you cannot establish which one belongs at the original path.
+Local cleanup moves files into a temporary `.retired-*` folder on the same drive and checks their identity there. On a later scan after at least one minute, TenuVault restores a held file automatically when its original path is free (by hard link, or by copying the file on drives without hard links such as exFAT) or when the file at the original path already holds identical bytes.
+
+If the original path already holds a different or partial file, TenuVault leaves both files in place, marks only that backup unavailable, blocks deletes that touch or depend on that backup, and names both paths in the warning. Other backups, restores, and imports stay usable, and retention of unrelated expired backups continues when healthy backups cover them.
+
+To resolve a recovery conflict:
+
+1. Close TenuVault on every computer that uses this backup folder.
+2. Copy the backup folder, including the `.retired-*` folder, to a safe location before making changes.
+3. Compare the two paths named in the warning. If the file at the live path is smaller than the file at the held path (for example, a partial copy left after a crash on a drive without hard links), delete the file at the live path. TenuVault restores it from the held path on the next start and the backup becomes available again.
+4. Otherwise, keep both files and contact support.
 
 ## Retention
 

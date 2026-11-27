@@ -43,7 +43,13 @@ export class StorageError extends Error {}
  * Local storage refused because files in the backup folder are damaged: a backup that is
  * unavailable, or a delete while damage is present. The message says what and how to recover.
  */
-export class InventoryDamagedError extends StorageError {}
+export class InventoryDamagedError extends StorageError {
+  readonly recoveryConflict?: boolean
+  constructor(message: string, options?: { recoveryConflict?: boolean }) {
+    super(message)
+    this.recoveryConflict = options?.recoveryConflict
+  }
+}
 
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
 export async function storageFailure(response: Response, account: string): Promise<StorageError> {
@@ -55,7 +61,10 @@ export async function storageFailure(response: Response, account: string): Promi
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
     if (message || code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined") {
       const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
-      return code === "InventoryIncomplete" || code === "BackupUnavailable" ? new InventoryDamagedError(decoded) : new StorageError(decoded)
+      const recoveryConflict = code === "BackupUnavailable" && response.headers.get("x-tenuvault-recovery-conflict") === "1"
+      return code === "InventoryIncomplete" || code === "BackupUnavailable"
+        ? new InventoryDamagedError(decoded, recoveryConflict ? { recoveryConflict: true } : undefined)
+        : new StorageError(decoded)
     }
     return new StorageError(await storageError(new Response(text, { status: response.status, headers: response.headers }), account))
   }
