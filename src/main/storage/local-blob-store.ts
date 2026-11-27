@@ -472,7 +472,12 @@ function parseLegacyRetentionLock(raw: string): LegacyRetentionLockRecord | null
 }
 
 function manualLockWarning(lockPath: string, reason: string): string {
-  return `Retention lock file ${lockPath} (${reason}) was not reclaimed automatically. Stop any TenuVault process on this computer that uses this backup folder. Delete it only if no other computer is running TenuVault on this backup folder.`
+  const label = lockPath.endsWith(".reclaim") ? "Retention reclaim gate file" : "Retention lock file"
+  return `${label} ${lockPath} (${reason}) was not reclaimed automatically. Stop any TenuVault process on this computer that uses this backup folder. Delete it only if no other computer is running TenuVault on this backup folder.`
+}
+
+function conflictResolutionMessage(live: string, held: string): string {
+  return `Close TenuVault on every computer that uses this backup folder. If the file at ${live} is smaller than the file at ${held}, delete the file at ${live}. TenuVault restores it from ${held} on the next start. Otherwise contact support and keep both files.`
 }
 
 function waitMs(ms: number, signal?: AbortSignal): Promise<void> {
@@ -641,9 +646,19 @@ function assertPrefixNotProtected(dir: string, name: string): void {
 export class IncompleteInventoryError extends Error {
   /** The backup folder that is unavailable, when the error is about one backup. */
   backup?: string
+  /** True when this backup is unavailable only due to a scoped recovery conflict (no other container damage). */
+  recoveryConflict?: boolean
   constructor(readonly unreadableFiles: number, message?: string) {
     super(message ?? `Backup inventory is incomplete: ${unreadableFiles} encrypted file(s) could not be read. Import the correct recovery keys or recover damaged files before continuing.`)
   }
+}
+
+/** Recovery conflict details for a held quarantine file that could not overwrite an occupied live path. */
+export interface RecoveryConflict {
+  held: string
+  live: string
+  liveFile: string
+  blobName: string
 }
 
 /** A file in the backup container that could not be used. */
@@ -657,6 +672,8 @@ export interface DamagedFile {
   code?: string
   /** The backup folder the file belongs to, or null when it cannot be traced. */
   backup: string | null
+  /** Present when this entry is a recovery conflict between a held file and an occupied live path. */
+  conflict?: RecoveryConflict
 }
 
 /** Damage found while reading the backup container's inventory. */
@@ -666,6 +683,8 @@ export interface InventoryDamage {
   unavailable: Map<string, string>
   /** Damaged files that could not be traced to a backup. */
   unattributed: number
+  /** True when the container also holds non-conflict damage (unreadable files, missing non-conflicted items, duplicates). */
+  hasNonConflictDamage?: boolean
 }
 
 const RECOVERY = "Import the recovery key it was made with, or restore the damaged files from a copy. Files that cannot be recovered can be removed from the backup folder."
@@ -892,10 +911,35 @@ export class LocalBlobStore {
     return names
   }
 
+  private isOnlyScopedConflicts(damage: InventoryDamage): boolean {
+    if (damage.unattributed > 0 || damage.hasNonConflictDamage) return false
+    const conflictEntries = damage.files.filter(file => file.conflict && file.backup)
+    if (conflictEntries.length === 0) return false
+    const conflictedBackups = new Set(conflictEntries.map(file => file.backup!))
+    const conflictedLiveFiles = new Map<string, string>()
+    for (const file of conflictEntries) conflictedLiveFiles.set(file.conflict!.liveFile, file.backup!)
+    for (const file of damage.files) {
+      if (file.conflict && file.backup) continue
+      if (file.backup && conflictedLiveFiles.get(file.file) === file.backup) continue
+      return false
+    }
+    for (const folder of damage.unavailable.keys()) {
+      if (!conflictedBackups.has(folder)) return false
+    }
+    return true
+  }
+
   private assertAvailable(entries: Map<string, Entry>, folder: string): void {
     const damage = this.damageOf.get(entries)
     const reason = damage?.unavailable.get(folder)
     if (!damage || !reason) return
+    const folderConflicts = damage.files.filter(file => file.backup === folder && file.conflict)
+    if (folderConflicts.length > 0 && damage.files.every(file => file.backup !== folder || Boolean(file.conflict) || folderConflicts.some(c => c.conflict!.liveFile === file.file))) {
+      throw Object.assign(
+        new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason}`),
+        { backup: folder, recoveryConflict: this.isOnlyScopedConflicts(damage) },
+      )
+    }
     const files = damage.files.filter((file) => file.backup === folder).map((file) => file.file)
     const named = files.length ? ` Affected file${files.length === 1 ? "" : "s"} in the backup folder: ${files.slice(0, MAX_NAMED_FILES).join(", ")}${files.length > MAX_NAMED_FILES ? `, and ${files.length - MAX_NAMED_FILES} more` : ""}.` : ""
     throw Object.assign(new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason}${named} ${RECOVERY}`), { backup: folder })
@@ -997,7 +1041,11 @@ export class LocalBlobStore {
     const version = this.writeFormat
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
     // A damaged file under the name this blob would get is kept for recovery, never written over.
-    if (!existing && this.damageOf.get(entries)?.files.some((damaged) => damaged.file === file)) {
+    const damagedMatch = !existing ? this.damageOf.get(entries)?.files.find((damaged) => damaged.file === file || damaged.conflict?.liveFile === file) : undefined
+    if (damagedMatch) {
+      if (damagedMatch.conflict) {
+        throw new IncompleteInventoryError(1, `${name} was not written because ${damagedMatch.conflict.live} has an unresolved recovery conflict with ${damagedMatch.conflict.held}. ${conflictResolutionMessage(damagedMatch.conflict.live, damagedMatch.conflict.held)}`)
+      }
       throw new IncompleteInventoryError(1, `${name} was not written: the file it would replace (${file}) could not be read, and is kept for recovery. ${RECOVERY}`)
     }
     const created = existing?.created ?? new Date()
@@ -1076,7 +1124,27 @@ export class LocalBlobStore {
     const entries = fresh ? await this.checkedEntries(account, container) : await this.entries(account, container)
     const damage = this.damageOf.get(entries)
     if (!options.despiteDamage && damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
-      throw new IncompleteInventoryError(damage.files.length, `${damageSummary(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${RECOVERY}`)
+      const onlyScopedConflicts = this.isOnlyScopedConflicts(damage)
+      if (onlyScopedConflicts) {
+        const conflictedBackups = new Set(damage.files.filter(file => file.conflict && file.backup).map(file => file.backup!))
+        const targetFolder = backupFolderOf(name)
+        const touchedBackup = (targetFolder && conflictedBackups.has(targetFolder))
+          ? targetFolder
+          : options.expectedReplacements?.map(rep => backupFolderOf(rep.prefix)).find((folder): folder is string => Boolean(folder && conflictedBackups.has(folder)))
+        if (touchedBackup) {
+          const conflict = damage.files.find(file => file.backup === touchedBackup && file.conflict)!.conflict!
+          throw new IncompleteInventoryError(
+            damage.files.length,
+            `Backup ${touchedBackup} has an unresolved recovery conflict after interrupted cleanup between ${conflict.live} and ${conflict.held}. Deletes that touch ${touchedBackup} are blocked until this is resolved. ${conflictResolutionMessage(conflict.live, conflict.held)}`,
+          )
+        }
+      } else {
+        const conflict = damage.files.find(file => file.conflict)?.conflict
+        const recovery = conflict
+          ? `A file was kept at ${conflict.held} after interrupted cleanup because ${conflict.live} already exists. ${conflictResolutionMessage(conflict.live, conflict.held)}`
+          : RECOVERY
+        throw new IncompleteInventoryError(damage.files.length, `${damageSummary(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${recovery}`)
+      }
     }
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
@@ -1121,7 +1189,10 @@ export class LocalBlobStore {
               needsRecovery = false
               renamed = false
             } catch (error) {
-              throw new BlobQuarantinedError(`A different file was kept in ${held} (live path ${path}). Move it back only after checking the live file.`, { cause: error })
+              const guidance = error instanceof QuarantineRestoreConflictError
+                ? conflictResolutionMessage(path, held)
+                : "Move it back only after checking the live file."
+              throw new BlobQuarantinedError(`A different file was kept in ${held} (live path ${path}). ${guidance}`, { cause: error })
             }
             throw new BlobConditionNotMetError(name)
           }
@@ -1135,7 +1206,10 @@ export class LocalBlobStore {
                 needsRecovery = false
                 renamed = false
               } catch (error) {
-                throw new BlobQuarantinedError(`Replacement backup ${changed} changed during deletion and ${name} was kept in ${held} (live path ${path}). Move it back only after checking the live file.`, { cause: error })
+                const guidance = error instanceof QuarantineRestoreConflictError
+                  ? conflictResolutionMessage(path, held)
+                  : "Move it back only after checking the live file."
+                throw new BlobQuarantinedError(`Replacement backup ${changed} changed during deletion and ${name} was kept in ${held} (live path ${path}). ${guidance}`, { cause: error })
               }
               throw new BlobReplacementChangedError(changed, undefined, restoredEtag)
             }
@@ -1185,9 +1259,32 @@ export class LocalBlobStore {
       const repDir = this.dir(account, targetContainer)
       const names = await this.names(repDir)
       if (names.length === 0) return reps[0]!.prefix
+      const prefixes = reps.map(rep => rep.prefix)
       const quarantineName = repDir === currentDir ? basename(currentQuarantine) : null
-      if (names.some(file => file.startsWith(RETIRED_PREFIX) && file !== quarantineName)) {
-        return reps[0]!.prefix
+      const unrelatedConflictLiveFiles = new Set<string>()
+      for (const folder of names) {
+        if (!folder.startsWith(RETIRED_PREFIX) || folder === quarantineName) continue
+        const retiredDir = join(repDir, folder)
+        const dirInfo = await lstat(retiredDir).catch(() => null)
+        if (!dirInfo?.isDirectory()) return reps[0]!.prefix
+        const stampInfo = await lstat(join(retiredDir, RETIRED_STAMP)).catch(error => isMissing(error) ? null : undefined)
+        if (stampInfo === undefined) return reps[0]!.prefix
+        const since = Math.max(dirInfo.mtimeMs, stampInfo ? (stampInfo.isFile() ? stampInfo.mtimeMs : Infinity) : 0)
+        if (Date.now() - since <= RETIRED_GRACE_MS) return reps[0]!.prefix
+        const heldFiles = (await readdir(retiredDir).catch(() => null))?.filter(file => file !== RETIRED_STAMP)
+        if (!heldFiles || heldFiles.length === 0) return reps[0]!.prefix
+        for (const file of heldFiles) {
+          if (!/^[a-f0-9]+\.tvb$/i.test(file)) return reps[0]!.prefix
+          const entry = await this.readEntry(retiredDir, account, targetContainer, file)
+          if (entry === VANISHED || entry instanceof Unreadable) return reps[0]!.prefix
+          const logical = logicalBackupName(entry.name)
+          if (!backupFolderOf(entry.name) || prefixes.some(prefix => entry.name.startsWith(prefix) || logical.startsWith(prefix))) {
+            return reps[0]!.prefix
+          }
+          if (this.fileNames(account, targetContainer, entry.name).includes(file)) {
+            unrelatedConflictLiveFiles.add(file)
+          }
+        }
       }
       const filesOnDisk = new Set(names.filter(file => file.endsWith(EXT)))
       const knownEntries = repDir === currentDir ? currentEntries : await this.entries(account, targetContainer)
@@ -1217,7 +1314,6 @@ export class LocalBlobStore {
           matchedFiles.add(matched)
         }
       }
-      const prefixes = reps.map(rep => rep.prefix)
       const otherFiles = [...filesOnDisk].filter(file => !matchedFiles.has(file))
       let extraChanged: string | null = null
       await mapLimit(otherFiles, HEADER_CONCURRENCY, async file => {
@@ -1238,7 +1334,7 @@ export class LocalBlobStore {
         const read = await this.readEntry(repDir, account, targetContainer, file)
         if (read === VANISHED) return
         if (read instanceof Unreadable) {
-          extraChanged ??= prefixes[0]!
+          if (!unrelatedConflictLiveFiles.has(file)) extraChanged ??= prefixes[0]!
           return
         }
         const logical = logicalBackupName(read.name)
@@ -2001,7 +2097,7 @@ export class LocalBlobStore {
     const data = await readFile(held)
     let handle: Awaited<ReturnType<typeof open>>
     try {
-      handle = await open(live, "wx", 0o600)
+      handle = await open(live, "wx+", 0o600)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         if (await isSameFile(held, live)) {
@@ -2017,29 +2113,80 @@ export class LocalBlobStore {
       }
       throw error
     }
+    let createdInfo: BigIntStats | undefined
     let writtenInfo: BigIntStats
+    let closed = false
     try {
+      createdInfo = await handle.stat({ bigint: true })
       await handle.writeFile(data)
       await handle.sync()
       writtenInfo = await handle.stat({ bigint: true })
+      if (writtenInfo.size !== BigInt(data.length)) {
+        throw new Error(`Incomplete copy while restoring ${held} to ${live}`)
+      }
     } catch (error) {
-      await handle.close().catch(() => undefined)
+      // Remove our own partial file if live still points to the exact file we created and
+      // nothing else was written to it, so the next run can retry cleanly.
+      try {
+        if (createdInfo && createdInfo.ino !== 0n) {
+          const handleInfo = await handle.stat({ bigint: true })
+          if (handleInfo.isFile() && handleInfo.ino !== 0n
+            && handleInfo.dev === createdInfo.dev && handleInfo.ino === createdInfo.ino
+            && handleInfo.size <= BigInt(data.length)) {
+            const size = Number(handleInfo.size)
+            let onlyOurPrefix = true
+            if (size > 0) {
+              const buf = Buffer.alloc(size)
+              let offset = 0
+              while (offset < size) {
+                const { bytesRead } = await handle.read(buf, offset, size - offset, offset)
+                if (bytesRead === 0) break
+                offset += bytesRead
+              }
+              onlyOurPrefix = offset === size && buf.equals(data.subarray(0, size))
+            }
+            if (onlyOurPrefix) {
+              const afterRead = await handle.stat({ bigint: true })
+              const liveInfo = await lstat(live, { bigint: true })
+              if (fileStamp(afterRead) === fileStamp(handleInfo)
+                && liveInfo.isFile() && liveInfo.ino !== 0n
+                && liveInfo.dev === createdInfo.dev && liveInfo.ino === createdInfo.ino
+                && fileStamp(liveInfo) === fileStamp(handleInfo)) {
+                if (process.platform === "win32") {
+                  await handle.close()
+                  closed = true
+                  const recheck = await lstat(live, { bigint: true })
+                  if (recheck.isFile() && recheck.ino !== 0n
+                    && recheck.dev === createdInfo.dev && recheck.ino === createdInfo.ino
+                    && fileStamp(recheck) === fileStamp(handleInfo)) {
+                    await rm(live)
+                  }
+                } else {
+                  await rm(live)
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // Leave live in place if identity cannot be proved.
+      }
+      if (!closed) await handle.close().catch(() => undefined)
       throw error
     }
     await handle.close()
     if (process.platform !== "win32") await syncDirectory(dir)
     await rm(held)
-    if (writtenInfo.size !== BigInt(data.length)) return undefined
     return await boundRestoredEtag(live, writtenInfo)
   }
 
   private async recoverRetired(dir: string, account: string, container: string, names: string[]): Promise<DamagedFile[]> {
     const held: Array<{ folder: string; file: string; since: number }> = []
     const damage: DamagedFile[] = []
-    const report = (file: string, reason: string, backup: string | null = null) => {
+    const report = (file: string, reason: string, backup: string | null = null, conflict?: RecoveryConflict) => {
       // Inventory details also travel in HTTP headers. Only expose names the store would create.
       const safeName = /^\.retired-[a-z0-9]+(?:\/[0-9a-f]{1,64}\.tvb)?$/i.test(file) ? file : RETIRED_PREFIX
-      damage.push({ file: safeName, reason, kind: "damaged", backup })
+      damage.push({ file: safeName, reason, kind: "damaged", backup, ...(conflict ? { conflict } : {}) })
     }
     for (const folder of names.filter(name => name.startsWith(RETIRED_PREFIX))) {
       try {
@@ -2065,13 +2212,16 @@ export class LocalBlobStore {
     for (const { folder, file, since } of held) {
       const path = join(dir, folder, file)
       let backup: string | null = null
+      let blobName: string | undefined
       let conflictReason: string | undefined
+      let conflict: RecoveryConflict | undefined
       try {
         const info = await lstat(path)
         if (info.isFile() && /^[a-f0-9]+\.tvb$/i.test(file)) {
           const entry = await this.readEntry(join(dir, folder), account, container, file)
           if (entry !== VANISHED && !(entry instanceof Unreadable)) {
             backup = backupFolderOf(entry.name)
+            blobName = entry.name
             if (counts.get(file) === 1 && Date.now() - since > RETIRED_GRACE_MS && !isPrefixProtected(dir, entry.name)) {
               await this.restoreQuarantinedFile(path, join(dir, file), dir)
               await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
@@ -2083,10 +2233,13 @@ export class LocalBlobStore {
       } catch (error) {
         if (isMissing(error)) continue
         if (error instanceof QuarantineRestoreConflictError) {
-          conflictReason = `a file was kept at ${error.held} after interrupted cleanup because ${error.live} already exists. Close TenuVault and follow the backup storage recovery instructions`
+          conflictReason = `a file was kept at ${error.held} after interrupted cleanup because ${error.live} already exists. ${conflictResolutionMessage(error.live, error.held)}`
+          if (backup && blobName) {
+            conflict = { held: error.held, live: error.live, liveFile: file, blobName }
+          }
         }
       }
-      report(`${folder}/${file}`, conflictReason ?? "a file was kept after interrupted cleanup. Close TenuVault and follow the backup storage recovery instructions", backup)
+      report(`${folder}/${file}`, conflictReason ?? "a file was kept after interrupted cleanup. Close TenuVault and follow the backup storage recovery instructions", backup, conflict)
     }
     return damage
   }
@@ -2189,10 +2342,19 @@ export class LocalBlobStore {
 
     const damage: InventoryDamage = { files: retired, unavailable: new Map(), unattributed: retired.filter(file => file.backup === null).length }
     const unavailable = (folder: string, reason: string) => { if (!damage.unavailable.has(folder)) damage.unavailable.set(folder, reason) }
+    const conflictedBlobNames = new Set<string>()
+    const conflictedLiveByFile = new Map<string, string>()
     for (const file of retired) {
-      if (file.backup) unavailable(file.backup, file.reason + ".")
+      if (file.backup) unavailable(file.backup, file.reason.endsWith(".") ? file.reason : `${file.reason}.`)
+      if (file.conflict && file.backup) {
+        conflictedBlobNames.add(file.conflict.blobName)
+        conflictedLiveByFile.set(file.conflict.liveFile, file.backup)
+      } else {
+        damage.hasNonConflictDamage = true
+      }
     }
     for (const [name, claimed] of claims) {
+      damage.hasNonConflictDamage = true
       const folder = backupFolderOf(name)
       for (const file of claimed) damage.files.push({ file, reason: DUPLICATE_REASON, kind: "duplicate", backup: folder })
       if (folder) unavailable(folder, "two files hold the same backup item.")
@@ -2220,17 +2382,20 @@ export class LocalBlobStore {
       } catch (error) {
         // A manifest removed since the listing no longer describes a backup.
         if (isMissing(error)) { entries.delete(entry.name); continue }
+        damage.hasNonConflictDamage = true
         damage.files.push(damagedFile(entry.file, unreadable(error), folder))
         unavailable(folder, "its manifest (metadata.json) could not be read.")
         continue
       }
       if (metadata?.Items === undefined) { legacy.add(folder); continue } // Legacy backups have no inventory manifest.
       if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) {
+        damage.hasNonConflictDamage = true
         unavailable(folder, "its manifest (metadata.json) is not valid.")
         continue
       }
       const prefix = backupBlobName(`${folder}/`)
       let missing = 0
+      let nonConflictMissing = 0
       let valid = true
       for (const [key, item] of Object.entries(metadata.Items)) {
         const type = key.split("/")[0]
@@ -2238,7 +2403,10 @@ export class LocalBlobStore {
         if (!type || typeof file !== "string" || !file || file.includes("/") || file.includes("\\")) { valid = false; break }
         const name = `${prefix}${type}/${file}`
         traced.set(name, folder)
-        if (!entries.has(name)) missing++
+        if (!entries.has(name)) {
+          missing++
+          if (!conflictedBlobNames.has(name)) nonConflictMissing++
+        }
       }
       if (metadata.LargeItems) {
         try {
@@ -2246,7 +2414,10 @@ export class LocalBlobStore {
             for (let shard = 0; shard < index.shards; shard++) {
               const name = `${prefix}${indexPath(type, shard)}`
               traced.set(name, folder)
-              if (!entries.has(name)) missing++
+              if (!entries.has(name)) {
+                missing++
+                if (!conflictedBlobNames.has(name)) nonConflictMissing++
+              }
             }
           }
           // Unknown damaged headers may belong to a large snapshot outside the inline inventory.
@@ -2254,9 +2425,13 @@ export class LocalBlobStore {
           legacy.add(folder)
         } catch { valid = false }
       }
-      if (!valid) unavailable(folder, "its manifest (metadata.json) is not valid.")
-      else if (missing) unavailable(folder, `${missing} file${missing === 1 ? "" : "s"} listed in its manifest ${missing === 1 ? "is" : "are"} missing or damaged.`)
-      else withManifest.add(folder)
+      if (!valid) {
+        damage.hasNonConflictDamage = true
+        unavailable(folder, "its manifest (metadata.json) is not valid.")
+      } else if (missing) {
+        if (nonConflictMissing > 0) damage.hasNonConflictDamage = true
+        unavailable(folder, `${missing} file${missing === 1 ? "" : "s"} listed in its manifest ${missing === 1 ? "is" : "are"} missing or damaged.`)
+      } else withManifest.add(folder)
     }
 
     if (unreadableFiles.length) {
@@ -2265,8 +2440,9 @@ export class LocalBlobStore {
         for (const file of this.fileNames(account, container, name)) byFileName.set(file, folder)
       }
       for (const { file, why } of unreadableFiles) {
-        const folder = byFileName.get(file) ?? null
+        const folder = byFileName.get(file) ?? conflictedLiveByFile.get(file) ?? null
         damage.files.push(damagedFile(file, why, folder))
+        if (!folder || conflictedLiveByFile.get(file) !== folder) damage.hasNonConflictDamage = true
         if (folder) unavailable(folder, `one of its files could not be read: ${why.reason}.`)
         else damage.unattributed++
       }
@@ -2290,6 +2466,7 @@ export class LocalBlobStore {
         forgotten = true
         continue
       }
+      damage.hasNonConflictDamage = true
       const folder = backupFolderOf(entry.name)
       if (!damage.files.some((damaged) => damaged.file === file)) damage.files.push(damagedFile(file, rememberedUnreadable(record), folder))
       if (folder) unavailable(folder, `one of its files could not be read: ${reason}.`)

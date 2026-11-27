@@ -15,6 +15,7 @@ import {
   BlobProtectedError,
   compareProcessStart,
   createProcessInfoReader,
+  IncompleteInventoryError,
   LocalBlobStore,
   parseDarwinPsStart,
   parseWindowsCreationDate,
@@ -1665,5 +1666,479 @@ describe("round 7 findings", () => {
     } finally {
       nowSpy.mockRestore()
     }
+  })
+})
+
+describe("round 8 findings", () => {
+  it("P2.1: removes our own partial live file on copy error during recovery so the next scan retries cleanly, but keeps live if another writer replaced it", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-partial-clean-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const prefix = "backup-2026-10-12-120000/"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","round":8}'), "application/json")
+    const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
+    const livePath = join(dir, tvbFile)
+    const fullBytes = readFileSync(livePath)
+    const oldTime = (Date.now() - 120_000) / 1000
+
+    const retired = join(dir, ".retired-err1")
+    const held = join(retired, tvbFile)
+    mkdirSync(retired)
+    renameSync(livePath, held)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    let failWrite = true
+    vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
+      const handle = await actual.open(file, flags as never, mode as never)
+      if (String(file) === livePath && String(flags).startsWith("wx") && failWrite) {
+        const realWriteFile = handle.writeFile.bind(handle)
+        handle.writeFile = (async (data: Parameters<typeof handle.writeFile>[0]) => {
+          const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as Uint8Array)
+          await realWriteFile(buf.subarray(0, Math.floor(buf.length / 2)))
+          throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" })
+        }) as typeof handle.writeFile
+      }
+      return handle
+    })
+    try {
+      const firstDamage = await store.damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(firstDamage.files).toHaveLength(1)
+      expect(existsSync(livePath)).toBe(false)
+      expect(existsSync(held)).toBe(true)
+
+      failWrite = false
+      vi.mocked(fsPromises.open).mockImplementation(actual.open)
+      const secondDamage = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(secondDamage.files).toEqual([])
+      expect(secondDamage.unavailable.size).toBe(0)
+      expect(existsSync(held)).toBe(false)
+      expect(readFileSync(livePath).equals(fullBytes)).toBe(true)
+
+      const retired2 = join(dir, ".retired-err2")
+      const held2 = join(retired2, tvbFile)
+      mkdirSync(retired2)
+      renameSync(livePath, held2)
+      writeFileSync(join(retired2, ".quarantined"), "")
+      utimesSync(join(retired2, ".quarantined"), oldTime, oldTime)
+      utimesSync(retired2, oldTime, oldTime)
+
+      vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
+        const handle = await actual.open(file, flags as never, mode as never)
+        if (String(file) === livePath && String(flags).startsWith("wx")) {
+          handle.writeFile = (async () => {
+            const replacement = join(dir, `${tvbFile}.other.tmp`)
+            writeFileSync(replacement, Buffer.from("concurrent-writer-data"))
+            renameSync(replacement, livePath)
+            throw Object.assign(new Error("I/O error"), { code: "EIO" })
+          }) as typeof handle.writeFile
+        }
+        return handle
+      })
+      await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(existsSync(livePath)).toBe(true)
+      expect(readFileSync(livePath).toString()).toBe("concurrent-writer-data")
+      expect(existsSync(held2)).toBe(true)
+    } finally {
+      vi.mocked(fsPromises.open).mockImplementation(actual.open)
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+
+  it("P2.2: conflict warning and delete-blocked error name both paths with plain resolution steps, and deleting partial live restores the backup on next scan", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-resolve-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const backupId = "backup-2026-08-01-020000"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+
+    const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
+    const payloadFile = entries.get(`${backupId}/DeviceConfigurations/Old.json`)!.file
+    const livePath = join(dir, payloadFile)
+    const fullBytes = readFileSync(livePath)
+    const retired = join(dir, ".retired-conflict1")
+    const heldPath = join(retired, payloadFile)
+    const oldTime = (Date.now() - 120_000) / 1000
+    mkdirSync(retired)
+    renameSync(livePath, heldPath)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+    writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
+
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    try {
+      const fresh = new LocalBlobStore(root, [MASTER])
+      const damage = await fresh.damage(ACCOUNT, BACKUP_CONTAINER)
+      const conflictEntry = damage.files.find(f => f.file === `.retired-conflict1/${payloadFile}`)
+      expect(conflictEntry).toBeDefined()
+      const expectedStep = `Close TenuVault on every computer that uses this backup folder. If the file at ${livePath} is smaller than the file at ${heldPath}, delete the file at ${livePath}. TenuVault restores it from ${heldPath} on the next start. Otherwise contact support and keep both files.`
+      expect(conflictEntry!.reason).toContain(expectedStep)
+
+      await expect(fresh.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedStep)
+      await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedStep)
+
+      rmSync(livePath)
+      const afterDelete = new LocalBlobStore(root, [MASTER])
+      const resolvedDamage = await afterDelete.damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(resolvedDamage.files).toEqual([])
+      expect(resolvedDamage.unavailable.size).toBe(0)
+      expect(existsSync(heldPath)).toBe(false)
+      expect(existsSync(retired)).toBe(false)
+      expect((await afterDelete.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`)).data.toString()).toBe(JSON.stringify(OLD_ITEM))
+      expect((await afterDelete.list(ACCOUNT, BACKUP_CONTAINER, `${backupId}/`)).length).toBe(3)
+    } finally {
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+
+  it("P2.4: scopes recovery-conflict delete blocks to the conflicted backup while keeping unrelated backups, restores, imports, and retention working", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-scoped-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+
+    const oldCovered = "backup-2026-08-01-020000"
+    const oldUncovered = "backup-2026-08-05-020000"
+    const conflicted = "backup-2026-09-25-020000"
+    const complianceItem = { id: "comp-1" }
+    const complianceManifest = {
+      TenantId: TENANT,
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["CompliancePolicies"] },
+      Items: {
+        "CompliancePolicies/comp-1": { file: "Comp.json", hash: snapshotHash(complianceItem), sha256: sha256(complianceItem) },
+      },
+      ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+    }
+
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/CompliancePolicies/Comp.json`, Buffer.from(JSON.stringify(complianceItem)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/metadata.json`, Buffer.from(JSON.stringify(complianceManifest)), "application/json")
+
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/CompliancePolicies/Comp.json`, Buffer.from(JSON.stringify(complianceItem)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/metadata.json`, Buffer.from(JSON.stringify(complianceManifest)), "application/json")
+
+    const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
+    const conflictFile = entries.get(`${conflicted}/CompliancePolicies/Comp.json`)!.file
+    const livePath = join(dir, conflictFile)
+    const fullBytes = readFileSync(livePath)
+    const retired = join(dir, ".retired-scope1")
+    const heldPath = join(retired, conflictFile)
+    const oldTime = (Date.now() - 120_000) / 1000
+    mkdirSync(retired)
+    renameSync(livePath, heldPath)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+    writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
+
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    try {
+      const fresh = new LocalBlobStore(root, [MASTER])
+
+      await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/metadata.json`)).rejects.toThrow(IncompleteInventoryError)
+      await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/metadata.json`, {
+        expectedReplacements: [{ prefix: `${conflicted}/`, blobs: { [`${conflicted}/metadata.json`]: '"etag"' } }],
+      })).rejects.toThrow(livePath)
+
+      expect((await fresh.get(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/CompliancePolicies/Comp.json`)).data.toString()).toBe(JSON.stringify(complianceItem))
+      const imported = "backup-2026-10-01-020000"
+      await fresh.put(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+      expect((await fresh.get(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`)).data.toString()).toBe('{"Status":"Success"}')
+      await fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`)
+
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const req = new Request(input, init)
+        const url = new URL(req.url)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
+        return handleLocalBlobRequest(fresh, req)
+      }
+      const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+      const engine = new BackupEngine({
+        fetch: fetchImpl,
+        getToken: async () => "token",
+        retentionDays: () => 30,
+        now: () => NOW,
+      })
+      const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
+      await engine.waitForJob(job)
+      expect(job.status).toBe("Completed")
+      const log = job.log.join("\n")
+      expect(log).toContain(livePath)
+      expect(log).toContain(heldPath)
+      expect(log).toContain("Close TenuVault on every computer that uses this backup folder.")
+      expect(await fresh.list(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/`)).toEqual([])
+      expect((await fresh.list(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/`)).length).toBe(3)
+      expect(existsSync(heldPath)).toBe(true)
+
+      const otherFile = entries.get(`${oldUncovered}/CompliancePolicies/Comp.json`)!.file
+      const damaged = Buffer.from(readFileSync(join(dir, otherFile)))
+      damaged[6] = damaged[6]! ^ 0xff
+      writeFileSync(join(dir, otherFile), damaged)
+      const mixedStore = new LocalBlobStore(root, [MASTER])
+      await expect(mixedStore.delete(ACCOUNT, BACKUP_CONTAINER, "backup-2026-10-12-120000/metadata.json")).rejects.toThrow("Nothing in the backup folder is deleted")
+    } finally {
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+
+  it("4722441339: literal interleaving where createNew creates a 0-byte live claim, recovery starts, and the new file is published leaves live untouched and keeps held", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r8-interleave-")); roots.push(root)
+    const storeSetup = new LocalBlobStore(root, [MASTER])
+    const storeWriter = new LocalBlobStore(root, [MASTER])
+    const storeRecovery = new LocalBlobStore(root, [MASTER])
+    await storeSetup.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const prefix = "backup-2026-10-12-120000/"
+    await storeSetup.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from('{"Status":"Success","v":"held"}'), "application/json")
+    const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
+    const livePath = join(dir, tvbFile)
+    const heldBytes = readFileSync(livePath)
+
+    const retired = join(dir, ".retired-race1")
+    const heldPath = join(retired, tvbFile)
+    const oldTime = (Date.now() - 120_000) / 1000
+    mkdirSync(retired)
+    renameSync(livePath, heldPath)
+    writeFileSync(join(retired, ".quarantined"), "")
+    utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired, oldTime, oldTime)
+
+    let claimCreated!: () => void
+    const onClaimCreated = new Promise<void>(resolve => { claimCreated = resolve })
+    let allowPublish!: () => void
+    const waitPublish = new Promise<void>(resolve => { allowPublish = resolve })
+    let recoveryHitLive!: () => void
+    const onRecoveryHitLive = new Promise<void>(resolve => { recoveryHitLive = resolve })
+    let allowRecoveryContinue!: () => void
+    const waitRecoveryContinue = new Promise<void>(resolve => { allowRecoveryContinue = resolve })
+
+    vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
+    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+      if (String(to) === livePath && String(from).endsWith(".tmp")) {
+        claimCreated()
+        await waitPublish
+      }
+      return actual.rename(from, to)
+    })
+    vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
+      if (String(file) === livePath && String(flags) === "wx+") {
+        try {
+          return await actual.open(file, flags as never, mode as never)
+        } catch (error) {
+          recoveryHitLive()
+          await waitRecoveryContinue
+          throw error
+        }
+      }
+      return actual.open(file, flags as never, mode as never)
+    })
+
+    try {
+      const stagedRetired = join(root, ".retired-race1")
+      renameSync(retired, stagedRetired)
+
+      const newPayload = '{"Status":"Success","v":"published-by-createNew"}'
+      const putPromise = storeWriter.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from(newPayload), "application/json", true)
+      await onClaimCreated
+      expect(existsSync(livePath)).toBe(true)
+      expect(readFileSync(livePath).length).toBe(0)
+
+      renameSync(stagedRetired, retired)
+      utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
+      utimesSync(retired, oldTime, oldTime)
+      const recoveryPromise = storeRecovery.damage(ACCOUNT, BACKUP_CONTAINER)
+      await onRecoveryHitLive
+
+      allowPublish()
+      await putPromise
+      allowRecoveryContinue()
+      const damage = await recoveryPromise
+
+      expect(existsSync(heldPath)).toBe(true)
+      expect(readFileSync(heldPath).equals(heldBytes)).toBe(true)
+      expect(damage.files.some(f => f.file === `.retired-race1/${tvbFile}` && f.reason.includes(heldPath) && f.reason.includes(livePath))).toBe(true)
+      rmSync(retired, { recursive: true, force: true })
+      const verifyStore = new LocalBlobStore(root, [MASTER])
+      expect((await verifyStore.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe(newPayload)
+    } finally {
+      allowPublish()
+      allowRecoveryContinue()
+      vi.mocked(fsPromises.link).mockImplementation(actual.link)
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      vi.mocked(fsPromises.open).mockImplementation(actual.open)
+    }
+  })
+
+  it("P3.2: escalated reclaim gate warnings name the gate file rather than the lock file with safe stop instructions", () => {
+    const gatePath = "/backups/.tenuvault-retention.lock.reclaim"
+    const manual = permanentLeaseFailureWarning(true, 3, new BlobLeaseError(new Error("gate"), 409, "RetentionLockManualIntervention", gatePath))
+    const sameHolder = permanentLeaseFailureWarning(true, 3, new BlobLeaseError(new Error("gate-held"), 409, "LeaseAlreadyPresent", gatePath, "holder-gate"))
+    for (const msg of [manual, sameHolder]) {
+      expect(msg).toContain(gatePath)
+      expect(msg).toContain("gate file")
+      expect(msg).not.toContain("Delete the lock file")
+      expect(msg).not.toContain("delete the lock file")
+      expect(msg).toContain("Stop any TenuVault process on this computer that uses this backup folder")
+      expect(msg).toContain("no other computer is running TenuVault on this backup folder")
+    }
+  })
+
+  it("P3.3: treats a missing large companion on a resumed newest backup as unreadable, failing closed with a warning", async () => {
+    const azureAccount = "contosoretention"
+    const anchorId = "backup-2026-10-05-120000"
+    const midId = "backup-2026-10-10-120000"
+    const missingLargeId = "backup-large-2026-10-10-120000"
+    const oldId = "backup-2026-08-01-020000"
+    const blobs = new Map<string, { body: string; etag: string }>()
+    let etagCounter = 1
+    const putBlob = (container: string, name: string, value: unknown) => {
+      blobs.set(`${container}/${name}`, { body: typeof value === "string" ? value : JSON.stringify(value), etag: `"e-${etagCounter++}"` })
+    }
+
+    // Resumed anchor (ordinary backup).
+    putBlob(BACKUP_CONTAINER, `${anchorId}/DeviceConfigurations/Old.json`, OLD_ITEM)
+    putBlob(BACKUP_CONTAINER, `${anchorId}/${BACKUP_OWNER_FILE}`, OWNER)
+    putBlob(BACKUP_CONTAINER, `${anchorId}/metadata.json`, {
+      ...ONE_ITEM_MANIFEST,
+      BackupFolder: anchorId,
+      RunId: "run-anchor",
+    })
+
+    // Resumed newest backup that declares a large companion whose metadata.json is missing.
+    putBlob(BACKUP_CONTAINER, `${midId}/DeviceConfigurations/Old.json`, OLD_ITEM)
+    putBlob(BACKUP_CONTAINER, `${midId}/${BACKUP_OWNER_FILE}`, OWNER)
+    putBlob(BACKUP_CONTAINER, `${midId}/metadata.json`, {
+      ...ONE_ITEM_MANIFEST,
+      BackupFolder: midId,
+      RunId: "run-mid",
+      CompanionBackup: missingLargeId,
+      LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "saved", Saved: 1 }],
+    })
+
+    // Expired untagged backup so retention runs and `shared = true` protects untagged backups.
+    putBlob(BACKUP_CONTAINER, `${oldId}/DeviceConfigurations/Old.json`, OLD_ITEM)
+    putBlob(BACKUP_CONTAINER, `${oldId}/metadata.json`, {
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["DeviceConfigurations"] },
+      Items: { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(OLD_ITEM), sha256: sha256(OLD_ITEM) } },
+      ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 },
+    })
+
+    const progressData = new Map<string, string>()
+    const progressKey = `${TENANT}/${azureAccount}/false`
+    progressData.set(progressKey, JSON.stringify({
+      latest: `${anchorId}/`,
+      newest: `${midId}/`,
+      reviews: {
+        [`${anchorId}/`]: { files: { [`${anchorId}/DeviceConfigurations/Old.json`]: blobs.get(`${BACKUP_CONTAINER}/${anchorId}/DeviceConfigurations/Old.json`)!.etag }, attempts: 0 },
+        [`${midId}/`]: { files: { [`${midId}/DeviceConfigurations/Old.json`]: blobs.get(`${BACKUP_CONTAINER}/${midId}/DeviceConfigurations/Old.json`)!.etag }, attempts: 0 },
+      },
+    }))
+    const progress: RetentionProgressStore = {
+      get: key => progressData.get(key) ?? null,
+      set: (key, value) => { progressData.set(key, value) },
+      delete: key => { progressData.delete(key) },
+    }
+
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (!url.hostname.startsWith(`${azureAccount}.`)) {
+        return withServerDate(Response.json({ value: [] }), NOW)
+      }
+      const method = req.method.toUpperCase()
+      const [container, ...rest] = url.pathname.replace(/^\//, "").split("/")
+      const blobName = rest.map(decodeURIComponent).join("/")
+      if (url.searchParams.get("restype") === "container") {
+        if (url.searchParams.get("comp") === "list") {
+          const prefix = url.searchParams.get("prefix") ?? ""
+          const delimiter = url.searchParams.get("delimiter") ?? ""
+          const prefixes = new Set<string>()
+          const items: string[] = []
+          for (const [fullKey, entry] of blobs) {
+            if (!fullKey.startsWith(`${container}/`)) continue
+            const name = fullKey.slice(container!.length + 1)
+            if (!name.startsWith(prefix)) continue
+            const tail = name.slice(prefix.length)
+            const cut = delimiter ? tail.indexOf(delimiter) : -1
+            if (cut >= 0) {
+              const folder = prefix + tail.slice(0, cut + delimiter.length)
+              if (!prefixes.has(folder)) {
+                prefixes.add(folder)
+                items.push(`<BlobPrefix><Name>${folder}</Name></BlobPrefix>`)
+              }
+            } else {
+              items.push(`<Blob><Name>${name}</Name><Properties><Etag>${entry.etag}</Etag><Content-Length>${Buffer.byteLength(entry.body)}</Content-Length></Properties></Blob>`)
+            }
+          }
+          return withServerDate(new Response(`<?xml version="1.0" encoding="utf-8"?><EnumerationResults><Blobs>${items.join("")}</Blobs><NextMarker /></EnumerationResults>`, { status: 200, headers: { "content-type": "application/xml" } }), NOW)
+        }
+        return withServerDate(new Response(null, { status: 200 }), NOW)
+      }
+      if (method === "PUT" && url.searchParams.get("comp") === "lease") {
+        const action = req.headers.get("x-ms-lease-action")
+        if (action === "acquire") return withServerDate(new Response(null, { status: 201, headers: { "x-ms-lease-id": "lease-1" } }), NOW)
+        return withServerDate(new Response(null, { status: 200 }), NOW)
+      }
+      const key = `${container}/${blobName}`
+      if (method === "PUT") {
+        const body = await req.text()
+        const etag = `"e-${etagCounter++}"`
+        blobs.set(key, { body, etag })
+        return withServerDate(new Response(null, { status: 201, headers: { etag } }), NOW)
+      }
+      if (method === "GET" || method === "HEAD") {
+        const entry = blobs.get(key)
+        if (!entry) return withServerDate(new Response("<Error><Code>BlobNotFound</Code></Error>", { status: 404, headers: { "x-ms-error-code": "BlobNotFound" } }), NOW)
+        return withServerDate(new Response(method === "HEAD" ? null : entry.body, { status: 200, headers: { etag: entry.etag, "content-type": "application/json" } }), NOW)
+      }
+      if (method === "DELETE") {
+        blobs.delete(key)
+        return withServerDate(new Response(null, { status: 202 }), NOW)
+      }
+      return withServerDate(new Response(null, { status: 400 }), NOW)
+    }
+
+    const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+    const engine = new BackupEngine({
+      fetch: fetchImpl,
+      getToken: async () => "token",
+      retentionDays: () => 30,
+      retentionProgress: progress,
+      retentionLimits: { candidates: 10, requests: 200, bytes: 10_000_000 },
+      now: () => NOW,
+    })
+    const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: azureAccount, scope })
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Completed")
+    const log = job.log.join("\n")
+    expect(log).toContain(`${midId}/`)
+    expect(log).toContain(`${missingLargeId}/`)
+    expect(log).toContain("missing")
+    expect(job.results?.warnings ?? 0).toBeGreaterThan(0)
+    // Failed closed for midId: cleared from resumed newest state and untagged oldId was kept.
+    const saved = readRetentionProgress(progressData.get(progressKey))
+    expect(saved.newest).not.toBe(`${midId}/`)
+    expect(blobs.has(`${BACKUP_CONTAINER}/${oldId}/metadata.json`)).toBe(true)
+    expect(LARGE_BACKUP_CONTAINER).toBe("intune-backups-large")
   })
 })

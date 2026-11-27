@@ -1694,11 +1694,12 @@ export class BackupEngine {
         return value === null ? { kind: "missing" } : { kind: "found", value }
       } catch (error) {
         signal.throwIfAborted()
-        if (error instanceof InventoryDamagedError || !(error instanceof RequestTimeoutError || error instanceof FetchApplicationError || error instanceof StorageError)) throw error
+        if ((error instanceof InventoryDamagedError && !error.recoveryConflict) || !(error instanceof RequestTimeoutError || error instanceof FetchApplicationError || error instanceof StorageError)) throw error
         return { kind: "unreadable", error }
       }
     }
     const candidateWriters = backups.map(metered)
+    let hasNonConflictUnreadable = false
     await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
       let claim: OwnershipFile | undefined
       let timedOut: OwnershipFile | undefined
@@ -1712,6 +1713,7 @@ export class BackupEngine {
       const failure = manifest.kind === "unreadable" ? manifest.error : owner.kind === "unreadable" ? owner.error : null
       if (failure !== null) {
         unreadable.add(index)
+        if (!(failure instanceof InventoryDamagedError && failure.recoveryConflict)) hasNonConflictUnreadable = true
         noteRepeatedFailure(backup.prefix)
         unreadableReason ||= failure instanceof Error ? failure.message : String(failure)
         return
@@ -1726,7 +1728,7 @@ export class BackupEngine {
     if (unreadable.size > 0) {
       this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. Older backups were left in place.`, "warning")
       // An unreadable local inventory can hide the only surviving encrypted copy.
-      if (!limits) return unreadable.size + markerWarnings
+      if (!limits && hasNonConflictUnreadable) return unreadable.size + markerWarnings
       saveProgress()
     }
     if (backups.length > 0 && unreadable.size === backups.length) {
@@ -1750,7 +1752,7 @@ export class BackupEngine {
     const isAnchorUnreadable = (error: unknown): boolean =>
       !signal.aborted
       && !(error instanceof RetentionBudgetError)
-      && !(error instanceof InventoryDamagedError)
+      && !(error instanceof InventoryDamagedError && !error.recoveryConflict)
       && !(error instanceof TokenError)
       && !(error instanceof RetentionClockError)
       && !(error instanceof RequestTimeoutError)
@@ -1797,8 +1799,13 @@ export class BackupEngine {
           const companionRead = await readFile(metered(), `${companionId}/metadata.json`)
           if (companionRead.kind === "found" && companionRead.value && typeof companionRead.value === "object" && !Array.isArray(companionRead.value)) {
             anchorCompanionManifest = companionRead.value as Record<string, unknown>
-          } else if (companionRead.kind === "unreadable") {
-            unreadableAnchor = { prefix: anchorPrefix, error: companionRead.error }
+          } else {
+            const error = companionRead.kind === "unreadable"
+              ? companionRead.error
+              : new Error(companionRead.kind === "missing"
+                ? `large companion manifest ${companionId}/metadata.json is missing`
+                : `large companion manifest ${companionId}/metadata.json is invalid`)
+            unreadableAnchor = { prefix: anchorPrefix, error }
             shared = true
             delete state.reviews[anchorPrefix]
             delete state.reviews[`${companionId}/`]
@@ -1863,6 +1870,7 @@ export class BackupEngine {
       }
       return nextCovered
     }
+    let newestCompanionWarnings = 0
     try {
       try {
         covered = await verifyCurrentAnchor()
@@ -1933,6 +1941,9 @@ export class BackupEngine {
           try {
             await verifyHalf(metered(), targetPrefix, targetManifest, undefined, targetClaim, newestProgress, keyFingerprint)
             if (targetCompanionPrefix && targetCompanionManifest) {
+              if (!matchingCompanions(targetPrefix.slice(0, -1), targetManifest, companionId as string, targetCompanionManifest)) {
+                throw new Error("The newest backup's companion does not match")
+              }
               await verifyHalf(metered(), targetCompanionPrefix, targetCompanionManifest, undefined, undefined, targetCompanionProgress, keyFingerprint)
             }
             newestTarget = targetPrefix
@@ -1975,7 +1986,16 @@ export class BackupEngine {
               const companionRead = await readFile(metered(), `${companionId}/metadata.json`)
               if (companionRead.kind === "found" && companionRead.value && typeof companionRead.value === "object" && !Array.isArray(companionRead.value)) {
                 resumedCompanionManifest = companionRead.value as Record<string, unknown>
-              } else if (companionRead.kind === "unreadable") {
+              } else {
+                const reason = companionRead.kind === "unreadable"
+                  ? (companionRead.error instanceof Error ? companionRead.error.message : String(companionRead.error))
+                  : companionRead.kind === "missing"
+                    ? `large companion manifest ${companionId}/metadata.json is missing`
+                    : `large companion manifest ${companionId}/metadata.json is invalid`
+                shared = true
+                noteRepeatedFailure(resumedNewest.prefix)
+                this.write(job, `Kept backup ${resumedNewest.prefix} because its large companion ${companionId}/ could not be verified: ${reason}`, "warning")
+                newestCompanionWarnings++
                 resumedManifest = null
               }
             }
@@ -2043,7 +2063,7 @@ export class BackupEngine {
     let kept = 0
     let unowned = 0
     let protectedKept = 0
-    let unverified = unreadable.size
+    let unverified = unreadable.size + newestCompanionWarnings
     let replacementChangedDuringRun: string | undefined
     const plan: Array<{
       halves: VerifiedHalf[]
@@ -2057,7 +2077,7 @@ export class BackupEngine {
     }> = []
     const keptForReview = (prefix: string, error: unknown) => {
       signal.throwIfAborted()
-      if (error instanceof InventoryDamagedError || error instanceof TokenError || error instanceof RetentionClockError || (!limits && error instanceof RetentionManifestMismatch)) throw error
+      if ((error instanceof InventoryDamagedError && !error.recoveryConflict) || error instanceof TokenError || error instanceof RetentionClockError || (!limits && error instanceof RetentionManifestMismatch)) throw error
       unverified++
       noteRepeatedFailure(prefix)
       const reason = error instanceof Error ? error.message : String(error)
@@ -2408,7 +2428,7 @@ export class BackupEngine {
             for (const folder of completeFolders(resolved.manifest.metadata)) freshCovered.add(folder)
           } catch (error) {
             signal.throwIfAborted()
-            if (error instanceof InventoryDamagedError || error instanceof TokenError || error instanceof RetentionClockError || error instanceof RetentionBudgetError) throw error
+            if ((error instanceof InventoryDamagedError && !error.recoveryConflict) || error instanceof TokenError || error instanceof RetentionClockError || error instanceof RetentionBudgetError) throw error
           }
         }
         const coveredFresh = freshAnchorOk && journal.folders.every(folder => freshCovered.has(folder) && Boolean(typeForFolder(folder)))
