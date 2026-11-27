@@ -209,6 +209,18 @@ class QuarantineRestoreConflictError extends Error {
   }
 }
 
+class QuarantineRestoreInterruptedError extends Error {
+  constructor(
+    readonly held: string,
+    readonly live: string,
+    readonly liveExists: boolean,
+    readonly heldExists: boolean,
+  ) {
+    super(`Could not confirm restore of ${held} to ${live} after the held file disappeared.`)
+    this.name = "QuarantineRestoreInterruptedError"
+  }
+}
+
 export interface RetentionLockRecord {
   id: string
   host: string
@@ -481,7 +493,7 @@ function manualLockWarning(lockPath: string, reason: string): string {
 
 function conflictResolutionMessage(live: string, held: string, liveIsHeldPrefix: boolean): string {
   if (liveIsHeldPrefix) {
-    return `First copy the backup folder somewhere safe, close TenuVault on every computer that uses this backup folder, then delete the file at ${live}. TenuVault then restores it from ${held} on the next start.`
+    return `Close TenuVault on every computer that uses this backup folder. Then copy the backup folder somewhere safe, then delete the file at ${live}. TenuVault then restores it from ${held} on the next start.`
   }
   return `Keep both files (${live} and ${held}), do not delete either, and contact support with both paths.`
 }
@@ -698,6 +710,8 @@ export interface InventoryDamage {
   unattributed: number
   /** True when the container also holds non-conflict damage (unreadable files, missing non-conflicted items, duplicates). */
   hasNonConflictDamage?: boolean
+  /** True when this scan observed an interrupted quarantine restore after linking held to live. */
+  interruptedRestore?: boolean
 }
 
 const RECOVERY = "Import the recovery key it was made with, or restore the damaged files from a copy. Files that cannot be recovered can be removed from the backup folder."
@@ -1251,8 +1265,27 @@ export class LocalBlobStore {
               throw new BlobReplacementChangedError(changed, undefined, restoredEtag)
             }
           }
+          const beforeRemove = await lstat(held, { bigint: true })
+          if (!beforeRemove.isFile() || beforeRemove.ino === 0n
+            || beforeRemove.dev !== moved.dev || beforeRemove.ino !== moved.ino
+            || beforeRemove.size !== moved.size || beforeRemove.mtimeNs !== moved.mtimeNs
+            || beforeRemove.nlink !== moved.nlink) {
+            this.index.delete(dir)
+            throw new Error(`Quarantined file ${held} changed before removal`)
+          }
+          const liveBefore = await lstat(path, { bigint: true }).catch(error => isMissing(error) ? null : undefined)
+          if (liveBefore !== null) {
+            this.index.delete(dir)
+            throw new Error(`Candidate file ${path} is present before removing ${held}`)
+          }
           await rm(held)
           needsRecovery = false
+          const liveAfter = await lstat(path, { bigint: true }).catch(error => isMissing(error) ? null : undefined)
+          if (liveAfter !== null) {
+            this.index.delete(dir)
+            this.changed(dir)
+            throw new Error(`Candidate file ${path} is still present after removing ${held}`)
+          }
           this.updateEntry(dir, entries, name)
         } finally {
           if (!needsRecovery) {
@@ -1685,9 +1718,10 @@ export class LocalBlobStore {
           && gateState.lock.pid === process.pid
           && leakedReclaimGates.has(leakedKey)
         if (isOwnLeakedGate) {
-          // Claim removal synchronously so no second caller in this process can also touch this gate.
-          leakedReclaimGates.delete(leakedKey)
+          // Check cancellation and claim removal synchronously so no second caller can touch this gate
+          // and an aborted caller never drops the leaked-gate record.
           signal?.throwIfAborted()
+          leakedReclaimGates.delete(leakedKey)
           try {
             await this.reclaimLockAside(gatePath, movedRaw => parseRetentionLock(movedRaw)?.id === gateId)
           } catch (error) {
@@ -1998,7 +2032,9 @@ export class LocalBlobStore {
       if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
       check.started = true
       try {
+        const cachedBefore = this.index.get(dir)
         let entries = await this.entries(account, container)
+        const rebuilt = cachedBefore === undefined || cachedBefore !== this.index.get(dir)
         const names = await this.names(dir)
         const files = new Set(names.filter(file => file.endsWith(EXT)))
         // Directory stamps can be coarse on a shared folder, so always reconcile names.
@@ -2010,7 +2046,7 @@ export class LocalBlobStore {
           try { return fileStamp(await stat(join(dir, file), { bigint: true })) === stamp } catch { return false }
         })).every(Boolean)
         if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
-        if (!unchanged) {
+        if (!unchanged && !(rebuilt && this.damageOf.get(entries)?.interruptedRestore)) {
           this.index.delete(dir)
           entries = await this.entries(account, container, entries)
         }
@@ -2078,23 +2114,35 @@ export class LocalBlobStore {
    * live because .tvb names are path-addressed and cross-process writers can target the same path.
    * Returns the restored file's ETag only when bound to the exact file just restored.
    */
+  private async resolveOccupiedLiveOnRestore(held: string, live: string, heldInfo: BigIntStats): Promise<string | undefined> {
+    if (await isSameFile(held, live)) {
+      await removeHeldAfterRestore(held, live)
+      return await boundRestoredEtag(live, heldInfo)
+    }
+    const identical = await identicalLiveHeldInfo(live, held)
+    if (identical) {
+      await removeHeldAfterRestore(held, live)
+      return await boundRestoredEtag(live, identical.liveInfo)
+    }
+    const prefix = await liveHeldPrefixInfo(live, held)
+    throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
+  }
+
   private async restoreQuarantinedFile(held: string, live: string, dir: string): Promise<string | undefined> {
     const heldInfo = await lstat(held, { bigint: true })
     if (this.hardLinks) {
+      let linked = false
       try {
         await link(held, live)
+        linked = true
         if (process.platform !== "win32") await syncDirectory(dir)
-        await rm(held)
+        await removeHeldAfterRestore(held, live)
         return await boundRestoredEtag(live, heldInfo)
       } catch (error) {
+        if (linked) throw error
         const code = (error as NodeJS.ErrnoException).code ?? ""
         if (code === "EEXIST") {
-          if (await isSameFile(held, live)) {
-            await rm(held)
-            return await boundRestoredEtag(live, heldInfo)
-          }
-          const prefix = await liveHeldPrefixInfo(live, held)
-          throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
+          return await this.resolveOccupiedLiveOnRestore(held, live, heldInfo)
         }
         if (!NO_HARD_LINKS.has(code)) throw error
         this.hardLinks = false
@@ -2106,17 +2154,7 @@ export class LocalBlobStore {
       handle = await open(live, "wx+", 0o600)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        if (await isSameFile(held, live)) {
-          await rm(held)
-          return await boundRestoredEtag(live, heldInfo)
-        }
-        const identicalInfo = await identicalLiveCopyInfo(live, data)
-        if (identicalInfo) {
-          await rm(held)
-          return await boundRestoredEtag(live, identicalInfo)
-        }
-        const prefix = await liveHeldPrefixInfo(live, held)
-        throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
+        return await this.resolveOccupiedLiveOnRestore(held, live, heldInfo)
       }
       throw error
     }
@@ -2213,7 +2251,7 @@ export class LocalBlobStore {
     }
     await handle.close()
     if (process.platform !== "win32") await syncDirectory(dir)
-    await rm(held)
+    await removeHeldAfterRestore(held, live)
     return await boundRestoredEtag(live, writtenInfo)
   }
 
@@ -2341,7 +2379,11 @@ export class LocalBlobStore {
         }
       } catch (error) {
         if (isMissing(error)) continue
-        if (error instanceof QuarantineRestoreConflictError) {
+        if (error instanceof QuarantineRestoreInterruptedError) {
+          conflictReason = error.liveExists
+            ? `restoring ${path} to ${join(dir, file)} was interrupted when the held file disappeared while the live file was present`
+            : `restoring ${path} to ${join(dir, file)} was interrupted when the held file disappeared`
+        } else if (error instanceof QuarantineRestoreConflictError) {
           const existingPartial = partialFilesByLive.get(file)?.[0]
           const aside = error.aside ?? (existingPartial ? join(dir, existingPartial) : undefined)
           if (existingPartial) matchedPartials.add(existingPartial)
@@ -2473,7 +2515,12 @@ export class LocalBlobStore {
       return entries
     }
 
-    const damage: InventoryDamage = { files: retired, unavailable: new Map(), unattributed: retired.filter(file => file.backup === null).length }
+    const damage: InventoryDamage = {
+      files: retired,
+      unavailable: new Map(),
+      unattributed: retired.filter(file => file.backup === null).length,
+      ...(retired.some(file => file.reason.includes("was interrupted when the held file disappeared")) ? { interruptedRestore: true } : {}),
+    }
     const unavailable = (folder: string, reason: string) => { if (!damage.unavailable.has(folder)) damage.unavailable.set(folder, reason) }
     const conflictedBlobNames = new Set<string>()
     const conflictedLiveByFile = new Map<string, string>()
@@ -2696,26 +2743,79 @@ async function boundRestoredEtag(live: string, expected: BigIntStats): Promise<s
   }
 }
 
-/** Verifies `live` is a regular file with exact byte-for-byte identical contents to `expectedData`, bound to one open handle. */
-async function identicalLiveCopyInfo(live: string, expectedData: Buffer): Promise<BigIntStats | null> {
-  if (expectedData.length === 0) return null
-  let handle: Awaited<ReturnType<typeof open>> | undefined
+/**
+ * Removes `held` after `live` was linked or copied from it. If `rm(held)` returns ENOENT,
+ * re-checks both paths and never treats the restore as complete.
+ */
+async function removeHeldAfterRestore(held: string, live: string): Promise<void> {
   try {
-    const linkInfo = await lstat(live, { bigint: true })
-    if (!linkInfo.isFile() || linkInfo.size !== BigInt(expectedData.length)) return null
-    handle = await open(live, "r")
-    const before = await handle.stat({ bigint: true })
-    if (!before.isFile() || before.ino === 0n || before.dev !== linkInfo.dev || before.ino !== linkInfo.ino || before.size !== BigInt(expectedData.length)) {
+    await rm(held)
+  } catch (error) {
+    if (!isMissing(error)) throw error
+    const [liveNow, heldNow] = await Promise.all([
+      lstat(live, { bigint: true }).catch(() => null),
+      lstat(held, { bigint: true }).catch(() => null),
+    ])
+    if (liveNow && heldNow) {
+      const prefix = await liveHeldPrefixInfo(live, held)
+      throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
+    }
+    throw new QuarantineRestoreInterruptedError(held, live, Boolean(liveNow), Boolean(heldNow))
+  }
+}
+
+/**
+ * Verifies `live` and `held` are regular files with exact byte-for-byte identical contents,
+ * bound to open file handles and re-checked unchanged at both paths after the reads.
+ */
+async function identicalLiveHeldInfo(live: string, held: string): Promise<{ liveInfo: BigIntStats; heldStamp: string } | null> {
+  let heldHandle: Awaited<ReturnType<typeof open>> | undefined
+  let liveHandle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    const heldLink = await lstat(held, { bigint: true })
+    if (!heldLink.isFile() || heldLink.ino === 0n || heldLink.size === 0n) return null
+    const liveLink = await lstat(live, { bigint: true })
+    if (!liveLink.isFile() || liveLink.ino === 0n || liveLink.size !== heldLink.size) return null
+
+    heldHandle = await open(held, "r")
+    const heldBefore = await heldHandle.stat({ bigint: true })
+    if (!heldBefore.isFile() || heldBefore.ino === 0n
+      || heldBefore.dev !== heldLink.dev || heldBefore.ino !== heldLink.ino
+      || heldBefore.size !== heldLink.size) {
       return null
     }
-    const bytes = await handle.readFile()
-    const after = await handle.stat({ bigint: true })
-    if (fileStamp(before) !== fileStamp(after)) return null
-    return bytes.equals(expectedData) ? after : null
+    const heldBytes = await heldHandle.readFile()
+    const heldAfter = await heldHandle.stat({ bigint: true })
+    if (fileStamp(heldBefore) !== fileStamp(heldAfter) || heldBytes.length !== Number(heldBefore.size) || heldBytes.length === 0) {
+      return null
+    }
+
+    liveHandle = await open(live, "r")
+    const liveBefore = await liveHandle.stat({ bigint: true })
+    if (!liveBefore.isFile() || liveBefore.ino === 0n
+      || liveBefore.dev !== liveLink.dev || liveBefore.ino !== liveLink.ino
+      || liveBefore.size !== BigInt(heldBytes.length)) {
+      return null
+    }
+    const liveBytes = await liveHandle.readFile()
+    const liveAfter = await liveHandle.stat({ bigint: true })
+    if (fileStamp(liveBefore) !== fileStamp(liveAfter) || liveBytes.length !== heldBytes.length) {
+      return null
+    }
+    if (!liveBytes.equals(heldBytes)) return null
+
+    const [livePathAfter, heldPathAfter] = await Promise.all([
+      lstat(live, { bigint: true }),
+      lstat(held, { bigint: true }),
+    ])
+    if (!livePathAfter.isFile() || fileStamp(livePathAfter) !== fileStamp(liveAfter)) return null
+    if (!heldPathAfter.isFile() || fileStamp(heldPathAfter) !== fileStamp(heldAfter)) return null
+    return { liveInfo: livePathAfter, heldStamp: fileStamp(heldAfter) }
   } catch {
     return null
   } finally {
-    await handle?.close().catch(() => undefined)
+    await liveHandle?.close().catch(() => undefined)
+    await heldHandle?.close().catch(() => undefined)
   }
 }
 

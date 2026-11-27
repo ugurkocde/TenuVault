@@ -62,6 +62,8 @@ function memoryStore(): RetentionProgressStore {
 function setupAzure(options: {
   count?: number
   progress?: RetentionProgressStore
+  limits?: { candidates: number; requests: number; bytes: number }
+  payloadPadding?: string
   override?: (url: URL, request: Request, init?: RequestInit) => Response | Promise<Response> | undefined
 } = {}) {
   vi.useFakeTimers()
@@ -80,8 +82,8 @@ function setupAzure(options: {
     if (overridden) return overridden
     if (url.hostname === "graph.microsoft.com") {
       return withDate(url.pathname.endsWith("/deviceConfigurations")
-        ? Response.json({ value: Array.from({ length: options.count ?? 1 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
-        : Response.json({ id: url.pathname.split("/").at(-1) }))
+        ? Response.json({ value: Array.from({ length: options.count ?? 1 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}`, ...(options.payloadPadding ? { padding: options.payloadPadding } : {}) })) })
+        : Response.json({ id: url.pathname.split("/").at(-1), ...(options.payloadPadding ? { padding: options.payloadPadding } : {}) }))
     }
     if (url.searchParams.get("comp") === "list") {
       const prefix = url.searchParams.get("prefix") ?? ""
@@ -112,6 +114,7 @@ function setupAzure(options: {
     fetch,
     getToken: async () => { registerStorageToken("token", TENANT); return "token" },
     retentionDays: () => 30,
+    retentionLimits: options.limits,
     retentionProgress: progress,
     recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keyring),
   })
@@ -124,7 +127,7 @@ function setupAzure(options: {
     seed(`${prefix}${BACKUP_OWNER_FILE}`, OWNER)
     seed(`${prefix}metadata.json`, twoItems ? TWO_ITEM_MANIFEST : ONE_ITEM_MANIFEST)
   }
-  return { createEngine, engine: createEngine(), saved, calls, seed, seedExpired, progress }
+  return { createEngine, engine: createEngine(), saved, calls, seed, seedExpired, progress, keyring }
 }
 
 async function runJob(engine: BackupEngine) {
@@ -1150,5 +1153,178 @@ describe("Round 3 findings: version-tied replacement coverage and outer-loop sto
       expect(deletes.some(name => name.startsWith(candidate2))).toBe(true)
       expect(job.log.join("\n")).toContain("could not be leased before deletion")
     }
+  })
+})
+
+describe("Round 10 findings: checkpointed fresh verification for deletion journals", () => {
+  it("4723063805: checkpoints fresh verification across consecutive 110 KB budgeted runs for two 70 KB payloads, keeps remaining files until complete, and resets on change", async () => {
+    const progress = memoryStore()
+    const expired = "backup-2026-08-01-020000/"
+    const padding = "x".repeat(70_000)
+    const leases = new Map<string, string>()
+
+    const ctx = setupAzure({
+      count: 2,
+      payloadPadding: padding,
+      progress,
+      limits: { candidates: 32, requests: 200, bytes: 110_000 },
+      override: (url, req) => {
+        const name = decodeURIComponent(url.pathname.slice(`/${BACKUP_CONTAINER}/`.length))
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") {
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${leases.size + 1}`
+            leases.set(name, id)
+            return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+          }
+          if (action === "release") leases.delete(name)
+          return new Response(null, { status: 200 })
+        }
+        return undefined
+      },
+    })
+
+    // Seed expired backup with a deletion journal whose one recorded file is already absent.
+    ctx.seedExpired(expired)
+    const etagOf = (name: string) => `"${createHash("sha256").update(ctx.saved.get(name)!).digest("hex")}"`
+    const progressKey = `${TENANT}/contoso`
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletes: {
+        [expired]: {
+          prefix: expired,
+          remaining: {
+            [`${expired}DeviceConfigurations/Absent.json`]: '"absent-etag"',
+            [`${expired}DeviceConfigurations/Old.json`]: etagOf(`${expired}DeviceConfigurations/Old.json`),
+            [`${expired}metadata.json`]: etagOf(`${expired}metadata.json`),
+            [`${expired}${BACKUP_OWNER_FILE}`]: etagOf(`${expired}${BACKUP_OWNER_FILE}`),
+          },
+          types: ["DeviceConfigurations"],
+          noTypes: false,
+          untagged: false,
+        },
+      },
+    }))
+
+    // Consecutive budgeted runs (110 KB per run, two 70 KB payloads per backup):
+    // anchor verification completes first via ordinary receipts, then fresh verification
+    // checkpoints payload 1 in journal.fresh (separate from state.reviews), keeps expired
+    // files until fresh verification finishes, and completes cleanup on the following run.
+    let sawPartialFreshCheckpoint = false
+    for (let run = 0; run < 8; run++) {
+      if (run > 0) vi.setSystemTime(new Date(NOW.getTime() + run * 60_000))
+      await runJob(ctx.createEngine())
+      const state = readRetentionProgress(progress.get(progressKey))
+      const journal = state.deletes?.[expired]
+      if (journal?.fresh) {
+        const entries = Object.values(journal.fresh)
+        if (entries.some(entry => !entry.done && Object.keys(entry.files).length === 1)) {
+          sawPartialFreshCheckpoint = true
+          // Remaining files must still be intact while fresh verification is incomplete.
+          expect(ctx.saved.has(`${expired}DeviceConfigurations/Old.json`)).toBe(true)
+          expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+          expect(ctx.saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(true)
+        }
+      }
+      if (!ctx.saved.has(`${expired}metadata.json`)) break
+    }
+
+    expect(sawPartialFreshCheckpoint).toBe(true)
+    expect(ctx.saved.has(`${expired}DeviceConfigurations/Old.json`)).toBe(false)
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(false)
+    expect(ctx.saved.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(false)
+    expect(readRetentionProgress(progress.get(progressKey)).deletes).toBeUndefined()
+  })
+
+  it("4723063805: resets persisted fresh verification progress when keyring fingerprint, replacement identity, or manifest changes", async () => {
+    const progress = memoryStore()
+    const expired = "backup-2026-08-01-020000/"
+    const padding = "y".repeat(70_000)
+    const ctx = setupAzure({
+      count: 2,
+      payloadPadding: padding,
+      progress,
+      limits: { candidates: 32, requests: 200, bytes: 110_000 },
+      override: (url, req) => {
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+          return new Response(null, { status: 200 })
+        }
+        return undefined
+      },
+    })
+    ctx.seedExpired(expired)
+    const etagOf = (name: string) => `"${createHash("sha256").update(ctx.saved.get(name)!).digest("hex")}"`
+    const progressKey = `${TENANT}/contoso`
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletes: {
+        [expired]: {
+          prefix: expired,
+          remaining: {
+            [`${expired}DeviceConfigurations/Absent.json`]: '"absent-etag"',
+            [`${expired}DeviceConfigurations/Old.json`]: etagOf(`${expired}DeviceConfigurations/Old.json`),
+            [`${expired}metadata.json`]: etagOf(`${expired}metadata.json`),
+            [`${expired}${BACKUP_OWNER_FILE}`]: etagOf(`${expired}${BACKUP_OWNER_FILE}`),
+          },
+          types: ["DeviceConfigurations"],
+          noTypes: false,
+          untagged: false,
+        },
+      },
+    }))
+
+    // Advance runs until fresh verification checkpoints payload 1 of the anchor replacement.
+    let anchorPrefix = ""
+    let bindingBefore = ""
+    let firstPayload = ""
+    let step = 0
+    for (; step < 8; step++) {
+      if (step > 0) vi.setSystemTime(new Date(NOW.getTime() + step * 60_000))
+      await runJob(ctx.createEngine())
+      const state = readRetentionProgress(progress.get(progressKey))
+      const freshMap = state.deletes?.[expired]?.fresh
+      if (freshMap) {
+        const hit = Object.entries(freshMap).find(([, entry]) => !entry.done && Object.keys(entry.files).length === 1)
+        if (hit) {
+          anchorPrefix = hit[0]
+          bindingBefore = hit[1].binding
+          firstPayload = Object.keys(hit[1].files)[0]!
+          break
+        }
+      }
+    }
+    expect(bindingBefore).not.toBe("")
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+
+    // Rotate keyring fingerprint: once anchor/newest re-verify under the new keyring, the fresh
+    // verification binding must reset (so firstPayload is re-read and expired stays on disk
+    // during the reset run rather than finishing immediately from the stale checkpoint).
+    ctx.keyring.unshift(Buffer.alloc(32, 9))
+    let sawResetCheckpoint = false
+    for (let extra = 1; extra <= 8; extra++) {
+      const callsBefore = ctx.calls.length
+      vi.setSystemTime(new Date(NOW.getTime() + (step + extra) * 60_000))
+      await runJob(ctx.createEngine())
+      const freshAfterKey = readRetentionProgress(progress.get(progressKey)).deletes?.[expired]?.fresh?.[anchorPrefix]
+      if (freshAfterKey && freshAfterKey.binding !== bindingBefore && !freshAfterKey.done) {
+        sawResetCheckpoint = true
+        const reReadFirst = ctx.calls.slice(callsBefore).filter(c => c.request.method === "GET" && c.name === `${anchorPrefix}${firstPayload}`)
+        expect(reReadFirst.length).toBeGreaterThanOrEqual(1)
+        expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+        break
+      }
+    }
+    expect(sawResetCheckpoint).toBe(true)
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(true)
+
+    // Continue consecutive runs under the new keyring until cleanup completes.
+    for (let extra = 9; extra <= 16; extra++) {
+      vi.setSystemTime(new Date(NOW.getTime() + (step + extra) * 60_000))
+      await runJob(ctx.createEngine())
+      if (!ctx.saved.has(`${expired}metadata.json`)) break
+    }
+    expect(ctx.saved.has(`${expired}metadata.json`)).toBe(false)
   })
 })

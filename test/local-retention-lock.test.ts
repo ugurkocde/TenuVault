@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process"
 import { createHash, randomBytes } from "node:crypto"
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import * as fsPromises from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -11,6 +11,7 @@ import { permanentLeaseFailureWarning } from "../src/main/backup/retention-lease
 import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import {
+  BlobDeleteInterruptedError,
   BlobLeaseConflictError,
   BlobProtectedError,
   BlobQuarantinedError,
@@ -38,6 +39,7 @@ vi.mock("node:fs/promises", async original => {
     link: vi.fn(actual.link),
     open: vi.fn(actual.open),
     readFile: vi.fn(actual.readFile),
+    rm: vi.fn(actual.rm),
   }
 })
 
@@ -859,10 +861,13 @@ describe("round 5 CodeRabbit fixes", () => {
     let allowRename!: () => void
     const waitRename = new Promise<void>(resolve => { allowRename = resolve })
 
+    const events: string[] = []
     vi.mocked(fsPromises.rename).mockImplementationOnce(async (from, to) => {
       renameStarted()
       await waitRename
-      return actual.rename(from, to)
+      const result = await actual.rename(from, to)
+      events.push("put-rename-committed")
+      return result
     })
 
     // Start a put on storeB; pause it after assertPrefixNotProtected, right at rename().
@@ -870,34 +875,41 @@ describe("round 5 CodeRabbit fixes", () => {
     await onRenameStart
 
     let lockId: string | undefined
+    let lockPromise: Promise<string> | undefined
     try {
       // Synchronize explicitly on guard registration before asserting that lock acquisition
       // waits for the in-flight put while blocking new puts to repPrefix.
       const guardRegistered = waitForLocalRetentionGuardRegistration(join(root, ACCOUNT, BACKUP_CONTAINER))
       let lockResolved = false
-      const lockPromise = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [repPrefix]).then(id => {
+      lockPromise = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [repPrefix]).then(id => {
         lockResolved = true
+        events.push("lock-resolved")
         return id
       })
 
       await guardRegistered
-      await Promise.resolve()
-      expect(lockResolved).toBe(false)
       await expect(storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}DeviceConfigurations/new.json`, Buffer.from("{}"), "application/json"))
         .rejects.toBeInstanceOf(BlobProtectedError)
+      // Give any unguarded cleanup I/O (such as finally rm(tmpPath)) time to finish so this
+      // fails deterministically if acquireRetentionLock stops waiting for the paused PUT.
+      await new Promise(resolve => setTimeout(resolve, 30))
+      expect(lockResolved).toBe(false)
+      expect(events).toEqual([])
 
       // Allow the in-flight rename to commit.
       allowRename()
       await putPromise
       lockId = await lockPromise
+      expect(events).toEqual(["put-rename-committed", "lock-resolved"])
       // Final read under the lock is guaranteed to observe the committed v2 manifest.
       const read = await storeA.get(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`)
       expect(read.data.toString()).toBe('{"v":2}')
     } finally {
       allowRename()
-      await putPromise.catch(() => undefined)
+      const [, lockResult] = await Promise.allSettled([putPromise, ...(lockPromise ? [lockPromise] : [])])
+      const resolvedLockId = lockId ?? (lockResult?.status === "fulfilled" ? (lockResult.value as string) : undefined)
+      if (resolvedLockId) await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, resolvedLockId).catch(() => undefined)
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-      if (lockId) await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
     }
   })
 
@@ -967,6 +979,7 @@ describe("round 5 CodeRabbit fixes", () => {
     }
   })
 })
+
 
 describe("round 5b reclaim gate", () => {
   const STALE_PID = 4321
@@ -1479,6 +1492,7 @@ describe("round 6 findings", () => {
   })
 })
 
+
 describe("round 7 findings", () => {
   it("4722421520: with an unstealable gate held, lock check and move complete without interleaving from another reclaimer", async () => {
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
@@ -1506,8 +1520,9 @@ describe("round 7 findings", () => {
       return actual.rename(from, to)
     })
     let lockIdA: string | undefined
+    let acquireA: Promise<string> | undefined
     try {
-      const acquireA = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+      acquireA = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
       await onLockMove
       // A holds the gate and has checked the lock; B arrives now and must not move the gate or lock.
       const errB = await storeB.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (error: unknown) => error)
@@ -1522,8 +1537,10 @@ describe("round 7 findings", () => {
       expect(existsSync(gatePath)).toBe(false)
     } finally {
       allowLockMove()
+      const [resultA] = await Promise.allSettled(acquireA ? [acquireA] : [])
+      const resolvedLockIdA = lockIdA ?? (resultA?.status === "fulfilled" ? resultA.value : undefined)
+      if (resolvedLockIdA) await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, resolvedLockIdA).catch(() => undefined)
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
-      if (lockIdA) await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockIdA)
     }
   })
 
@@ -1782,7 +1799,7 @@ describe("round 8 findings", () => {
       const damage = await fresh.damage(ACCOUNT, BACKUP_CONTAINER)
       const conflictEntry = damage.files.find(f => f.file === `.retired-conflict1/${payloadFile}`)
       expect(conflictEntry).toBeDefined()
-      const expectedStep = `First copy the backup folder somewhere safe, close TenuVault on every computer that uses this backup folder, then delete the file at ${livePath}. TenuVault then restores it from ${heldPath} on the next start.`
+      const expectedStep = `Close TenuVault on every computer that uses this backup folder. Then copy the backup folder somewhere safe, then delete the file at ${livePath}. TenuVault then restores it from ${heldPath} on the next start.`
       expect(conflictEntry!.reason).toContain(expectedStep)
 
       await expect(fresh.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedStep)
@@ -1894,7 +1911,7 @@ describe("round 8 findings", () => {
       const log = job.log.join("\n")
       expect(log).toContain(livePath)
       expect(log).toContain(heldPath)
-      expect(log).toContain("First copy the backup folder somewhere safe, close TenuVault on every computer that uses this backup folder")
+      expect(log).toContain("Close TenuVault on every computer that uses this backup folder. Then copy the backup folder somewhere safe")
       expect(await fresh.list(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/`)).toEqual([])
       expect((await fresh.list(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/`)).length).toBe(3)
       expect(existsSync(heldPath)).toBe(true)
@@ -1965,6 +1982,8 @@ describe("round 8 findings", () => {
       return actual.open(file, flags as never, mode as never)
     })
 
+    let putPromise: Promise<unknown> | undefined
+    let recoveryPromise: Promise<unknown> | undefined
     try {
       // Stage the aged quarantine folder outside dir while storeWriter runs entries(),
       // pause at claimCreated (0-byte livePath exists), then move retired into place and start storeRecovery.
@@ -1972,7 +1991,7 @@ describe("round 8 findings", () => {
       renameSync(retired, stagedRetired)
 
       const newPayload = '{"Status":"Success","v":"published-by-createNew"}'
-      const putPromise = storeWriter.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from(newPayload), "application/json", true)
+      putPromise = storeWriter.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from(newPayload), "application/json", true)
       await onClaimCreated
       // Right now createNew has created the 0-byte claim at livePath and has not renamed tmp onto it yet.
       expect(existsSync(livePath)).toBe(true)
@@ -1982,14 +2001,14 @@ describe("round 8 findings", () => {
       renameSync(stagedRetired, retired)
       utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
       utimesSync(retired, oldTime, oldTime)
-      const recoveryPromise = storeRecovery.damage(ACCOUNT, BACKUP_CONTAINER)
+      recoveryPromise = storeRecovery.damage(ACCOUNT, BACKUP_CONTAINER)
       await onRecoveryHitLive
 
       // Now the writer publishes its completed file onto livePath, and recovery resumes.
       allowPublish()
       await putPromise
       allowRecoveryContinue()
-      const damage = await recoveryPromise
+      const damage = await recoveryPromise as Awaited<ReturnType<LocalBlobStore["damage"]>>
 
       // Assert: published file is completely untouched, held copy is kept, and conflict names both paths.
       expect(existsSync(heldPath)).toBe(true)
@@ -2002,6 +2021,7 @@ describe("round 8 findings", () => {
     } finally {
       allowPublish()
       allowRecoveryContinue()
+      await Promise.allSettled([putPromise, recoveryPromise].filter((p): p is Promise<unknown> => Boolean(p)))
       vi.mocked(fsPromises.link).mockImplementation(actual.link)
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
       vi.mocked(fsPromises.open).mockImplementation(actual.open)
@@ -2125,7 +2145,7 @@ describe("round 9 findings", () => {
     const prefixBytes = fullBytes.subarray(0, Math.floor(fullBytes.length / 2))
     writeFileSync(livePath, prefixBytes)
 
-    const expectedDelete = `First copy the backup folder somewhere safe, close TenuVault on every computer that uses this backup folder, then delete the file at ${livePath}. TenuVault then restores it from ${heldPath} on the next start.`
+    const expectedDelete = `Close TenuVault on every computer that uses this backup folder. Then copy the backup folder somewhere safe, then delete the file at ${livePath}. TenuVault then restores it from ${heldPath} on the next start.`
     vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     try {
       const fresh = new LocalBlobStore(root, [MASTER])
@@ -2164,7 +2184,7 @@ describe("round 9 findings", () => {
         expectedReplacements: [{ prefix: `${repId}/`, blobs: { [`${repId}/metadata.json`]: '"stale-etag"' } }],
       }).then(() => null, (error: unknown) => error)
       expect(delErr).toBeInstanceOf(BlobQuarantinedError)
-      expect((delErr as Error).message).toContain(`First copy the backup folder somewhere safe, close TenuVault on every computer that uses this backup folder, then delete the file at ${delLive}. TenuVault then restores it from ${quarantineHeld} on the next start.`)
+      expect((delErr as Error).message).toContain(`Close TenuVault on every computer that uses this backup folder. Then copy the backup folder somewhere safe, then delete the file at ${delLive}. TenuVault then restores it from ${quarantineHeld} on the next start.`)
     } finally {
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
       vi.mocked(fsPromises.link).mockImplementation(actual.link)
@@ -2239,18 +2259,30 @@ describe("round 9 findings", () => {
     }
   })
 
-  it("P1: storage docs keep the copy-folder-first step and describe both conflict cases without size comparisons", () => {
+  it("P1: storage docs order close-first then copy then delete and qualify retention pause for scoped conflicts", () => {
     const doc = readFileSync(join(process.cwd(), "docs-site/src/content/docs/backups/storage.md"), "utf8")
     const start = doc.indexOf("### Recover files from interrupted cleanup")
     expect(start).toBeGreaterThan(-1)
     const end = doc.indexOf("\n## ", start)
     const section = doc.slice(start, end > start ? end : undefined)
-    expect(section).toContain("Copy the backup folder, including the `.retired-*` folder, to a safe location")
+    const closeIdx = section.indexOf("Close TenuVault on every computer that uses this backup folder")
+    const copyIdx = section.indexOf("Copy the backup folder, including the `.retired-*` folder, to a safe location")
+    const deleteIdx = section.indexOf("delete that live file")
+    expect(closeIdx).toBeGreaterThan(-1)
+    expect(copyIdx).toBeGreaterThan(closeIdx)
+    expect(deleteIdx).toBeGreaterThan(copyIdx)
     expect(section).toContain("If TenuVault tells you it is safe to delete the file at the live path")
-    expect(section).toContain("close TenuVault on every computer that uses this backup folder")
     expect(section).toContain("If TenuVault tells you to keep both files, do not delete either file and contact support with both paths.")
     expect(section).not.toMatch(/smaller than/i)
     expect(section).not.toMatch(/compare the two/i)
+
+    const pauseLines = doc.split("\n").filter(line => line.includes("Retention is paused"))
+    expect(pauseLines.length).toBeGreaterThanOrEqual(2)
+    for (const line of pauseLines) {
+      expect(line).toContain("recovery conflict after interrupted cleanup")
+      expect(line).toContain("deletes that touch the conflicted backup are blocked")
+      expect(line).toContain("retention of unrelated expired backups continues")
+    }
   })
 
   it("P3: partial copy cleanup renames live aside and verifies identity before unlink, moving back on mismatch or keeping aside when live is occupied", async () => {
@@ -2396,6 +2428,328 @@ describe("round 9 findings", () => {
       vi.mocked(fsPromises.lstat).mockImplementation(actual.lstat)
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
       vi.mocked(fsPromises.link).mockImplementation(actual.link)
+    }
+  })
+})
+
+describe("round 10 findings", () => {
+  it("4723063824: DELETE never reports success while a scan-restored manifest is live, and scan treats ENOENT on rm(held) after linking as interrupted", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const oldTime = (Date.now() - 120_000) / 1000
+
+    // Subcase A: DELETE pauses after quarantine rename (before its pre-rm checks), scan links
+    // held -> live and pauses before its own rm(held). DELETE resumes and must fail with
+    // BlobDeleteInterruptedError without removing held; scan then finishes cleanly.
+    {
+      const root = mkdtempSync(join(tmpdir(), "tv-r10-del-race-a-")); roots.push(root)
+      const storeDelete = new LocalBlobStore(root, [MASTER])
+      const storeScan = new LocalBlobStore(root, [MASTER])
+      await storeDelete.createContainer(ACCOUNT, BACKUP_CONTAINER)
+      const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+      const backupId = "backup-2026-08-01-020000"
+      await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+      await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+      const entries = await (storeDelete as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
+      const manifestFile = entries.get(`${backupId}/metadata.json`)!.file
+      const livePath = join(dir, manifestFile)
+
+      let heldPath = ""
+      let quarantineDir = ""
+      let deletePaused!: () => void
+      const onDeletePaused = new Promise<void>(resolve => { deletePaused = resolve })
+      let allowDeleteResume!: () => void
+      const waitDeleteResume = new Promise<void>(resolve => { allowDeleteResume = resolve })
+      let scanLinked!: () => void
+      const onScanLinked = new Promise<void>(resolve => { scanLinked = resolve })
+      let allowScanRm!: () => void
+      const waitScanRm = new Promise<void>(resolve => { allowScanRm = resolve })
+
+      vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+        await actual.rename(from, to)
+        if (String(from) === livePath && String(to).includes(".retired-")) {
+          heldPath = String(to)
+          quarantineDir = heldPath.slice(0, heldPath.lastIndexOf("/"))
+          utimesSync(join(quarantineDir, ".quarantined"), oldTime, oldTime)
+          utimesSync(quarantineDir, oldTime, oldTime)
+          deletePaused()
+          await waitDeleteResume
+        }
+      })
+      vi.mocked(fsPromises.link).mockImplementation(async (existing, next) => {
+        const res = await actual.link(existing, next)
+        if (String(existing) === heldPath && String(next) === livePath) {
+          scanLinked()
+          await waitScanRm
+        }
+        return res
+      })
+
+      let delPromise: Promise<unknown> | undefined
+      let scanPromise: Promise<unknown> | undefined
+      try {
+        delPromise = storeDelete.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, { despiteDamage: true })
+        await onDeletePaused
+
+        scanPromise = storeScan.damage(ACCOUNT, BACKUP_CONTAINER)
+        await onScanLinked
+        expect(existsSync(livePath)).toBe(true)
+        expect(existsSync(heldPath)).toBe(true)
+
+        allowDeleteResume()
+        await expect(delPromise).rejects.toBeInstanceOf(BlobDeleteInterruptedError)
+        expect(existsSync(livePath)).toBe(true)
+
+        allowScanRm()
+        const damage = await scanPromise as Awaited<ReturnType<LocalBlobStore["damage"]>>
+        expect(damage.files).toEqual([])
+        expect(existsSync(livePath)).toBe(true)
+        const verify = new LocalBlobStore(root, [MASTER])
+        expect((await verify.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).data.toString()).toBe(JSON.stringify(ONE_ITEM_MANIFEST))
+      } finally {
+        allowDeleteResume()
+        allowScanRm()
+        await Promise.allSettled([delPromise, scanPromise].filter((p): p is Promise<unknown> => Boolean(p)))
+        vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+        vi.mocked(fsPromises.link).mockImplementation(actual.link)
+        vi.mocked(fsPromises.rm).mockImplementation(actual.rm)
+      }
+    }
+
+    // Subcase B: DELETE has already passed its pre-rm check and pauses right at rm(held);
+    // scan links held -> live and pauses before its own rm(held); DELETE then runs rm(held)
+    // first. DELETE must STILL fail with BlobDeleteInterruptedError (because live is present),
+    // and scan's subsequent rm(held) ENOENT must NOT be treated as complete/done.
+    {
+      const root = mkdtempSync(join(tmpdir(), "tv-r10-del-race-b-")); roots.push(root)
+      const storeDelete = new LocalBlobStore(root, [MASTER])
+      const storeScan = new LocalBlobStore(root, [MASTER])
+      await storeDelete.createContainer(ACCOUNT, BACKUP_CONTAINER)
+      const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+      const backupId = "backup-2026-08-01-020000"
+      await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+      await storeDelete.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+      const entries = await (storeDelete as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
+      const manifestFile = entries.get(`${backupId}/metadata.json`)!.file
+      const livePath = join(dir, manifestFile)
+
+      let heldPath = ""
+      let quarantineDir = ""
+      let deleteAtRm!: () => void
+      const onDeleteAtRm = new Promise<void>(resolve => { deleteAtRm = resolve })
+      let allowDeleteRm!: () => void
+      const waitDeleteRm = new Promise<void>(resolve => { allowDeleteRm = resolve })
+      let scanLinked!: () => void
+      const onScanLinked = new Promise<void>(resolve => { scanLinked = resolve })
+      let allowScanRm!: () => void
+      const waitScanRm = new Promise<void>(resolve => { allowScanRm = resolve })
+      let rmCallCount = 0
+
+      vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+        await actual.rename(from, to)
+        if (String(from) === livePath && String(to).includes(".retired-")) {
+          heldPath = String(to)
+          quarantineDir = heldPath.slice(0, heldPath.lastIndexOf("/"))
+          utimesSync(join(quarantineDir, ".quarantined"), oldTime, oldTime)
+          utimesSync(quarantineDir, oldTime, oldTime)
+        }
+      })
+      vi.mocked(fsPromises.link).mockImplementation(async (existing, next) => {
+        const res = await actual.link(existing, next)
+        if (String(existing) === heldPath && String(next) === livePath) {
+          scanLinked()
+          await waitScanRm
+        }
+        return res
+      })
+      vi.mocked(fsPromises.rm).mockImplementation(async (target, options) => {
+        if (String(target) === heldPath) {
+          rmCallCount++
+          if (rmCallCount === 1) {
+            // First rm(held) is DELETE's rm(held): pause so scan can link held -> live first.
+            deleteAtRm()
+            await waitDeleteRm
+          }
+        }
+        return actual.rm(target, options)
+      })
+
+      let delPromise: Promise<unknown> | undefined
+      let scanPromise: Promise<unknown> | undefined
+      try {
+        delPromise = storeDelete.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, { despiteDamage: true })
+        await onDeleteAtRm
+
+        scanPromise = storeScan.damage(ACCOUNT, BACKUP_CONTAINER)
+        await onScanLinked
+        expect(existsSync(livePath)).toBe(true)
+        expect(existsSync(heldPath)).toBe(true)
+
+        // Let DELETE's rm(held) execute while scan is paused between link() and rm(held).
+        allowDeleteRm()
+        await expect(delPromise).rejects.toBeInstanceOf(BlobDeleteInterruptedError)
+        expect(existsSync(livePath)).toBe(true)
+        expect(existsSync(heldPath)).toBe(false)
+
+        // Now let scan's rm(held) run and observe ENOENT: scan must report interrupted, never done.
+        allowScanRm()
+        const damage = await scanPromise as Awaited<ReturnType<LocalBlobStore["damage"]>>
+        expect(damage.files.length).toBeGreaterThan(0)
+        expect(damage.unavailable.has(backupId)).toBe(true)
+        expect(damage.files.some(f => f.reason.includes("interrupted"))).toBe(true)
+        expect(existsSync(livePath)).toBe(true)
+        const verify = new LocalBlobStore(root, [MASTER])
+        expect((await verify.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).data.toString()).toBe(JSON.stringify(ONE_ITEM_MANIFEST))
+      } finally {
+        allowDeleteRm()
+        allowScanRm()
+        await Promise.allSettled([delPromise, scanPromise].filter((p): p is Promise<unknown> => Boolean(p)))
+        vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+        vi.mocked(fsPromises.link).mockImplementation(actual.link)
+        vi.mocked(fsPromises.rm).mockImplementation(actual.rm)
+      }
+    }
+  })
+
+  it("4723063813: aborting during readRetentionLockState does not consume leakedReclaimGates so a later acquire reclaims it", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r10-leaked-abort-")); roots.push(root)
+    const deadPid = spawnSync(process.execPath, ["-e", ""]).pid!
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const lockPath = join(dir, ".tenuvault-retention.lock")
+    const gatePath = `${lockPath}.reclaim`
+    writeFileSync(lockPath, JSON.stringify({ id: "stale-1", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
+
+    // Step 1: Cause releaseReclaimGate to fail both rename attempts so this process leaks its gate.
+    vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
+      if (String(from) === gatePath && String(to).endsWith(".release")) {
+        throw Object.assign(new Error("EIO"), { code: "EIO" })
+      }
+      return actual.rename(from, to)
+    })
+    let lock1: string | undefined
+    let lock3: string | undefined
+    try {
+      lock1 = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+      expect(existsSync(gatePath)).toBe(true)
+      await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lock1)
+      lock1 = undefined
+      // Re-plant a stale lock so the next acquire enters reclaimStaleRetentionLock -> acquireReclaimGate.
+      writeFileSync(lockPath, JSON.stringify({ id: "stale-2", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+
+      // Step 2: Abort while readRetentionLockState(gatePath) is pending.
+      const controller = new AbortController()
+      let abortedDuringRead = false
+      vi.mocked(fsPromises.readFile).mockImplementation((async (file: unknown, options: unknown) => {
+        const result = await actual.readFile(file as never, options as never)
+        if (!abortedDuringRead && String(file) === gatePath) {
+          abortedDuringRead = true
+          controller.abort(new Error("aborted during gate read"))
+        }
+        return result
+      }) as typeof actual.readFile)
+
+      await expect(store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, undefined, controller.signal)).rejects.toThrow("aborted during gate read")
+      expect(abortedDuringRead).toBe(true)
+      expect(existsSync(gatePath)).toBe(true)
+
+      // Step 3: A subsequent non-aborted acquire must still recognize the leaked gate and reclaim it.
+      vi.mocked(fsPromises.readFile).mockImplementation(actual.readFile)
+      lock3 = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
+      expect(existsSync(gatePath)).toBe(false)
+      expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(lock3)
+    } finally {
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      vi.mocked(fsPromises.readFile).mockImplementation(actual.readFile)
+      if (lock1) await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lock1).catch(() => undefined)
+      if (lock3) await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lock3).catch(() => undefined)
+    }
+  })
+
+  it("4723063820: hard-link-capable volumes resolve byte-identical live copies in different inodes and still conflict when bytes differ or change", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r10-hardlink-ident-")); roots.push(root)
+    const store = new LocalBlobStore(root, [MASTER])
+    await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
+    const backupId = "backup-2026-08-01-020000"
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+    await store.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
+
+    const entries = await (store as unknown as { entries: (a: string, c: string) => Promise<Map<string, { file: string }>> }).entries(ACCOUNT, BACKUP_CONTAINER)
+    const payloadFile = entries.get(`${backupId}/DeviceConfigurations/Old.json`)!.file
+    const livePath = join(dir, payloadFile)
+    const fullBytes = readFileSync(livePath)
+    const oldTime = (Date.now() - 120_000) / 1000
+
+    // Case 1: Byte-identical copy in a DIFFERENT inode on a hard-link-capable volume -> resolves cleanly.
+    const retired1 = join(dir, ".retired-hlident1")
+    const held1 = join(retired1, payloadFile)
+    mkdirSync(retired1)
+    renameSync(livePath, held1)
+    writeFileSync(join(retired1, ".quarantined"), "")
+    utimesSync(join(retired1, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired1, oldTime, oldTime)
+    writeFileSync(livePath, fullBytes)
+    expect(statSync(livePath).ino).not.toBe(statSync(held1).ino)
+
+    const damage1 = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+    expect(damage1.files).toEqual([])
+    expect(existsSync(retired1)).toBe(false)
+    expect((await new LocalBlobStore(root, [MASTER]).get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`)).data.toString()).toBe(JSON.stringify(OLD_ITEM))
+
+    // Case 2: Equal-length DIFFERENT bytes in a different inode -> conflict with keep-both guidance.
+    const retired2 = join(dir, ".retired-hldiff1")
+    const held2 = join(retired2, payloadFile)
+    mkdirSync(retired2)
+    renameSync(livePath, held2)
+    writeFileSync(join(retired2, ".quarantined"), "")
+    utimesSync(join(retired2, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired2, oldTime, oldTime)
+    const altered = Buffer.from(fullBytes)
+    altered[altered.length - 1] = altered[altered.length - 1]! ^ 0xff
+    writeFileSync(livePath, altered)
+
+    const damage2 = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+    expect(damage2.files.some(f => f.file === `.retired-hldiff1/${payloadFile}` && f.reason.includes("Keep both files"))).toBe(true)
+    expect(existsSync(held2)).toBe(true)
+    expect(readFileSync(livePath).equals(altered)).toBe(true)
+
+    // Case 3: live is replaced while identicalLiveHeldInfo holds an open handle to the old copy ->
+    // path recheck catches the change, held is NOT removed, and conflict is reported.
+    rmSync(retired2, { recursive: true, force: true })
+    writeFileSync(livePath, fullBytes)
+    const retired3 = join(dir, ".retired-hlrace1")
+    const held3 = join(retired3, payloadFile)
+    mkdirSync(retired3)
+    renameSync(livePath, held3)
+    writeFileSync(join(retired3, ".quarantined"), "")
+    utimesSync(join(retired3, ".quarantined"), oldTime, oldTime)
+    utimesSync(retired3, oldTime, oldTime)
+    writeFileSync(livePath, fullBytes)
+
+    let mutatedAfterOpen = false
+    vi.mocked(fsPromises.open).mockImplementation(async (file, flags, mode) => {
+      const handle = await actual.open(file, flags as never, mode as never)
+      if (!mutatedAfterOpen && String(file) === livePath && String(flags) === "r") {
+        mutatedAfterOpen = true
+        const replacement = join(dir, `${payloadFile}.hlrace.tmp`)
+        writeFileSync(replacement, altered)
+        renameSync(replacement, livePath)
+      }
+      return handle
+    })
+    try {
+      const damage3 = await new LocalBlobStore(root, [MASTER]).damage(ACCOUNT, BACKUP_CONTAINER)
+      expect(mutatedAfterOpen).toBe(true)
+      expect(existsSync(held3)).toBe(true)
+      expect(readFileSync(livePath).equals(altered)).toBe(true)
+      expect(damage3.files.some(f => f.file === `.retired-hlrace1/${payloadFile}`)).toBe(true)
+    } finally {
+      vi.mocked(fsPromises.open).mockImplementation(actual.open)
     }
   })
 })

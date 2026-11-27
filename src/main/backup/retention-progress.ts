@@ -14,6 +14,13 @@ export interface VerificationProgress {
   reason?: string
 }
 
+export interface FreshVerificationProgress {
+  binding: string
+  files: Record<string, string>
+  done?: boolean
+  covers?: string[]
+}
+
 export interface DeletionJournalEntry {
   prefix: string
   remaining: Record<string, string>
@@ -21,6 +28,7 @@ export interface DeletionJournalEntry {
   noTypes: boolean
   untagged: boolean
   absent?: string[]
+  fresh?: Record<string, FreshVerificationProgress>
 }
 
 export interface LeaseFailureProgress {
@@ -63,6 +71,15 @@ function isReview(value: unknown): value is VerificationProgress {
   return true
 }
 
+function isFreshVerification(value: unknown): value is FreshVerificationProgress {
+  if (!isRecord(value)) return false
+  if (typeof value.binding !== "string" || !value.binding) return false
+  if (!isStringRecord(value.files)) return false
+  if (value.done !== undefined && typeof value.done !== "boolean") return false
+  if (value.covers !== undefined && (!Array.isArray(value.covers) || !value.covers.every(entry => typeof entry === "string" && entry.length > 0))) return false
+  return true
+}
+
 function isDeletionJournal(key: string, value: unknown): value is DeletionJournalEntry {
   if (!isRecord(value)) return false
   if (typeof value.prefix !== "string" || !value.prefix || value.prefix !== key) return false
@@ -77,6 +94,10 @@ function isDeletionJournal(key: string, value: unknown): value is DeletionJourna
   if (value.absent !== undefined) {
     if (!Array.isArray(value.absent) || !value.absent.every(name => typeof name === "string" && name.startsWith(key) && name.length > key.length)) return false
     if (value.noTypes && value.absent.some(name => name !== key + "metadata.json" && name !== key + BACKUP_OWNER_FILE)) return false
+  }
+  if (value.fresh !== undefined) {
+    if (!isRecord(value.fresh) || !Object.entries(value.fresh).every(([repPrefix, entry]) =>
+      repPrefix.endsWith("/") && isFreshVerification(entry))) return false
   }
   return true
 }

@@ -9,7 +9,7 @@ import { BlobLeaseError, ReplacementChangedError, wasDeleteConfirmedUnchanged, t
 import { createRetentionLeaseManager, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
 import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "./retention-budget"
 import { DAY_MS, HOUR_MS, RetentionClockError } from "./retention-clock"
-import { readRetentionProgress, type DeletionJournalEntry, type RetentionProgressStore } from "./retention-progress"
+import { readRetentionProgress, retentionIdentity, type DeletionJournalEntry, type FreshVerificationProgress, type RetentionProgressStore } from "./retention-progress"
 import { RetentionVerificationError, checkOwner, manifestTypes, matchesJournalTypes, verifyBackup } from "./retention-verification"
 import { DeleteConditionError, InventoryDamagedError, ProtectedBlobError, StorageError } from "./request"
 
@@ -306,7 +306,75 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     // Reserve listing + HEAD + fallback GET + lease acquire per replacement identity.
     return prefixes.reduce((sum, replacementPrefix) => sum + 1 + 3 * (replacementIdentities.get(replacementPrefix)?.size ?? 0), 0)
   }
-  const verifyReplacementFresh = async (replacementPrefix: string, allowUntagged: boolean): Promise<{ identities: Map<string, string>; covers: Set<string> } | null> => {
+  const verifyReplacementFresh = async (
+    replacementPrefix: string,
+    allowUntagged: boolean,
+    journal: DeletionJournalEntry,
+    onProgress: () => void,
+  ): Promise<{ identities: Map<string, string>; covers: Set<string> } | null> => {
+    const runWithFreshProgress = async (
+      manifestMetadata: Record<string, unknown>,
+      freshRoots: Map<string, RetentionBlob>,
+      listing: Awaited<ReturnType<BlobWriter["list"]>>,
+    ): Promise<{ identities: Map<string, string>; covers: Set<string> }> => {
+      const previousIdentities = replacementIdentities.get(replacementPrefix)
+      const sortedPrevious = previousIdentities ? [...previousIdentities.entries()].sort(([a], [b]) => a.localeCompare(b)) : null
+      const sortedListed = [...listing.blobs].sort().map(name => [name, listing.etags.get(name) ?? null])
+      const sortedRoots = [...freshRoots.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, file]) => [name, file.etag])
+      const binding = retentionIdentity([
+        "fresh-journal",
+        replacementPrefix,
+        sortedPrevious,
+        sortedListed,
+        sortedRoots,
+        manifestMetadata,
+        keyFingerprint ?? null,
+        [...(journal.absent ?? [])].sort(),
+      ])
+      const existingFresh = journal.fresh?.[replacementPrefix]
+      let resetFresh = false
+      let freshEntry: FreshVerificationProgress
+      if (existingFresh && existingFresh.binding === binding) {
+        freshEntry = existingFresh
+      } else {
+        freshEntry = { binding, files: {} }
+        if (existingFresh) {
+          journal.fresh![replacementPrefix] = freshEntry
+          resetFresh = true
+        }
+      }
+      const uniqueListed = new Set(listing.blobs)
+      const hasAllListedEtags = uniqueListed.size === listing.blobs.length
+        && listing.blobs.every(name => Boolean(listing.etags.get(name)))
+      if (freshEntry.done && freshEntry.covers && hasAllListedEtags) {
+        return {
+          identities: new Map(listing.blobs.map(name => [name, listing.etags.get(name)!])),
+          covers: new Set(freshEntry.covers),
+        }
+      }
+      const freshProgress = { files: freshEntry.files, attempts: 0 }
+      const beforeFresh = Object.keys(freshProgress.files).length
+      try {
+        const verified = await verifyBackup(storage, replacementPrefix, manifestMetadata, freshRoots, listing, keyFingerprint, freshProgress)
+        freshEntry.done = true
+        freshEntry.covers = [...verified.covers]
+        journal.fresh ??= {}
+        journal.fresh[replacementPrefix] = freshEntry
+        onProgress()
+        save()
+        return { identities: verified.identities, covers: verified.covers }
+      } catch (error) {
+        if (Object.keys(freshProgress.files).length > beforeFresh) {
+          journal.fresh ??= {}
+          journal.fresh[replacementPrefix] = freshEntry
+          onProgress()
+          save()
+        } else if (resetFresh) {
+          save()
+        }
+        throw error
+      }
+    }
     try {
       const freshRoots = new Map<string, RetentionBlob>()
       if (replacementPrefix === latestPrefix) {
@@ -316,8 +384,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         checkOwner(claim, written, tenant, latestPrefix)
         freshRoots.set("metadata.json", manifest)
         freshRoots.set(owner, claim)
-        const verified = await verifyBackup(storage, latestPrefix, written, freshRoots, await storage.list(latestPrefix), keyFingerprint)
-        return { identities: verified.identities, covers: verified.covers }
+        return await runWithFreshProgress(written, freshRoots, await storage.list(latestPrefix))
       }
       const { manifest, owner: ownership } = await resolveBackupOwnership(async name => {
         const file = await storage.readForRetention(replacementPrefix + name, true)
@@ -333,11 +400,17 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         checkOwner(claim, manifest.metadata, tenant, replacementPrefix)
         freshRoots.set(owner, claim)
       }
-      const verified = await verifyBackup(storage, replacementPrefix, manifest.metadata, freshRoots, listing, keyFingerprint)
-      return { identities: verified.identities, covers: verified.covers }
+      return await runWithFreshProgress(manifest.metadata, freshRoots, listing)
     } catch (error) {
       if (error instanceof RetentionBudgetError || (error instanceof InventoryDamagedError && !error.recoveryConflict)) throw error
-      if (isCandidateUnreadable(error) || error instanceof StorageError) return null
+      if (isCandidateUnreadable(error) || error instanceof StorageError) {
+        if (journal.fresh && Object.hasOwn(journal.fresh, replacementPrefix)) {
+          delete journal.fresh[replacementPrefix]
+          if (!Object.keys(journal.fresh).length) delete journal.fresh
+          save()
+        }
+        return null
+      }
       throw error
     }
   }
@@ -619,7 +692,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
           const toVerify = [...new Set([...replacements, ...(ownedReplacements ?? [])])]
           for (const replacementPrefix of toVerify) {
             const allowUntagged = !shared && !(ownedReplacements?.includes(replacementPrefix))
-            const fresh = await verifyReplacementFresh(replacementPrefix, allowUntagged)
+            const fresh = await verifyReplacementFresh(replacementPrefix, allowUntagged, journal, () => { madeProgress = true })
             if (!fresh) {
               if (replacements.includes(replacementPrefix)) allFreshOk = false
               if (ownedReplacements?.includes(replacementPrefix)) ownedReplacements = null
@@ -627,6 +700,11 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
             }
             const previousIdentities = replacementIdentities.get(replacementPrefix)
             if (previousIdentities && !sameIdentities(previousIdentities, fresh.identities)) {
+              if (journal.fresh && Object.hasOwn(journal.fresh, replacementPrefix)) {
+                delete journal.fresh[replacementPrefix]
+                if (!Object.keys(journal.fresh).length) delete journal.fresh
+                save()
+              }
               replacementChangedDuringRun = replacementPrefix
               break
             }
