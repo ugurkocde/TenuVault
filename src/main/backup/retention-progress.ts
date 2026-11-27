@@ -9,6 +9,8 @@ export interface RetentionProgressStore {
 export interface VerificationProgress {
   files: Record<string, string>
   attempts: number
+  failures?: number
+  reason?: string
 }
 
 export interface RetentionProgress {

@@ -548,6 +548,141 @@ describe("retention verification", () => {
     expect(saved.has(expired + "metadata.json")).toBe(false)
     expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(2)
   })
+
+  it("keeps an unreadable candidate after 3 consecutive failures with a persistent warning and cleans up other owned candidates", async () => {
+    const { engine, saved, calls, seed, folder } = setup()
+    folder(newerExpired)
+    saved.delete(newerExpired + "DeviceConfigurations/Old.json")
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    // Attempts 1 and 2 abort and delete nothing.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await complete(engine)
+      expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    // Attempt 3 keeps the unreadable candidate, emits a warning naming it, and deletes the verified owned candidate.
+    const third = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(newerExpired))).toBe(false)
+    expect(third.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(newerExpired),
+    }))
+    // The warning persists on later runs while the unreadable candidate remains, and newer expiries still clean up.
+    const anotherExpired = "backup-2026-07-15-020000/"
+    folder(anotherExpired)
+    seed(anotherExpired + "metadata.json", manifest)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const fourth = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(anotherExpired + "metadata.json")).toBe(false)
+    expect(fourth.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(newerExpired),
+    }))
+    // Once repaired, the warning clears and the candidate ages out normally.
+    seed(newerExpired + "DeviceConfigurations/Old.json", oldItem)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const fifth = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(false)
+    expect(fifth.results?.notices?.some(notice => notice.level === "warning" && notice.message.includes(newerExpired))).toBe(false)
+  })
+
+  it("keeps untagged backups and deletes only verified owned backups after 3 consecutive failures on a damaged manifest", async () => {
+    const { engine, saved, calls, seed, folder } = setup()
+    const damaged = "backup-2026-08-03-020000/"
+    const untagged = "backup-2026-08-02-020000/"
+    folder(damaged)
+    saved.set(damaged + "metadata.json", Buffer.from("{ not json"))
+    folder(untagged, null)
+    seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await complete(engine)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    const third = await complete(engine)
+    expect(saved.has(damaged + "metadata.json")).toBe(true)
+    expect(saved.has(untagged + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(damaged))).toBe(false)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(untagged))).toBe(false)
+    expect(third.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(damaged),
+    }))
+  })
+
+  it("drops an earlier untagged candidate from the delete plan if a later candidate fails verification on its 3rd attempt", async () => {
+    const { engine, saved, calls, seed, folder } = setup()
+    const untagged = "backup-2026-08-03-020000/"
+    folder(untagged, null)
+    seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+    folder(newerExpired)
+    saved.delete(newerExpired + "DeviceConfigurations/Old.json")
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await complete(engine)
+      expect(saved.has(untagged + "metadata.json")).toBe(true)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    const third = await complete(engine)
+    expect(saved.has(untagged + "metadata.json")).toBe(true)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(calls.some(call => call.request.method === "DELETE" && call.name.startsWith(untagged))).toBe(false)
+    expect(third.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(newerExpired),
+    }))
+  })
+
+  it("does not count transient storage errors toward the 3 unreadable candidate failures", async () => {
+    let failWithServerError = false
+    const { engine, saved, seed, folder } = setup({
+      override: (url, req) => {
+        if (failWithServerError && req.method === "GET" && url.pathname.endsWith(`${newerExpired}metadata.json`)) {
+          return new Response("server error", { status: 500 })
+        }
+      },
+    })
+    folder(newerExpired)
+    saved.delete(newerExpired + "DeviceConfigurations/Old.json")
+    seed(newerExpired + "metadata.json", manifest)
+    folder(expired)
+    seed(expired + "metadata.json", manifest)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await complete(engine)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    // A transient 500 must not count as the 3rd unreadable failure.
+    failWithServerError = true
+    const transientJob = engine.start(request)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await engine.waitForJob(transientJob)
+    expect(transientJob.status).toBe("Completed")
+    expect(saved.has(expired + "metadata.json")).toBe(true)
+    // Once storage answers again, the 3rd unreadable verification failure skips the broken backup and cleans up the owned one.
+    failWithServerError = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const fourth = await complete(engine)
+    expect(saved.has(newerExpired + "metadata.json")).toBe(true)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(fourth.results?.notices).toContainEqual(expect.objectContaining({
+      level: "warning",
+      message: expect.stringContaining(newerExpired),
+    }))
+  })
 })
 
 describe("retention server time", () => {

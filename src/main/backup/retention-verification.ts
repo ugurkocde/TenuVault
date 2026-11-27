@@ -8,12 +8,19 @@ import { snapshotHash } from "../../portal/lib/policies/backup-manifest"
 import { retentionIdentity, type VerificationProgress } from "./retention-progress"
 import type { BlobListing, BlobWriter, RetentionBlob } from "./blob-writer"
 
+export class RetentionVerificationError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "RetentionVerificationError"
+  }
+}
+
 export async function verifyBackup(
   storage: BlobWriter, prefix: string, manifest: Record<string, unknown>, roots: Map<string, RetentionBlob>,
   listing: BlobListing, keyFingerprint: string | undefined, progress?: VerificationProgress,
 ): Promise<{ identities: Map<string, string>; covers: Set<string>; types: Set<string> }> {
   const reject = (name: string, reason: string): never => {
-    throw new Error(`${prefix}${name} could not be verified for retention: ${reason}.`)
+    throw new RetentionVerificationError(`${prefix}${name} could not be verified for retention: ${reason}.`)
   }
   const items = itemsOf(manifest)
   if (!items) return reject("metadata.json", "the item list is invalid")
@@ -85,6 +92,6 @@ export function checkOwner(marker: RetentionBlob, manifest: Record<string, unkno
   const { TenantId, RunId } = marker.value as Record<string, unknown>
   if (typeof TenantId !== "string" || TenantId.toLowerCase() !== tenant
     || (typeof manifest.RunId === "string" && typeof RunId === "string" && RunId !== manifest.RunId)) {
-    throw new Error(`${prefix}${BACKUP_OWNER_FILE} does not match the backup's ownership.`)
+    throw new RetentionVerificationError(`${prefix}${BACKUP_OWNER_FILE} does not match the backup's ownership.`)
   }
 }
