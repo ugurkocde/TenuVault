@@ -3,7 +3,7 @@ import { assertStorageAccountName } from "../../shared/storage-account"
 import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constants"
 import { backupReadKeyFingerprint, wasBackupReadAuthenticated } from "../storage/authenticated-read"
 import { isLocalAccount } from "../storage/blob-emulator"
-import { releaseLocalRetentionGuard } from "../storage/local-blob-store"
+import { releaseLocalRetentionGuard, type ExpectedReplacement } from "../storage/local-blob-store"
 import { createHash, randomUUID } from "node:crypto"
 import { readBytesCapped, readJsonCapped } from "../../shared/capped-body"
 import { oversizedOwnershipFile } from "../../shared/backup-ownership"
@@ -19,6 +19,16 @@ const deleteConfirmedUnchanged = new WeakSet<object>()
 /** Whether a failed BlobWriter.delete call confirmed that storage did not move or remove the blob. */
 export function wasDeleteConfirmedUnchanged(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && deleteConfirmedUnchanged.has(error))
+}
+
+export type { ExpectedReplacement }
+
+/** A replacement backup changed before cleanup completed or before a quarantined local delete could be finalized. */
+export class ReplacementChangedError extends FetchApplicationError {
+  constructor(cause: unknown) {
+    super(cause)
+    this.name = "ReplacementChangedError"
+  }
 }
 
 /** Lease acquisition or renewal failed (conflict, missing permission, or storage error). */
@@ -367,21 +377,34 @@ export class BlobWriter {
     }
   }
 
-  async delete(name: string, etag?: string, retentionLockId?: string): Promise<void> {
+  async delete(name: string, etag?: string, retentionLockId?: string, expectedReplacements?: readonly ExpectedReplacement[]): Promise<void> {
     let dispatched = false
     let confirmedUnchanged = false
     try {
       const headers: Record<string, string> = {}
       if (etag) headers["if-match"] = etag
       if (retentionLockId) headers["x-tenuvault-retention-lock-id"] = retentionLockId
+      const sendReplacements = isLocalAccount(this.account) && Boolean(expectedReplacements?.length)
+      if (sendReplacements) {
+        headers["x-tenuvault-expected-replacements"] = "1"
+        headers["content-type"] = "application/json"
+      }
       await this.request(backupStoragePath(name), {
         method: "DELETE",
         ...(Object.keys(headers).length ? { headers } : {}),
+        ...(sendReplacements ? { body: JSON.stringify(expectedReplacements) } : {}),
       }, async (response, _signal, ambiguous) => {
         if (!response.ok && response.status !== 404) {
           const code = response.headers.get("x-ms-error-code") ?? ""
           const local = isLocalAccount(this.account)
           const unchangedHeader = response.headers.get("x-tenuvault-delete-unchanged") === "1"
+          if (code === "ReplacementChanged") {
+            if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
+            const body = await response.clone().text().catch(() => "")
+            const message = /<Message>([^<]+)<\/Message>/.exec(body)?.[1]
+              ?.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
+            throw new ReplacementChangedError(message ? new Error(message) : await storageFailure(response, this.account))
+          }
           if (code === "RetentionLockLost") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
             throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code)
@@ -397,6 +420,10 @@ export class BlobWriter {
           }
           const text = await response.clone().text()
           const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
+          if (bodyCode === "ReplacementChanged") {
+            if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
+            throw new ReplacementChangedError(await storageFailure(response, this.account))
+          }
           if (bodyCode === "RetentionLockLost") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
             throw new BlobLeaseError(await storageFailure(response, this.account), response.status, bodyCode)

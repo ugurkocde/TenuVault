@@ -597,6 +597,89 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
     expect(has(`${older}metadata.json`), third.log.join("\n")).toBe(false)
     expect(anchorPolicyReads()).toBe(1)
   })
+
+  it("P3: persists newest-backup receipts across runs from a resumed anchor, reuses them on anchor fallback, and starts fresh when the newest backup changes", async () => {
+    const progress = memoryStore()
+    const progressKey = `${TENANT}/contoso/false`
+    const big = "p".repeat(12_000)
+    const { createEngine, has, saved, keyOf, calls, seed, folder } = setupAzure({
+      progress,
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 20_000 },
+      override: url => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return Response.json({ id: url.pathname.split("/").at(-1), description: big, assignments: [] })
+        }
+        return undefined
+      },
+    })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+
+    // Run 1: backup B hits byte budget after Policy 0 -> B becomes the resumed anchor.
+    const first = await runBackup(createEngine())
+    const prefixB = `${first.backupFolder}/`
+
+    // Run 2: backup C is created; B finishes Policy 1 (complete receipt saved for B), C verifies Policy 0 and hits budget on Policy 1.
+    await vi.advanceTimersByTimeAsync(1_000)
+    const second = await runBackup(createEngine())
+    const folderC = second.backupFolder!
+    const prefixC = `${folderC}/`
+    expect(has(`${older}metadata.json`)).toBe(true)
+
+    const afterPartialC = readRetentionProgress(progress.get(progressKey))
+    expect(afterPartialC.latest).toBe(prefixB)
+    expect(afterPartialC.newest).toBe(prefixC)
+    expect(afterPartialC.reviews[prefixC]?.files["DeviceConfigurations/Policy 0.json"]).toBeTruthy()
+    const cPolicy0Reads = () => calls.filter(c => c.name === `${prefixC}DeviceConfigurations/Policy 0.json` && c.request.method === "GET").length
+    const readsAfterPartialC = cPolicy0Reads()
+    expect(readsAfterPartialC).toBe(1)
+
+    const invokeApplyRetention = async (currentFolder: string) => {
+      const engine = createEngine()
+      const written = JSON.parse(saved.get(keyOf(`${currentFolder}/metadata.json`))!.toString("utf8")) as Record<string, unknown>
+      const writer = new BlobWriter((engine as unknown as { deps: { fetch: typeof fetch } }).deps.fetch, "contoso", async () => "token")
+      const pending: Array<(beforeDelete: () => void) => Promise<number>> = []
+      const job = { id: "test-job", tenantId: TENANT, storageAccountName: "contoso", status: "Running", log: [] as string[], results: { notices: [] as Array<{ level: string; message: string }> } }
+      const controller = new AbortController()
+      const keyFingerprint = (engine as unknown as { deps: { recoveryKeyFingerprint?: () => string } }).deps.recoveryKeyFingerprint?.()
+      await (engine as unknown as {
+        applyRetention: (...args: unknown[]) => Promise<number>
+      }).applyRetention(job, writer, currentFolder, written, pending, controller.signal, NOW.getTime() + 5_000, keyFingerprint, { candidates: 32, requests: 100, bytes: 20_000 })
+      for (const task of pending) await task(() => {})
+    }
+
+    // Subcase A: Run 3 with SAME C finishes via persisted receipts and cleans up state.newest.
+    const snapshotAfterPartialC = progress.get(progressKey)!
+    await invokeApplyRetention(folderC)
+    expect(cPolicy0Reads()).toBe(readsAfterPartialC)
+    expect(has(`${older}metadata.json`)).toBe(false)
+    const afterCompleteC = readRetentionProgress(progress.get(progressKey))
+    expect(afterCompleteC.newest).toBeUndefined()
+    expect(afterCompleteC.reviews[prefixC]).toBeUndefined()
+
+    // Subcase B: restore partial C progress, then newest backup CHANGES to D -> C's newest receipts are cleared and D starts fresh.
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+    progress.set(progressKey, snapshotAfterPartialC)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const fourth = await runBackup(createEngine())
+    const prefixD = `${fourth.backupFolder}/`
+    const afterChangeD = readRetentionProgress(progress.get(progressKey))
+    expect(afterChangeD.reviews[prefixC]).toBeUndefined()
+    expect(afterChangeD.newest).toBe(prefixD)
+    expect(calls.filter(c => c.name === `${prefixD}DeviceConfigurations/Policy 0.json` && c.request.method === "GET")).toHaveLength(1)
+
+    // Subcase C: resumed anchor B becomes unreadable while C has persisted newest receipts -> fallback to C reuses C's Policy 0 receipt.
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+    progress.set(progressKey, snapshotAfterPartialC)
+    seed(`${prefixB}DeviceConfigurations/Policy 0.json`, { id: "p0", description: "tampered" })
+    await invokeApplyRetention(folderC)
+    expect(cPolicy0Reads()).toBe(readsAfterPartialC)
+    expect(has(`${older}metadata.json`)).toBe(false)
+  })
 })
 
 describe("replacement protection, deletion journal, cursor safety, and per-backup guards (items 2, 3, 7, 8)", () => {

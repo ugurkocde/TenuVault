@@ -5,7 +5,7 @@ import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } f
 import type { BigIntStats } from "node:fs"
 import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises"
 import { hostname } from "node:os"
-import { dirname, join, resolve, win32 } from "node:path"
+import { basename, dirname, join, resolve, win32 } from "node:path"
 import { promisify } from "node:util"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
@@ -188,6 +188,16 @@ export class BlobLeaseConflictError extends Error {
 }
 export class BlobLeaseUnsupportedError extends Error {}
 export class BlobProtectedError extends Error {}
+export interface ExpectedReplacement {
+  prefix: string
+  blobs: Record<string, string>
+}
+export class BlobReplacementChangedError extends Error {
+  constructor(readonly prefix: string, message?: string) {
+    super(message ?? `Replacement backup ${prefix} changed before cleanup completed`)
+    this.name = "BlobReplacementChangedError"
+  }
+}
 
 export interface RetentionLockRecord {
   id: string
@@ -485,6 +495,8 @@ function waitMs(ms: number, signal?: AbortSignal): Promise<void> {
  */
 const protectedPrefixesByDir = new Map<string, Map<string, number>>()
 const lockProtectedEntries = new Map<string, Array<{ dir: string; prefix: string }>>()
+/** Reclaim gate ids this process created but could not release, so the next acquire can reclaim them safely. */
+const leakedReclaimGates = new Set<string>()
 
 interface InFlightPut {
   name: string
@@ -517,7 +529,10 @@ async function waitForInFlightPuts(dir: string, prefixes: string[] | undefined, 
   if (!prefixes?.length) return
   const key = resolve(dir)
   const normalized = prefixes.map(normalizePrefix)
-  const matches = (name: string) => normalized.some(prefix => name.startsWith(prefix))
+  const matches = (name: string) => {
+    const logical = logicalBackupName(name)
+    return normalized.some(prefix => name.startsWith(prefix) || logical.startsWith(prefix))
+  }
   while (true) {
     signal?.throwIfAborted()
     const set = inFlightPutsByDir.get(key)
@@ -1031,7 +1046,7 @@ export class LocalBlobStore {
    * of deletes. despiteDamage is for removing files the caller has just written itself, such as
    * an archive import that is rolled back.
    */
-  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean; ifMatch?: string; retentionLockId?: string } = {}): Promise<void> {
+  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean; ifMatch?: string; retentionLockId?: string; expectedReplacements?: readonly ExpectedReplacement[] } = {}): Promise<void> {
     const dir = this.dir(account, container)
     assertPrefixNotProtected(dir, name)
     // Every file is checked again at most every few seconds, so a file damaged in place is found
@@ -1089,6 +1104,20 @@ export class LocalBlobStore {
             }
             throw new BlobConditionNotMetError(name)
           }
+          if (options.expectedReplacements?.length) {
+            const changed = await this.findChangedReplacement(account, container, options.expectedReplacements, quarantine, dir, entries)
+            if (changed) {
+              this.index.delete(dir)
+              try {
+                await this.restoreQuarantinedFile(held, path, dir)
+                needsRecovery = false
+                renamed = false
+              } catch (error) {
+                throw new BlobQuarantinedError(`Replacement backup ${changed} changed during deletion and ${name} was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
+              }
+              throw new BlobReplacementChangedError(changed)
+            }
+          }
           await rm(held)
           needsRecovery = false
           this.updateEntry(dir, entries, name)
@@ -1108,6 +1137,98 @@ export class LocalBlobStore {
   }
 
   /**
+   * Re-checks replacement expectations directly on disk after `rename(path, held)` and before
+   * `rm(held)`, ignoring our own active quarantine folder. Groups replacements by their resolved
+   * container (including `LARGE_BACKUP_CONTAINER` companions). Returns the first changed prefix,
+   * or null when every expected replacement file matches and no extra/unreadable file appeared.
+   */
+  private async findChangedReplacement(
+    account: string,
+    container: string,
+    expectedReplacements: readonly ExpectedReplacement[],
+    currentQuarantine: string,
+    currentDir: string,
+    currentEntries: Map<string, Entry>,
+  ): Promise<string | null> {
+    const byContainer = new Map<string, ExpectedReplacement[]>()
+    for (const rep of expectedReplacements) {
+      const targetContainer = (container === BACKUP_CONTAINER || container === LARGE_BACKUP_CONTAINER)
+        ? backupContainer(rep.prefix)
+        : container
+      const list = byContainer.get(targetContainer)
+      if (list) list.push(rep)
+      else byContainer.set(targetContainer, [rep])
+    }
+    for (const [targetContainer, reps] of byContainer) {
+      const repDir = this.dir(account, targetContainer)
+      const names = await this.names(repDir)
+      if (names.length === 0) return reps[0]!.prefix
+      const quarantineName = repDir === currentDir ? basename(currentQuarantine) : null
+      if (names.some(file => file.startsWith(RETIRED_PREFIX) && file !== quarantineName)) {
+        return reps[0]!.prefix
+      }
+      const filesOnDisk = new Set(names.filter(file => file.endsWith(EXT)))
+      const knownEntries = repDir === currentDir ? currentEntries : await this.entries(account, targetContainer)
+      const knownByFile = new Map<string, Entry>([...knownEntries.values()].map(entry => [entry.file, entry]))
+      const matchedFiles = new Set<string>()
+      for (const rep of reps) {
+        const pairs = Object.entries(rep.blobs)
+        if (pairs.length === 0) return rep.prefix
+        for (const [logicalName, expectedEtag] of pairs) {
+          const physicalName = backupBlobName(logicalName)
+          const candidates = new Set<string>()
+          const knownFile = knownEntries.get(physicalName)?.file ?? knownEntries.get(logicalName)?.file
+          if (knownFile && filesOnDisk.has(knownFile)) candidates.add(knownFile)
+          for (const candidate of this.fileNames(account, targetContainer, physicalName)) {
+            if (filesOnDisk.has(candidate)) candidates.add(candidate)
+          }
+          let matched: string | null = null
+          for (const candidate of candidates) {
+            if (matchedFiles.has(candidate)) continue
+            const info = await lstat(join(repDir, candidate), { bigint: true }).catch(() => null)
+            if (info && info.isFile() && info.ino !== 0n && `"${fileStamp(info)}"` === expectedEtag) {
+              matched = candidate
+              break
+            }
+          }
+          if (!matched) return rep.prefix
+          matchedFiles.add(matched)
+        }
+      }
+      const prefixes = reps.map(rep => rep.prefix)
+      const otherFiles = [...filesOnDisk].filter(file => !matchedFiles.has(file))
+      let extraChanged: string | null = null
+      await mapLimit(otherFiles, HEADER_CONCURRENCY, async file => {
+        if (extraChanged) return
+        const info = await lstat(join(repDir, file), { bigint: true }).catch(() => null)
+        if (!info) return
+        if (!info.isFile()) {
+          extraChanged ??= prefixes[0]!
+          return
+        }
+        const known = knownByFile.get(file)
+        if (known && fileStamp(info) === known.stamp) {
+          const logical = logicalBackupName(known.name)
+          const hit = prefixes.find(prefix => known.name.startsWith(prefix) || logical.startsWith(prefix))
+          if (hit) extraChanged ??= hit
+          return
+        }
+        const read = await this.readEntry(repDir, account, targetContainer, file)
+        if (read === VANISHED) return
+        if (read instanceof Unreadable) {
+          extraChanged ??= prefixes[0]!
+          return
+        }
+        const logical = logicalBackupName(read.name)
+        const hit = prefixes.find(prefix => read.name.startsWith(prefix) || logical.startsWith(prefix))
+        if (hit) extraChanged ??= hit
+      })
+      if (extraChanged) return extraChanged
+    }
+    return null
+  }
+
+  /**
    * Registers in-process write protection for the given prefixes in a container.
    * Returns a release function that must be called in a finally block.
    */
@@ -1122,8 +1243,8 @@ export class LocalBlobStore {
     }
   }
 
-  private registerLockProtectedPrefixes(account: string, container: string, dir: string, id: string, prefixes: string[] | undefined): void {
-    if (!prefixes?.length) return
+  private registerLockProtectedPrefixes(account: string, container: string, dir: string, id: string, prefixes: string[] | undefined): Array<{ dir: string; prefix: string }> {
+    if (!prefixes?.length) return []
     const key = `${resolve(dir)}\0${id}`
     const entries: Array<{ dir: string; prefix: string }> = []
     for (const prefix of prefixes) {
@@ -1133,6 +1254,7 @@ export class LocalBlobStore {
       entries.push(addProtectedPrefix(this.dir(account, targetContainer), prefix))
     }
     lockProtectedEntries.set(key, entries)
+    return entries
   }
 
   private releaseLockProtectedPrefixes(dir: string, id: string): void {
@@ -1245,8 +1367,16 @@ export class LocalBlobStore {
           await rm(tmpPath, { force: true }).catch(() => undefined)
           if (process.platform !== "win32") await syncDirectory(dir)
           signal?.throwIfAborted()
-          this.registerLockProtectedPrefixes(account, container, dir, id, protectedPrefixes)
-          await waitForInFlightPuts(dir, protectedPrefixes, signal)
+          const registered = this.registerLockProtectedPrefixes(account, container, dir, id, protectedPrefixes)
+          const prefixesByDir = new Map<string, string[]>()
+          for (const entry of registered) {
+            const list = prefixesByDir.get(entry.dir)
+            if (list) list.push(entry.prefix)
+            else prefixesByDir.set(entry.dir, [entry.prefix])
+          }
+          for (const [targetDir, targetPrefixes] of prefixesByDir) {
+            await waitForInFlightPuts(targetDir, targetPrefixes, signal)
+          }
           signal?.throwIfAborted()
           return id
         } catch (error) {
@@ -1422,10 +1552,21 @@ export class LocalBlobStore {
             lockPath: gatePath,
           })
         }
-        if ((await this.assessLockHolder(gatePath, gateState.lock)) === "live") return null
-        signal?.throwIfAborted()
         const gateId = gateState.lock.id
+        const leakedKey = `${resolve(gatePath)}\0${gateId}`
+        const isOwnLeakedGate = gateState.lock.host === hostname()
+          && gateState.lock.pid === process.pid
+          && leakedReclaimGates.has(leakedKey)
+        if (!isOwnLeakedGate && (await this.assessLockHolder(gatePath, gateState.lock)) === "live") {
+          throw new BlobLeaseConflictError("Another TenuVault instance is currently reclaiming the retention lock on this backup folder.", {
+            code: "LeaseAlreadyPresent",
+            lockPath: gatePath,
+            holderId: gateId,
+          })
+        }
+        signal?.throwIfAborted()
         await this.reclaimLockAside(gatePath, movedRaw => parseRetentionLock(movedRaw)?.id === gateId)
+        if (isOwnLeakedGate) leakedReclaimGates.delete(leakedKey)
       }
       return null
     } finally {
@@ -1433,24 +1574,36 @@ export class LocalBlobStore {
     }
   }
 
-  /** Best-effort gate release: moves the gate aside and removes it only if it is still ours. */
+  /** Best-effort gate release: retries once, warns and records the leaked gate if release fails. */
   private async releaseReclaimGate(gatePath: string, id: string): Promise<void> {
-    const aside = `${gatePath}.${randomBytes(8).toString("hex")}.release`
-    try {
-      await rename(gatePath, aside)
-    } catch {
+    const leakedKey = `${resolve(gatePath)}\0${id}`
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const aside = `${gatePath}.${randomBytes(8).toString("hex")}.release`
+      try {
+        await rename(gatePath, aside)
+      } catch (error) {
+        if (isMissing(error)) {
+          leakedReclaimGates.delete(leakedKey)
+          return
+        }
+        if (attempt === 0) continue
+        leakedReclaimGates.add(leakedKey)
+        console.warn(`[backups] Could not release retention reclaim gate ${gatePath}; left in place.`, error)
+        return
+      }
+      const movedRaw = await readFile(aside, "utf8").catch(() => null)
+      if (movedRaw !== null && parseRetentionLock(movedRaw)?.id === id) {
+        leakedReclaimGates.delete(leakedKey)
+        await rm(aside, { force: true }).catch(() => undefined)
+        return
+      }
+      try {
+        await link(aside, gatePath)
+        await rm(aside, { force: true }).catch(() => undefined)
+      } catch {
+        console.warn(`[backups] Retention reclaim gate ${gatePath} changed during release; the moved gate file was kept at ${aside}.`)
+      }
       return
-    }
-    const movedRaw = await readFile(aside, "utf8").catch(() => null)
-    if (movedRaw !== null && parseRetentionLock(movedRaw)?.id === id) {
-      await rm(aside, { force: true }).catch(() => undefined)
-      return
-    }
-    try {
-      await link(aside, gatePath)
-      await rm(aside, { force: true }).catch(() => undefined)
-    } catch {
-      console.warn(`[backups] Retention reclaim gate ${gatePath} changed during release; the moved gate file was kept at ${aside}.`)
     }
   }
 
@@ -1809,6 +1962,25 @@ export class LocalBlobStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         if (await isSameFile(held, live) || await isIdenticalFileCopy(held, live)) {
+          await rm(held)
+          return
+        }
+        if (await isRegularPartialCopy(live, data)) {
+          const tmp = `${live}.${randomBytes(8).toString("hex")}.recover.tmp`
+          try {
+            const tmpHandle = await open(tmp, "wx", 0o600)
+            try {
+              await tmpHandle.writeFile(data)
+              await tmpHandle.sync()
+            } finally {
+              await tmpHandle.close()
+            }
+            await rename(tmp, live)
+            if (process.platform !== "win32") await syncDirectory(dir)
+          } catch (replaceError) {
+            await rm(tmp, { force: true }).catch(() => undefined)
+            throw replaceError
+          }
           await rm(held)
           return
         }
@@ -2186,6 +2358,21 @@ async function isIdenticalFileCopy(a: string, b: string): Promise<boolean> {
     if (!infoA.isFile() || !infoB.isFile() || infoA.size === 0n || infoA.size !== infoB.size) return false
     const [bytesA, bytesB] = await Promise.all([readFile(a), readFile(b)])
     return bytesA.equals(bytesB)
+  } catch {
+    return false
+  }
+}
+
+/** Whether `live` is a regular, non-linked file that is 0 bytes or a strict byte prefix of `heldData`. */
+async function isRegularPartialCopy(live: string, heldData: Buffer): Promise<boolean> {
+  if (heldData.length === 0) return false
+  try {
+    const info = await lstat(live, { bigint: true })
+    if (!info.isFile() || info.nlink > 1n) return false
+    if (info.size === 0n) return true
+    if (info.size >= BigInt(heldData.length)) return false
+    const liveBytes = await readFile(live)
+    return liveBytes.length === Number(info.size) && heldData.subarray(0, liveBytes.length).equals(liveBytes)
   } catch {
     return false
   }

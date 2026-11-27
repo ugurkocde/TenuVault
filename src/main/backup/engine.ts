@@ -16,7 +16,7 @@ export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
-import { BlobLeaseError, BlobWriter, wasDeleteConfirmedUnchanged } from "./blob-writer"
+import { BlobLeaseError, BlobWriter, ReplacementChangedError, wasDeleteConfirmedUnchanged, type ExpectedReplacement } from "./blob-writer"
 import { createRetentionLeaseManager, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
 import { RetentionBudget, RetentionBudgetError, RETENTION_LIMITS, type RetentionLimits } from "./retention-budget"
 import { readRetentionProgress, type DeletionJournalEntry, type RetentionProgressStore } from "./retention-progress"
@@ -52,8 +52,6 @@ const ORIGIN_SKEW_MS = 5 * 60_000
 const NO_TRUSTED_TIME = "TenuVault could not verify the time with Microsoft. Old backups were kept."
 const ORIGIN_TIME_MISMATCH = "Microsoft Graph and Azure Storage reported different times. Old backups were kept."
 const DAY_MS = 86400_000
-
-class ReplacementChangedError extends Error {}
 
 function sameIdentities(a: Map<string, string>, b: Map<string, string>): boolean {
   if (a.size !== b.size) return false
@@ -1619,6 +1617,13 @@ export class BackupEngine {
         if (isLargeBackup(prefix) === currentIsLarge && !existingPrefixes.has(prefix)) delete state.reviews[prefix]
       }
       if (state.latest && !existingPrefixes.has(state.latest)) delete state.latest
+      if (state.newest && !existingPrefixes.has(state.newest)) {
+        if (state.newestCompanion) {
+          delete state.reviews[state.newestCompanion]
+          delete state.newestCompanion
+        }
+        delete state.newest
+      }
       const hasDeletions = Boolean(state.deletions && Object.keys(state.deletions).length > 0)
       if (!limits && !hasDeletions && !state.timeAttempts && !state.leaseFailures) {
         if (savedProgress) {
@@ -1628,7 +1633,7 @@ export class BackupEngine {
         }
         return
       }
-      const empty = !state.cursor && !state.latest && !state.latestAttempts && !state.timeAttempts && !state.leaseFailures
+      const empty = !state.cursor && !state.latest && !state.newest && !state.newestCompanion && !state.latestAttempts && !state.timeAttempts && !state.leaseFailures
         && Object.keys(state.reviews).length === 0 && !hasDeletions
       const value = JSON.stringify(state)
       if (value === savedProgress) return
@@ -1652,6 +1657,14 @@ export class BackupEngine {
           delete state.latest
         }
         if (latestCompanionPrefix) delete state.reviews[latestCompanionPrefix]
+        if (state.newest) {
+          delete state.reviews[state.newest]
+          delete state.newest
+        }
+        if (state.newestCompanion) {
+          delete state.reviews[state.newestCompanion]
+          delete state.newestCompanion
+        }
       }
       if (state.cursor) this.write(job, "Retention will continue reviewing older backups on the next run.", "info")
       saveProgress()
@@ -1741,6 +1754,14 @@ export class BackupEngine {
       && !(error instanceof TokenError)
       && !(error instanceof RetentionClockError)
       && !(error instanceof RequestTimeoutError)
+    if (state.newest && state.newest !== latestPrefix) {
+      if (state.newest !== state.latest) delete state.reviews[state.newest]
+      delete state.newest
+      if (state.newestCompanion) {
+        delete state.reviews[state.newestCompanion]
+        delete state.newestCompanion
+      }
+    }
     const resumedLatest = limits && state.latest && state.latest !== latestPrefix
       ? ordered.find(backup => backup.prefix === state.latest && backup.time >= cutoff)
       : undefined
@@ -1853,11 +1874,14 @@ export class BackupEngine {
           anchorCompanionManifest = writtenCompanion
           if (!anchorManifest) throw new Error("The latest backup has no readable manifest")
           if (limits) {
-            delete state.reviews[latestPrefix]
+            if (state.newest !== latestPrefix) delete state.reviews[latestPrefix]
+            delete state.newest
             const fallbackCompanion = anchorManifest.CompanionBackup
             if (typeof fallbackCompanion === "string" && isLargeBackup(fallbackCompanion)) {
-              delete state.reviews[`${fallbackCompanion}/`]
+              const fallbackCompanionPrefix = `${fallbackCompanion}/`
+              if (state.newestCompanion !== fallbackCompanionPrefix) delete state.reviews[fallbackCompanionPrefix]
             }
+            delete state.newestCompanion
           }
           covered = await verifyCurrentAnchor()
         } else {
@@ -1872,18 +1896,37 @@ export class BackupEngine {
         const newestManifest = written ?? await metered().readJson(`${current}/metadata.json`)
         if (!newestManifest) throw new Error("The latest backup has no readable manifest")
         const newestProgress = limits ? review(latestPrefix) : undefined
+        const companionId = newestManifest.CompanionBackup
+        const newestCompanionPrefix = typeof companionId === "string" && isLargeBackup(companionId) && writtenCompanion ? `${companionId}/` : undefined
+        const newestCompanionProgress = limits && newestCompanionPrefix ? review(newestCompanionPrefix) : undefined
+        const persistNewest = () => {
+          const hasNewest = Boolean(newestProgress && (Object.keys(newestProgress.files).length > 0 || newestProgress.complete !== undefined))
+          if (hasNewest) state.newest = latestPrefix
+          else {
+            if (newestProgress) delete state.reviews[latestPrefix]
+            if (state.newest === latestPrefix) delete state.newest
+          }
+          const hasCompanion = Boolean(newestCompanionProgress && (Object.keys(newestCompanionProgress.files).length > 0 || newestCompanionProgress.complete !== undefined))
+          if (hasCompanion && newestCompanionPrefix) state.newestCompanion = newestCompanionPrefix
+          else {
+            if (newestCompanionPrefix && newestCompanionProgress) delete state.reviews[newestCompanionPrefix]
+            if (state.newestCompanion === newestCompanionPrefix) delete state.newestCompanion
+          }
+        }
         try {
           await verifyHalf(metered(), latestPrefix, newestManifest, undefined, undefined, newestProgress, keyFingerprint)
-          const companionId = newestManifest.CompanionBackup
-          if (typeof companionId === "string" && isLargeBackup(companionId) && writtenCompanion) {
-            await verifyHalf(metered(), `${companionId}/`, writtenCompanion, undefined, undefined, limits ? review(`${companionId}/`) : undefined, keyFingerprint)
+          if (newestCompanionPrefix && writtenCompanion) {
+            await verifyHalf(metered(), newestCompanionPrefix, writtenCompanion, undefined, undefined, newestCompanionProgress, keyFingerprint)
           }
-          if (newestProgress && !Object.keys(newestProgress.files).length && !newestProgress.complete) delete state.reviews[latestPrefix]
+          persistNewest()
         } catch (error) {
-          if (newestProgress && !Object.keys(newestProgress.files).length && !newestProgress.complete) delete state.reviews[latestPrefix]
+          persistNewest()
           saveProgress()
           throw error
         }
+      } else if (state.newest === latestPrefix) {
+        delete state.newest
+        delete state.newestCompanion
       }
       if (limits) state.latest = anchorPrefix
       delete state.latestAttempts
@@ -2619,10 +2662,13 @@ export class BackupEngine {
           saveProgress()
           let deleted = 0
           let remaining = names.reduce((sum, name) => sum + size(name), 0)
+          const expectedReplacements: ExpectedReplacement[] | undefined = localStorage
+            ? unit.replacements.map(rep => ({ prefix: rep.prefix, blobs: Object.fromEntries(rep.blobs) }))
+            : undefined
           const remove = async (name: string) => {
             if (leaseManager) await leaseManager.ensureFresh()
             if (localStorage) await verifyReplacements(unit.replacements)
-            await unit.writer.delete(name, verified.get(name)!, localLocks.get(backupContainer(name)))
+            await unit.writer.delete(name, verified.get(name)!, localLocks.get(backupContainer(name)), expectedReplacements)
             deleted++
             delete journal.remaining[name]
             journal.deleted.push(name)
@@ -2758,7 +2804,7 @@ export class BackupEngine {
       delete state.timeAttempts
     }
     const hasDeletions = Boolean(state.deletions && Object.keys(state.deletions).length > 0)
-    const empty = !state.cursor && !state.latest && !state.latestAttempts && !state.timeAttempts && !state.leaseFailures
+    const empty = !state.cursor && !state.latest && !state.newest && !state.newestCompanion && !state.latestAttempts && !state.timeAttempts && !state.leaseFailures
       && Object.keys(state.reviews).length === 0 && !hasDeletions
     if (empty) {
       this.retentionProgress.delete(key)
