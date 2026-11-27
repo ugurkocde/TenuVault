@@ -434,27 +434,34 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
 
   it("binds verifyHalf receipts to the exact backup prefix so receipts from one folder never match another (item 6)", async () => {
     const policy = { id: "p0", displayName: "Same" }
+    const policy2 = { id: "p1", displayName: "Second" }
     const manifest = {
       TenantId: TENANT,
       Status: "Success",
       Failures: 0,
-      Items: { "DeviceConfigurations/p0": { file: "P0.json", sha256: sha256(policy) } },
-      ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 },
+      Items: {
+        "DeviceConfigurations/p0": { file: "P0.json", sha256: sha256(policy) },
+        "DeviceConfigurations/p1": { file: "P1.json", sha256: sha256(policy2) },
+      },
+      ItemCounts: { DeviceConfigurations: 2, TotalPolicies: 2 },
     }
     const readPaths: string[] = []
-    const makeWriter = (prefix: string) => {
+    const makeWriter = (prefix: string, failSecond = false) => {
       const files = new Map<string, Buffer>([
         [`/intune-backups/${prefix}metadata.json`, Buffer.from(JSON.stringify(manifest))],
         [`/intune-backups/${prefix}DeviceConfigurations/P0.json`, Buffer.from(JSON.stringify(policy))],
+        [`/intune-backups/${prefix}DeviceConfigurations/P1.json`, Buffer.from(JSON.stringify(policy2))],
       ])
       const fetchImpl: typeof fetch = async input => {
         const path = new URL(String(input)).pathname
         readPaths.push(path)
+        if (failSecond && path.endsWith("/P1.json")) return new Response(null, { status: 500 })
         return new Response(new Uint8Array(files.get(path)!), { status: 200, headers: { etag: '"same-etag"' } })
       }
       const etags = new Map<string, string>([
         [`${prefix}metadata.json`, '"same-etag"'],
         [`${prefix}DeviceConfigurations/P0.json`, '"same-etag"'],
+        [`${prefix}DeviceConfigurations/P1.json`, '"same-etag"'],
       ])
       return {
         writer: new BlobWriter(fetchImpl, "contoso", async () => "token"),
@@ -462,9 +469,10 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
       }
     }
     const progress = { files: {} as Record<string, string>, attempts: 0 }
-    const a = makeWriter("backup-2026-10-12-120000/")
-    await verifyHalf(a.writer, "backup-2026-10-12-120000/", manifest, a.listing, undefined, progress)
-    // Even if a different backup folder has identical manifest, payload, and ETags, receipts must NOT match.
+    const a = makeWriter("backup-2026-10-12-120000/", true)
+    await expect(verifyHalf(a.writer, "backup-2026-10-12-120000/", manifest, a.listing, undefined, progress)).rejects.toThrow()
+    expect(progress.files["DeviceConfigurations/P0.json"]).toBeTruthy()
+    // Even if a different backup folder has identical manifest, payload, and ETags, partial file receipts must NOT match.
     readPaths.length = 0
     const b = makeWriter("backup-2026-10-12-120001/")
     await verifyHalf(b.writer, "backup-2026-10-12-120001/", manifest, b.listing, undefined, progress)
