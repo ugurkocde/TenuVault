@@ -299,7 +299,7 @@ function TrialAzureChoice() {
 export function TrialChanges({ tenantId }: { tenantId?: string }) {
   const { status } = useLicense()
   const tenants = useTenants()
-  const [daily, setDaily] = useState(false)
+  const [fallsBackToWeekly, setFallsBackToWeekly] = useState(false)
   const [workflows, setWorkflows] = useState(false)
   const [longHistory, setLongHistory] = useState(false)
   const trialIds = (status?.tenants.filter(t => t.trialEndsAt && (!tenantId || t.tenantId === tenantId)).map(t => t.tenantId) ?? []).sort().join(",")
@@ -311,12 +311,12 @@ export function TrialChanges({ tenantId }: { tenantId?: string }) {
     return () => { active = false }
   }, [trialIds])
   useEffect(() => {
-    void bridge.schedules.list().then(schedules => setDaily(schedules.some(s => s.enabled && s.frequency === "daily" && status?.tenants.some(t => t.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.tenantId === s.tenantId)))).catch(() => {})
+    void bridge.schedules.list().then(schedules => setFallsBackToWeekly(schedules.some(s => s.enabled && s.frequency !== "weekly" && status?.tenants.some(t => t.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.tenantId === s.tenantId)))).catch(() => {})
     void bridge.preferences.get().then(prefs => setLongHistory(prefs.retentionDays > 30)).catch(() => {})
   }, [status, tenantId])
   const azure = tenants.some(t => t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || licensed.tenantId === tenantId) && licensed.tenantId === t.credentials?.tenantId?.toLowerCase()))
   return <ul className="list-disc space-y-1 pl-5 text-sm">
-    {daily && <li>Your saved daily schedule runs weekly on Community.</li>}
+    {fallsBackToWeekly && <li>Your saved backup schedule runs weekly on Community.</li>}
     {azure && <li>Azure storage backups pause. <Link to="/portal/backup?tab=schedule">Switch to weekly local backups in Backup & Restore.</Link></li>}
     {workflows && <li>Alerts, health review and change reports pause.</li>}
     {longHistory && <li>Backup history returns to 30 days.</li>}

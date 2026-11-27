@@ -8,6 +8,7 @@ import type { Tenant } from "~/contexts/TenantContext"
 import { storageLabel } from "~/lib/storage-label"
 import type { AppPreferences, BackupReaderState, BackupSettings } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
+import { HOURLY_INTERVALS, type HourlyInterval, type ScheduleFrequency } from "../../shared/schedule-frequency"
 import { describeCloudSchedule, nextRunsInZone } from "../../shared/cloud-backup"
 import { allows, COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
@@ -39,7 +40,7 @@ interface BackupSchedulePanelProps {
 }
 
 /** Automatic backups for one tenant, run by TenuVault itself (window or tray). */
-type Draft = { enabled: boolean; frequency: "daily" | "weekly"; time: string; weekday: number }
+type Draft = { enabled: boolean; frequency: ScheduleFrequency; intervalHours: HourlyInterval; time: string; weekday: number }
 const drafts = new Map<string, Draft>()
 
 export function BackupSchedulePanel(props: BackupSchedulePanelProps) {
@@ -63,7 +64,8 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const current = schedules.find((s) => s.tenantId === tenantId.toLowerCase())
   const { refusals, error: refusalsError } = useRefusals(tenantId)
   const [enabled, setEnabled] = useState(false)
-  const [frequency, setFrequency] = useState<"daily" | "weekly">("weekly")
+  const [frequency, setFrequency] = useState<ScheduleFrequency>("weekly")
+  const [intervalHours, setIntervalHours] = useState<HourlyInterval>(6)
   const [time, setTime] = useState("02:00")
   const [weekday, setWeekday] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -86,15 +88,16 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
     const draft = drafts.get(tenantId)
     setEnabled(draft?.enabled ?? current?.enabled ?? false)
     setFrequency(draft?.frequency ?? current?.frequency ?? (planKnown && !community ? "daily" : "weekly"))
+    setIntervalHours(draft?.intervalHours ?? current?.intervalHours ?? 6)
     setTime(draft?.time ?? current?.time ?? "02:00")
     setWeekday(draft?.weekday ?? current?.weekday ?? 0)
-  }, [tenantId, community, planKnown, current?.enabled, current?.frequency, current?.time, current?.weekday])
+  }, [tenantId, community, planKnown, current?.enabled, current?.frequency, current?.intervalHours, current?.time, current?.weekday])
 
   const dirty =
     enabled !== (current?.enabled ?? false) ||
-    (enabled && (frequency !== current?.frequency || time !== current?.time || (frequency === "weekly" && weekday !== current?.weekday)))
+    (enabled && (frequency !== current?.frequency || time !== current?.time || (frequency === "weekly" && weekday !== current?.weekday) || (frequency === "hourly" && intervalHours !== current?.intervalHours)))
 
-  const dailyExplained = community && (current?.frequency === "daily" || (enabled && frequency === "daily"))
+  const proExplained = community && ((current && current.frequency !== "weekly") || (enabled && frequency !== "weekly"))
 
   const save = async () => {
     if (enabled && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
@@ -105,11 +108,11 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
     setTimeError(false)
     setSaving(true)
     try {
-      await bridge.schedules.set({ tenantId, enabled, frequency, time, weekday: frequency === "weekly" ? weekday : undefined })
+      await bridge.schedules.set({ tenantId, enabled, frequency, intervalHours: frequency === "hourly" ? intervalHours : undefined, time, weekday: frequency === "weekly" ? weekday : undefined })
       drafts.delete(tenantId)
       toast(enabled ? "Schedule saved" : "Automatic backups paused", "success")
     } catch (error) {
-      showFeaturePlanError(error, dailyExplained ? ["dailySchedule"] : [])
+      showFeaturePlanError(error, proExplained ? ["dailySchedule"] : [])
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
       setSaving(false)
@@ -129,10 +132,10 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
   const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const azurePaused = !!(current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX))
-  const fallbackWeekday = community && current?.frequency === "daily" ? current.fallbackWeekday : undefined
+  const fallbackWeekday = community && frequency !== "weekly" ? current?.fallbackWeekday : undefined
   const nextComputerRuns = useMemo(
-    () => (enabled && !azurePaused ? nextRunsInZone({ frequency: fallbackWeekday === undefined ? frequency : "weekly", time, weekday: fallbackWeekday ?? weekday }, localTimeZone, new Date(), 4) : []),
-    [enabled, frequency, time, weekday, localTimeZone, azurePaused, fallbackWeekday],
+    () => (enabled && !azurePaused && (frequency === "weekly" || !community || fallbackWeekday !== undefined) ? nextRunsInZone({ frequency: fallbackWeekday === undefined ? frequency : "weekly", intervalHours, time, weekday: fallbackWeekday ?? weekday }, localTimeZone, new Date(), 4) : []),
+    [enabled, frequency, intervalHours, time, weekday, localTimeZone, azurePaused, community, fallbackWeekday],
   )
   const bothRunners = !!(current?.enabled && cloud.config?.linked)
 
@@ -197,11 +200,11 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         )}
 
         {runnerKind === "azure" ? (
-          <CloudBackupSettings tenant={tenant} community={community} cloud={cloud} scopeVersion={scopeVersion} />
+          <CloudBackupSettings tenant={tenant} plan={plan} cloud={cloud} scopeVersion={scopeVersion} />
         ) : (
         <>
 
-        {current?.enabled && community && !azurePaused && current.frequency === "daily" && <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Runs weekly on Community (daily needs Pro)</p>}
+        {current?.enabled && community && !azurePaused && current.frequency !== "weekly" && <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Runs weekly on Community ({current.frequency} needs Pro)</p>}
         {current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && (
           <div role="status" className="space-y-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <p>Paused: Azure storage needs Pro</p>
@@ -226,7 +229,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         )}
 
         <label className="flex items-center gap-3 text-sm text-gray-800">
-          <input type="checkbox" className="h-4 w-4" checked={enabled} onChange={(e) => (drafts.set(tenantId, { enabled: e.target.checked, frequency, time, weekday }), setEnabled(e.target.checked))} />
+          <input type="checkbox" className="h-4 w-4" checked={enabled} onChange={(e) => (drafts.set(tenantId, { enabled: e.target.checked, frequency, intervalHours, time, weekday }), setEnabled(e.target.checked))} />
           Back up {tenantName} automatically
         </label>
 
@@ -234,11 +237,24 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           <div className="flex flex-wrap items-start gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="schedule-frequency" className="flex items-center gap-2">Repeat{!planKnown && <span className="text-xs text-gray-500">{license ? "Plan not verified" : "Checking plan"}</span>}{community && <PlanBadge feature="dailySchedule" />}</Label>
-              {!planKnown && frequency === "daily" ? <output id="schedule-frequency" className="block text-sm text-gray-700">Every day</output> : <select id="schedule-frequency" className={select} value={frequency} onChange={(e) => (drafts.set(tenantId, { enabled, frequency: e.target.value as "daily" | "weekly", time, weekday }), setFrequency(e.target.value as "daily" | "weekly"))}>
+              {!planKnown && frequency !== "weekly" ? <output id="schedule-frequency" className="block text-sm text-gray-700">{frequency === "hourly" ? "Every N hours" : "Every day"}</output> : <select id="schedule-frequency" className={select} value={frequency} onChange={(e) => (drafts.set(tenantId, { enabled, frequency: e.target.value as ScheduleFrequency, intervalHours, time, weekday }), setFrequency(e.target.value as ScheduleFrequency))}>
                 {planKnown && <option value="daily" disabled={community}>{community ? "Every day (Pro)" : "Every day"}</option>}
                 <option value="weekly">Every week</option>
+                {planKnown && <option value="hourly" disabled={community}>{community ? "Every N hours (Pro)" : "Every N hours"}</option>}
               </select>}
             </div>
+            {frequency === "hourly" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="schedule-interval" className="block">Interval</Label>
+                <select id="schedule-interval" className={select} value={intervalHours} disabled={!planKnown || community} onChange={(e) => {
+                  const interval = Number(e.target.value) as HourlyInterval
+                  drafts.set(tenantId, { enabled, frequency, intervalHours: interval, time, weekday })
+                  setIntervalHours(interval)
+                }}>
+                  {HOURLY_INTERVALS.map(hours => <option key={hours} value={hours}>{hours} hours</option>)}
+                </select>
+              </div>
+            )}
             {frequency === "weekly" && (
               <div className="space-y-1.5">
                 <Label htmlFor="schedule-weekday" className="block">Day</Label>
@@ -249,14 +265,14 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
                       type="button"
                       aria-pressed={weekday === index}
                       aria-label={day}
-                      onClick={() => (drafts.set(tenantId, { enabled, frequency, time, weekday: index }), setWeekday(index))}
+                      onClick={() => (drafts.set(tenantId, { enabled, frequency, intervalHours, time, weekday: index }), setWeekday(index))}
                       className={`flex size-10 items-center justify-center rounded-full border text-sm ${weekday === index ? "border-coral-500 bg-coral-500 text-white" : "border-gray-300 bg-white text-gray-700"}`}
                     >
                       {day.slice(0, 2)}
                     </button>
                   ))}
                 </div>
-                <select id="schedule-weekday" className="sr-only" value={weekday} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, time, weekday: Number(e.target.value) }), setWeekday(Number(e.target.value)))} tabIndex={-1} aria-hidden="true">
+                <select id="schedule-weekday" className="sr-only" value={weekday} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, intervalHours, time, weekday: Number(e.target.value) }), setWeekday(Number(e.target.value)))} tabIndex={-1} aria-hidden="true">
                   {WEEKDAYS.map((day, index) => (
                     <option key={day} value={index}>
                       {day}
@@ -266,8 +282,8 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="schedule-time" className="block">Time ({Intl.DateTimeFormat().resolvedOptions().timeZone})</Label>
-              <input ref={timeInput} id="schedule-time" type="time" className={select} value={time} aria-invalid={timeError || undefined} aria-describedby={timeError ? "schedule-time-error" : undefined} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, time: e.target.value, weekday }), setTime(e.target.value), setTimeError(false))} />
+              <Label htmlFor="schedule-time" className="block">{frequency === "hourly" ? "Anchor time" : "Time"} ({Intl.DateTimeFormat().resolvedOptions().timeZone})</Label>
+              <input ref={timeInput} id="schedule-time" type="time" className={select} value={time} aria-invalid={timeError || undefined} aria-describedby={timeError ? "schedule-time-error" : undefined} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, intervalHours, time: e.target.value, weekday }), setTime(e.target.value), setTimeError(false))} />
               {timeError && <p id="schedule-time-error" className="text-xs text-red-600">Choose a time, for example 07:45.</p>}
             </div>
           </div>
@@ -275,7 +291,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
 
         <div className="space-y-2">
           <div className="flex items-center gap-3">
-            <Button disabled={!dirty || saving || schedulesLoading || !!schedulesError || (enabled && frequency === "daily" && !planKnown)} onClick={() => void save()}>
+            <Button disabled={!dirty || saving || schedulesLoading || !!schedulesError || (enabled && frequency !== "weekly" && !planKnown)} onClick={() => void save()}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save
             </Button>
@@ -284,7 +300,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           {current && runner?.installed === false && <p className="text-xs text-gray-500">Background restart is not installed. Backups run while TenuVault is running.</p>}
         </div>
 
-        {dailyExplained && <UpgradeNote feature="dailySchedule" />}
+        {proExplained && <UpgradeNote feature="dailySchedule" message={current?.frequency === "hourly" ? "Hourly scheduled backups are included in Pro." : undefined} />}
         {weeklyMessage && <p className="text-sm text-gray-500">{weeklyMessage}</p>}
 
         {license && !tenantPlan(license) && (

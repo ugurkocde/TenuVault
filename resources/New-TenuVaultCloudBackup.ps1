@@ -24,7 +24,7 @@
         watcher's state
       * tries to create the private audit-logs container and grants the managed identity read and
         create access there. If Azure refuses, setup continues and prints the manual steps
-      * links the runbook to a daily or weekly schedule in the timezone you choose
+      * links the runbook to a schedule every 4, 6 or 12 hours, daily or weekly, in the timezone you choose
       * with -AlertEmail, creates an Azure Monitor action group and a metric alert on failed
         Automation jobs, before the schedule is linked. Without it, -NoFailureAlert is the
         explicit opt out. Setup refuses to guess: a backup that fails silently is worse than none.
@@ -81,6 +81,10 @@
 .PARAMETER Time
     Local time of day the backup runs, "HH:mm". Default 02:00.
 
+.PARAMETER Frequency
+    Daily, Weekly, or Hourly. Hourly requires -IntervalHours.
+.PARAMETER IntervalHours
+    For Hourly only: 4, 6, or 12 hours, anchored at -Time in -TimeZone.
 .PARAMETER WeekDay
     Day of the week for a weekly schedule. Default Sunday.
 
@@ -137,7 +141,8 @@ param(
     [string]$ResourceGroupName = "rg-tenuvault-backups",
     [string]$Location,
     [string]$AutomationAccountName = "aa-tenuvault",
-    [ValidateSet("Daily", "Weekly")][string]$Frequency = "Daily",
+    [ValidateSet("Daily", "Weekly", "Hourly")][string]$Frequency = "Daily",
+    [ValidateSet("4", "6", "12")][string]$IntervalHours,
     [string]$Time = "02:00",
     [DayOfWeek]$WeekDay = [DayOfWeek]::Sunday,
     [string]$TimeZone = "UTC",
@@ -199,6 +204,9 @@ $changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutA
 $tenantNamePassed = $PSBoundParameters.ContainsKey("TenantName")
 
 # Validate every input before the first Azure write.
+if (($Frequency -eq "Hourly") -ne $PSBoundParameters.ContainsKey("IntervalHours")) {
+    throw "-Frequency Hourly requires -IntervalHours 4, 6, or 12. Omit -IntervalHours for Daily or Weekly."
+}
 if ($TenantId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
     throw "'$TenantId' is not a tenant id. Pass the tenant (directory) id GUID."
 }
@@ -207,6 +215,10 @@ if ($StorageAccountName -notmatch '^[a-z0-9]{3,24}$') {
 }
 if ($Time -notmatch '^([01]\d|2[0-3]):[0-5]\d$') {
     throw "-Time '$Time' is invalid: use HH:mm, for example 02:00."
+}
+if ($Frequency -eq "Hourly") {
+    if ($PSBoundParameters.ContainsKey("WeekDay")) { throw "-WeekDay is only used with weekly schedules." }
+    [void][TimeZoneInfo]::FindSystemTimeZoneById($TimeZone)
 }
 if ($AlertEmail -and $AlertEmail -notmatch "^[^@\s]+@[^@\s]+$") {
     throw "-AlertEmail '$AlertEmail' is not an email address."
@@ -994,15 +1006,34 @@ if ($GrantGraphRoles) {
 # ---------------------------------------------------------------------------
 
 $linked = $false
+$scheduleDescription = if ($Frequency -eq "Hourly") { "Every $IntervalHours hours from $Time $TimeZone" } else { "$Frequency at $Time $TimeZone" }
 if ($GrantGraphRoles -or $GraphRolesGranted) {
     $tz = [TimeZoneInfo]::FindSystemTimeZoneById($TimeZone)
     $nowLocal = [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
     $hour, $minute = $Time -split ":"
     $next = [DateTime]::new($nowLocal.Year, $nowLocal.Month, $nowLocal.Day, [int]$hour, [int]$minute, 0)
-    if ($Frequency -eq "Weekly") {
-        while ($next.DayOfWeek -ne $WeekDay -or $next -le $nowLocal.AddMinutes(10)) { $next = $next.AddDays(1) }
-    } elseif ($next -le $nowLocal.AddMinutes(10)) { $next = $next.AddDays(1) }
-    $startTime = [DateTimeOffset]::new($next, $tz.GetUtcOffset($next))
+    if ($Frequency -eq "Hourly") {
+        $interval = [int]$IntervalHours
+        $after = [DateTimeOffset]::UtcNow.AddMinutes(10)
+        $next = $next.Date.AddHours([int]$hour % $interval).AddMinutes([int]$minute)
+        do {
+            # A slot inside a daylight saving gap runs at the same wall time after the clock
+            # change (02:30 becomes 03:30), as the app's preview shows.
+            $slot = $next
+            while ($tz.IsInvalidTime($slot)) { $slot = $slot.AddHours(1) }
+            $offset = if ($tz.IsAmbiguousTime($slot)) {
+                ($tz.GetAmbiguousTimeOffsets($slot) | Sort-Object -Descending)[0]
+            } else { $tz.GetUtcOffset($slot) }
+            $startTime = [DateTimeOffset]::new($slot, $offset)
+            if ($startTime -gt $after) { break }
+            $next = $next.AddHours($interval)
+        } while ($true)
+    } else {
+        if ($Frequency -eq "Weekly") {
+            while ($next.DayOfWeek -ne $WeekDay -or $next -le $nowLocal.AddMinutes(10)) { $next = $next.AddDays(1) }
+        } elseif ($next -le $nowLocal.AddMinutes(10)) { $next = $next.AddDays(1) }
+        $startTime = [DateTimeOffset]::new($next, $tz.GetUtcOffset($next))
+    }
 
     $existingSchedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
         -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
@@ -1017,13 +1048,14 @@ if ($GrantGraphRoles -or $GraphRolesGranted) {
         $existingSchedule = $null
     }
     if (-not $existingSchedule) {
-        Write-Host "Creating schedule '$scheduleName' ($Frequency at $Time $TimeZone, first run $($startTime.ToString('u')))..."
+        Write-Host "Creating schedule '$scheduleName' ($scheduleDescription, first run $($startTime.ToString('u')))..."
         if ($PSCmdlet.ShouldProcess($scheduleName, "Create schedule")) {
             $scheduleParams = @{
                 ResourceGroupName = $ResourceGroupName; AutomationAccountName = $AutomationAccountName
                 Name = $scheduleName; StartTime = $startTime; TimeZone = $TimeZone
             }
-            if ($Frequency -eq "Daily") { $scheduleParams.DayInterval = 1 }
+            if ($Frequency -eq "Hourly") { $scheduleParams.HourInterval = [byte]$IntervalHours }
+            elseif ($Frequency -eq "Daily") { $scheduleParams.DayInterval = 1 }
             else { $scheduleParams.WeekInterval = 1; $scheduleParams.DaysOfWeek = @($WeekDay) }
             [void](New-AzAutomationSchedule @scheduleParams)
         }
@@ -1061,7 +1093,7 @@ if ($changeReportActorsPassed) { $changeReportSummary += $(if ($ChangeReportWith
 Write-Host "  Change reports:      $changeReportSummary"
 if ($principalId) { Write-Host "  Managed identity:    $principalId" }
 if ($alertStatus) { Write-Host "  Failure alert:       $alertStatus" }
-Write-Host "  Schedule:            $(if ($linked) { "$Frequency at $Time $TimeZone ('$scheduleName')" } else { 'not linked yet' })"
+Write-Host "  Schedule:            $(if ($linked) { "$scheduleDescription ('$scheduleName')" } else { 'not linked yet' })"
 Write-Host "  Scope:               $(if ($ExcludedFolders) { "custom, leaving out $ExcludedFolders" } else { $Scope })$(if ($appOnlyExcluded) { "; cloud backups leave out $appOnlyExcluded (no device inventory permission)" })"
 
 if ($consentReceipt) {
@@ -1096,6 +1128,7 @@ Write-Host "automationAccount=$AutomationAccountName"
 Write-Host "storageAccount=$StorageAccountName"
 Write-Host "scheduleName=$scheduleName"
 Write-Host "frequency=$($Frequency.ToLowerInvariant())"
+if ($Frequency -eq "Hourly") { Write-Host "intervalHours=$IntervalHours" }
 Write-Host "time=$Time"
 Write-Host "weekDay=$WeekDay"
 Write-Host "timeZone=$TimeZone"

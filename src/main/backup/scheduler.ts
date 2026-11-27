@@ -1,4 +1,6 @@
 import { CommunityChoicePendingError } from "../../shared/plan-errors"
+import { hoursInDay, isHourlyInterval, isScheduleFrequency } from "../../shared/schedule-frequency"
+import { validateScheduleFrequency } from "./schedule-input"
 import type { Plan } from "../../shared/plans"
 import type { BackupSchedule, ScheduleInput } from "../../shared/ipc"
 import type { KeyValueStore } from "../storage/secure-store"
@@ -102,6 +104,7 @@ export class BackupScheduler {
   }
 
   set(input: ScheduleInput): BackupSchedule {
+    validateScheduleFrequency(input)
     if (!VALID_TIME.test(input.time)) throw new Error("Choose a time such as 02:00.")
     if (input.frequency === "weekly" && !validWeekday(input.weekday)) {
       throw new Error("Choose a day of the week.")
@@ -109,7 +112,7 @@ export class BackupScheduler {
     const all = this.read()
     const id = input.tenantId.toLowerCase()
     const previous = all[id]
-    if (previous && previous.enabled !== input.enabled && previous.frequency === input.frequency && previous.time === input.time && (input.frequency === "daily" || previous.weekday === input.weekday)) {
+    if (previous && previous.enabled !== input.enabled && previous.frequency === input.frequency && previous.time === input.time && (input.frequency !== "weekly" || previous.weekday === input.weekday) && previous.intervalHours === input.intervalHours) {
       all[id] = { ...previous, enabled: input.enabled }
       this.write(all)
       return this.list().find((schedule) => schedule.tenantId === id)!
@@ -119,10 +122,11 @@ export class BackupScheduler {
       tenantId: id,
       enabled: input.enabled,
       frequency: input.frequency,
+      intervalHours: input.intervalHours,
       time: input.time,
       weekday: input.frequency === "weekly" ? input.weekday : undefined,
-      fallbackWeekday: input.frequency === "daily" ? previous?.fallbackWeekday : undefined,
-      fallbackStartsAt: input.frequency === "daily" ? previous?.fallbackStartsAt : undefined,
+      fallbackWeekday: input.frequency !== "weekly" ? previous?.fallbackWeekday : undefined,
+      fallbackStartsAt: input.frequency !== "weekly" ? previous?.fallbackStartsAt : undefined,
       // Changing a schedule does not trigger a catch-up run for slots before the change.
       since: this.now().toISOString(),
       lastRunAt: previous?.lastRunAt,
@@ -248,12 +252,7 @@ export class BackupScheduler {
     if (!schedule.enabled || schedule.pausedReason) return null
     if (this.isDue(schedule)) return this.now()
     const now = this.now()
-    let next = this.slotOn(schedule, now)
-    if (next <= now) {
-      const reference = new Date(now)
-      reference.setDate(reference.getDate() + (schedule.frequency === "weekly" || schedule.fallbackWeekday !== undefined ? 7 : 1))
-      next = this.slotOn(schedule, reference)
-    }
+    const next = this.adjacentSlot(schedule, now, "next")
     const slot = this.lastSlot(schedule)
     if (schedule.lastStatus !== "Cancelled" && this.owed(schedule, slot) && this.slotAttempts(schedule, slot) < MAX_ATTEMPTS && this.waitsForRetry(schedule, slot)) {
       const retry = new Date(Date.parse(schedule.lastAttemptAt!) + RETRY_MS)
@@ -285,26 +284,35 @@ export class BackupScheduler {
 
   /** The most recent slot at or before now, in local time. */
   private lastSlot(schedule: BackupSchedule, reference = this.now()): Date {
-    const slot = this.slotOn(schedule, reference)
-    if (slot <= reference) return slot
-    const previous = new Date(reference)
-    previous.setDate(previous.getDate() - (schedule.frequency === "weekly" || schedule.fallbackWeekday !== undefined ? 7 : 1))
-    return this.slotOn(schedule, previous)
+    return this.adjacentSlot(schedule, reference, "last")
   }
 
-  /** The slot in the week (weekly) or on the day (daily) of `reference`. */
-  private slotOn(schedule: BackupSchedule, reference: Date): Date {
-    const [hours, minutes] = schedule.time.split(":").map(Number) as [number, number]
-    const slot = new Date(reference)
-    if (schedule.frequency === "weekly" || schedule.fallbackWeekday !== undefined) slot.setDate(slot.getDate() + ((schedule.fallbackWeekday ?? schedule.weekday ?? 0) - slot.getDay()))
-    slot.setHours(hours, minutes, 0, 0)
-    return slot
+  private adjacentSlot(schedule: BackupSchedule, reference: Date, direction: "last" | "next"): Date {
+    const weekly = schedule.frequency === "weekly" || schedule.fallbackWeekday !== undefined
+    const slots = this.slotsOn(schedule, reference)
+    const slot = direction === "last" ? slots.findLast(at => at <= reference) : slots.find(at => at > reference)
+    if (slot) return slot
+    const adjacent = new Date(reference)
+    const days = weekly ? 7 : 1
+    adjacent.setDate(adjacent.getDate() + (direction === "last" ? -days : days))
+    return this.slotsOn(schedule, adjacent).at(direction === "last" ? -1 : 0)!
+  }
+
+  /** Slots in local time, using the first occurrence of an ambiguous wall-clock time. */
+  private slotsOn(schedule: BackupSchedule, reference: Date): Date[] {
+    const [hour, minute] = schedule.time.split(":").map(Number) as [number, number]
+    const day = new Date(reference)
+    const weekday = schedule.fallbackWeekday ?? (schedule.frequency === "weekly" ? schedule.weekday ?? 0 : undefined)
+    if (weekday !== undefined) day.setDate(day.getDate() + weekday - day.getDay())
+    const hours = weekday === undefined && schedule.frequency === "hourly" && schedule.intervalHours
+      ? hoursInDay(hour, schedule.intervalHours) : [hour]
+    return hours.map(at => new Date(day.getFullYear(), day.getMonth(), day.getDate(), at, minute))
   }
 
   private firstFallbackSlot(schedule: BackupSchedule, endedAt?: number): Date {
     const now = this.now().getTime()
     const reference = new Date(Math.max(Math.min(endedAt ?? now, now), Date.parse(schedule.since)))
-    const slot = this.slotOn({ ...schedule, fallbackWeekday: undefined }, reference)
+    const slot = this.slotsOn({ ...schedule, frequency: "daily", fallbackWeekday: undefined }, reference)[0]!
     if (slot <= reference) slot.setDate(slot.getDate() + 1)
     return slot
   }
@@ -321,7 +329,7 @@ export class BackupScheduler {
       const before = JSON.stringify(schedule)
       const pausedReason = coverage.plan === "community" && coverage.azure ? "Paused: Azure storage needs Pro"
         : coverage.plan === null && coverage.pendingChoice ? "Paused: choose a Community tenant or add a license" : undefined
-      const fallback = coverage.plan === "community" && schedule.frequency === "daily"
+      const fallback = coverage.plan === "community" && schedule.frequency !== "weekly"
         ? schedule.fallbackWeekday ?? this.firstFallbackSlot(schedule, coverage.endedAt).getDay() : undefined
       schedule.pausedReason = pausedReason
       schedule.fallbackStartsAt = fallback === undefined ? undefined : schedule.fallbackStartsAt ?? this.firstFallbackSlot(schedule, coverage.endedAt).toISOString()
@@ -394,7 +402,8 @@ function parseSchedule(id: string, value: unknown): BackupSchedule | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const entry = value as Record<string, unknown>
   if (typeof entry.tenantId !== "string" || !entry.tenantId || entry.tenantId !== id || id !== id.toLowerCase()
-    || typeof entry.enabled !== "boolean" || (entry.frequency !== "daily" && entry.frequency !== "weekly")
+    || typeof entry.enabled !== "boolean" || !isScheduleFrequency(entry.frequency)
+    || (entry.frequency === "hourly" ? !isHourlyInterval(entry.intervalHours) : entry.intervalHours !== undefined)
     || typeof entry.time !== "string" || !VALID_TIME.test(entry.time) || !validDate(entry.since)
     || (entry.frequency === "weekly" && !validWeekday(entry.weekday))
     || (entry.fallbackStartsAt !== undefined && !validDate(entry.fallbackStartsAt))

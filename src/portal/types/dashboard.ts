@@ -1,3 +1,5 @@
+import type { ScheduleFrequency } from "../../shared/schedule-frequency"
+
 import type { BackupState } from "~/lib/backup-health"
 
 export interface DashboardStats {
@@ -68,7 +70,7 @@ export interface ScheduleInfo {
   id: string
   tenantId: number
   tenantName: string
-  frequency: "daily" | "weekly" | "monthly"
+  frequency: ScheduleFrequency | "monthly"
   nextRun: Date
   lastRun: Date | null
   isEnabled: boolean

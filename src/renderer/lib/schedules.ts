@@ -74,6 +74,7 @@ export function describeSchedule(schedule: BackupSchedule): string {
   if (!schedule.enabled) return "Off"
   if (schedule.pausedReason) return schedule.pausedReason
   if (schedule.fallbackWeekday !== undefined) return `Every ${WEEKDAYS[schedule.fallbackWeekday]} at ${schedule.time} on Community`
+  if (schedule.frequency === "hourly") return `Every ${schedule.intervalHours} hours from ${schedule.time}`
   return schedule.frequency === "daily"
     ? `Daily at ${schedule.time}`
     : `Every ${WEEKDAYS[schedule.weekday ?? 0]} at ${schedule.time}`

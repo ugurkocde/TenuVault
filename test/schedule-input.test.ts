@@ -63,3 +63,28 @@ describe("schedule input plan checks", () => {
     expect(() => prepareScheduleInput(paused, "community")).toThrow(PlanRequired)
   })
 })
+
+describe("hourly schedule input", () => {
+  const hourly = { ...daily, frequency: "hourly" } as const
+
+  it.each([4, 6, 12] as const)("accepts and stores a %i-hour interval for Pro and MSP", intervalHours => {
+    const input = { ...hourly, intervalHours }
+    const store = memoryStore()
+    const scheduler = new BackupScheduler(store, async () => ({ status: "Completed", message: "Done" }))
+    expect(scheduler.set(prepareScheduleInput(input, "pro"))).toMatchObject(input)
+    expect(prepareScheduleInput(input, "msp")).toBe(input)
+    expect(() => prepareScheduleInput(input, "community")).toThrow(PlanRequired)
+    expect(() => prepareScheduleInput(input, null)).toThrow(PlanRequired)
+    expect(() => prepareScheduleInput({ ...input, intervalHours: intervalHours === 4 ? 12 : 4 }, "community", scheduler.list()[0])).toThrow(PlanRequired)
+    expect(prepareScheduleInput({ ...daily, enabled: false }, "community", scheduler.list()[0])).toMatchObject({ enabled: false, frequency: "hourly", intervalHours })
+  })
+
+  it.each([undefined, 0, 5, 5.5, "6"])("rejects an invalid hourly interval %s even for Pro", intervalHours => {
+    expect(() => prepareScheduleInput({ ...hourly, intervalHours } as ScheduleInput, "pro")).toThrow("Choose an interval")
+  })
+
+  it("rejects Hourly intervals on daily and weekly schedules", () => {
+    expect(() => prepareScheduleInput({ ...daily, intervalHours: 4 }, "pro")).toThrow("Choose an interval")
+    expect(() => prepareScheduleInput({ ...daily, frequency: "weekly", weekday: 0, intervalHours: 12 }, "pro")).toThrow("Choose an interval")
+  })
+})

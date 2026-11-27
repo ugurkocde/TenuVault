@@ -1,3 +1,5 @@
+import { hoursInDay, isHourlyInterval, type HourlyInterval, type ScheduleFrequency } from "./schedule-frequency"
+
 /**
  * Cloud backups: scheduled Intune backups that run in an Azure Automation account in the
  * customer's own tenant instead of on an admin's computer (see
@@ -19,7 +21,8 @@ export interface CloudBackupConfig {
    */
   keyVault?: string
   scheduleName: string
-  frequency: "daily" | "weekly"
+  frequency: ScheduleFrequency
+  intervalHours?: HourlyInterval
   /** Local time in `timeZone`, "HH:MM". Empty when the template path could not report it. */
   time: string
   /** 0 = Sunday, for weekly schedules. */
@@ -93,13 +96,18 @@ export function parseCloudSetup(text: string): CloudBackupConfig | null {
   const automationAccount = get("automationaccount")
   const resourceGroup = get("resourcegroup")
   if (!GUID.test(tenantId) || !/^[a-z0-9]{3,24}$/.test(storageAccount) || !automationAccount || !resourceGroup) return null
-  const frequency = get("frequency").toLowerCase() === "weekly" || get("frequency").toLowerCase() === "week" ? "weekly" : "daily"
+  const recurrence = get("frequency").toLowerCase()
+  const frequency = recurrence === "weekly" || recurrence === "week" ? "weekly"
+    : recurrence === "hourly" || recurrence === "hour" ? "hourly" : "daily"
+  const intervalHours = Number(get("intervalhours"))
+  if (frequency === "hourly" && !isHourlyInterval(intervalHours)) return null
   const weekdayName = get("weekday")
   // The stored configuration round trips through this parser with a numeric weekday.
   const weekdayIndex = /^[0-6]$/.test(weekdayName)
     ? Number(weekdayName)
     : WEEKDAYS.findIndex((day) => day.toLowerCase() === weekdayName.toLowerCase())
   const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(get("time")) ? get("time") : ""
+  if (frequency === "hourly" && !time) return null
   return {
     tenantId: tenantId.toLowerCase(),
     subscriptionId: GUID.test(get("subscriptionid")) ? get("subscriptionid").toLowerCase() : "",
@@ -109,6 +117,7 @@ export function parseCloudSetup(text: string): CloudBackupConfig | null {
     ...(get("keyvault") ? { keyVault: get("keyvault") } : {}),
     scheduleName: get("schedulename") || `TenuVaultBackup-${cloudTenantKey(tenantId)}`,
     frequency,
+    ...(frequency === "hourly" && isHourlyInterval(intervalHours) && { intervalHours }),
     time,
     weekday: weekdayIndex >= 0 ? weekdayIndex : 0,
     timeZone: get("timezone") || "UTC",
@@ -183,7 +192,8 @@ export function cloudSchedulePortalUrl(config: CloudBackupConfig): string {
 export function cloudSetupCommand(options: {
   tenantId: string
   storageAccount: string
-  frequency: "daily" | "weekly"
+  frequency: ScheduleFrequency
+  intervalHours?: HourlyInterval
   time: string
   weekday: number
   timeZone: string
@@ -207,12 +217,16 @@ export function cloudSetupCommand(options: {
     "./New-TenuVaultCloudBackup.ps1",
     `-TenantId ${options.tenantId}`,
     `-StorageAccountName ${options.storageAccount}`,
-    `-Frequency ${options.frequency === "weekly" ? "Weekly" : "Daily"}`,
+    `-Frequency ${options.frequency === "hourly" ? "Hourly" : options.frequency === "weekly" ? "Weekly" : "Daily"}`,
     `-Time ${options.time}`,
   ]
   if (options.resourceGroup) parts.push(`-ResourceGroupName ${options.resourceGroup}`)
   if (options.location) parts.push(`-Location ${options.location}`)
   if (options.subscriptionId) parts.push(`-SubscriptionId ${options.subscriptionId}`)
+  if (options.frequency === "hourly") {
+    if (!isHourlyInterval(options.intervalHours)) throw new Error("Choose a cloud backup interval of 4, 6, or 12 hours.")
+    parts.push(`-IntervalHours ${options.intervalHours}`)
+  }
   if (options.frequency === "weekly") parts.push(`-WeekDay ${WEEKDAYS[options.weekday] ?? "Sunday"}`)
   parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`)
   const reportOn = options.changeReport === "names" || options.changeReport === "full"
@@ -276,12 +290,12 @@ function zonedInstant(year: number, month: number, day: number, hour: number, mi
 }
 
 /**
- * The next `count` runs of a daily or weekly schedule at `time` wall clock in `timeZone`,
+ * The next `count` runs of a schedule anchored at `time` wall clock in `timeZone`,
  * strictly after `from`. A time skipped by the spring clock change resolves to the instant
  * the same duration after midnight, which is what Azure Automation does with the zone.
  */
 export function nextRunsInZone(
-  schedule: { frequency: "daily" | "weekly"; time: string; weekday: number },
+  schedule: Pick<CloudBackupConfig, "frequency" | "intervalHours" | "time" | "weekday">,
   timeZone: string,
   from: Date,
   count: number,
@@ -290,6 +304,8 @@ export function nextRunsInZone(
   if (!match) return []
   const hour = +match[1]!
   const minute = +match[2]!
+  if (schedule.frequency === "hourly" && !isHourlyInterval(schedule.intervalHours)) return []
+  const hours = schedule.frequency === "hourly" && schedule.intervalHours ? hoursInDay(hour, schedule.intervalHours) : [hour]
   const runs: Date[] = []
   try {
     const start = zoneParts(from, timeZone)
@@ -297,9 +313,14 @@ export function nextRunsInZone(
     let month = +start.month! - 1
     let day = +start.day!
     for (let scanned = 0; scanned < 400 && runs.length < count; scanned++) {
-      const candidate = zonedInstant(year, month, day, hour, minute, timeZone)
       const weekday = new Date(Date.UTC(year, month, day)).getUTCDay()
-      if (candidate > from && (schedule.frequency === "daily" || weekday === schedule.weekday)) runs.push(candidate)
+      if (schedule.frequency !== "weekly" || weekday === schedule.weekday) {
+        for (const at of hours) {
+          const candidate = zonedInstant(year, month, day, at, minute, timeZone)
+          if (candidate > from) runs.push(candidate)
+          if (runs.length === count) break
+        }
+      }
       const next = new Date(Date.UTC(year, month, day + 1))
       year = next.getUTCFullYear()
       month = next.getUTCMonth()
@@ -312,9 +333,10 @@ export function nextRunsInZone(
 }
 
 /** One sentence an admin can check against the Azure schedule, for example "Daily at 02:00 (Europe/Berlin)". */
-export function describeCloudSchedule(config: Pick<CloudBackupConfig, "frequency" | "time" | "weekday" | "timeZone" | "linked">): string {
+export function describeCloudSchedule(config: Pick<CloudBackupConfig, "frequency" | "intervalHours" | "time" | "weekday" | "timeZone" | "linked">): string {
   if (!config.linked) return "Set up in Azure, schedule not linked yet"
   const zone = config.timeZone ? ` (${config.timeZone})` : ""
+  if (config.frequency === "hourly") return `Every ${config.intervalHours} hours from ${config.time}${zone}`
   if (!config.time) return config.frequency === "weekly" ? `Weekly in Azure${zone}` : `Daily in Azure${zone}`
   return config.frequency === "weekly"
     ? `Weekly on ${WEEKDAYS[config.weekday] ?? WEEKDAYS[0]} at ${config.time}${zone}`

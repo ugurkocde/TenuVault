@@ -6,9 +6,11 @@ import { INTUNE_TYPES } from "../../shared/intune/registry"
 import { includedTypes, normalizeScope, presetOf, type BackupScope } from "../../shared/intune/scope"
 import type { PdfBranding } from "../../shared/pdf/theme"
 import { allows, COMMUNITY_RETENTION_DAYS, type Plan } from "../../shared/plans"
+import { isHourlyInterval, isScheduleFrequency } from "../../shared/schedule-frequency"
 import { isGuid } from "../../shared/security"
 import { MODULES, type ModuleId } from "../../shared/services/modules"
 import type { AppearanceSetting, SettingsExportOptions, SetupConnection, SetupStorage, TransferApplyResult, TransferGroup, TransferItem, TransferPreview } from "../../shared/settings-transfer"
+import { scheduleNeedsPro } from "../backup/schedule-input"
 import { VALID_TIME, validWeekday } from "../backup/scheduler"
 import type { KeyValueStore } from "../storage/secure-store"
 import { parseSettingsFile, writeSettingsFile, type SettingsFile, type SettingsFileTenant } from "./file"
@@ -145,13 +147,15 @@ function describeScope(scope: BackupScope): string {
 
 function describeSchedule(schedule: ScheduleInput | undefined): string {
   if (!schedule) return "No schedule"
-  const when = schedule.frequency === "daily" ? `Daily at ${schedule.time}` : `Weekly on ${WEEKDAYS[schedule.weekday ?? 0]} at ${schedule.time}`
+  const when = schedule.frequency === "hourly" ? `Every ${schedule.intervalHours} hours from ${schedule.time}`
+    : schedule.frequency === "daily" ? `Daily at ${schedule.time}` : `Weekly on ${WEEKDAYS[schedule.weekday ?? 0]} at ${schedule.time}`
   return schedule.enabled ? when : `${when}, paused`
 }
 
 function describeCloud(config: CloudBackupConfig | null): string {
   if (!config) return "Not set up"
-  const when = !config.time ? "" : config.frequency === "weekly" ? `, weekly on ${WEEKDAYS[config.weekday] ?? WEEKDAYS[0]} at ${config.time}` : `, daily at ${config.time}`
+  const when = !config.time ? "" : config.frequency === "hourly" ? `, every ${config.intervalHours} hours from ${config.time}`
+    : config.frequency === "weekly" ? `, weekly on ${WEEKDAYS[config.weekday] ?? WEEKDAYS[0]} at ${config.time}` : `, daily at ${config.time}`
   return `${config.automationAccount} in ${config.resourceGroup}, storage account ${config.storageAccount}${when}${config.linked ? "" : ", schedule not linked yet"}`
 }
 
@@ -188,7 +192,7 @@ function valueText(value: unknown): string {
   return `"${String(value).slice(0, 80)}"`
 }
 const BRANDING_NAMES: Partial<Record<keyof PdfBranding, string>> = { companyName: "company name", logo: "logo", colors: "colors", preparedBy: "prepared by", classification: "classification", footerText: "footer text" }
-const CLOUD_NAMES: Partial<Record<keyof CloudBackupConfig, string>> = { subscriptionId: "subscription", resourceGroup: "resource group", automationAccount: "Automation account", storageAccount: "storage account", keyVault: "key vault", scheduleName: "schedule name", frequency: "frequency", time: "time", weekday: "weekday", timeZone: "time zone", linked: "linked schedule" }
+const CLOUD_NAMES: Partial<Record<keyof CloudBackupConfig, string>> = { subscriptionId: "subscription", resourceGroup: "resource group", automationAccount: "Automation account", storageAccount: "storage account", keyVault: "key vault", scheduleName: "schedule name", frequency: "frequency", intervalHours: "interval between backups", time: "time", weekday: "weekday", timeZone: "time zone", linked: "linked schedule" }
 const changeNote = (fields: string[]) => (fields.length ? `Changes the ${fields.join("; the ")}.` : undefined)
 
 /** Lists fields inside a known part that this version does not know; the known fields still apply. */
@@ -199,7 +203,7 @@ function unknownFields(value: unknown, known: readonly string[], where: string, 
 
 // eslint-disable-next-line no-control-regex
 const CLOUD_TEXT = /^[^\u0000-\u001f\u007f]{1,256}$/
-const CLOUD_FIELDS = ["tenantId", "subscriptionId", "resourceGroup", "automationAccount", "storageAccount", "keyVault", "scheduleName", "frequency", "time", "weekday", "timeZone", "tenantKey", "linked"]
+const CLOUD_FIELDS = ["tenantId", "subscriptionId", "resourceGroup", "automationAccount", "storageAccount", "keyVault", "scheduleName", "frequency", "intervalHours", "time", "weekday", "timeZone", "tenantKey", "linked"]
 
 /**
  * A cloud backup setup as the renderer stores it. Each known field is checked for its type and
@@ -210,11 +214,12 @@ const CLOUD_FIELDS = ["tenantId", "subscriptionId", "resourceGroup", "automation
 function cloudConfig(value: unknown): CloudBackupConfig | null {
   if (!isObject(value)) return null
   const text = (field: unknown, optional: boolean) => (field === undefined || field === "" ? optional : typeof field === "string" && CLOUD_TEXT.test(field))
-  const { tenantId, subscriptionId, storageAccount, frequency, time, weekday, linked } = value
+  const { tenantId, subscriptionId, storageAccount, frequency, intervalHours, time, weekday, linked } = value
   if (!isGuid(tenantId) || !(subscriptionId === undefined || subscriptionId === "" || isGuid(subscriptionId))) return null
   if (typeof storageAccount !== "string" || !/^[a-z0-9]{3,24}$/.test(storageAccount) || !text(value.resourceGroup, false) || !text(value.automationAccount, false)) return null
   if (!text(value.keyVault, true) || !text(value.scheduleName, true) || !text(value.timeZone, true) || !text(value.tenantKey, true)) return null
-  if (frequency !== undefined && frequency !== "daily" && frequency !== "weekly") return null
+  if (frequency !== undefined && !isScheduleFrequency(frequency)) return null
+  if (frequency === "hourly" ? !isHourlyInterval(intervalHours) : intervalHours !== undefined) return null
   if (time !== undefined && time !== "" && (typeof time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time))) return null
   if (weekday !== undefined && !(typeof weekday === "number" && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)) return null
   if (linked !== undefined && typeof linked !== "boolean") return null
@@ -236,20 +241,23 @@ function sameCloud(a: CloudBackupConfig | null, b: CloudBackupConfig | null): bo
 }
 
 function scheduleConfig(schedule: BackupSchedule | undefined): ScheduleInput | undefined {
-  return schedule && { tenantId: schedule.tenantId, enabled: schedule.enabled, frequency: schedule.frequency, time: schedule.time, ...(schedule.frequency === "weekly" && { weekday: schedule.weekday }) }
+  if (!schedule) return undefined
+  const { tenantId, enabled, frequency, time, intervalHours, weekday } = schedule
+  return { tenantId, enabled, frequency, time, ...(frequency === "weekly" && { weekday }), ...(frequency === "hourly" && { intervalHours }) }
 }
 
 function sameSchedule(a: ScheduleInput | undefined, b: ScheduleInput): boolean {
-  return !!a && a.enabled === b.enabled && a.frequency === b.frequency && a.time === b.time && (b.frequency === "daily" || a.weekday === b.weekday)
+  return !!a && a.enabled === b.enabled && a.frequency === b.frequency && a.time === b.time && a.intervalHours === b.intervalHours && (b.frequency !== "weekly" || a.weekday === b.weekday)
 }
 
 /** The schedule in a file, or null when any field is not valid. */
 function fileSchedule(value: unknown, tenantId: string): ScheduleInput | null {
   if (!isObject(value)) return null
-  const { enabled, frequency, time, weekday } = value
-  if (typeof enabled !== "boolean" || (frequency !== "daily" && frequency !== "weekly") || typeof time !== "string" || !VALID_TIME.test(time)) return null
+  const { enabled, frequency, time, weekday, intervalHours } = value
+  if (typeof enabled !== "boolean" || !isScheduleFrequency(frequency) || typeof time !== "string" || !VALID_TIME.test(time)) return null
   if (frequency === "weekly" && !validWeekday(weekday)) return null
-  return { tenantId, enabled, frequency, time, ...(frequency === "weekly" && { weekday: weekday as number }) }
+  if (frequency === "hourly" && !isHourlyInterval(intervalHours) || frequency !== "hourly" && intervalHours !== undefined) return null
+  return { tenantId, enabled, frequency, time, ...(frequency === "weekly" && { weekday: weekday as number }), ...(isHourlyInterval(intervalHours) && { intervalHours }) }
 }
 
 const STORAGE_ACCOUNT = /^[a-z0-9]{3,24}$/
@@ -378,7 +386,7 @@ export class SettingsTransfer {
       ...(tenant.domain && { domain: tenant.domain }),
       services,
       backupScope: this.deps.scopes.get(tenant.tenantId).scope,
-      ...(schedule && { schedule: { enabled: schedule.enabled, frequency: schedule.frequency, time: schedule.time, ...(schedule.weekday !== undefined && { weekday: schedule.weekday }) } }),
+      ...(schedule && { schedule: { enabled: schedule.enabled, frequency: schedule.frequency, time: schedule.time, ...(schedule.weekday !== undefined && { weekday: schedule.weekday }), ...(schedule.intervalHours !== undefined && { intervalHours: schedule.intervalHours }) } }),
       ...(cloud && { cloudBackup: cloud }),
       ...(connection && { connection: { clientId: tenant.clientId, ...(tenant.storage && { storage: tenant.storage }) } }),
     }
@@ -485,7 +493,7 @@ export class SettingsTransfer {
       }
     }
     unknownFields(tenant.backupScope, ["excluded"], `${title}: what is backed up`, skipped)
-    unknownFields(tenant.schedule, ["enabled", "frequency", "time", "weekday"], `${title}: backup schedule`, skipped)
+    unknownFields(tenant.schedule, ["enabled", "frequency", "time", "weekday", "intervalHours"], `${title}: backup schedule`, skipped)
     unknownFields(tenant.cloudBackup, CLOUD_FIELDS, `${title}: cloud backup setup`, skipped)
     unknownFields(tenant.connection, ["clientId", "storage"], `${title}: connection details`, skipped)
     if (isObject(tenant.connection)) unknownFields(tenant.connection.storage, ["kind", "storageAccountName", "subscriptionId", "resourceGroupName", "location"], `${title}: storage`, skipped)
@@ -635,22 +643,19 @@ export class SettingsTransfer {
     if (tenant.schedule !== undefined) {
       const schedule = fileSchedule(tenant.schedule, tenantId)
       const current = scheduleConfig(this.deps.schedules.list().find((entry) => entry.tenantId === tenantId))
-      // The rules of the schedule settings: a Community tenant keeps a daily schedule it has, but cannot
-      // start one, and while the plan is not known yet no daily schedule is turned on.
       const plan = this.deps.plan(tenantId)
-      const newDaily = !!schedule && schedule.frequency === "daily" && current?.frequency !== "daily"
-      const planBlocked = newDaily && plan === "community"
-      // As in the schedule editor, which saves no enabled daily schedule while the plan is unknown, even
-      // over a paused daily one.
-      const planUnknown = !!schedule && schedule.frequency === "daily" && schedule.enabled && plan === null && !sameSchedule(current, schedule)
+      const planBlocked = !!schedule && plan === "community" && scheduleNeedsPro(schedule, current)
+      const planUnknown = !!schedule && schedule.frequency !== "weekly" && plan === null && !sameSchedule(current, schedule)
+        && (schedule.enabled || (schedule.frequency === "hourly" && scheduleNeedsPro(schedule, current)))
+      const cadence = schedule?.frequency === "hourly" ? "hourly" : "daily"
       items.push(this.item(`${prefix}schedule`, "Backup schedule", describeSchedule(current), schedule ? describeSchedule(schedule) : "Not valid", !!schedule && sameSchedule(current, schedule), !schedule ? NOT_VALID
-        : planBlocked ? "Daily schedules are included in Pro and MSP. Weekly schedules are included in every plan."
-        : planUnknown ? "The plan of this tenant is not known yet, so a daily schedule cannot be turned on. Import the file again once TenuVault has checked the license." : null, {
+        : planBlocked ? `${cadence === "hourly" ? "Hourly" : "Daily"} schedules are included in Pro and MSP. Weekly schedules are included in every plan.`
+        : planUnknown ? `The plan of this tenant is not known yet, so ${cadence === "hourly" ? "an" : "a"} ${cadence} schedule cannot be saved. Import the file again once TenuVault has checked the license.` : null, {
         ...(planBlocked && { feature: "dailySchedule" as const }),
         // How the scheduler runs it on Community, so the preview does not promise more than happens.
         ...(plan === "community" && schedule && { note: here.storage?.kind === "azure"
           ? "On Community, schedules of a tenant whose backups are in Azure storage are paused until it is on Pro or MSP."
-          : schedule.frequency === "daily" ? "On Community, a daily schedule runs once a week." : undefined }),
+          : schedule.frequency !== "weekly" ? `On Community, ${cadence === "hourly" ? "an" : "a"} ${cadence} schedule runs once a week.` : undefined }),
         warning: SCHEDULE_WARNING,
         state: [current, plan, here.storage?.kind],
         apply: () => void this.deps.schedules.set(schedule!),

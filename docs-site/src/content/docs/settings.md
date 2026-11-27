@@ -237,7 +237,7 @@ Branded reports are fully white label: they carry no TenuVault name or logo. Wha
 | Part | Settings |
 | --- | --- |
 | **This computer** | **Keep backups for**, **Keep running in the menu bar/tray when I close the window**, **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Download and install updates automatically**, **Get nightly builds**, the appearance and the PDF branding with its logo. Only the preferences you changed are written, so defaults stay defaults. |
-| Each tenant you choose | Which optional services are on in **Services and permissions**, what is backed up, the backup schedule (on or off, daily or weekly, time and weekday) and the [cloud backup](/backups/cloud/) setup record. |
+| Each tenant you choose | Which optional services are on in **Services and permissions**, what is backed up, the backup schedule (on or off, every 4, 6 or 12 hours, daily or weekly, time and weekday) and the [cloud backup](/backups/cloud/) setup record. |
 | **Include connection details** | Optional. For each tenant, the client ID of its app registration and where its backups are stored (this device, or the Azure storage account with its subscription, resource group and region). Another admin can then connect the tenant from the file. Both are identifiers, not secrets. |
 
 A file never holds sign-ins or tokens, license keys, the recovery key or encryption keys, Backup Reader certificates, proxy passwords, client secrets, logs, journals or history. Permissions are not part of the file either: they belong to the app registration in Entra, and every admin signs in with their own account.

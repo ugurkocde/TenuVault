@@ -5,7 +5,7 @@ description: Back up each tenant automatically, keep TenuVault running in the me
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-TenuVault can back up each tenant automatically, daily or weekly, at a time you choose. The **Schedule** tab walks through the three decisions in order:
+TenuVault can back up each tenant automatically, weekly, daily, or every 4, 6, or 12 hours, at a time you choose. The **Schedule** tab walks through the three decisions in order:
 
 1. **Where backups are stored**: encrypted on this device, or in your own Azure storage account (Pro and MSP). Backups never go to a TenuVault server. See [Backup storage and retention](/backups/storage/).
 2. **What to back up**: the tenant's saved backup choice.
@@ -15,7 +15,7 @@ This page covers backups on this computer: how to set up the schedule and how to
 
 ## How scheduled backups run
 
-* Each tenant has its own schedule: daily or weekly, at a time in your computer's local timezone. Daylight saving and timezone changes are followed. A time skipped by the spring clock change moves forward by the clock change. A repeated autumn time uses its first occurrence, with one attempt budget for both occurrences.
+* Each tenant has its own schedule in your computer's local timezone. An hourly interval repeats from the anchor time. For example, every 6 hours from 02:00 runs at 02:00, 08:00, 14:00 and 20:00. Daylight saving and timezone changes are followed. A time skipped by the spring clock change moves forward by the clock change. A repeated autumn time uses its first occurrence, with one attempt budget for both occurrences.
 * Backups run while TenuVault is running, in the window or in the system tray (the menu bar on macOS) after you close the window.
 * TenuVault checks the schedules every minute. The first check runs 30 seconds after TenuVault starts.
 * If the computer was off or TenuVault was not running at the scheduled time, the missed backup runs once as soon as TenuVault starts again. Only the most recent missed slot runs, not every missed one.
@@ -33,7 +33,7 @@ When choosing backup frequency as part of an [Intune disaster recovery plan](htt
 2. Open **Backup & Restore** and click the **Schedule** tab. You can also click **Set up automatic backups** or **Edit schedule** on the Dashboard.
 3. In step 1, check **Backups for** *tenant name* **go to** and use **Change storage** when the backups should land somewhere else. The same choice exists in **Settings**; both open the same chooser.
 4. In step 3, choose **On this computer**. Under **Automatic backups**, tick **Back up** *tenant name* **automatically**.
-5. In **Repeat**, choose **Every day** or **Every week**. For a weekly backup, pick the day.
+5. In **Repeat**, choose **Every day**, **Every week**, or **Every N hours**. For a weekly backup, pick the day. For an hourly schedule, select **4 hours**, **6 hours**, or **12 hours**, and set the anchor time.
 6. In **Time**, choose the time. The label shows your computer's timezone, and **Upcoming backups on this computer** lists the next runs so you can check them before saving.
 7. Click **Save**.
 
@@ -41,10 +41,10 @@ TenuVault confirms with **Schedule saved**. The new schedule starts at 02:00 by 
 
 If the time is empty or invalid, **Choose a time, for example 07:45.** appears beside **Time**. Selecting **Save** moves focus to that field without saving. Your recurrence and weekday stay selected.
 
-To pause automatic backups on any plan, clear the check box and click **Save**. TenuVault confirms with **Automatic backups paused**. The saved recurrence, time, weekday and last result are kept. You can pause an existing daily schedule after moving from Pro or MSP to Community. Its recurrence summary stays visible while it is paused. Enabling daily backups again requires Pro or MSP.
+To pause automatic backups on any plan, clear the check box and click **Save**. TenuVault confirms with **Automatic backups paused**. The saved recurrence, interval, time, weekday and last result are kept. You can pause an existing daily or hourly schedule after moving from Pro or MSP to Community. Its recurrence summary stays visible while it is paused. On Community, a resumed daily or hourly schedule runs weekly.
 
 :::note
-Daily backups are part of Pro and MSP. Before the tenant's plan information has loaded, **Checking plan** appears beside **Repeat**. If the license check has returned but no plan is available for the tenant, **Plan not verified** appears with the license coverage warning. Daily backups are unavailable in both cases. On Community, **Repeat** offers **Every day (Pro)** as an unavailable option and you schedule weekly backups.
+Daily and hourly schedules are part of Pro and MSP. Before the tenant's plan information has loaded, **Checking plan** appears beside **Repeat**. If the license check has returned but no plan is available for the tenant, **Plan not verified** appears with the license coverage warning. Daily and hourly scheduling are unavailable in both cases. On Community, **Repeat** offers **Every day (Pro)** and **Every N hours (Pro)** as unavailable options and you schedule weekly backups.
 :::
 
 If a schedule is saved and the background runner is not installed, the summary shows: **Background restart is not installed. Backups run while TenuVault is running.** Under **Background runner**, use **Settings > Background runner** to open Settings, then select **Background runner** to manage automatic restarts.
@@ -86,7 +86,7 @@ A tenant that never saved a choice uses **Everything except apps**, shown as "(d
 Before every automatic backup, TenuVault checks that:
 
 * your license covers the tenant
-* the plan includes daily backups, for a daily schedule
+* the plan includes daily or hourly backups, for those schedules
 * the plan includes Azure storage, when the tenant's backups go to an Azure storage account
 
 If a check fails, the backup does not run. TenuVault shows a notification, records the refusal under **Not backed up because of the license** and shows "Not backed up:" with the reason as the schedule's last result. When the tenant is not licensed, the Schedule tab also says "Your license does not cover" the tenant "right now, so its automatic backups do not run."
@@ -186,6 +186,7 @@ To stop automatic restarts, open **Settings** > **Background runner**, click **R
 | --- | --- | --- | --- |
 | Weekly automatic backups | Yes | Yes | Yes |
 | Daily automatic backups | No | Yes | Yes |
+| Automatic backups every 4, 6 or 12 hours | No | Yes | Yes |
 | Automatic backups to your Azure storage account | No | Yes | Yes |
 | [Cloud backups](/backups/cloud/) in your own Azure Automation account | No | Yes | Yes |
 | Menu bar or tray, start at login, background launch | Yes | Yes | Yes |

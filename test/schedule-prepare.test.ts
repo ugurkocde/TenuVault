@@ -10,17 +10,17 @@ const schedule = (tenantId: string, frequency = "weekly", enabled = true) => ({ 
 afterEach(() => vi.useRealTimers())
 
 describe("scheduled coverage preparation", () => {
-  it("waits for an unchecked tenant's slot while rechecking Community daily schedules", async () => {
+  it("waits for an unchecked tenant's slot while rechecking Community daily and hourly schedules", async () => {
     vi.useFakeTimers()
     const license = { plan: (id: string) => id === "unchecked" ? null : id.startsWith("community") ? "community" as const : "pro" as const, requireEntitlement: vi.fn(async (_id: string) => "community") }
     let due = false
-    const scheduler = { list: () => [schedule("unchecked"), schedule("community-daily", "daily"), schedule("community-weekly"), schedule("pro", "daily"), schedule("disabled", "daily", false)], isDue: () => due }
+    const scheduler = { list: () => [schedule("unchecked"), schedule("community-daily", "daily"), schedule("community-weekly"), { ...schedule("community-hourly", "hourly"), intervalHours: 6 } as BackupSchedule, schedule("pro", "daily"), schedule("disabled", "daily", false)], isDue: () => due }
     const prepare = prepareScheduledCoverage(license)
     await prepare(scheduler)
-    expect(license.requireEntitlement.mock.calls.map(([id]) => id)).toEqual(["community-daily"])
+    expect(license.requireEntitlement.mock.calls.map(([id]) => id)).toEqual(["community-daily", "community-hourly"])
     due = true
     await prepare(scheduler)
-    expect(license.requireEntitlement.mock.calls.map(([id]) => id)).toEqual(["community-daily", "unchecked", "community-daily"])
+    expect(license.requireEntitlement.mock.calls.map(([id]) => id)).toEqual(["community-daily", "community-hourly", "unchecked", "community-daily", "community-hourly"])
   })
 
   it("does not check a never-due tenant across many ticks, then checks once when due", async () => {
