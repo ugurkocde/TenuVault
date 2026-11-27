@@ -1864,6 +1864,27 @@ export class BackupEngine {
           throw error
         }
       }
+      if (anchorPrefix !== latestPrefix) {
+        // The anchor is a resumed older backup, but no deletion may run while the newest
+        // backup is incomplete: verify its listed payloads with the same checks before
+        // any DELETE. A mismatch (or a budget stop) throws here, before the plan phase,
+        // so nothing is deleted; receipts for both backups are kept for the next run.
+        const newestManifest = written ?? await metered().readJson(`${current}/metadata.json`)
+        if (!newestManifest) throw new Error("The latest backup has no readable manifest")
+        const newestProgress = limits ? review(latestPrefix) : undefined
+        try {
+          await verifyHalf(metered(), latestPrefix, newestManifest, undefined, undefined, newestProgress, keyFingerprint)
+          const companionId = newestManifest.CompanionBackup
+          if (typeof companionId === "string" && isLargeBackup(companionId) && writtenCompanion) {
+            await verifyHalf(metered(), `${companionId}/`, writtenCompanion, undefined, undefined, limits ? review(`${companionId}/`) : undefined, keyFingerprint)
+          }
+          if (newestProgress && !Object.keys(newestProgress.files).length && !newestProgress.complete) delete state.reviews[latestPrefix]
+        } catch (error) {
+          if (newestProgress && !Object.keys(newestProgress.files).length && !newestProgress.complete) delete state.reviews[latestPrefix]
+          saveProgress()
+          throw error
+        }
+      }
       if (limits) state.latest = anchorPrefix
       delete state.latestAttempts
     } catch (error) {
@@ -2662,7 +2683,11 @@ export class BackupEngine {
         } finally {
           for (const [container, lockId] of localLocks) {
             try {
-              const releaseWarning = await storage.releaseContainerLease(lockId, container).catch(() => undefined)
+              const releaseWarning = await storage.releaseContainerLease(lockId, container).catch(() => {
+                warnings++
+                this.write(job, "The local retention lock could not be released. It stays on disk until TenuVault exits.", "warning")
+                return undefined
+              })
               if (releaseWarning) {
                 warnings++
                 this.write(job, releaseWarning, "warning")

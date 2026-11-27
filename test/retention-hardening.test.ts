@@ -414,7 +414,11 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
       }
       await vi.advanceTimersByTimeAsync(1_000)
       const second = await runBackup(createEngine())
-      expect(has(`${older}metadata.json`), second.log.join("\n")).toBe(tamper)
+      // Without tampering the anchor resumes from its receipt, but the newest backup must also
+      // be payload-verified before any delete (4721701675) and that check cannot finish within
+      // the remaining byte budget, so deletion is deferred this run.
+      if (!tamper) expect(second.log.join("\n")).toContain("reached its storage budget")
+      expect(has(`${older}metadata.json`), second.log.join("\n")).toBe(true)
       expect(calls.filter(call => call.name === firstPolicy && call.request.method === "GET")).toHaveLength(tamper ? 2 : 1)
       if (tamper) {
         expect(second.log.join("\n")).toContain("does not match its manifest")
@@ -539,6 +543,59 @@ describe("candidate-local failures, discovery budget, and newest-backup progress
     expect(has(`${firstPrefix}metadata.json`)).toBe(true)
     const savedAfterRecovery = progress.get(progressKey)
     expect(savedAfterRecovery ? (JSON.parse(savedAfterRecovery) as { latest?: string }).latest : undefined).not.toBe(firstPrefix)
+  })
+
+  it("4721701675: deletes nothing when the newest backup fails payload verification while a resumed older backup is the anchor", async () => {
+    const progress = memoryStore()
+    const progressKey = `${TENANT}/contoso/false`
+    const big = "s".repeat(12_000)
+    let hitBudgetOnce = true
+    let tamperNewest = false
+    let firstPrefix = ""
+    const { createEngine, has, calls, seed, folder } = setupAzure({
+      progress,
+      count: 2,
+      limits: { candidates: 32, requests: 100, bytes: 100_000 },
+      override: (url, req) => {
+        if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+          return Response.json({ id: url.pathname.split("/").at(-1), description: big, assignments: [] })
+        }
+        if (hitBudgetOnce && req.method === "GET" && url.pathname.endsWith("/Policy%201.json")) {
+          hitBudgetOnce = false
+          return new Response(new Uint8Array(120_000), { status: 200, headers: { etag: '"oversized"' } })
+        }
+        // The newest backup's payload cannot be read back (the resumed anchor's payloads can).
+        if (tamperNewest && req.method === "GET" && firstPrefix && !url.pathname.includes(firstPrefix) && url.pathname.endsWith("/Policy%200.json")) {
+          return new Response(null, { status: 404 })
+        }
+        return undefined
+      },
+    })
+    const older = "backup-2026-08-01-020000/"
+    folder(older)
+    seed(`${older}metadata.json`, COMPLETE_MANIFEST)
+
+    const first = await runBackup(createEngine())
+    firstPrefix = `${first.backupFolder}/`
+    const savedAfterFirst = JSON.parse(progress.get(progressKey)!) as { latest?: string }
+    expect(savedAfterFirst.latest).toBe(firstPrefix)
+    const anchorPolicyReads = () => calls.filter(call => call.name === `${firstPrefix}DeviceConfigurations/Policy 0.json` && call.request.method === "GET").length
+    expect(anchorPolicyReads()).toBe(1)
+
+    // B is the anchor and verifies from its receipt, but newest C fails payload verification.
+    tamperNewest = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    await runBackup(createEngine())
+    expect(has(`${older}metadata.json`)).toBe(true)
+    expect(anchorPolicyReads()).toBe(1)
+
+    // With the newest backup healthy again, the next run deletes the expired candidate.
+    progress.set(progressKey, JSON.stringify(savedAfterFirst))
+    tamperNewest = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    const third = await runBackup(createEngine())
+    expect(has(`${older}metadata.json`), third.log.join("\n")).toBe(false)
+    expect(anchorPolicyReads()).toBe(1)
   })
 })
 

@@ -824,8 +824,11 @@ describe("Item 4: owner-and-process local retention lock and container scoping",
     await storeB.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedDead)
 
     // 3. Same host + alive PID with different processStart of the same kind (PID reuse) -> reclaimed.
-    const startKind = String(written.processStart).split(":")[0]
-    writeFileSync(lockPath, JSON.stringify({ id: "reused-pid", host: hostname(), pid: process.pid, processStart: `${startKind}:different-process-start`, app: "TenuVault" }))
+    const currentStart = String(written.processStart)
+    const differentStart = currentStart.startsWith("proc:")
+      ? `${currentStart.slice(0, currentStart.lastIndexOf(":") + 1)}${currentStart.endsWith(":0") ? "1" : "0"}`
+      : `${currentStart.split(":")[0]}:different-process-start`
+    writeFileSync(lockPath, JSON.stringify({ id: "reused-pid", host: hostname(), pid: process.pid, processStart: differentStart, app: "TenuVault" }))
     const reclaimedReuse = await storeA.acquireRetentionLock(account, BACKUP_CONTAINER)
     expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedReuse)
     await storeA.releaseRetentionLock(account, BACKUP_CONTAINER, reclaimedReuse)

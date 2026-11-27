@@ -206,14 +206,18 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
               return error(400, "InvalidHeaderValue", "Invalid protected prefixes header.")
             }
           }
-          const leaseId = await store.acquireRetentionLock(account, container, request.headers.get("x-ms-proposed-lease-id") ?? undefined, protectedPrefixes)
+          const leaseId = await store.acquireRetentionLock(account, container, request.headers.get("x-ms-proposed-lease-id") ?? undefined, protectedPrefixes, request.signal)
+          if (request.signal?.aborted) {
+            await store.releaseRetentionLock(account, container, leaseId).catch(() => undefined)
+            throw request.signal.reason ?? new DOMException("The operation was aborted.", "AbortError")
+          }
           return new Response(null, { status: 201, headers: { "x-ms-lease-id": leaseId } })
         }
         const leaseId = request.headers.get("x-ms-lease-id") ?? ""
         if (!leaseId) return error(400, "MissingRequiredHeader", "x-ms-lease-id is required.")
         if (action === "release") {
           const { warning } = await store.releaseRetentionLock(account, container, leaseId)
-          return new Response(null, { status: 200, headers: warning ? { "x-tenuvault-lock-warning": warning } : undefined })
+          return new Response(null, { status: 200, headers: warning ? { "x-tenuvault-lock-warning": encodeURIComponent(warning) } : undefined })
         }
         return error(400, "InvalidHeaderValue", `Unsupported lease action: ${action}`)
       }

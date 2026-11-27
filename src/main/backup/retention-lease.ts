@@ -236,11 +236,11 @@ export function permanentLeaseFailureWarning(local: boolean, consecutiveRuns: nu
   if (local) {
     if (error?.code === "RetentionLockManualIntervention") {
       const pathDetail = error.lockPath ? ` (${error.lockPath})` : ""
-      return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because the local retention lock${pathDetail} requires manual inspection. Delete the lock file only if no other computer is running TenuVault on this backup folder.`
+      return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because the local retention lock${pathDetail} requires manual inspection. Stop any TenuVault process on this computer that uses this backup folder. Delete the lock file only if no other computer is running TenuVault on this backup folder.`
     }
     if (error?.code === "LeaseAlreadyPresent" && error.lockHolder) {
       const pathDetail = error.lockPath ? ` (${error.lockPath})` : ""
-      return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because the same local retention lock${pathDetail} is still held by another TenuVault instance. Check whether another TenuVault process is stuck, and delete the lock file only if no other computer is running TenuVault on this backup folder.`
+      return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because the same local retention lock${pathDetail} is still held by another TenuVault instance. Check whether another TenuVault process is stuck. Stop any TenuVault process on this computer that uses this backup folder, then delete the lock file only if no other computer is running TenuVault on this backup folder.`
     }
     return `Retention skipped cleanup on ${consecutiveRuns} consecutive runs because the backup folder does not support the local retention lock. Check folder permissions or move local backups to a folder that supports exclusive lock files.`
   }
