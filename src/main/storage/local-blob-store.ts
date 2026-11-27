@@ -200,7 +200,14 @@ export class BlobReplacementChangedError extends Error {
 }
 
 class QuarantineRestoreConflictError extends Error {
-  constructor(readonly held: string, readonly live: string) {
+  constructor(
+    readonly held: string,
+    readonly live: string,
+    readonly liveIsHeldPrefix = false,
+    readonly liveStamp?: string,
+    readonly heldStamp?: string,
+    readonly aside?: string,
+  ) {
     super(`Could not restore ${held} to ${live} because the live path already exists.`)
     this.name = "QuarantineRestoreConflictError"
   }
@@ -476,8 +483,19 @@ function manualLockWarning(lockPath: string, reason: string): string {
   return `${label} ${lockPath} (${reason}) was not reclaimed automatically. Stop any TenuVault process on this computer that uses this backup folder. Delete it only if no other computer is running TenuVault on this backup folder.`
 }
 
-function conflictResolutionMessage(live: string, held: string): string {
-  return `Close TenuVault on every computer that uses this backup folder. If the file at ${live} is smaller than the file at ${held}, delete the file at ${live}. TenuVault restores it from ${held} on the next start. Otherwise contact support and keep both files.`
+function conflictResolutionMessage(live: string, held: string, liveIsHeldPrefix: boolean): string {
+  if (liveIsHeldPrefix) {
+    return `First copy the backup folder somewhere safe, close TenuVault on every computer that uses this backup folder, then delete the file at ${live}. TenuVault then restores it from ${held} on the next start.`
+  }
+  return `Keep both files (${live} and ${held}), do not delete either, and contact support with both paths.`
+}
+
+function conflictAsideNote(aside?: string): string {
+  return aside ? ` An unexpected file moved aside during cleanup was kept at ${aside}.` : ""
+}
+
+function conflictReasonText(live: string, held: string, liveIsHeldPrefix: boolean, aside?: string): string {
+  return `a file was kept at ${held} after interrupted cleanup because ${live} already exists.${conflictAsideNote(aside)} ${conflictResolutionMessage(live, held, liveIsHeldPrefix)}`
 }
 
 function waitMs(ms: number, signal?: AbortSignal): Promise<void> {
@@ -659,6 +677,10 @@ export interface RecoveryConflict {
   live: string
   liveFile: string
   blobName: string
+  liveIsHeldPrefix: boolean
+  liveStamp?: string
+  heldStamp?: string
+  aside?: string
 }
 
 /** A file in the backup container that could not be used. */
@@ -888,7 +910,7 @@ export class LocalBlobStore {
   async list(account: string, container: string, prefix = ""): Promise<StoredBlob[]> {
     const entries = await this.checkedEntries(account, container)
     const folder = backupFolderOf(prefix)
-    if (folder) this.assertAvailable(entries, folder)
+    if (folder) await this.assertAvailable(entries, folder)
     return [...entries.values()].filter((entry) => entry.name.startsWith(prefix))
       .map(({ file: _file, version: _version, stamp: _stamp, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
   }
@@ -896,7 +918,10 @@ export class LocalBlobStore {
   /** Damage in the container's current inventory; empty when there is none. */
   async damage(account: string, container: string): Promise<InventoryDamage> {
     const entries = await this.checkedEntries(account, container)
-    return this.damageOf.get(entries) ?? { files: [], unavailable: new Map(), unattributed: 0 }
+    const damage = this.damageOf.get(entries)
+    if (!damage) return { files: [], unavailable: new Map(), unattributed: 0 }
+    await revalidateDamageConflicts(damage)
+    return damage
   }
 
   /** Every file name a blob can have, for each key and format. Remembered, since each takes an HMAC per key. */
@@ -913,13 +938,13 @@ export class LocalBlobStore {
 
   private isOnlyScopedConflicts(damage: InventoryDamage): boolean {
     if (damage.unattributed > 0 || damage.hasNonConflictDamage) return false
-    const conflictEntries = damage.files.filter(file => file.conflict && file.backup)
+    const conflictEntries = damage.files.filter(file => file.conflict && file.backup && !file.conflict.aside)
     if (conflictEntries.length === 0) return false
     const conflictedBackups = new Set(conflictEntries.map(file => file.backup!))
     const conflictedLiveFiles = new Map<string, string>()
     for (const file of conflictEntries) conflictedLiveFiles.set(file.conflict!.liveFile, file.backup!)
     for (const file of damage.files) {
-      if (file.conflict && file.backup) continue
+      if (file.conflict && file.backup && !file.conflict.aside) continue
       if (file.backup && conflictedLiveFiles.get(file.file) === file.backup) continue
       return false
     }
@@ -929,10 +954,12 @@ export class LocalBlobStore {
     return true
   }
 
-  private assertAvailable(entries: Map<string, Entry>, folder: string): void {
+  private async assertAvailable(entries: Map<string, Entry>, folder: string): Promise<void> {
     const damage = this.damageOf.get(entries)
-    const reason = damage?.unavailable.get(folder)
-    if (!damage || !reason) return
+    if (!damage || !damage.unavailable.has(folder)) return
+    await revalidateDamageConflicts(damage)
+    const reason = damage.unavailable.get(folder)
+    if (!reason) return
     const folderConflicts = damage.files.filter(file => file.backup === folder && file.conflict)
     if (folderConflicts.length > 0 && damage.files.every(file => file.backup !== folder || Boolean(file.conflict) || folderConflicts.some(c => c.conflict!.liveFile === file.file))) {
       throw Object.assign(
@@ -957,7 +984,7 @@ export class LocalBlobStore {
     let entries = this.dirty.has(dir) ? await this.checkedEntries(account, container) : await this.entries(account, container)
     let entry = entries.get(name)
     const folder = backupFolderOf(name)
-    if (folder) this.assertAvailable(entries, folder)
+    if (folder) await this.assertAvailable(entries, folder)
     if (!entry) throw this.missing(entries, name)
     // A selective read checks its own file. Listings still verify every cached header,
     // and directory changes or our own writes still validate the complete manifest.
@@ -967,7 +994,7 @@ export class LocalBlobStore {
       this.changed(dir)
       this.index.delete(dir)
       entries = await this.checkedEntries(account, container)
-      if (folder) this.assertAvailable(entries, folder)
+      if (folder) await this.assertAvailable(entries, folder)
       entry = entries.get(name)
       if (!entry) throw this.missing(entries, name)
     }
@@ -1041,10 +1068,13 @@ export class LocalBlobStore {
     const version = this.writeFormat
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
     // A damaged file under the name this blob would get is kept for recovery, never written over.
-    const damagedMatch = !existing ? this.damageOf.get(entries)?.files.find((damaged) => damaged.file === file || damaged.conflict?.liveFile === file) : undefined
+    const damage = !existing ? this.damageOf.get(entries) : undefined
+    const damagedMatch = damage?.files.find((damaged) => damaged.file === file || damaged.conflict?.liveFile === file)
     if (damagedMatch) {
       if (damagedMatch.conflict) {
-        throw new IncompleteInventoryError(1, `${name} was not written because ${damagedMatch.conflict.live} has an unresolved recovery conflict with ${damagedMatch.conflict.held}. ${conflictResolutionMessage(damagedMatch.conflict.live, damagedMatch.conflict.held)}`)
+        if (damage) await revalidateDamageConflicts(damage)
+        const guidance = await resolveConflictGuidance(damagedMatch.conflict)
+        throw new IncompleteInventoryError(1, `${name} was not written because ${damagedMatch.conflict.live} has an unresolved recovery conflict with ${damagedMatch.conflict.held}.${conflictAsideNote(damagedMatch.conflict.aside)} ${guidance}`)
       }
       throw new IncompleteInventoryError(1, `${name} was not written: the file it would replace (${file}) could not be read, and is kept for recovery. ${RECOVERY}`)
     }
@@ -1124,6 +1154,7 @@ export class LocalBlobStore {
     const entries = fresh ? await this.checkedEntries(account, container) : await this.entries(account, container)
     const damage = this.damageOf.get(entries)
     if (!options.despiteDamage && damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
+      await revalidateDamageConflicts(damage)
       const onlyScopedConflicts = this.isOnlyScopedConflicts(damage)
       if (onlyScopedConflicts) {
         const conflictedBackups = new Set(damage.files.filter(file => file.conflict && file.backup).map(file => file.backup!))
@@ -1133,15 +1164,16 @@ export class LocalBlobStore {
           : options.expectedReplacements?.map(rep => backupFolderOf(rep.prefix)).find((folder): folder is string => Boolean(folder && conflictedBackups.has(folder)))
         if (touchedBackup) {
           const conflict = damage.files.find(file => file.backup === touchedBackup && file.conflict)!.conflict!
+          const guidance = await resolveConflictGuidance(conflict)
           throw new IncompleteInventoryError(
             damage.files.length,
-            `Backup ${touchedBackup} has an unresolved recovery conflict after interrupted cleanup between ${conflict.live} and ${conflict.held}. Deletes that touch ${touchedBackup} are blocked until this is resolved. ${conflictResolutionMessage(conflict.live, conflict.held)}`,
+            `Backup ${touchedBackup} has an unresolved recovery conflict after interrupted cleanup between ${conflict.live} and ${conflict.held}.${conflictAsideNote(conflict.aside)} Deletes that touch ${touchedBackup} are blocked until this is resolved. ${guidance}`,
           )
         }
       } else {
         const conflict = damage.files.find(file => file.conflict)?.conflict
         const recovery = conflict
-          ? `A file was kept at ${conflict.held} after interrupted cleanup because ${conflict.live} already exists. ${conflictResolutionMessage(conflict.live, conflict.held)}`
+          ? `A file was kept at ${conflict.held} after interrupted cleanup because ${conflict.live} already exists.${conflictAsideNote(conflict.aside)} ${await resolveConflictGuidance(conflict)}`
           : RECOVERY
         throw new IncompleteInventoryError(damage.files.length, `${damageSummary(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${recovery}`)
       }
@@ -1190,7 +1222,7 @@ export class LocalBlobStore {
               renamed = false
             } catch (error) {
               const guidance = error instanceof QuarantineRestoreConflictError
-                ? conflictResolutionMessage(path, held)
+                ? `${conflictAsideNote(error.aside).trimStart()}${error.aside ? " " : ""}${await resolveConflictGuidance(error)}`
                 : "Move it back only after checking the live file."
               throw new BlobQuarantinedError(`A different file was kept in ${held} (live path ${path}). ${guidance}`, { cause: error })
             }
@@ -1207,7 +1239,7 @@ export class LocalBlobStore {
                 renamed = false
               } catch (error) {
                 const guidance = error instanceof QuarantineRestoreConflictError
-                  ? conflictResolutionMessage(path, held)
+                  ? `${conflictAsideNote(error.aside).trimStart()}${error.aside ? " " : ""}${await resolveConflictGuidance(error)}`
                   : "Move it back only after checking the live file."
                 throw new BlobQuarantinedError(`Replacement backup ${changed} changed during deletion and ${name} was kept in ${held} (live path ${path}). ${guidance}`, { cause: error })
               }
@@ -2001,7 +2033,7 @@ export class LocalBlobStore {
         const damaged = this.damagedStamps.get(entries) ?? new Map<string, string>()
         const known = new Map<string, string>([...damaged, ...[...entries.values()].map((entry): [string, string] => [entry.file, entry.stamp])])
         const sameFiles = files.size === known.size && [...known.keys()].every(file => files.has(file))
-        const unchanged = !names.some(file => file.startsWith(RETIRED_PREFIX)) && !this.dirty.has(dir) && sameFiles && (await mapLimit([...known], HEADER_CONCURRENCY, async ([file, stamp]) => {
+        const unchanged = !names.some(file => file.startsWith(RETIRED_PREFIX) || file.endsWith(".partial")) && !this.dirty.has(dir) && sameFiles && (await mapLimit([...known], HEADER_CONCURRENCY, async ([file, stamp]) => {
           try { return fileStamp(await stat(join(dir, file), { bigint: true })) === stamp } catch { return false }
         })).every(Boolean)
         if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
@@ -2088,7 +2120,8 @@ export class LocalBlobStore {
             await rm(held)
             return await boundRestoredEtag(live, heldInfo)
           }
-          throw new QuarantineRestoreConflictError(held, live)
+          const prefix = await liveHeldPrefixInfo(live, held)
+          throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
         }
         if (!NO_HARD_LINKS.has(code)) throw error
         this.hardLinks = false
@@ -2109,7 +2142,8 @@ export class LocalBlobStore {
           await rm(held)
           return await boundRestoredEtag(live, identicalInfo)
         }
-        throw new QuarantineRestoreConflictError(held, live)
+        const prefix = await liveHeldPrefixInfo(live, held)
+        throw new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
       }
       throw error
     }
@@ -2125,8 +2159,9 @@ export class LocalBlobStore {
         throw new Error(`Incomplete copy while restoring ${held} to ${live}`)
       }
     } catch (error) {
-      // Remove our own partial file if live still points to the exact file we created and
-      // nothing else was written to it, so the next run can retry cleanly.
+      // Remove our own partial file by renaming live aside and verifying its identity on the
+      // aside file before unlinking, avoiding any check-to-unlink race on live.
+      let conflictError: QuarantineRestoreConflictError | undefined
       try {
         if (createdInfo && createdInfo.ino !== 0n) {
           const handleInfo = await handle.stat({ bigint: true })
@@ -2155,14 +2190,42 @@ export class LocalBlobStore {
                 if (process.platform === "win32") {
                   await handle.close()
                   closed = true
-                  const recheck = await lstat(live, { bigint: true })
-                  if (recheck.isFile() && recheck.ino !== 0n
-                    && recheck.dev === createdInfo.dev && recheck.ino === createdInfo.ino
-                    && fileStamp(recheck) === fileStamp(handleInfo)) {
-                    await rm(live)
+                }
+                const aside = `${live}.${randomBytes(8).toString("hex")}.partial`
+                let movedAside = false
+                try {
+                  await rename(live, aside)
+                  movedAside = true
+                } catch {
+                  // Live disappeared or could not be moved aside; leave live untouched.
+                }
+                if (movedAside) {
+                  let samePartial = false
+                  try {
+                    const asideInfo = await lstat(aside, { bigint: true })
+                    samePartial = asideInfo.isFile() && asideInfo.ino !== 0n
+                      && asideInfo.dev === createdInfo.dev
+                      && asideInfo.ino === createdInfo.ino
+                      && asideInfo.size === handleInfo.size
+                      && asideInfo.mtimeNs === handleInfo.mtimeNs
+                    if (samePartial && !closed) {
+                      const currentHandleInfo = await handle.stat({ bigint: true })
+                      samePartial = fileStamp(currentHandleInfo) === fileStamp(asideInfo)
+                    }
+                  } catch {
+                    samePartial = false
                   }
-                } else {
-                  await rm(live)
+                  if (samePartial) {
+                    await rm(aside)
+                  } else {
+                    const movedBack = await this.moveAsideBackIfFree(aside, live, dir)
+                    if (movedBack) {
+                      const prefix = await liveHeldPrefixInfo(live, held)
+                      conflictError = new QuarantineRestoreConflictError(held, live, prefix !== null, prefix?.liveStamp, prefix?.heldStamp)
+                    } else {
+                      conflictError = new QuarantineRestoreConflictError(held, live, false, undefined, undefined, aside)
+                    }
+                  }
                 }
               }
             }
@@ -2172,6 +2235,7 @@ export class LocalBlobStore {
         // Leave live in place if identity cannot be proved.
       }
       if (!closed) await handle.close().catch(() => undefined)
+      if (conflictError) throw conflictError
       throw error
     }
     await handle.close()
@@ -2180,14 +2244,77 @@ export class LocalBlobStore {
     return await boundRestoredEtag(live, writtenInfo)
   }
 
+  /**
+   * Moves an unverified aside file back to `live` only when `live` is free.
+   * Uses a hard link where supported, otherwise creates `live` exclusively ("wx")
+   * and copies the bytes without ever overwriting an occupied `live`.
+   */
+  private async moveAsideBackIfFree(aside: string, live: string, dir: string): Promise<boolean> {
+    if (this.hardLinks) {
+      try {
+        await link(aside, live)
+        if (process.platform !== "win32") await syncDirectory(dir)
+        await rm(aside, { force: true }).catch(() => undefined)
+        return true
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? ""
+        if (code === "EEXIST") return false
+        if (!NO_HARD_LINKS.has(code)) return false
+        this.hardLinks = false
+      }
+    }
+    let src: Awaited<ReturnType<typeof open>> | undefined
+    let dst: Awaited<ReturnType<typeof open>> | undefined
+    try {
+      const asideLinkInfo = await lstat(aside, { bigint: true })
+      if (!asideLinkInfo.isFile() || asideLinkInfo.ino === 0n) return false
+      src = await open(aside, "r")
+      const before = await src.stat({ bigint: true })
+      if (!before.isFile() || before.ino === 0n || before.dev !== asideLinkInfo.dev || before.ino !== asideLinkInfo.ino) {
+        return false
+      }
+      const bytes = await src.readFile()
+      const after = await src.stat({ bigint: true })
+      if (fileStamp(before) !== fileStamp(after)) return false
+      dst = await open(live, "wx", 0o600)
+      await dst.writeFile(bytes)
+      await dst.sync()
+      const dstInfo = await dst.stat({ bigint: true })
+      if (dstInfo.size !== BigInt(bytes.length)) return false
+      await dst.close()
+      dst = undefined
+      if (process.platform !== "win32") await syncDirectory(dir)
+      const asideAfter = await lstat(aside, { bigint: true })
+      if (fileStamp(asideAfter) === fileStamp(after)) {
+        await rm(aside, { force: true }).catch(() => undefined)
+      }
+      return true
+    } catch {
+      if (dst) await dst.close().catch(() => undefined)
+      return false
+    } finally {
+      await src?.close().catch(() => undefined)
+    }
+  }
+
   private async recoverRetired(dir: string, account: string, container: string, names: string[]): Promise<DamagedFile[]> {
     const held: Array<{ folder: string; file: string; since: number }> = []
     const damage: DamagedFile[] = []
     const report = (file: string, reason: string, backup: string | null = null, conflict?: RecoveryConflict) => {
       // Inventory details also travel in HTTP headers. Only expose names the store would create.
-      const safeName = /^\.retired-[a-z0-9]+(?:\/[0-9a-f]{1,64}\.tvb)?$/i.test(file) ? file : RETIRED_PREFIX
+      const safeName = /^(?:\.retired-[a-z0-9]+(?:\/[0-9a-f]{1,64}\.tvb)?|[0-9a-f]{1,64}\.tvb\.[0-9a-f]{1,32}\.partial)$/i.test(file) ? file : RETIRED_PREFIX
       damage.push({ file: safeName, reason, kind: "damaged", backup, ...(conflict ? { conflict } : {}) })
     }
+    const partialFilesByLive = new Map<string, string[]>()
+    for (const name of names) {
+      const match = /^([a-f0-9]+\.tvb)\.[a-f0-9]+\.partial$/i.exec(name)
+      if (!match) continue
+      const liveFile = match[1]!
+      const list = partialFilesByLive.get(liveFile) ?? []
+      list.push(name)
+      partialFilesByLive.set(liveFile, list)
+    }
+    const matchedPartials = new Set<string>()
     for (const folder of names.filter(name => name.startsWith(RETIRED_PREFIX))) {
       try {
         const path = join(dir, folder)
@@ -2223,23 +2350,56 @@ export class LocalBlobStore {
             backup = backupFolderOf(entry.name)
             blobName = entry.name
             if (counts.get(file) === 1 && Date.now() - since > RETIRED_GRACE_MS && !isPrefixProtected(dir, entry.name)) {
-              await this.restoreQuarantinedFile(path, join(dir, file), dir)
-              await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
-              await rmdir(join(dir, folder)).catch(() => undefined)
-              continue
+              const existingPartial = partialFilesByLive.get(file)?.[0]
+              if (existingPartial) {
+                matchedPartials.add(existingPartial)
+                const asidePath = join(dir, existingPartial)
+                const livePath = join(dir, file)
+                conflictReason = conflictReasonText(livePath, path, false, asidePath)
+                conflict = { held: path, live: livePath, liveFile: file, blobName, liveIsHeldPrefix: false, aside: asidePath }
+              } else {
+                await this.restoreQuarantinedFile(path, join(dir, file), dir)
+                await rm(join(dir, folder, RETIRED_STAMP), { force: true }).catch(() => undefined)
+                await rmdir(join(dir, folder)).catch(() => undefined)
+                continue
+              }
             }
           }
         }
       } catch (error) {
         if (isMissing(error)) continue
         if (error instanceof QuarantineRestoreConflictError) {
-          conflictReason = `a file was kept at ${error.held} after interrupted cleanup because ${error.live} already exists. ${conflictResolutionMessage(error.live, error.held)}`
-          if (backup && blobName) {
-            conflict = { held: error.held, live: error.live, liveFile: file, blobName }
+          const existingPartial = partialFilesByLive.get(file)?.[0]
+          const aside = error.aside ?? (existingPartial ? join(dir, existingPartial) : undefined)
+          if (existingPartial) matchedPartials.add(existingPartial)
+          const liveIsHeldPrefix = aside ? false : await isConflictPrefixStillValid(error)
+          conflictReason = conflictReasonText(error.live, error.held, liveIsHeldPrefix, aside)
+          if (blobName) {
+            conflict = {
+              held: error.held,
+              live: error.live,
+              liveFile: file,
+              blobName,
+              liveIsHeldPrefix,
+              ...(liveIsHeldPrefix && error.liveStamp ? { liveStamp: error.liveStamp } : {}),
+              ...(liveIsHeldPrefix && error.heldStamp ? { heldStamp: error.heldStamp } : {}),
+              ...(aside ? { aside } : {}),
+            }
           }
         }
       }
       report(`${folder}/${file}`, conflictReason ?? "a file was kept after interrupted cleanup. Close TenuVault and follow the backup storage recovery instructions", backup, conflict)
+    }
+    for (const [liveFile, partialNames] of partialFilesByLive) {
+      for (const partialName of partialNames) {
+        if (matchedPartials.has(partialName)) continue
+        const asidePath = join(dir, partialName)
+        const livePath = join(dir, liveFile)
+        report(
+          partialName,
+          `an unexpected file moved aside during interrupted cleanup was kept at ${asidePath} (live path ${livePath}). Keep both files (${livePath} and ${asidePath}), do not delete either, and contact support with both paths.`,
+        )
+      }
     }
     return damage
   }
@@ -2346,7 +2506,7 @@ export class LocalBlobStore {
     const conflictedLiveByFile = new Map<string, string>()
     for (const file of retired) {
       if (file.backup) unavailable(file.backup, file.reason.endsWith(".") ? file.reason : `${file.reason}.`)
-      if (file.conflict && file.backup) {
+      if (file.conflict && file.backup && !file.conflict.aside) {
         conflictedBlobNames.add(file.conflict.blobName)
         conflictedLiveByFile.set(file.conflict.liveFile, file.backup)
       } else {
@@ -2472,6 +2632,7 @@ export class LocalBlobStore {
       if (folder) unavailable(folder, `one of its files could not be read: ${reason}.`)
     }
     if (forgotten) await this.writeBodyDamage(dir, remembered).catch(() => undefined)
+    await revalidateDamageConflicts(damage)
     this.damageOf.set(entries, damage)
     this.damagedStamps.set(entries, new Map(damage.files.map(({ file }) => [file, before.get(file) ?? "missing"])))
     return entries
@@ -2600,6 +2761,99 @@ async function identicalLiveCopyInfo(live: string, expectedData: Buffer): Promis
     return null
   } finally {
     await handle?.close().catch(() => undefined)
+  }
+}
+
+/**
+ * Verifies `live` is a regular file strictly smaller than `held` whose bytes equal `held`'s
+ * leading bytes, bound to open file handles and re-checked unchanged after the reads.
+ */
+async function liveHeldPrefixInfo(live: string, held: string): Promise<{ liveStamp: string; heldStamp: string } | null> {
+  let heldHandle: Awaited<ReturnType<typeof open>> | undefined
+  let liveHandle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    const heldLink = await lstat(held, { bigint: true })
+    if (!heldLink.isFile() || heldLink.ino === 0n || heldLink.size === 0n) return null
+    heldHandle = await open(held, "r")
+    const heldBefore = await heldHandle.stat({ bigint: true })
+    if (!heldBefore.isFile() || heldBefore.ino === 0n
+      || heldBefore.dev !== heldLink.dev || heldBefore.ino !== heldLink.ino
+      || heldBefore.size !== heldLink.size) {
+      return null
+    }
+    const heldBytes = await heldHandle.readFile()
+    const heldAfter = await heldHandle.stat({ bigint: true })
+    if (fileStamp(heldBefore) !== fileStamp(heldAfter) || heldBytes.length !== Number(heldBefore.size) || heldBytes.length === 0) {
+      return null
+    }
+    const heldStamp = fileStamp(heldAfter)
+
+    const liveLink = await lstat(live, { bigint: true })
+    if (!liveLink.isFile() || liveLink.ino === 0n || liveLink.size >= BigInt(heldBytes.length)) return null
+    liveHandle = await open(live, "r")
+    const liveBefore = await liveHandle.stat({ bigint: true })
+    if (!liveBefore.isFile() || liveBefore.ino === 0n
+      || liveBefore.dev !== liveLink.dev || liveBefore.ino !== liveLink.ino
+      || liveBefore.size !== liveLink.size || liveBefore.size >= BigInt(heldBytes.length)) {
+      return null
+    }
+    const liveBytes = await liveHandle.readFile()
+    const liveAfter = await liveHandle.stat({ bigint: true })
+    if (fileStamp(liveBefore) !== fileStamp(liveAfter) || liveBytes.length !== Number(liveBefore.size)) {
+      return null
+    }
+    const [livePathAfter, heldPathAfter] = await Promise.all([
+      lstat(live, { bigint: true }),
+      lstat(held, { bigint: true }),
+    ])
+    if (!livePathAfter.isFile() || fileStamp(livePathAfter) !== fileStamp(liveAfter)) return null
+    if (!heldPathAfter.isFile() || fileStamp(heldPathAfter) !== heldStamp) return null
+    if (!liveBytes.equals(heldBytes.subarray(0, liveBytes.length))) return null
+    return { liveStamp: fileStamp(liveAfter), heldStamp }
+  } catch {
+    return null
+  } finally {
+    await liveHandle?.close().catch(() => undefined)
+    await heldHandle?.close().catch(() => undefined)
+  }
+}
+
+/** Re-checks stored conflict stamps before emitting a delete instruction for `live`. */
+async function isConflictPrefixStillValid(
+  conflict: Pick<RecoveryConflict, "live" | "held" | "liveIsHeldPrefix" | "liveStamp" | "heldStamp">,
+): Promise<boolean> {
+  if (!conflict.liveIsHeldPrefix || !conflict.liveStamp || !conflict.heldStamp) return false
+  try {
+    const [liveInfo, heldInfo] = await Promise.all([
+      lstat(conflict.live, { bigint: true }),
+      lstat(conflict.held, { bigint: true }),
+    ])
+    return liveInfo.isFile() && heldInfo.isFile()
+      && fileStamp(liveInfo) === conflict.liveStamp
+      && fileStamp(heldInfo) === conflict.heldStamp
+  } catch {
+    return false
+  }
+}
+
+async function resolveConflictGuidance(
+  conflict: Pick<RecoveryConflict, "live" | "held" | "liveIsHeldPrefix" | "liveStamp" | "heldStamp">,
+): Promise<string> {
+  return conflictResolutionMessage(conflict.live, conflict.held, await isConflictPrefixStillValid(conflict))
+}
+
+async function revalidateDamageConflicts(damage: InventoryDamage): Promise<void> {
+  for (const file of damage.files) {
+    const conflict = file.conflict
+    if (!conflict || !conflict.liveIsHeldPrefix) continue
+    if (await isConflictPrefixStillValid(conflict)) continue
+    conflict.liveIsHeldPrefix = false
+    delete conflict.liveStamp
+    delete conflict.heldStamp
+    file.reason = conflictReasonText(conflict.live, conflict.held, false, conflict.aside)
+    if (file.backup && damage.unavailable.get(file.backup)?.startsWith(`a file was kept at ${conflict.held} after interrupted cleanup`)) {
+      damage.unavailable.set(file.backup, file.reason)
+    }
   }
 }
 
