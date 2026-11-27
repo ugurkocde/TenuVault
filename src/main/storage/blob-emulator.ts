@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto"
 import { authenticatedBackupRead } from "./authenticated-read"
 import { LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterruptedError, BlobLeaseConflictError, BlobQuarantinedError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -15,6 +16,16 @@ import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobQuarantinedError,
  */
 
 const HOST = /^(tvlocal-[a-z0-9-]+)\.blob\.core\.windows\.net$/i
+const blobLeases = new WeakMap<LocalBlobStore, Map<string, { id: string; expiresAt: number }>>()
+
+function storeBlobLeases(store: LocalBlobStore): Map<string, { id: string; expiresAt: number }> {
+  let leases = blobLeases.get(store)
+  if (!leases) {
+    leases = new Map()
+    blobLeases.set(store, leases)
+  }
+  return leases
+}
 
 export function localAccountFromUrl(url: URL): string | null {
   const match = HOST.exec(url.hostname)
@@ -79,10 +90,10 @@ export function isLocalAccount(storageAccountName: string | undefined): boolean 
 const xml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
-function error(status: number, code: string, message: string): Response {
+function error(status: number, code: string, message: string, extraHeaders?: Record<string, string>): Response {
   return new Response(
     `<?xml version="1.0" encoding="utf-8"?><Error><Code>${code}</Code><Message>${xml(message)}</Message></Error>`,
-    { status, headers: { "content-type": "application/xml", "x-ms-error-code": code } },
+    { status, headers: { "content-type": "application/xml", "x-ms-error-code": code, ...extraHeaders } },
   )
 }
 
@@ -177,6 +188,29 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
 
     // Container level.
     if (!blobName && query.get("restype") === "container") {
+      if (method === "PUT" && query.get("comp") === "lease") {
+        if (!(await store.containerExists(account, container))) {
+          return error(404, "ContainerNotFound", "The specified container does not exist.")
+        }
+        const action = (request.headers.get("x-ms-lease-action") ?? "").toLowerCase()
+        const durationSec = Number(request.headers.get("x-ms-lease-duration") ?? "60")
+        const durationMs = Number.isFinite(durationSec) && durationSec > 0 ? durationSec * 1000 : 60_000
+        if (action === "acquire") {
+          const leaseId = await store.acquireRetentionLock(durationMs, request.headers.get("x-ms-proposed-lease-id") ?? undefined)
+          return new Response(null, { status: 201, headers: { "x-ms-lease-id": leaseId } })
+        }
+        const leaseId = request.headers.get("x-ms-lease-id") ?? ""
+        if (!leaseId) return error(400, "MissingRequiredHeader", "x-ms-lease-id is required.")
+        if (action === "renew") {
+          await store.renewRetentionLock(leaseId, durationMs)
+          return new Response(null, { status: 200, headers: { "x-ms-lease-id": leaseId } })
+        }
+        if (action === "release") {
+          await store.releaseRetentionLock(leaseId)
+          return new Response(null, { status: 200 })
+        }
+        return error(400, "InvalidHeaderValue", `Unsupported lease action: ${action}`)
+      }
       if (method === "PUT") {
         return (await store.createContainer(account, container))
           ? new Response(null, { status: 201 })
@@ -208,7 +242,47 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     if (!blobName) return error(400, "InvalidUri", "A blob name is required.")
 
     // Blob level.
+    const leaseKey = `${account}\0${container}\0${blobName}`
+    const leases = storeBlobLeases(store)
+    const activeLease = () => {
+      const held = leases.get(leaseKey)
+      if (!held) return undefined
+      if (held.expiresAt <= Date.now()) {
+        leases.delete(leaseKey)
+        return undefined
+      }
+      return held
+    }
+    if (method === "PUT" && query.get("comp") === "lease") {
+      await store.get(account, container, blobName)
+      const action = (request.headers.get("x-ms-lease-action") ?? "").toLowerCase()
+      const durationSec = Number(request.headers.get("x-ms-lease-duration") ?? "60")
+      const durationMs = Number.isFinite(durationSec) && durationSec > 0 ? durationSec * 1000 : 60_000
+      const held = activeLease()
+      if (action === "acquire") {
+        if (held) return error(409, "LeaseAlreadyPresent", "There is already a lease present.")
+        const leaseId = request.headers.get("x-ms-proposed-lease-id") || randomUUID()
+        leases.set(leaseKey, { id: leaseId, expiresAt: Date.now() + durationMs })
+        return new Response(null, { status: 201, headers: { "x-ms-lease-id": leaseId } })
+      }
+      const leaseId = request.headers.get("x-ms-lease-id") ?? ""
+      if (!leaseId) return error(400, "MissingRequiredHeader", "x-ms-lease-id is required.")
+      if (!held || held.id !== leaseId) return error(412, "LeaseIdMismatchWithLeaseOperation", "The lease ID specified did not match the lease ID for the blob.")
+      if (action === "renew") {
+        held.expiresAt = Date.now() + durationMs
+        return new Response(null, { status: 200, headers: { "x-ms-lease-id": leaseId } })
+      }
+      if (action === "release") {
+        leases.delete(leaseKey)
+        return new Response(null, { status: 200 })
+      }
+      return error(400, "InvalidHeaderValue", `Unsupported lease action: ${action}`)
+    }
     if (method === "PUT") {
+      const held = activeLease()
+      if (held && request.headers.get("x-ms-lease-id") !== held.id) {
+        return error(412, "LeaseIdMissing", "There is currently a lease on the blob and no lease ID was specified in the request.")
+      }
       const data = new Uint8Array(await request.arrayBuffer())
       const metadata = Object.fromEntries([...request.headers].filter(([key]) => key.startsWith("x-ms-meta-")).map(([key, value]) => [key.slice("x-ms-meta-".length), value]))
       const blob = await store.put(account, container, blobName, data, request.headers.get("content-type") ?? "application/octet-stream", request.headers.get("if-none-match") === "*", Object.keys(metadata).length ? metadata : undefined, request.headers.get("if-match") ?? undefined)
@@ -228,24 +302,33 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       return authenticatedBackupRead(new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers }))
     }
     if (method === "DELETE") {
+      const held = activeLease()
+      if (held && request.headers.get("x-ms-lease-id") !== held.id) {
+        return error(412, "LeaseIdMissing", "There is currently a lease on the blob and no lease ID was specified in the request.", { "x-tenuvault-delete-unchanged": "1" })
+      }
       await store.delete(account, container, blobName, { ifMatch: request.headers.get("if-match") ?? undefined })
+      leases.delete(leaseKey)
       return new Response(null, { status: 202 })
     }
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)
   } catch (caught) {
-    if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.")
+    const unchanged = method === "DELETE" && !(caught instanceof BlobQuarantinedError) && !(caught instanceof BlobDeleteInterruptedError)
+      ? { "x-tenuvault-delete-unchanged": "1" }
+      : undefined
+    if (caught instanceof BlobLeaseConflictError) return error(409, "LeaseAlreadyPresent", caught.message)
+    if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.", unchanged)
     if (caught instanceof BlobQuarantinedError) return error(412, "BlobQuarantined", caught.message)
-    if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.")
+    if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.", unchanged)
     // Damaged files: retrying cannot help, so this is not a 5xx that clients retry. BackupUnavailable
     // is about one backup; InventoryIncomplete covers the rest, such as a blob that may be in a file
     // that could not be traced, or a delete refused while damage is present.
-    if (caught instanceof IncompleteInventoryError) return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message)
+    if (caught instanceof IncompleteInventoryError) return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message, unchanged)
     if (caught instanceof BlobNotFoundError) {
       return (await store.containerExists(account, container))
-        ? error(404, "BlobNotFound", "The specified blob does not exist.")
-        : error(404, "ContainerNotFound", "The specified container does not exist.")
+        ? error(404, "BlobNotFound", "The specified blob does not exist.", unchanged)
+        : error(404, "ContainerNotFound", "The specified container does not exist.", unchanged)
     }
     console.error("[backups] Local storage request failed:", caught)
-    return error(500, "InternalError", caught instanceof Error ? caught.message : String(caught))
+    return error(500, "InternalError", caught instanceof Error ? caught.message : String(caught), unchanged)
   }
 }

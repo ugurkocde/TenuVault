@@ -20,6 +20,7 @@ export interface DeletionJournalEntry {
   untagged?: boolean
   remaining: Record<string, string>
   deleted: string[]
+  absent?: string[]
 }
 
 export interface RetentionProgress {
@@ -72,6 +73,7 @@ function isDeletionJournalEntry(value: unknown): value is DeletionJournalEntry {
   if (!isPlainRecord(value.remaining)
     || !Object.values(value.remaining).every(etag => typeof etag === "string" && etag.length > 0)) return false
   if (!Array.isArray(value.deleted) || !value.deleted.every(name => typeof name === "string")) return false
+  if (value.absent !== undefined && (!Array.isArray(value.absent) || !value.absent.every(name => typeof name === "string"))) return false
   return true
 }
 

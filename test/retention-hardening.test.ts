@@ -1426,4 +1426,387 @@ describe("deletion journal tampering and binding guards", () => {
     expect(has(`${target}DeviceConfigurations/New.json`), run3.log.join("\n")).toBe(false)
     expect(has(`${target}metadata.json`)).toBe(false)
   })
+
+  it("handles missing journaled remaining files on Azure by recording them and freshly re-verifying replacement coverage (crash and external deletion)", async () => {
+    const progressKey = `${TENANT}/contoso/false`
+    const target = "backup-2026-08-01-020000/"
+    const secondPolicy = { id: "new" }
+    const twoManifest = {
+      ...COMPLETE_MANIFEST,
+      Items: { ...ITEMS, "DeviceConfigurations/new": { file: "New.json", sha256: sha256(secondPolicy) } },
+      ItemCounts: { DeviceConfigurations: 2, TotalPolicies: 2 },
+    }
+
+    // (a) Crash after DELETE of Old.json before journal update, with healthy replacement:
+    // logs absent file, runs fresh replacement verification (no receipts), and finishes deleting remaining files.
+    {
+      const progress = memoryStore()
+      const { createEngine, has, calls, etags, keyOf, seed } = setupAzure({ progress, count: 1 })
+      seed(`${target}DeviceConfigurations/New.json`, secondPolicy)
+      seed(`${target}${BACKUP_OWNER_FILE}`, OWNER)
+      seed(`${target}metadata.json`, twoManifest)
+      progress.set(progressKey, JSON.stringify({
+        reviews: {},
+        deletions: {
+          [target]: {
+            prefixes: [target],
+            remnant: false,
+            folders: ["DeviceConfigurations"],
+            untagged: false,
+            remaining: {
+              [`${target}DeviceConfigurations/Old.json`]: '"etag-old"',
+              [`${target}DeviceConfigurations/New.json`]: etags.get(keyOf(`${target}DeviceConfigurations/New.json`))!,
+              [`${target}metadata.json`]: etags.get(keyOf(`${target}metadata.json`))!,
+              [`${target}${BACKUP_OWNER_FILE}`]: etags.get(keyOf(`${target}${BACKUP_OWNER_FILE}`))!,
+            },
+            deleted: [],
+          },
+        },
+      }))
+      const job = await runBackup(createEngine())
+      const replacementPolicy = `${job.backupFolder}/DeviceConfigurations/Policy 0.json`
+      expect(has(`${target}DeviceConfigurations/New.json`), job.log.join("\n")).toBe(false)
+      expect(has(`${target}metadata.json`)).toBe(false)
+      expect(job.log.join("\n")).toContain("DeviceConfigurations/Old.json")
+      expect(job.log.join("\n")).toContain("already absent")
+      expect(calls.filter(c => c.request.method === "GET" && c.name === replacementPolicy)).toHaveLength(2)
+    }
+
+    // (b) External deletion of Old.json when replacement is corrupted before resume:
+    // fresh re-verification fails, keeping journal (with absent recorded) and remaining files with a warning.
+    {
+      const progress = memoryStore()
+      let corrupted = false
+      let newestPrefix = ""
+      const { createEngine, has, calls, etags, keyOf, seed } = setupAzure({
+        progress,
+        count: 1,
+        override: (url, req) => {
+          if (req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+            const match = /\/(backup-[^/]+\/)metadata\.json$/.exec(url.pathname)
+            if (match) newestPrefix = match[1]!
+          }
+          if (!corrupted && newestPrefix && req.method === "GET" && url.searchParams.get("comp") === "list" && url.searchParams.get("prefix") === target) {
+            corrupted = true
+            seed(`${newestPrefix}DeviceConfigurations/Policy 0.json`, { id: "p0", tampered: true })
+          }
+          return undefined
+        },
+      })
+      seed(`${target}DeviceConfigurations/New.json`, secondPolicy)
+      seed(`${target}${BACKUP_OWNER_FILE}`, OWNER)
+      seed(`${target}metadata.json`, twoManifest)
+      progress.set(progressKey, JSON.stringify({
+        reviews: {},
+        deletions: {
+          [target]: {
+            prefixes: [target],
+            remnant: false,
+            folders: ["DeviceConfigurations"],
+            untagged: false,
+            remaining: {
+              [`${target}DeviceConfigurations/Old.json`]: '"etag-old"',
+              [`${target}DeviceConfigurations/New.json`]: etags.get(keyOf(`${target}DeviceConfigurations/New.json`))!,
+              [`${target}metadata.json`]: etags.get(keyOf(`${target}metadata.json`))!,
+              [`${target}${BACKUP_OWNER_FILE}`]: etags.get(keyOf(`${target}${BACKUP_OWNER_FILE}`))!,
+            },
+            deleted: [],
+          },
+        },
+      }))
+      const job = await runBackup(createEngine())
+      expect(corrupted).toBe(true)
+      expect(has(`${target}DeviceConfigurations/New.json`)).toBe(true)
+      expect(has(`${target}metadata.json`)).toBe(true)
+      expect(calls.filter(c => c.request.method === "DELETE")).toEqual([])
+      expect(job.log.join("\n")).toContain("DeviceConfigurations/Old.json")
+      expect(job.log.join("\n")).toContain("replacement coverage could not be freshly verified")
+      expect(readRetentionProgress(progress.get(progressKey)).deletions?.[target]?.absent).toEqual([`${target}DeviceConfigurations/Old.json`])
+    }
+  })
+
+  it("handles missing journaled remaining files on local storage (crash and external deletion)", async () => {
+    const account = localStorageAccountName(TENANT)
+    const progressKey = `${TENANT}/${account}/false`
+    const target = "backup-2026-08-01-020000/"
+    const secondPolicy = { id: "new" }
+    const twoManifest = {
+      ...COMPLETE_MANIFEST,
+      Items: { ...ITEMS, "DeviceConfigurations/new": { file: "New.json", sha256: sha256(secondPolicy) } },
+      ItemCounts: { DeviceConfigurations: 2, TotalPolicies: 2 },
+    }
+    const etagOf = (blob: { etag?: string; lastModified: Date }) => blob.etag ?? `"0x${blob.lastModified.getTime().toString(16).toUpperCase()}"`
+
+    // (a) Crash after local manifest delete before journal update: freshly re-verifies replacement and cleans up.
+    {
+      const root = mkdtempSync(join(tmpdir(), "tv-ret-missing-local-a-")); tempRoots.push(root)
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const progress = memoryStore()
+      await store.createContainer(account, BACKUP_CONTAINER)
+      await store.put(account, BACKUP_CONTAINER, `${target}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${target}DeviceConfigurations/New.json`, Buffer.from(JSON.stringify(secondPolicy)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${target}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${target}metadata.json`, Buffer.from(JSON.stringify(twoManifest)), "application/json")
+      const blobs = await store.list(account, BACKUP_CONTAINER, target)
+      const remaining = Object.fromEntries(blobs.map(b => [b.name, etagOf(b)]))
+      await store.delete(account, BACKUP_CONTAINER, `${target}metadata.json`)
+      progress.set(progressKey, JSON.stringify({
+        reviews: {},
+        deletions: {
+          [target]: { prefixes: [target], remnant: false, folders: ["DeviceConfigurations"], untagged: false, remaining, deleted: [] },
+        },
+      }))
+      const replacementReads: string[] = []
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const req = new Request(input, init)
+        const url = new URL(req.url)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
+        if (req.method === "GET" && !url.search) replacementReads.push(decodeURIComponent(url.pathname))
+        return handleLocalBlobRequest(store, req)
+      }
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress: progress, now: () => NOW })
+      const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE }))
+      expect(job.status).toBe("Completed")
+      expect(await store.list(account, BACKUP_CONTAINER, target)).toEqual([])
+      expect(job.log.join("\n")).toContain("metadata.json")
+      expect(job.log.join("\n")).toContain("already absent")
+      expect(replacementReads.filter(p => p.endsWith(`/${job.backupFolder}/metadata.json`)).length).toBeGreaterThanOrEqual(2)
+    }
+
+    // (b) External deletion on resumed manifestless local backup when type is uncovered: keeps journal with absent and keeps remaining files.
+    {
+      const root = mkdtempSync(join(tmpdir(), "tv-ret-missing-local-b-")); tempRoots.push(root)
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const progress = memoryStore()
+      await store.createContainer(account, BACKUP_CONTAINER)
+      await store.put(account, BACKUP_CONTAINER, `${target}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${target}DeviceConfigurations/New.json`, Buffer.from(JSON.stringify(secondPolicy)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${target}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${target}metadata.json`, Buffer.from(JSON.stringify(twoManifest)), "application/json")
+      await store.delete(account, BACKUP_CONTAINER, `${target}metadata.json`)
+      const blobs = await store.list(account, BACKUP_CONTAINER, target)
+      const remaining = Object.fromEntries(blobs.map(b => [b.name, etagOf(b)]))
+      await store.delete(account, BACKUP_CONTAINER, `${target}DeviceConfigurations/Old.json`)
+      progress.set(progressKey, JSON.stringify({
+        reviews: {},
+        deletions: {
+          [target]: { prefixes: [target], remnant: false, folders: ["DeviceConfigurations"], untagged: false, remaining, deleted: [`${target}metadata.json`] },
+        },
+      }))
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const req = new Request(input, init)
+        const url = new URL(req.url)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
+        return handleLocalBlobRequest(store, req)
+      }
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress: progress, now: () => NOW })
+      const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: COMPLIANCE_ONLY_SCOPE }))
+      expect(job.status).toBe("Completed")
+      const stillThere = (await store.list(account, BACKUP_CONTAINER, target)).map(b => b.name)
+      expect(stillThere).toContain(`${target}DeviceConfigurations/New.json`)
+      expect(stillThere).toContain(`${target}${BACKUP_OWNER_FILE}`)
+      expect(job.log.join("\n")).toContain("DeviceConfigurations/Old.json")
+      expect(readRetentionProgress(progress.get(progressKey)).deletions?.[target]?.absent).toEqual([`${target}DeviceConfigurations/Old.json`])
+    }
+  })
+
+  it("protects Azure replacement blobs with finite 60s leases during candidate deletes, renews long leases, blocks concurrent writes, and releases all leases", async () => {
+    const expired = "backup-2026-08-01-020000/"
+    const activeLeases = new Map<string, string>()
+    const acquiredDurations: number[] = []
+    const renewed: string[] = []
+    const released: string[] = []
+    let rivalWriteStatus = 0
+    let rivalTried = false
+    let newestPrefix = ""
+
+    const leaseHandler = (url: URL, req: Request): Response | Promise<Response> | undefined => {
+      const container = url.pathname.split("/")[1] ?? ""
+      const name = decodeURIComponent(url.pathname.slice(`/${container}/`.length))
+      if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+        const action = req.headers.get("x-ms-lease-action")
+        if (action === "acquire") {
+          return req.text().then(body => {
+            expect(body).toBe("")
+            acquiredDurations.push(Number(req.headers.get("x-ms-lease-duration")))
+            if (activeLeases.has(name)) return new Response(null, { status: 409, headers: { "x-ms-error-code": "LeaseAlreadyPresent" } })
+            const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${activeLeases.size + 1}`
+            activeLeases.set(name, id)
+            return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+          })
+        }
+        const id = req.headers.get("x-ms-lease-id") ?? ""
+        if (activeLeases.get(name) !== id) return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMismatchWithLeaseOperation" } })
+        if (action === "renew") {
+          renewed.push(name)
+          return new Response(null, { status: 200, headers: { "x-ms-lease-id": id } })
+        }
+        if (action === "release") {
+          activeLeases.delete(name)
+          released.push(name)
+          return new Response(null, { status: 200 })
+        }
+      }
+      if ((req.method === "PUT" || req.method === "DELETE") && !url.search && activeLeases.has(name)) {
+        if (req.headers.get("x-ms-lease-id") !== activeLeases.get(name)) {
+          return new Response(null, { status: 412, headers: { "x-ms-error-code": "LeaseIdMissing" } })
+        }
+      }
+      if (req.method === "PUT" && !url.search && url.pathname.endsWith("/metadata.json")) {
+        const match = /\/(backup-[^/]+\/)metadata\.json$/.exec(url.pathname)
+        if (match) newestPrefix = match[1]!
+      }
+      if (!rivalTried && req.method === "DELETE" && name.startsWith(expired)) {
+        rivalTried = true
+        const target = `${newestPrefix}DeviceConfigurations/Policy 0.json`
+        const res = leaseHandler(
+          new URL(`https://contoso.blob.core.windows.net/intune-backups/${target}`),
+          new Request(`https://contoso.blob.core.windows.net/intune-backups/${target}`, { method: "PUT", body: '{"tampered":true}' }),
+        )
+        rivalWriteStatus = res instanceof Response ? res.status : 200
+        return new Promise<Response>(resolve => setTimeout(() => {
+          first.saved.delete(first.keyOf(name))
+          resolve(new Response(null, { status: 202 }))
+        }, 35_000))
+      }
+      return undefined
+    }
+
+    const first = setupAzure({ count: 1, override: leaseHandler })
+    first.folder(expired)
+    first.seed(`${expired}metadata.json`, COMPLETE_MANIFEST)
+    const jobPromise = runBackup(first.engine)
+    await vi.advanceTimersByTimeAsync(40_000)
+    await jobPromise
+    expect(rivalTried).toBe(true)
+    expect(rivalWriteStatus).toBe(412)
+    expect(acquiredDurations).toEqual([60, 60, 60])
+    expect(renewed.length).toBeGreaterThanOrEqual(3)
+    expect(released).toHaveLength(3)
+    expect(activeLeases.size).toBe(0)
+    expect(first.has(`${expired}metadata.json`)).toBe(false)
+
+    // Lease acquisition failure (409 and 403): skips deletes, warns, and releases prior leases.
+    for (const status of [409, 403]) {
+      activeLeases.clear()
+      released.length = 0
+      let acquires = 0
+      const failed = setupAzure({
+        count: 1,
+        override: (url, req) => {
+          const container = url.pathname.split("/")[1] ?? ""
+          const name = decodeURIComponent(url.pathname.slice(`/${container}/`.length))
+          if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+            const action = req.headers.get("x-ms-lease-action")
+            if (action === "acquire") {
+              acquires++
+              if (acquires === 2) return new Response(null, { status, headers: { "x-ms-error-code": status === 409 ? "LeaseAlreadyPresent" : "AuthorizationPermissionMismatch" } })
+              const id = req.headers.get("x-ms-proposed-lease-id") || `lease-${acquires}`
+              activeLeases.set(name, id)
+              return new Response(null, { status: 201, headers: { "x-ms-lease-id": id } })
+            }
+            if (action === "release") {
+              activeLeases.delete(name)
+              released.push(name)
+              return new Response(null, { status: 200 })
+            }
+          }
+          return undefined
+        },
+      })
+      failed.folder(expired)
+      failed.seed(`${expired}metadata.json`, COMPLETE_MANIFEST)
+      const job = await runBackup(failed.engine)
+      expect(failed.has(`${expired}metadata.json`)).toBe(true)
+      expect(failed.calls.filter(c => c.request.method === "DELETE")).toEqual([])
+      expect(job.log.join("\n")).toContain("could not be leased")
+      expect(released).toHaveLength(1)
+      expect(activeLeases.size).toBe(0)
+    }
+  })
+
+  it("holds a cross-process retention lock file on local storage and re-checks replacement identities before each individual DELETE", async () => {
+    const account = localStorageAccountName(TENANT)
+    const older = "backup-2026-08-01-020000/"
+
+    // 1. Replacement mutates AFTER candidate's first DELETE (metadata.json), before second DELETE (Old.json):
+    // per-delete check catches it immediately and keeps Old.json and owner marker.
+    {
+      const root = mkdtempSync(join(tmpdir(), "tv-ret-perdel-local-")); tempRoots.push(root)
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      await store.createContainer(account, BACKUP_CONTAINER)
+      await store.put(account, BACKUP_CONTAINER, `${older}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${older}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${older}metadata.json`, Buffer.from(JSON.stringify(COMPLETE_MANIFEST)), "application/json")
+      let mutated = false
+      let currentFolder = ""
+      const deletes: string[] = []
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const req = new Request(input, init)
+        const url = new URL(req.url)
+        if (!localAccountFromUrl(url)) {
+          if (url.pathname.endsWith("/deviceConfigurations")) {
+            return withServerDate(Response.json({ value: [{ id: "p0", displayName: "Policy 0" }] }), NOW)
+          }
+          return withServerDate(Response.json({ id: "p0", displayName: "Policy 0", assignments: [] }), NOW)
+        }
+        if (req.method === "DELETE") {
+          const path = decodeURIComponent(url.pathname)
+          deletes.push(path)
+          const res = await handleLocalBlobRequest(store, req)
+          if (!mutated && path.endsWith(`${older}metadata.json`)) {
+            mutated = true
+            await store.put(account, BACKUP_CONTAINER, `${currentFolder}/DeviceConfigurations/Policy 0.json`, Buffer.from(JSON.stringify({ id: "p0", modified: true })), "application/json")
+          }
+          return res
+        }
+        return handleLocalBlobRequest(store, req)
+      }
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => NOW })
+      const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE })
+      currentFolder = job.backupFolder!
+      await engine.waitForJob(job)
+      expect(mutated).toBe(true)
+      expect(deletes).toEqual([`/${BACKUP_CONTAINER}/${older}metadata.json`])
+      expect(job.log.join("\n")).toContain("changed before cleanup completed")
+      const remaining = (await store.list(account, BACKUP_CONTAINER, older)).map(b => b.name)
+      expect(remaining).toContain(`${older}DeviceConfigurations/Old.json`)
+      expect(remaining).toContain(`${older}${BACKUP_OWNER_FILE}`)
+    }
+
+    // 2. Cross-process retention lock file in backup root prevents concurrent retention, and releases on finish.
+    {
+      const root = mkdtempSync(join(tmpdir(), "tv-ret-lock-local-")); tempRoots.push(root)
+      const keys = [randomBytes(32)]
+      const store = new LocalBlobStore(root, keys)
+      const other = new LocalBlobStore(root, keys)
+      await store.createContainer(account, BACKUP_CONTAINER)
+      await store.put(account, BACKUP_CONTAINER, `${older}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_POLICY)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${older}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
+      await store.put(account, BACKUP_CONTAINER, `${older}metadata.json`, Buffer.from(JSON.stringify(COMPLETE_MANIFEST)), "application/json")
+      const lockId = await other.acquireRetentionLock(60_000)
+      let clock = NOW
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const req = new Request(input, init)
+        const url = new URL(req.url)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), clock)
+        return handleLocalBlobRequest(store, req)
+      }
+      const createEngine = () => new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => clock })
+      const eng1 = createEngine()
+      const blocked = await eng1.waitForJob(eng1.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE }))
+      expect(blocked.status).toBe("Completed")
+      expect(blocked.log.join("\n")).toContain("local retention lock could not be acquired")
+      expect(await store.list(account, BACKUP_CONTAINER, older)).toHaveLength(3)
+
+      await other.releaseRetentionLock(lockId)
+      clock = new Date(NOW.getTime() + 5_000)
+      const eng2 = createEngine()
+      const unblocked = await eng2.waitForJob(eng2.start({ tenantId: TENANT, clientId: "client", storageAccountName: account, scope: DEVICE_CONFIG_SCOPE }))
+      expect(unblocked.status).toBe("Completed")
+      expect(await store.list(account, BACKUP_CONTAINER, older)).toEqual([])
+      const reacquired = await other.acquireRetentionLock(60_000)
+      await other.releaseRetentionLock(reacquired)
+    }
+  })
 })

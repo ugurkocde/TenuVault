@@ -524,7 +524,7 @@ describe("verified retention coverage", () => {
     const { engine, saved, seed, folder } = setup({
       count: 1,
       override: (url, sent) => {
-        if (url.hostname !== "contoso.blob.core.windows.net" || sent.method !== "PUT" || !url.pathname.endsWith("/metadata.json")) return undefined
+        if (url.hostname !== "contoso.blob.core.windows.net" || sent.method !== "PUT" || url.search || !url.pathname.endsWith("/metadata.json")) return undefined
         expect(sent.redirect).not.toBe("error")
         redirectedOnce = true
         return (async () => {

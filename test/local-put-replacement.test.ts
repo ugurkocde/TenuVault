@@ -1,14 +1,20 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import * as fileSystem from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
+import { BackupEngine } from '../src/main/backup/engine'
+import { readRetentionProgress } from '../src/main/backup/retention-progress'
+import { handleLocalBlobRequest, localAccountFromUrl } from '../src/main/storage/blob-emulator'
 import { LocalBlobStore, localBackupsExist } from '../src/main/storage/local-blob-store'
+import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from '../src/shared/constants'
+import { INTUNE_TYPES } from '../src/shared/intune/registry'
+import { memoryStore, withServerDate } from './helpers'
 
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, lstat: vi.fn(actual.lstat), rename: vi.fn(actual.rename) }
+  return { ...actual, lstat: vi.fn(actual.lstat), rename: vi.fn(actual.rename), rm: vi.fn(actual.rm) }
 })
 
 const roots: string[] = []
@@ -199,4 +205,88 @@ it("uses the quarantine stamp for the full grace period when rename leaves the b
   clock.mockReturnValue(now + 61_000)
   expect((await new LocalBlobStore(root, keys).get(account, container, name)).data).toEqual(body)
   expect(readdirSync(dir)).toEqual([file])
+})
+
+it.each(["rm", "lstat"] as const)("keeps the local deletion journal when the first DELETE fails in %s after moving metadata.json into quarantine, so remaining payloads stay resumable", async failStep => {
+  const root = mkdtempSync(join(tmpdir(), "tv-retired-journal-")); roots.push(root)
+  const keys = [randomBytes(32)]
+  const tenant = "11111111-1111-1111-1111-111111111111"
+  const account = localStorageAccountName(tenant)
+  const store = new LocalBlobStore(root, keys)
+  const dir = join(root, account, BACKUP_CONTAINER)
+  await store.createContainer(account, BACKUP_CONTAINER)
+
+  const oldPrefix = "backup-2026-08-01-020000/"
+  const policy = { id: "old" }
+  const manifest = {
+    TenantId: tenant,
+    Status: "Success",
+    Failures: 0,
+    Scope: { Included: ["DeviceConfigurations"] },
+    Items: {
+      "DeviceConfigurations/old": {
+        file: "Old.json",
+        sha256: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
+      },
+    },
+    ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 },
+  }
+  await store.put(account, BACKUP_CONTAINER, `${oldPrefix}DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(policy)), "application/json")
+  await store.put(account, BACKUP_CONTAINER, `${oldPrefix}${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify({ Source: "TenuVault Desktop", TenantId: tenant })), "application/json")
+  await store.put(account, BACKUP_CONTAINER, `${oldPrefix}metadata.json`, Buffer.from(JSON.stringify(manifest)), "application/json")
+
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+  let injected = false
+  if (failStep === "rm") {
+    vi.mocked(fileSystem.rm).mockImplementation(async (...args) => {
+      const target = String(args[0])
+      if (!injected && target.includes(".retired-") && target.endsWith(".tvb")) {
+        injected = true
+        throw Object.assign(new Error("EACCES: locked"), { code: "EACCES" })
+      }
+      return actual.rm(...args)
+    })
+  } else {
+    vi.mocked(fileSystem.lstat).mockImplementation((async (...args: Parameters<typeof actual.lstat>) => {
+      const target = String(args[0])
+      if (!injected && target.includes(".retired-") && target.endsWith(".tvb")) {
+        injected = true
+        throw Object.assign(new Error("EIO: read error"), { code: "EIO" })
+      }
+      return actual.lstat(...args)
+    }) as typeof actual.lstat)
+  }
+
+  const progressKey = `${tenant}/${account}/false`
+  const progress = memoryStore()
+  let clock = new Date("2026-09-24T12:00:00Z")
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    const url = new URL(request.url)
+    if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+    return withServerDate(Response.json({ value: [] }), clock)
+  }) as typeof fetch
+  const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+  const createEngine = () => new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress: progress, now: () => clock })
+
+  const firstEng = createEngine()
+  const first = await firstEng.waitForJob(firstEng.start({ tenantId: tenant, clientId: "client", storageAccountName: account, scope }))
+  expect(first.status).toBe("Completed")
+  expect(injected).toBe(true)
+  expect(readdirSync(dir).some(name => name.startsWith(".retired-"))).toBe(true)
+  expect(readRetentionProgress(progress.get(progressKey)).deletions?.[oldPrefix]).toBeTruthy()
+
+  // Simulate manual recovery removing the quarantined folder (leaving payloads + owner without manifest).
+  for (const name of readdirSync(dir)) {
+    if (name.startsWith(".retired-")) rmSync(join(dir, name), { recursive: true, force: true })
+  }
+  vi.mocked(fileSystem.rm).mockImplementation(actual.rm)
+  vi.mocked(fileSystem.lstat).mockImplementation(actual.lstat)
+
+  clock = new Date("2026-09-24T12:00:05Z")
+  const secondEng = createEngine()
+  const second = await secondEng.waitForJob(secondEng.start({ tenantId: tenant, clientId: "client", storageAccountName: account, scope }))
+  expect(second.status).toBe("Completed")
+  expect(await store.list(account, BACKUP_CONTAINER, oldPrefix)).toEqual([])
+  expect(readRetentionProgress(progress.get(progressKey)).deletions).toBeUndefined()
 })

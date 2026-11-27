@@ -55,6 +55,8 @@ const TAG = 16
 const EXT = ".tvb"
 const RETIRED_PREFIX = ".retired-"
 const RETIRED_STAMP = ".quarantined"
+const RETENTION_LOCK_FILE = ".tenuvault-retention.lock"
+const RETENTION_LOCK_UNREADABLE_GRACE_MS = 5_000
 // Another app instance can be between the rename and delete. Let that operation settle first.
 const RETIRED_GRACE_MS = 60_000
 
@@ -164,6 +166,8 @@ export class BlobAlreadyExistsError extends Error {}
 /** An If-Match ETag no longer matches the stored blob. */
 export class BlobConditionNotMetError extends Error {}
 export class BlobQuarantinedError extends BlobConditionNotMetError {}
+export class BlobDeleteInterruptedError extends Error {}
+export class BlobLeaseConflictError extends Error {}
 
 export class IncompleteInventoryError extends Error {
   /** The backup folder that is unavailable, when the error is about one backup. */
@@ -603,43 +607,137 @@ export class LocalBlobStore {
       const candidate = !options.ifMatch && folder ? [...entries.values()].filter(blob => backupFolderOf(blob.name) === folder) : [entry]
       for (const blob of candidate) await this.readBody(account, container, blob, entries)
     }
-    await this.write(dir, async () => {
-      const path = join(dir, entry.file)
-      const info = await lstat(path, { bigint: true })
-      if (!info.isFile() || info.ino === 0n || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
-      const quarantine = await mkdtemp(join(dir, RETIRED_PREFIX))
-      const held = join(quarantine, entry.file)
-      const stamp = join(quarantine, RETIRED_STAMP)
-      let needsRecovery = false
-      try {
-        await writeFile(stamp, "", { flag: "wx" })
-        await rename(path, held)
-        needsRecovery = true
-        this.changed(dir)
-        const moved = await lstat(held, { bigint: true })
-        // The rename can change ctime. Compare the attributes that survive it.
-        if (!moved.isFile() || moved.ino === 0n || moved.dev !== info.dev || moved.ino !== info.ino
-          || moved.size !== info.size || moved.mtimeNs !== info.mtimeNs) {
-          this.index.delete(dir)
-          try {
-            await link(held, path)
-            await rm(held)
-            needsRecovery = false
-          } catch (error) {
-            throw new BlobQuarantinedError(`A different file was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
+    let renamed = false
+    try {
+      await this.write(dir, async () => {
+        const path = join(dir, entry.file)
+        const info = await lstat(path, { bigint: true })
+        if (!info.isFile() || info.ino === 0n || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
+        const quarantine = await mkdtemp(join(dir, RETIRED_PREFIX))
+        const held = join(quarantine, entry.file)
+        const stamp = join(quarantine, RETIRED_STAMP)
+        let needsRecovery = false
+        try {
+          await writeFile(stamp, "", { flag: "wx" })
+          await rename(path, held)
+          renamed = true
+          needsRecovery = true
+          this.changed(dir)
+          const moved = await lstat(held, { bigint: true })
+          // The rename can change ctime. Compare the attributes that survive it.
+          if (!moved.isFile() || moved.ino === 0n || moved.dev !== info.dev || moved.ino !== info.ino
+            || moved.size !== info.size || moved.mtimeNs !== info.mtimeNs) {
+            this.index.delete(dir)
+            try {
+              await link(held, path)
+              await rm(held)
+              needsRecovery = false
+              renamed = false
+            } catch (error) {
+              throw new BlobQuarantinedError(`A different file was kept in ${quarantine}. Move it back only after checking the live file.`, { cause: error })
+            }
+            throw new BlobConditionNotMetError(name)
           }
-          throw new BlobConditionNotMetError(name)
+          await rm(held)
+          needsRecovery = false
+          this.updateEntry(dir, entries, name)
+        } finally {
+          if (!needsRecovery) {
+            await rm(stamp, { force: true }).catch(() => undefined)
+            await rmdir(quarantine).catch(() => undefined)
+          }
         }
-        await rm(held)
-        needsRecovery = false
-        this.updateEntry(dir, entries, name)
-      } finally {
-        if (!needsRecovery) {
-          await rm(stamp, { force: true }).catch(() => undefined)
-          await rmdir(quarantine).catch(() => undefined)
+      })
+    } catch (error) {
+      if (renamed && !(error instanceof BlobQuarantinedError)) {
+        throw new BlobDeleteInterruptedError(error instanceof Error ? error.message : String(error), { cause: error })
+      }
+      throw error
+    }
+  }
+
+  /** Acquires a cross-process retention lock file in the backup root. */
+  async acquireRetentionLock(durationMs = 60_000, proposedId?: string): Promise<string> {
+    await mkdir(this.root, { recursive: true, mode: 0o700 })
+    const lockPath = join(this.root, RETENTION_LOCK_FILE)
+    const id = proposedId || randomBytes(16).toString("hex")
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const handle = await open(lockPath, "wx", 0o600)
+        try {
+          await handle.writeFile(JSON.stringify({ id, pid: process.pid, expiresAt: Date.now() + durationMs }))
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+        return id
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath))) {
+          throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
         }
       }
-    })
+    }
+    throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
+  }
+
+  private async reclaimStaleRetentionLock(lockPath: string): Promise<boolean> {
+    try {
+      const info = await lstat(lockPath, { bigint: true })
+      if (!info.isFile()) return false
+      const raw = await readFile(lockPath, "utf8")
+      let expired = false
+      try {
+        const parsed = JSON.parse(raw) as { expiresAt?: unknown }
+        expired = typeof parsed?.expiresAt === "number" && Number.isFinite(parsed.expiresAt) && parsed.expiresAt <= Date.now()
+      } catch {
+        expired = Date.now() - Number(info.mtimeMs) >= RETENTION_LOCK_UNREADABLE_GRACE_MS
+      }
+      if (!expired) return false
+      const aside = `${lockPath}.${randomBytes(4).toString("hex")}.stale`
+      await rename(lockPath, aside)
+      const moved = await lstat(aside, { bigint: true })
+      if (moved.dev !== info.dev || moved.ino !== info.ino || moved.mtimeNs !== info.mtimeNs) {
+        await link(aside, lockPath).catch(() => undefined)
+        await rm(aside, { force: true }).catch(() => undefined)
+        return false
+      }
+      await rm(aside, { force: true })
+      return true
+    } catch (error) {
+      return isMissing(error)
+    }
+  }
+
+  async renewRetentionLock(id: string, durationMs = 60_000): Promise<void> {
+    const lockPath = join(this.root, RETENTION_LOCK_FILE)
+    let handle: Awaited<ReturnType<typeof open>> | undefined
+    try {
+      handle = await open(lockPath, "r+")
+      const raw = await handle.readFile("utf8")
+      const parsed = JSON.parse(raw) as { id?: unknown }
+      if (parsed?.id !== id) throw new BlobLeaseConflictError("The local retention lock is no longer held.")
+      const payload = Buffer.from(JSON.stringify({ id, pid: process.pid, expiresAt: Date.now() + durationMs }))
+      await handle.truncate(0)
+      await handle.write(payload, 0, payload.length, 0)
+      await handle.sync()
+    } catch (error) {
+      if (error instanceof BlobLeaseConflictError) throw error
+      throw new BlobLeaseConflictError("The local retention lock is no longer held.", { cause: error })
+    } finally {
+      await handle?.close()
+    }
+  }
+
+  async releaseRetentionLock(id: string): Promise<void> {
+    const lockPath = join(this.root, RETENTION_LOCK_FILE)
+    try {
+      const raw = await readFile(lockPath, "utf8")
+      const parsed = JSON.parse(raw) as { id?: unknown }
+      if (parsed?.id === id) await rm(lockPath, { force: true })
+    } catch (error) {
+      if (!isMissing(error)) throw error
+    }
   }
 
   /**
