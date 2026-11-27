@@ -125,12 +125,11 @@ Local cleanup moves files into a temporary `.retired-*` folder on the same drive
 
 If the original path already holds a different or partial file, TenuVault leaves both files in place, marks only that backup unavailable, blocks deletes that touch or depend on that backup, and names both paths in the warning. Other backups, restores, and imports stay usable, and retention of unrelated expired backups continues when healthy backups cover them.
 
-To resolve a recovery conflict:
+Follow the exact guidance TenuVault shows in the warning:
 
-1. Close TenuVault on every computer that uses this backup folder.
-2. Copy the backup folder, including the `.retired-*` folder, to a safe location before making changes.
-3. Compare the two paths named in the warning. If the file at the live path is smaller than the file at the held path (for example, a partial copy left after a crash on a drive without hard links), delete the file at the live path. TenuVault restores it from the held path on the next start and the backup becomes available again.
-4. Otherwise, keep both files and contact support.
+1. Copy the backup folder, including the `.retired-*` folder, to a safe location before making any changes.
+2. If TenuVault tells you it is safe to delete the file at the live path (because it verified the file is only an incomplete copy of the held file), close TenuVault on every computer that uses this backup folder, then delete that live file. TenuVault restores it from the held path on the next start and the backup becomes available again.
+3. If TenuVault tells you to keep both files, do not delete either file and contact support with both paths.
 
 ## Retention
 
