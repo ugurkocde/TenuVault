@@ -1,7 +1,7 @@
 import { isBearerToken } from "../../../../shared/security"
 import { signInLogCode } from "../../../../shared/sign-in-errors"
 import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, largeRunProblems, matchingCompanions, withRunRecord } from "../../../../shared/backup-companion"
-import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
+import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE, untrustedTimeFolder } from "../../../../shared/backup-storage"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages, listLargeBackupPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
@@ -366,6 +366,13 @@ export async function POST(request: NextRequest, runStatus?: RunStatus) {
         if (name === `${folder}/${BACKUP_OWNER_FILE}`) inventory.owner = match[0]
       }
     }
+    const untrustedDates = new Set<string>()
+    for (const listing of [blobsText, largeText]) {
+      for (const match of listing.matchAll(/<Blob>\s*<Name>([^<]+)<\/Name>/g)) {
+        const folder = untrustedTimeFolder(decodeXml(match[1]!))
+        if (folder !== null) untrustedDates.add(folder)
+      }
+    }
     const backupFolders = summary ? [...inventories.keys()] : [...backupFoldersIn(blobsText).map((folder) => folder.name), ...inventories.keys()]
     // Backups on this device: the store says how many files in the folder could not be read, so
     // the list can say that some backups may be missing from it or unavailable.
@@ -522,6 +529,7 @@ export async function POST(request: NextRequest, runStatus?: RunStatus) {
       const matches = matchingCompanions(backup.id, metadata, companionId, evidence) && evidence?.TenantId?.toLowerCase() === String(tenantId).toLowerCase()
       if (evidence && !matches) { cause = "Large companion does not match this run."; mismatched.add(companionId) }
       if (matches) {
+        if (untrustedDates.has(companionId)) untrustedDates.add(backup.id)
         hidden.add(companionId)
         backup.companionId = companionId
         if (other && !completeHalf(other)) cause = `Large companion is ${String(other.Status ?? "incomplete").toLowerCase()}; large capture is incomplete.`
@@ -655,6 +663,7 @@ export async function POST(request: NextRequest, runStatus?: RunStatus) {
       delete backup.sealed
     }
 
+    for (const backup of backups) if (untrustedDates.has(backup.id)) backup.untrustedDate = true
     return NextResponse.json({ backups, unresolved, sealed, ...(warnings.length ? { warnings } : {}), ...(damagedFiles ? { damagedFiles, damagedFileNames, ...(damagedKinds ? { damagedKinds } : {}) } : {}) })
   } catch (error) {
     console.error("List backups error:", error)

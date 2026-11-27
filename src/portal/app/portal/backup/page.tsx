@@ -460,6 +460,7 @@ export default function BackupRestorePage() {
                           <div className="flex flex-wrap justify-end gap-2">
                             {backup.type && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", backup.type === "scheduled" ? "bg-blue-50 text-blue-700" : "bg-muted text-gray-700")}>{TRIGGER_LABEL[backup.type]}</span>}
                             {(kind !== "success" || backup.coverage === "incomplete") && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status, backup.coverage)}</span>}
+                            {backup.untrustedDate && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", STATUS_STYLE.warning.badge)} title="This backup has a future date and is kept outside automatic retention.">Untrusted date</span>}
                             {backup.coverage === "incomplete" && <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-gray-700">Coverage incomplete</span>}
                           </div>
                         </div>

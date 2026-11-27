@@ -14,6 +14,7 @@ export interface BackupSummary {
   companionId?: string
   ordinaryOnlyExport?: boolean
   ordinaryOnlyAvailable?: boolean
+  untrustedDate?: boolean
   warning?: string
   largeProblems?: Array<{ folder: string; reason: string }>
   /** Stored bytes per registry folder, from the same listing as `counts`. */

@@ -1,3 +1,4 @@
+import { withServerDate } from "./helpers"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -9,7 +10,7 @@ import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azure-seal"
 import { BACKUP_CONTAINER } from "../src/shared/constants"
-import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
+import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER, untrustedTimeMarker } from "../src/shared/backup-storage"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { POST as history } from "../src/portal/app/api/list-backups/route"
@@ -31,21 +32,22 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     const store = new LocalBlobStore(root, [Buffer.alloc(32, 9)])
     const account = azure ? "isolationstore" : local
     let refused = 0, failAt = "all"
+    let serverTime = new Date("2026-11-17T12:00:00Z")
     const requests: string[] = []
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
       if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
       if (url.pathname === "/api/revert-metadata") return Response.json({ reverts: {} })
       if (url.hostname === "graph.microsoft.com") {
-        if (url.pathname === "/v1.0/synthetic") return Response.json({ value: [{ id: "large-one", displayName: "Large" }] })
-        if (url.pathname === "/beta/deviceManagement/deviceCategories") return Response.json({ value: [{ id: "one", displayName: "One" }, { id: "two", displayName: "Two" }] })
-        if (url.pathname.startsWith("/beta/deviceManagement/deviceCategories/")) return Response.json({ id: url.pathname.split("/").at(-1), displayName: "Category" })
+        if (url.pathname === "/v1.0/synthetic") return withServerDate(Response.json({ value: [{ id: "large-one", displayName: "Large" }] }), serverTime)
+        if (url.pathname === "/beta/deviceManagement/deviceCategories") return withServerDate(Response.json({ value: [{ id: "one", displayName: "One" }, { id: "two", displayName: "Two" }] }), serverTime)
+        if (url.pathname.startsWith("/beta/deviceManagement/deviceCategories/")) return withServerDate(Response.json({ id: url.pathname.split("/").at(-1), displayName: "Category" }), serverTime)
         throw new Error(`Unexpected Graph request ${url}`)
       }
       requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`)
       if (refused && url.pathname.startsWith(`/${LARGE_BACKUP_CONTAINER}`) && (failAt === "all" || url.pathname.includes(failAt))) return new Response(`<Error><Code>${refused === 403 ? "AuthorizationPermissionMismatch" : "ContainerNotFound"}</Code></Error>`, { status: refused })
       url.hostname = `${local}.blob.core.windows.net`
-      return handleLocalBlobRequest(store, new Request(url, init))
+      return withServerDate(await handleLocalBlobRequest(store, new Request(url, init)), serverTime)
     })
     vi.stubGlobal("fetch", fetcher)
     const write = async (folder: string, name: string, value: unknown) => {
@@ -60,10 +62,32 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
       if (large) await write(folder, `_index/${folderName}/000000.json`, [{ id: "one", file: "one.json", hash: snapshotHash(snapshot) }])
       await write(folder, "metadata.json", { BackupFolder: folder, TenantId: TENANT, Status: "Success", Failures: 0, Coverage: "Complete", Scope: { Included: [folderName], Excluded: [] }, Items: large ? {} : { [`${folderName}/one`]: { file: "one.json", hash: snapshotHash(snapshot) } }, ItemCounts: { [folderName]: 1, TotalPolicies: large ? 0 : 1 }, ...(large ? { LargeItems: { [folderName]: { version: 1, count: 1, shards: 1, complete: true } } } : {}) })
     }
-    return { root, store, account, fetcher, requests, write, read, request, seed, refuse: (status: number, at = "all") => { refused = status; failAt = at } }
+    return { root, store, account, fetcher, requests, write, read, request, seed, setServerTime: (time: Date) => { serverTime = time }, refuse: (status: number, at = "all") => { refused = status; failAt = at } }
   }
 
   const ordinary = "backup-2020-01-01-000000", large = "backup-large-2020-01-01-000000"
+
+  it("shows one untrusted date in history for a split run marked in both locations", async () => {
+    const f = await setup()
+    f.setServerTime(new Date("2026-11-17T12:00:00Z"))
+    undo = registerTestTypes([largeType])
+    const clock = new Date("2026-11-18T12:00:00Z")
+    if (azure) registerStorageToken("storage", TENANT)
+    const engine = new BackupEngine({
+      fetch: f.fetcher, now: () => clock, getToken: async () => jwt({ scp: "Policy.Read.All" }),
+      services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1,
+    })
+    const scope = { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) }
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope }))
+    expect(job.status, job.log.join("\n")).toBe("Completed")
+    const ordinaryId = "backup-2026-11-18-120000", largeId = "backup-large-2026-11-18-120000"
+    await f.store.get(local, BACKUP_CONTAINER, untrustedTimeMarker(ordinaryId))
+    await f.store.get(local, LARGE_BACKUP_CONTAINER, untrustedTimeMarker(largeId))
+    for (const summary of [false, true]) {
+      const result = await (await history(f.request({ summary }))).json()
+      expect(result.backups).toMatchObject([{ id: ordinaryId, companionId: largeId, untrustedDate: true }])
+    }
+  })
   async function pair() {
     undo = registerTestTypes([largeType])
     const f = await setup()
@@ -289,6 +313,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
       return original(input, init)
     })
     const run = async (at: Date) => {
+      f.setServerTime(at)
       const engine = new BackupEngine({ now: () => at, fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => state === "off" ? 0 : 1 })
       return engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
     }
@@ -699,6 +724,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
   }, 60_000)
   it("protects a valid complete run inside retention", async () => {
     const f = await pair()
+    f.setServerTime(new Date("2020-01-01T12:00:00Z"))
     const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
     await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
     for (const id of [ordinary, large]) expect(await f.read(id)).toMatchObject({ RunId: "same-run", Status: "Success" })
@@ -712,7 +738,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
       await f.store.delete(local, BACKUP_CONTAINER, `${ordinary}/metadata.json`)
       for (const blob of await f.store.list(local, BACKUP_CONTAINER, `${ordinary}/`)) await f.store.delete(local, BACKUP_CONTAINER, blob.name)
     }
-    const engine = new BackupEngine({ fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
+    const engine = new BackupEngine({ now: () => new Date("2026-11-17T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
     const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
     expect(job.status, job.exception).toBe("Completed")
     expect((await f.store.list(local, LARGE_BACKUP_CONTAINER, `${large}/`)).length > 0).toBe(state !== "complete")
