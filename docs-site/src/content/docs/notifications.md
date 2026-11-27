@@ -38,7 +38,9 @@ A system notification on this computer. It only appears while TenuVault runs, in
 
 ### Webhook
 
-TenuVault posts a signed JSON event to an https address you control, for example a ticketing system, Slack incoming webhook or your own automation. The body is one event object with the schema name `tenuvault.notification/v1`. It carries names, object ids, counts, statuses, timestamps and the names of changed settings. It never carries policy content, setting values, credentials or audit request bodies. The fields of change events are listed under [Webhook fields for changes](#webhook-fields-for-changes).
+TenuVault posts a JSON event to an HTTPS address you control, for example a ticketing system or your own automation. The body is one event object with the schema name `tenuvault.notification/v1`. It carries names, object ids, counts, statuses, timestamps and the names of changed settings. It never carries policy content, setting values, credentials or audit request bodies. The fields of change events are listed under [Webhook fields for changes](#webhook-fields-for-changes).
+
+To send webhook alerts to a Log Analytics workspace, follow [Send alerts to Microsoft Sentinel](/sentinel/).
 
 Two optional protections:
 
