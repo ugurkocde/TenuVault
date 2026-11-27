@@ -199,7 +199,7 @@ export function hardLinksUnsupportedWarning(folderPath?: string, consecutiveRuns
   const prefix = consecutiveRuns !== undefined
     ? `Retention skipped cleanup on ${consecutiveRuns} consecutive runs for ${target}`
     : `Automatic cleanup was skipped for ${target}`
-  return `${prefix} because this drive type does not support hard links and cannot clean up old backups safely. Backups and restores keep working. Old backups stay until you move the backup folder to an NTFS, APFS or ext4 drive or delete them manually in TenuVault.`
+  return `${prefix} because this backup folder location does not support hard links, so old backups cannot be cleaned up safely. Backups and restores keep working. Old backups stay in the folder until it is moved to a drive that supports hard links, such as a local NTFS, APFS or ext4 drive.`
 }
 export class BlobProtectedError extends Error {}
 export interface ExpectedReplacement {
@@ -1522,7 +1522,11 @@ export class LocalBlobStore {
     if (entries === null) return true
     if (!entries || entries.some(file => file !== RETIRED_STAMP)) return false
     if (!(await this.isRetentionLockHeld(lockDir, retentionLockId))) return false
-    if (entries.includes(RETIRED_STAMP)) {
+    // Re-list right before removing the stamp, so a delete that placed a held file meanwhile keeps its stamp.
+    const latest = await readdir(retiredDir).catch(error => isMissing(error) ? null : undefined)
+    if (latest === null) return true
+    if (!latest || latest.some(file => file !== RETIRED_STAMP)) return false
+    if (latest.includes(RETIRED_STAMP)) {
       try {
         await rm(stampPath)
       } catch (error) {
@@ -1592,12 +1596,9 @@ export class LocalBlobStore {
     const dir = this.dir(account, container)
     await mkdir(dir, { recursive: true, mode: 0o700 })
     signal?.throwIfAborted()
-    if (!this.hardLinks) {
-      throw new BlobLeaseUnsupportedError(hardLinksUnsupportedWarning(dir), {
-        code: "RetentionHardLinksUnsupported",
-        lockPath: dir,
-      })
-    }
+    // Re-probe hard link support on every retention run: publishing the lock is the probe, so a transient
+    // failure or a remounted folder does not disable cleanup until the app restarts.
+    this.hardLinks = true
     const lockPath = join(dir, RETENTION_LOCK_FILE)
     const id = proposedId || randomBytes(16).toString("hex")
     const record: RetentionLockRecord = {
