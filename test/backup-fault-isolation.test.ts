@@ -1,11 +1,8 @@
 vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 
-import { notifiedStatus, scheduledResult } from "../src/main/backup/scheduler"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit } from "../src/main/backup/engine"
 import { GraphSession } from "../src/main/backup/graph-session"
-import { summarizeBackupResults } from "../src/portal/lib/backup-job-display"
-import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
 import { MODULES, type ModuleId, type ServiceModule } from "../src/shared/services/modules"
 import { fixture, refusal, registerTestTypes, scriptedGraph, testType, type GraphRoute } from "./helpers/backup-fixture"
 import { GRAPH_ANSWERS } from "./fixtures/graph-answers"
@@ -591,111 +588,5 @@ describe("auth failure and throttle state per service", () => {
     await expect(shared.get("https://graph.microsoft.com/beta/a")).rejects.toThrow("longer than 5 minutes")
     await expect(shared.get("https://graph.microsoft.com/beta/b")).rejects.toThrow("longer than 5 minutes")
     expect(sent).toBe(1)
-  })
-})
-
-describe("Start now backup evidence", () => {
-  const clientId = GRAPH_CLI_CLIENT_ID
-
-  it("reports an access-only skip as success in the manifest, schedule and outcome notification", async () => {
-    const f = fixture(tenant(), { graphCliGrant: () => new Set(["DeviceManagementConfiguration.Read.All"]) })
-    const job = await f.run({ clientId, trigger: "scheduled" })
-    expect(f.requests.some(request => request.path.startsWith("/beta/security/"))).toBe(false)
-    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({ outcome: "skipped", cause: "permission" })
-    expect(await f.manifest(job)).toMatchObject({ Status: "Success", Failures: 0, Coverage: "Incomplete" })
-    expect(scheduledResult(job).status).toBe("Completed")
-    expect(notifiedStatus(job)).toBe("Success")
-  })
-
-  it("continues reading device profiles after a detail is refused with the read scope", async () => {
-    const path = "/beta/deviceManagement/deviceConfigurations"
-    const f = fixture(tenant({
-      [path]: { value: [{ id: "denied", displayName: "Restricted" }, { id: "readable", displayName: "Readable" }] },
-      [path + "/denied?$expand=assignments"]: refusal(403, "Forbidden", "Access denied"),
-      [path + "/readable?$expand=assignments"]: { id: "readable", displayName: "Readable", assignments: [] },
-    }), { concurrency: 1, graphCliGrant: () => new Set(["DeviceManagementConfiguration.Read.All"]) })
-    const job = await f.run({ clientId })
-    expect(await f.files(job)).toContain("DeviceConfigurations/Readable.json")
-    expect(outcomeOf(job, "DeviceConfigurations")).toMatchObject({ outcome: "failed", error: expect.stringContaining("HTTP 403"), saved: 1 })
-    expect(job.coverage).toBe("incomplete")
-  })
-
-  it("finishes with warnings and saves later types when five device profile details are denied", async () => {
-    const path = "/beta/deviceManagement/deviceConfigurations"
-    const profiles = Array.from({ length: 5 }, (_, index) => ({ id: `denied${index + 1}`, displayName: `Restricted ${index + 1}` }))
-    const deniedPaths = profiles.map(({ id }) => `${path}/${id}?$expand=assignments`)
-    const denied = refusal(403, "Forbidden", "Access denied")
-    const f = fixture(tenant({
-      [path]: { value: profiles },
-      ...Object.fromEntries(deniedPaths.map(detail => [detail, denied])),
-    }), { concurrency: 1, graphCliGrant: () => new Set(["DeviceManagementConfiguration.Read.All"]) })
-    const job = await f.run({ clientId })
-    expect(job.status).toBe("Completed")
-    expect(f.requests.filter(request => request.path.startsWith(`${path}/`)).map(request => request.path)).toEqual(deniedPaths)
-    expect(summarizeBackupResults(job.results!, true).partial).toContainEqual(expect.objectContaining({ folder: "DeviceConfigurations", found: 5, saved: 0, failed: 5 }))
-    expect(outcomeOf(job, "DeviceConfigurations")).toMatchObject({ outcome: "failed", saved: 0, error: expect.stringContaining("5 of 5 could not be saved") })
-    expect(outcomeOf(job, "CompliancePolicies")).toMatchObject({ outcome: "saved", saved: 1 })
-    expect(await f.files(job)).toContain("CompliancePolicies/Compliance.json")
-    expect(await f.manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Coverage: "Incomplete" })
-  })
-
-  it("uses beta continuation links for a type otherwise read on the stable endpoint", async () => {
-    const stable = testType("TokenLifetimePolicies", "policies/tokenLifetimePolicies", { apiVersion: "v1.0", listOnly: true })
-    const remove = registerTestTypes([stable])
-    try {
-      const path = "/beta/policies/tokenLifetimePolicies"
-      const nextLink = `https://graph.microsoft.com${path}?$skiptoken=fixture`
-      const graph = scriptedGraph({
-        [path]: { value: [{ id: "first", displayName: "First" }], "@odata.nextLink": nextLink },
-        [path + "?$skiptoken=fixture"]: { value: [{ id: "next", displayName: "Next" }] },
-      })
-      const f = fixture(graph, { services: () => ({ services: ["entra"] }), graphCliGrant: () => new Set(["Policy.Read.All"]) })
-      const job = await f.run({ clientId, scope: { excluded: [] } })
-      expect(f.requests.map(request => request.path)).toEqual([path, path + "?$skiptoken=fixture"])
-      expect(outcomeOf(job, stable.folder)).toMatchObject({ outcome: "saved", saved: 2 })
-    } finally { remove() }
-  })
-
-  it.each([
-    [403, "Insufficient privileges", { outcome: "failed" }],
-    [400, "Intune is not licensed", { outcome: "skipped", cause: "license" }],
-  ])("classifies Intune HTTP %s with a verified scope", async (status, detail, expected) => {
-    const f = fixture(tenant({ "/beta/deviceManagement/deviceCompliancePolicies": refusal(status, "Forbidden", detail) }), {
-      graphCliGrant: () => new Set(["DeviceManagementConfiguration.ReadWrite.All"]),
-    })
-    const job = await f.run({ clientId })
-    expect(outcomeOf(job, "CompliancePolicies")).toMatchObject({ ...expected, status })
-    expect(scheduledResult(job).status).toBe(status === 403 ? "Failed" : "Completed")
-    expect(notifiedStatus(job)).toBe(status === 403 ? "CompletedWithWarnings" : "Success")
-    expect(job.coverage).toBe("incomplete")
-  })
-
-  it("classifies a refusal with the opaque bearer used after a refresh", async () => {
-    const path = "/beta/identityGovernance/termsOfUse/agreements"
-    const f = fixture(scriptedGraph({
-      [path]: (request: Request) => request.headers.get("authorization") === "Bearer initial"
-        ? refusal(401, "Unauthorized", "Access denied")()
-        : refusal(403, "Forbidden", "Access denied")(),
-    }), {
-      services: () => ({ services: ["entra"] }),
-      getToken: async (_tenant, _client, _scope, fresh) => fresh ? "opaque" : "initial",
-      graphCliGrant: token => token === "initial" ? new Set(["Agreement.Read.All"]) : undefined,
-    })
-    const job = await f.run({ clientId })
-    expect(f.requests.filter(request => request.path === path).map(request => request.headers.get("authorization")))
-      .toEqual(["Bearer initial", "Bearer opaque"])
-    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({
-      outcome: "failed", status: 403, error: expect.stringContaining("could not verify the permissions for this request"),
-    })
-  })
-
-  it("records an opaque grant's 403 as unread and keeps account details out of history", async () => {
-    const f = fixture(tenant({ "/beta/identityGovernance/termsOfUse/agreements": refusal(403, "Authorization_RequestDenied", "private-admin@example.test") }), {
-      graphCliGrant: () => undefined,
-    })
-    const job = await f.run({ clientId })
-    expect(outcomeOf(job, "TermsOfUseAgreements")).toMatchObject({ outcome: "failed", status: 403 })
-    expect(JSON.stringify(await f.manifest(job))).not.toContain("private-admin@example.test")
-    expect(job.coverage).toBe("incomplete")
   })
 })

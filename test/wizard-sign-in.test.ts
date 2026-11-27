@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { StagedSignIn } from "../src/main/auth/tenant-connections"
 import { WizardSignIn } from "../src/main/auth/wizard-sign-in"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 
 const TENANT = "39cc968d-dd54-4f13-815b-ebbcff25e104"
+const OTHER = "44444444-4444-4444-8444-444444444444"
 const CHOICE = { intune: { access: "restore" } }
 const account = (clientId: string) => ({ tenantId: TENANT, clientId, homeAccountId: "internal", username: "admin@example.test" })
 
@@ -11,8 +12,8 @@ function fixture() {
   const host = {
     connected: vi.fn((_tenant: string) => false),
     enabled: vi.fn(async () => true),
-    stage: vi.fn(async (_tenant, method): Promise<StagedSignIn> => ({
-      account: account(method === "graphCli" ? GRAPH_CLI_CLIENT_ID : TENUVAULT_CLIENT_ID),
+    stage: vi.fn(async (_tenant?: string, _method?: "tenuvaultApp", _choice?: unknown): Promise<StagedSignIn> => ({
+      account: account(TENUVAULT_CLIENT_ID),
       accessToken: "opaque",
       idToken: "id-proof",
       grantedScopes: ["User.Read", "Organization.Read.All", "DeviceManagementConfiguration.Read.All"],
@@ -30,16 +31,15 @@ function fixture() {
 afterEach(() => vi.useRealTimers())
 
 describe("staged wizard sign-in", () => {
-  it.each(["graphCli", "tenuvaultApp"] as const)("reads the tenant name using the staged %s bearer", async method => {
+  it("reads the tenant name using the staged TenuVault app bearer", async () => {
     const { host, wizard } = fixture()
-    const staged = await wizard.stage("", method, CHOICE)
+    const staged = await wizard.stage("", "tenuvaultApp", CHOICE)
     expect(staged).toMatchObject({ result: { organizationName: "Contoso Ltd" } })
     if ("result" in staged) {
       const { id } = staged.result
       expect(wizard.azureStorageSignIn("wrong-id", TENANT)).toBeUndefined()
-      expect(wizard.azureStorageSignIn(id, GRAPH_CLI_CLIENT_ID)).toBeUndefined()
-      if (method === "tenuvaultApp") expect(wizard.azureStorageSignIn(id, TENANT)?.account.clientId).toBe(TENUVAULT_CLIENT_ID)
-      else expect(wizard.azureStorageSignIn(id, TENANT)).toBeUndefined()
+      expect(wizard.azureStorageSignIn(id, OTHER)).toBeUndefined()
+      expect(wizard.azureStorageSignIn(id, TENANT)?.account.clientId).toBe(TENUVAULT_CLIENT_ID)
       wizard.discard(id)
       expect(wizard.azureStorageSignIn(id, TENANT)).toBeUndefined()
     }
@@ -52,45 +52,27 @@ describe("staged wizard sign-in", () => {
 
   it.each([
     () => new Response(null, { status: 403 }),
-    () => Response.json({ value: [{ id: GRAPH_CLI_CLIENT_ID, displayName: "Another tenant" }] }),
+    () => Response.json({ value: [{ id: OTHER, displayName: "Another tenant" }] }),
   ])("falls back to the signed-in tenant ID if its organization name is unavailable", async reply => {
     const { host, wizard } = fixture()
     host.fetch.mockImplementationOnce(async () => reply())
-    const staged = await wizard.stage("", "graphCli", CHOICE)
+    const staged = await wizard.stage("", "tenuvaultApp", CHOICE)
     expect(staged).toMatchObject({ result: { account: { tenantId: TENANT }, organizationName: undefined } })
   })
 
-  it("previews Start now without publishing a profile, then saves a backup-only choice", async () => {
-    const { host, wizard } = fixture()
-    const staged = await wizard.stage(TENANT, "graphCli", undefined)
-    expect(staged).toMatchObject({ result: { coverage: [
-      { service: "entra", readable: null }, { service: "intune", readable: null },
-    ] } })
-    expect(JSON.stringify(staged)).not.toMatch(/id-proof|staged-cache|homeAccountId/)
-    expect(host.enroll).not.toHaveBeenCalled()
-    expect(wizard.trialContactProof(TENANT)).toBe("id-proof")
-    const id = "result" in staged ? staged.result.id : ""
-    expect(await wizard.finish(id, "profile", CHOICE)).toEqual({ result: true })
-    expect(host.enroll).toHaveBeenCalledWith(expect.objectContaining({ method: "graphCli" }), "profile", { intune: { access: "backup" } })
-    await expect(wizard.finish(id, "profile", CHOICE)).resolves.toMatchObject({ error: { code: "sign_in_required" } })
-    expect(host.enroll).toHaveBeenCalledOnce()
-    expect(host.releaseLicense).not.toHaveBeenCalled()
-    expect(wizard.trialContactProof(TENANT)).toBeUndefined()
-  })
-
-  it.each(["graphCli", "tenuvaultApp"] as const)("leaves no organization activation after quitting %s before Storage", async method => {
+  it("leaves no organization activation after quitting TenuVault app before Storage", async () => {
     const { host, wizard } = fixture()
     // The service keeps the slot across app restarts, while the staged proof was in process memory.
     const slots = new Set<string>()
     host.checkLicense.mockImplementation(async () => { slots.add(TENANT) })
-    const staged = await wizard.stage(TENANT, method, CHOICE)
+    const staged = await wizard.stage(TENANT, "tenuvaultApp", CHOICE)
     expect(staged).toHaveProperty("result.id")
     const id = "result" in staged ? staged.result.id : ""
     const restarted = new WizardSignIn(host)
     await expect(restarted.finish(id, "profile", CHOICE)).resolves.toMatchObject({ error: { code: "sign_in_required" } })
     expect(slots.size).toBe(0)
     expect(host.checkLicense).not.toHaveBeenCalled()
-    const resumed = await restarted.stage(TENANT, method, CHOICE)
+    const resumed = await restarted.stage(TENANT, "tenuvaultApp", CHOICE)
     expect("result" in resumed && await restarted.finish(resumed.result.id, "profile", CHOICE)).toEqual({ result: true })
     expect(host.checkLicense).toHaveBeenCalledOnce()
     expect(slots.has(TENANT)).toBe(true)
@@ -101,7 +83,7 @@ describe("staged wizard sign-in", () => {
     const staged = await wizard.stage(TENANT, "tenuvaultApp", CHOICE)
     const id = "result" in staged ? staged.result.id : ""
     expect(host.checkLicense).not.toHaveBeenCalled()
-    await expect(wizard.checkAzureStorageLicense(id, GRAPH_CLI_CLIENT_ID)).rejects.toThrow("Sign in again")
+    await expect(wizard.checkAzureStorageLicense(id, OTHER)).rejects.toThrow("Sign in again")
     await wizard.checkAzureStorageLicense(id, TENANT)
     expect(host.checkLicense).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ idToken: "id-proof" }))
     await wizard.discard(id)
@@ -122,16 +104,16 @@ describe("staged wizard sign-in", () => {
   it("rejects a mismatched or connected tenant and a disabled method before enrolling", async () => {
     const { host, wizard } = fixture()
     host.connected.mockReturnValueOnce(true)
-    expect(await wizard.stage(TENANT, "graphCli", undefined)).toMatchObject({ error: { code: "conflict" } })
+    expect(await wizard.stage(TENANT, "tenuvaultApp", CHOICE)).toMatchObject({ error: { code: "conflict" } })
     expect(host.stage).not.toHaveBeenCalled()
     host.enabled.mockResolvedValueOnce(false)
-    expect(await wizard.stage(TENANT, "graphCli", undefined)).toMatchObject({ error: { code: "unavailable" } })
+    expect(await wizard.stage(TENANT, "tenuvaultApp", CHOICE)).toMatchObject({ error: { code: "unavailable" } })
     expect(host.stage).not.toHaveBeenCalled()
     host.stage.mockResolvedValueOnce({
-      account: { ...account(GRAPH_CLI_CLIENT_ID), tenantId: "different" },
+      account: { ...account(TENUVAULT_CLIENT_ID), tenantId: "different" },
       accessToken: "opaque", idToken: "proof", grantedScopes: [], cacheWrites: () => ({ key: "discarded-cache" }),
     })
-    expect(await wizard.stage(TENANT, "graphCli", undefined)).toMatchObject({ error: { code: "wrong_tenant" } })
+    expect(await wizard.stage(TENANT, "tenuvaultApp", CHOICE)).toMatchObject({ error: { code: "wrong_tenant" } })
     expect(host.checkLicense).not.toHaveBeenCalled()
     expect(host.enroll).not.toHaveBeenCalled()
   })
@@ -139,8 +121,8 @@ describe("staged wizard sign-in", () => {
   it("rejects a duplicate found after resolving the signed-in tenant", async () => {
     const { host, wizard } = fixture()
     host.connected.mockImplementation(tenant => tenant === TENANT)
-    expect(await wizard.stage("", "graphCli", undefined)).toMatchObject({ error: { code: "conflict" } })
-    expect(host.stage).toHaveBeenCalledWith("organizations", "graphCli", undefined)
+    expect(await wizard.stage("", "tenuvaultApp", CHOICE)).toMatchObject({ error: { code: "conflict" } })
+    expect(host.stage).toHaveBeenCalledWith("organizations", "tenuvaultApp", CHOICE)
     expect(host.connected).toHaveBeenCalledWith(TENANT)
     expect(host.startTrial).not.toHaveBeenCalled()
     expect(host.enroll).not.toHaveBeenCalled()
@@ -187,24 +169,10 @@ describe("staged wizard sign-in", () => {
     }), "profile", choice)
   })
 
-  it("rejects Start now at finish when none of the final choices can be read", async () => {
-    const { host, wizard } = fixture()
-    host.stage.mockResolvedValueOnce({
-      ...(await host.stage(TENANT, "graphCli")),
-      graphScopes: ["DeviceManagementConfiguration.Read.All"],
-    })
-    const staged = await wizard.stage(TENANT, "graphCli", undefined)
-    expect(staged).toHaveProperty("result.id")
-    const id = "result" in staged ? staged.result.id : ""
-    await expect(wizard.finish(id, "profile", { entra: { access: "backup" } })).resolves.toMatchObject({ error: { code: "AADSTS65001" } })
-    expect(host.checkLicense).not.toHaveBeenCalled()
-    expect(host.enroll).not.toHaveBeenCalled()
-  })
-
   it("rechecks the flag at storage and expires staged sign-ins", async () => {
     vi.useFakeTimers()
     const { host, wizard } = fixture()
-    const staged = await wizard.stage(TENANT, "graphCli", undefined)
+    const staged = await wizard.stage(TENANT, "tenuvaultApp", CHOICE)
     const id = "result" in staged ? staged.result.id : ""
     host.enabled.mockResolvedValueOnce(false)
     expect(await wizard.finish(id, "profile", CHOICE)).toMatchObject({ error: { code: "unavailable" } })

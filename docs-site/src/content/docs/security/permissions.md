@@ -3,27 +3,13 @@ title: "App registration and delegated permissions"
 description: The app registration TenuVault signs in with, every delegated permission it requests, and why.
 ---
 
-This page covers Start now and the app registration that you create in your own tenant.
+This page covers the TenuVault app and the app registration that you create in your own tenant.
 
 For the step-by-step setup, see [Create the app registration](/getting-started/app-registration/).
 
-## Start now permissions
-
-Start now uses Microsoft Graph Command Line Tools and requests the Microsoft Graph `.default` scope. TenuVault uses the delegated scopes in the access token to show which Entra ID and Intune backup types those scopes cover. For an opaque token, an explicit grant in the token response can provide the evidence. Without that evidence coverage is unknown. The scopes requested during sign-in do not establish coverage.
-
-Start now requires a Microsoft browser session and existing consent. It stops if Microsoft requires approval or another sign-in step. Start now permits Graph reads and uses encrypted backups on this device. Microsoft Graph write calls are blocked even when the granted scopes include write access. Azure Storage, Azure Resource Manager and Win32 installer capture require a different sign-in method.
-
-Start now allows outbound alerts to Teams Workflows and webhook URLs configured by the admin, while email alerts require a different sign-in method because sending through Microsoft Graph is a write.
-
-If Start now lacks access for Conditional Access change watching, the Alerts and Change watching tabs show the available sign-in options.
-
-Organization license sharing requires the key holder to allow Start now sign-ins explicitly. The normal tenant trial flow uses the Microsoft ID token for the tenant.
-
-[Microsoft identity platform scope reference](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-default-scope)
-
 ## TenuVault app permission packs
 
-The TenuVault app is coming in a later release. Its planned sign-in basics are `openid`, `profile`, `offline_access`, `User.Read` and `Organization.Read.All`. The desktop client defines the following permission packs for separate administrator approval, with read-only backup access and optional restore access per service.
+The TenuVault app's sign-in basics are `openid`, `profile`, `offline_access`, `User.Read` and `Organization.Read.All`. The desktop client defines the following permission packs for separate administrator approval, with read-only backup access and optional restore access per service.
 
 Service restore packs include the read access needed for backup. A read/write scope stands in for its read alternative where the manifest permits it.
 

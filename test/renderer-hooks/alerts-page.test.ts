@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 import type { NotificationRule, NotificationsStatus, PublicChannel, WatcherDeployView } from "../../src/renderer/features/notifications/api"
-import { GRAPH_CLI_CLIENT_ID } from "../../src/shared/tenant-connection"
 import { optionalPermissionStatus, type OptionalPermissionId } from "../../src/shared/services/optional-permissions"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -97,19 +96,6 @@ describe("the Alerts page", () => {
     const hub = HUBS.find((entry) => entry.id === "alerts")!
     expect(hub.tabs.map((tab) => tab.id)).toEqual(["alerts", "channels", "watching", "deliveries"])
     expect(new Set(hub.tabs.map((tab) => tab.feature))).toEqual(new Set(["notifications"]))
-  })
-
-  it.each([
-    ["Alerts", AlertsTab], ["Channels", ChannelsTab], ["Change watching", WatchingTab],
-  ] as const)("offers sign-in upgrades on %s for Start now", async (_label, tab) => {
-    permissionState.scopes = ["Policy.Read.All"]
-    state.status = { ...empty, channels: [{ ...teams, kind: "email", recipients: [{ type: "address", address: "ops@example.test" }] }] }
-    const startNow = { ...tenant, credentials: { ...tenant.credentials!, appId: GRAPH_CLI_CLIENT_ID } }
-    const container = await render(tab, true, "/portal/alerts", startNow)
-    const links = [...container.querySelectorAll("a")].filter(link => link.textContent === "Review sign-in options")
-    expect(links.length).toBeGreaterThan(0)
-    expect(links.every(link => link.getAttribute("href")?.includes("section=signin#sign-in-"))).toBe(true)
-    expect(container.textContent).not.toContain("grant admin consent")
   })
 
   it("lets a first alert start without a channel: the dialog adds one", async () => {

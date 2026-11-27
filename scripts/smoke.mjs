@@ -566,7 +566,7 @@ await check("Community users can reach the tenant sign-in without a key", async 
     assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `${name} scrolls: ${JSON.stringify(overflow)}`)
   }
   assert(await waitForText("How do you want to connect?"), "method choice missing")
-  assert(await evaluate(`[...document.querySelectorAll("[data-sign-in-method]")].map(card => card.getAttribute("aria-label").replace("Choose ", "")).join("|") === "Start now|TenuVault app|Your own app registration"`), "sign-in method order is wrong")
+  assert(await evaluate(`[...document.querySelectorAll("[data-sign-in-method]")].map(card => card.getAttribute("aria-label").replace("Choose ", "")).join("|") === "TenuVault app|Your own app registration"`), "sign-in method order is wrong")
   await assertFit("Sign-in method cards")
   await screenshot("00b-setup-connect")
   await evaluate(`document.querySelector('[data-sign-in-method="ownApp"]').click()`)

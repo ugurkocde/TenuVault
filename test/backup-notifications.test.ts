@@ -90,6 +90,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     notifyFailure: (tenantId: string, name: string, message: string, trigger: Trigger) => notifyBackupFailure({ tenantId, name }, message, trigger, () => null),
     // Notification channel events are covered by the notifications suites; here they are inert.
     emitBackupOutcome: vi.fn(async () => ({ created: 0, localCreated: false })),
+    connections: { needsSignInMethod: () => false },
     featureDeps: {},
   }
   const run = new Function(...Object.keys(dependencies), transformSync(source, { loader: "ts" }).code + "\nreturn runScheduledBackup;")(

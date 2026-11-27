@@ -27,8 +27,6 @@ With every service and opt-in area selected, TenuVault backs up 54 types. Open *
 
 **Backup Details** counts the selected types that were read in full in that backup, including permission skips in the total selected. **Run status** shows **Finished** when the run ended with incomplete coverage and **Complete** when full coverage is recorded. An empty list or an unset configuration counts as read. A partial read can still show how many policies were saved. **Not included** means the backup scope left the type out. **Unknown** means the read or coverage could not be confirmed. Expand **Coverage details** to see the affected types and any known reason.
 
-With **Start now**, if your sign-in has the Intune configuration read permission but access to individual device configuration profiles is denied, TenuVault continues backing up the remaining profiles and types. **Backup Details** reports the incomplete coverage.
-
 ## How to read the tables
 
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).

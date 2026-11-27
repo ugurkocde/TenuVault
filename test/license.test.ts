@@ -1,5 +1,5 @@
 import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { prepareScheduledCoverage } from "../src/main/backup/schedule-prepare"
 import { BackupScheduler } from "../src/main/backup/scheduler"
 import { createHash, generateKeyPairSync, sign } from "node:crypto"
@@ -1237,30 +1237,7 @@ describe("LicenseService organization licenses", () => {
     expect(calls.at(-1)!.body.shareWithTenant).toBe(true)
   })
 
-  it.each([false, true])("uses public Graph CLI proof for organization activation only when the key holder allows it (%s)", async allowed => {
-    answer = ({ action, body }) => {
-      if (action === "health") return Response.json({ organizationLicenses: { clientIdSets: true }, connectMethods: { graphCli: true } })
-      expect(body).toMatchObject({ action: "activate", publicClientProof: "id.token.value" })
-      expect(body).not.toHaveProperty("idToken")
-      expect(body).not.toHaveProperty("allowGraphCli")
-      return allowed ? granted("act-org", { source: "tenant" }) : denied("tenant_not_licensed")
-    }
-    const license = service({ clientId: () => GRAPH_CLI_CLIENT_ID })
-    await expect(license.requireEntitlement(TENANT)).resolves.toBe(allowed ? "pro" : "community")
-    expect(license.status([TENANT]).tenants[0]?.source).toBe(allowed ? "tenant" : null)
-  })
-
-  it("does not pass the Graph CLI proof to legacy organization activation", async () => {
-    answer = ({ action }) => {
-      expect(action).toBe("health")
-      return Response.json({ connectMethods: { graphCli: true } })
-    }
-    const license = service({ clientId: () => GRAPH_CLI_CLIENT_ID })
-    await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
-    expect(calls.map(call => call.action)).toEqual(["health"])
-  })
-
-  it("sends the tenant's client ID set and requires explicit key-holder authorization for Start now", async () => {
+  it("sends the tenant's client ID set without Start now fields when sharing", async () => {
     answer = ({ action, body }) => {
       if (action === "health") return Response.json({ organizationLicenses: { clientIdSets: true } })
       if (action === "activate") return granted("act-key", { shared: false })
@@ -1271,19 +1248,15 @@ describe("LicenseService organization licenses", () => {
     expect(calls.map(call => call.action)).toEqual(["health", "activate"])
     expect(calls.at(-1)?.body).toMatchObject({ clientId: TENUVAULT_CLIENT_ID, publicClientProof: "id.token.value", allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
     expect(calls.at(-1)?.body).not.toHaveProperty("idToken")
-    await license.setShared(TENANT, true, true)
-    expect(calls.at(-1)?.body).toMatchObject({ allowGraphCli: true, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID] })
-    expect(license.status([TENANT]).tenants[0]?.graphCliShared).toBe(true)
+    expect(calls.at(-1)?.body).not.toHaveProperty("allowGraphCli")
+    await license.setShared(TENANT, true)
+    expect(calls.at(-1)?.body).toMatchObject({ allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
+    expect(calls.at(-1)?.body).not.toHaveProperty("allowGraphCli")
     await license.refreshAll()
     expect(calls.findLast(call => call.action === "refresh")?.body).not.toHaveProperty("allowGraphCli")
-    await license.setShared(TENANT, true, false)
-    expect(calls.at(-1)?.body).toMatchObject({ allowGraphCli: false, allowedClientIds: [APP_ID, TENUVAULT_CLIENT_ID] })
-    expect(license.status([TENANT]).tenants[0]?.graphCliShared).toBe(false)
-    answer = () => granted("act-key", { shared: true })
-    await expect(license.setShared(TENANT, true, true)).rejects.toThrow("did not confirm")
   })
 
-  it.each([GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID])("uses the legacy contract without replacing an own registration after changing to %s", async publicClient => {
+  it("uses the legacy contract without replacing an own registration after changing to the TenuVault app", async () => {
     let registeredClient: unknown
     let clientId = APP_ID
     answer = ({ action, body }) => {
@@ -1298,16 +1271,13 @@ describe("LicenseService organization licenses", () => {
     const license = service({ clientId: () => clientId, ownClientId: () => APP_ID })
     await license.setKey("TEST-LICENSE-KEY", [TENANT])
     expect(calls.at(-1)?.body).toMatchObject({ clientId: APP_ID, idToken: "id.token.value" })
-    clientId = publicClient
+    clientId = TENUVAULT_CLIENT_ID
     await license.refreshAll()
     expect(calls.at(-1)?.body).toMatchObject({ shareWithTenant: true })
     expect(calls.at(-1)?.body).not.toHaveProperty("idToken")
     expect(calls.at(-1)?.body).not.toHaveProperty("clientId")
     expect(registeredClient).toBe(APP_ID)
     expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: true, shared: true })
-    const count = calls.length
-    await expect(license.setShared(TENANT, true, true)).rejects.toThrow("does not support Start now sharing")
-    expect(calls).toHaveLength(count)
   })
 
   it("keeps the existing organization activation until the key holder shares the replacement registration", async () => {
@@ -1369,7 +1339,7 @@ describe("LicenseService organization licenses", () => {
     }
     const license = service({ clientId: () => clientId, ownClientId: () => APP_ID })
     await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
-    clientId = GRAPH_CLI_CLIENT_ID
+    clientId = TENUVAULT_CLIENT_ID
     await license.refreshAll()
     expect(calls.map(call => call.action)).toEqual(["health", "tenant"])
     expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: true, source: "tenant" })
@@ -2563,48 +2533,33 @@ it("does not apply a refused candidate key's cooldown to the saved key after rol
 describe("Desktop build sign-in availability", () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it("keeps the TenuVault app disabled even when health enables it", async () => {
-    const fetch = vi.fn(async () => Response.json({ connectMethods: { graphCli: true, tenuvaultApp: true } }))
-    const licensing = service({ fetch })
-    expect(await licensing.connectMethodEnabled("graphCli")).toBe(true)
-    expect(await licensing.tenuvaultAppEnabled(true)).toBe(false)
-    expect(licensing.connectMethodEnabledNow("tenuvaultApp")).toBe(false)
-  })
-
-  it.each([false, true])("checks health even with a signed-in profile (lab build: %s)", async lab => {
+  it.each([false, true])("gates the TenuVault app by server health on stable and lab builds (lab build: %s)", async lab => {
     vi.stubGlobal("__TV_LAB_BUILD__", lab)
     let enabled = false
-    const fetch = vi.fn(async () => Response.json({ connectMethods: { graphCli: enabled, tenuvaultApp: enabled } }))
-    for (const [method, clientId] of [["graphCli", GRAPH_CLI_CLIENT_ID], ["tenuvaultApp", TENUVAULT_CLIENT_ID]] as const) {
-      enabled = false
-      const licensing = service({ fetch, clientId: () => clientId })
-      const gate = new ConnectionCapabilities(
-        () => ({ version: 1, method, clientId, origin: "wizard", createdAt: "", updatedAt: "" }),
-        () => [],
-        (method, fresh) => licensing.connectMethodEnabled(method, fresh),
-        method => licensing.connectMethodEnabledNow(method),
-      )
-      expect(await licensing.connectMethodEnabled(method)).toBe(false)
-      await expect(gate.requireConnectionEnabled(TENANT, clientId)).rejects.toThrow("currently unavailable")
-      enabled = true
-      const allowed = method === "graphCli" || lab
-      expect(await licensing.connectMethodEnabled(method, true)).toBe(allowed)
-      if (allowed) {
-        await expect(gate.requireConnectionEnabled(TENANT, clientId)).resolves.toBeUndefined()
-        const url = new URL("https://graph.microsoft.com/beta/me")
-        gate.requireIssuedToken(TENANT, clientId, "https://graph.microsoft.com/.default", "fixture-token")
-        const request = await gate.authorizeRequest(url, url, { headers: { Authorization: "Bearer fixture-token" } }, TENANT)
-        expect(request?.beforeDispatch).toBeTypeOf("function")
-        expect(() => request?.beforeDispatch?.()).not.toThrow()
-        enabled = false
-        await expect(gate.authorizeRequest(url, url, { headers: { Authorization: "Bearer fixture-token" } }, TENANT))
-          .rejects.toThrow("currently unavailable")
-        expect(() => request?.beforeDispatch?.()).toThrow("currently unavailable")
-      } else {
-        await expect(gate.requireConnectionEnabled(TENANT, clientId)).rejects.toThrow("currently unavailable")
-        expect(licensing.connectMethodEnabledNow(method)).toBe(false)
-      }
-    }
+    const fetch = vi.fn(async () => Response.json({ connectMethods: { tenuvaultApp: enabled } }))
+    const licensing = service({ fetch, clientId: () => TENUVAULT_CLIENT_ID })
+    const gate = new ConnectionCapabilities(
+      () => ({ version: 1, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, origin: "wizard", createdAt: "", updatedAt: "" }),
+      () => [],
+      fresh => licensing.connectMethodEnabled("tenuvaultApp", fresh),
+      () => licensing.connectMethodEnabledNow("tenuvaultApp"),
+    )
+    expect(await licensing.tenuvaultAppEnabled(true)).toBe(false)
+    expect(licensing.connectMethodEnabledNow("tenuvaultApp")).toBe(false)
+    await expect(gate.requireConnectionEnabled(TENANT, TENUVAULT_CLIENT_ID)).rejects.toThrow("temporarily unavailable")
+    enabled = true
+    expect(await licensing.tenuvaultAppEnabled(true)).toBe(true)
+    expect(licensing.connectMethodEnabledNow("tenuvaultApp")).toBe(true)
+    await expect(gate.requireConnectionEnabled(TENANT, TENUVAULT_CLIENT_ID)).resolves.toBeUndefined()
+    const url = new URL("https://graph.microsoft.com/beta/me")
+    gate.requireIssuedToken(TENANT, TENUVAULT_CLIENT_ID, "https://graph.microsoft.com/.default", "fixture-token")
+    const request = await gate.authorizeRequest(url, url, { headers: { Authorization: "Bearer fixture-token" } }, TENANT)
+    expect(request?.beforeDispatch).toBeTypeOf("function")
+    expect(() => request?.beforeDispatch?.()).not.toThrow()
+    enabled = false
+    await expect(gate.authorizeRequest(url, url, { headers: { Authorization: "Bearer fixture-token" } }, TENANT))
+      .rejects.toThrow("temporarily unavailable")
+    expect(() => request?.beforeDispatch?.()).toThrow("temporarily unavailable")
   })
 })
 
@@ -2635,17 +2590,6 @@ describe("tenant hashes on the license wire", () => {
         expect(body).not.toHaveProperty("tenantIdHash")
       }
     }
-  })
-
-  it("pairs the organization hash with the public-client proof", async () => {
-    answer = ({ action }) => action === "health"
-      ? Response.json({ organizationLicenses: { clientIdSets: true, tenantIdHashes: true } })
-      : granted("act-1")
-    const licensing = service({ clientId: () => GRAPH_CLI_CLIENT_ID, idTokenValue: "fresh.signed.token" })
-    await expect(licensing.requireEntitlement(TENANT)).resolves.toBe("pro")
-    expect(calls.find(call => call.action === "tenant")?.body).toMatchObject({
-      tenantIdHash: digest, publicClientProof: "fresh.signed.token", action: "activate",
-    })
   })
 
   it("loads organization health before sending the TenuVault app's first tenant proof", async () => {

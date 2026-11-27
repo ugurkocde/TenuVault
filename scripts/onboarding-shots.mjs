@@ -92,11 +92,10 @@ const MAIN_OVERRIDES = `(() => {
   }))
   handle("auth:connection", () => ({ tenantId: M.accounts[0].tenantId, clientId: "${restoreAppId}", graphScopes: [] }))
   handle("auth:savedDirectoryRestores", () => ({ owner: "Contoso Admin", pages: [] }))
-  handle("auth:graphCliAvailable", () => true)
   handle("auth:tenuvaultAppAvailable", () => scene !== "02-connect")
   handle("auth:wizardStage", (_tenantId, _method, choice) => scene.endsWith("-wait") ? pending() : ({ result: {
     id: "contoso-sign-in",
-    account: { ...M.accounts[0], clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e" },
+    account: { ...M.accounts[0], clientId: "${restoreAppId}" },
     organizationName: M.tenants[0].name,
     coverage: coverage({ ...choice, entra: true }),
     missing: ["Agreement.Read.All"],
@@ -204,10 +203,8 @@ const scenes = [
 const extended = [
   ["00-welcome", "Welcome to TenuVault."],
   ["07-restore-access", "Intune restore access prompt."],
-  ["08-start-now", "Sign in with the access already available."],
   ["09-tenuvault-app", "Sign in with the TenuVault app."],
   ["10-own-registration", "Create an app registration."],
-  ["11-start-now-wait", "Wait for Start now sign-in in the browser."],
   ["12-tenuvault-app-wait", "Wait for the TenuVault app sign-in in the browser."],
   ["13-own-registration-wait", "Wait for the registration setup sign-in."],
   ["14-check-wait", "Check backup access."],
@@ -220,10 +217,9 @@ const extended = [
   ["21-own-routes", "Find other ways to set up an app registration."],
   ["22-help", "Find setup and support actions."],
   ["23-check-partial-expanded", "Review which backup areas need access."],
-  ["24-start-now-storage", "Choose local storage for Start now."],
   ["25-tenuvault-app-permissions", "Review permissions and open admin consent."],
   ["26-needs-access", "Find services that need access in the sidebar."],
-  ["27-methods-available", "Compare all three connection methods."],
+  ["27-methods-available", "Compare both connection methods."],
   ["28-setup-file", "Sign in with the registration from an imported setup file."],
   ["29-different-tenant", "Enter a different tenant ID or domain."],
   ["30-own-setup-details", "Review what creating an app registration does."],
@@ -352,20 +348,16 @@ try {
         } else if (state === "22-help" && !baseline) {
           await evaluate(`document.querySelector('nav[aria-label="Help"] button').dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))`)
           await showing("Support")
-        } else if (["08-start-now", "11-start-now-wait", "16-check-partial", "23-check-partial-expanded", "24-start-now-storage", "29-different-tenant", "31-check-permission-names"].includes(state)) {
-          await click("Choose Start now")
+        } else if (["16-check-partial", "23-check-partial-expanded", "29-different-tenant", "31-check-permission-names"].includes(state)) {
+          await click("Choose TenuVault app")
           await showing("Sign in with Microsoft")
           if (state === "29-different-tenant") await disclose(baseline ? "Setting up a different tenant?" : "Different tenant?")
-          else if (!state.startsWith("08")) await click("Sign in with Microsoft")
-          if (state.endsWith("-wait")) await showing("Finish signing in in your browser")
-          if (partial || state === "24-start-now-storage") {
+          else await click("Sign in with Microsoft")
+          if (partial) {
             await showing("Also back up Entra ID device and access settings")
             await evaluate(`document.querySelector('input[role="switch"][aria-label^="Also back up Entra ID"]').click()`)
             await showing("Needs access")
-            if (state === "24-start-now-storage") {
-              await click("Continue with Intune and Entra ID")
-              await showing("This device, encrypted")
-            } else if (expanded) {
+            if (expanded) {
               await disclose("Details")
               if (state === "31-check-permission-names") await disclose("Show permission names")
             }

@@ -6,7 +6,7 @@ import { healthScene, HEALTH_TENANT } from "../fixtures/services-health"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
 import type { DashboardBackup, TenantDashboardStats } from "../../src/portal/hooks/dashboard/useDashboardStats"
-import { GRAPH_CLI_CLIENT_ID } from "../../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
 
 const mocks = vi.hoisted(() => ({ report: vi.fn(), stats: null as TenantDashboardStats | null, scheduled: true }))
 const tenant = {
@@ -94,7 +94,7 @@ describe("first-run Dashboard", () => {
   function prepare() {
     mocks.scheduled = false
     mocks.report.mockResolvedValue(healthScene("entra-all-areas"))
-    tenant.credentials!.appId = GRAPH_CLI_CLIENT_ID
+    tenant.credentials!.appId = TENUVAULT_CLIENT_ID
     mocks.stats = stats
     const container = document.body.appendChild(document.createElement("div"))
     root = createRoot(container)
@@ -108,17 +108,11 @@ describe("first-run Dashboard", () => {
     expect(hero.textContent).toContain("214 policies from Intune and Entra ID")
     expect(hero.querySelector('a[href="/portal/backup?tab=schedule"]')?.textContent).toBe("Turn on daily backups")
     expect(hero.querySelector('a[href="/portal/backup?backup=backup-first"]')?.textContent).toBe("View backup")
-    expect(hero.querySelector('a[href^="/portal/settings?section=services"]')?.textContent).toBe("Add more coverage")
     const backup = container.querySelector('[aria-label="Last backup"]')!
     expect(backup.textContent).toContain("Coverage incomplete")
     expect(backup.textContent).toContain("Tenant Health: Needs access")
     expect(backup.textContent).not.toContain("Critical")
     expect(container.querySelector('[aria-label="Next Backup"]')?.textContent).toContain("No schedule yet")
-    await act(async () => hero.querySelector<HTMLButtonElement>('[aria-label="Dismiss coverage message"]')!.click())
-    expect(hero.textContent).toContain("Your first backup is done")
-    expect(hero.textContent).not.toContain("Add more coverage")
-    await mount(container, "reopened")
-    expect(container.textContent).not.toContain("Add more coverage")
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Dismiss first backup message"]')!.click())
     await mount(container, "dismissed")
     expect(container.textContent).not.toContain("Your first backup is done")

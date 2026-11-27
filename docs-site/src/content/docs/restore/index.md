@@ -73,8 +73,8 @@ Click a backup to continue.
 
 If the selected backup contains supported policies that need restore access, TenuVault shows the next action:
 
+* **TenuVault app.** Approve the restore permission pack for the service when prompted, then select **Check again**.
 * **Your own app registration.** Open **Details** on the restore access notice to review the missing permissions and use the in-app update, CLI commands or manual instructions for that registration. Select **Check again** after the permissions are granted.
-* **Start now.** Select **Use your own app registration** in **Settings > Sign-in and access** and add restore access for the service.
 
 TenuVault reads the backup (**Reading the backup...**) and lists its items grouped by area (for example **Device configuration**, **Compliance**, **Apps**) and then by type.
 

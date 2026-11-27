@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 import { ServiceBackupNotice } from "../../src/renderer/components/ServiceBackupNotice"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
 import { healthFixture } from "../fixtures/services-health"
 import { MODULE_BY_ID, MODULES, type ModuleId, type ServiceModule } from "../../src/shared/services/modules"
 
@@ -109,21 +109,9 @@ describe("The scope picker follows the tenant's selection", () => {
 })
 
 describe("Tenant backup coverage", () => {
-  it("shows license and setup guidance for Start now without a sign-in upgrade link", async () => {
-    state.report.mockResolvedValue({
-      ...answer(), clientId: GRAPH_CLI_CLIENT_ID,
-      coverage: [{ service: "entra", folders: ["TermsOfUseAgreements"], readable: [], issues: { TermsOfUseAgreements: "license" } }],
-    })
-    const container = mount(createElement(ServiceBackupNotice, { tenantId: TENANT, showCoverage: true }))
-    await act(async () => undefined)
-    expect(container.textContent).toContain("Check the service license and setup in Microsoft 365.")
-    expect(container.querySelector("a")).toBeNull()
-  })
-
   it.each([
     ["22222222-2222-2222-2222-222222222222", "Add access", `/portal/settings?section=services&tenant=${TENANT}`],
     [TENUVAULT_CLIENT_ID, "Add access", `/portal/settings?section=signin&pack=conditionalAccess-backup#sign-in-${TENANT}`],
-    [GRAPH_CLI_CLIENT_ID, "Add access", `/portal/settings?section=signin#sign-in-${TENANT}`],
   ])("shows each coverage state and the action for %s", async (clientId, label, href) => {
     state.report.mockResolvedValue({
       ...answer(), clientId,

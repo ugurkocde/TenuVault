@@ -8,11 +8,10 @@ import { SecureStore } from "../src/main/storage/secure-store"
 import { ModuleSettings } from "../src/main/services/settings"
 import { TenantConnections, TENANT_LIST_KEY, type StagedSignIn } from "../src/main/auth/tenant-connections"
 import { accountStore, connectionCache, publicAccountKey, stageConnectionCache } from "../src/main/auth/stores"
-import { CONNECTION_WRITE_REFUSED, GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type SignInMethod, type TenantConnection } from "../src/shared/tenant-connection"
-import { graphCliCoverage } from "../src/shared/services/graph-cli-coverage"
+import { CONNECTION_WRITE_REFUSED, SETUP_HELPER_CLIENT_ID, START_NOW_REMOVED_REASON, TENUVAULT_CLIENT_ID, type SignInMethod, type TenantConnection } from "../src/shared/tenant-connection"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
-import { connectionChoice, connectionCoverage, verifyGraphCliGrant } from "../src/main/auth/connection-coverage"
-import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
+import { connectionChoice, connectionCoverage } from "../src/main/auth/connection-coverage"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { executionMetadata } from "../src/main/api/execution-metadata"
 import { ApiHost } from "../src/main/api/host"
@@ -53,7 +52,7 @@ function fixture() {
   const now = vi.fn(() => new Date(NOW))
   const tokenFile = join(dir, "token-cache.bin")
   const legacyCache = new SecureStore(tokenFile, cipher)
-  const connectionHost = { store, legacyCache, signIn: { ownApp: signIn, graphCli: signIn, tenuvaultApp: signIn }, coverage, now }
+  const connectionHost = { store, legacyCache, signIn: { ownApp: signIn, tenuvaultApp: signIn }, coverage, now }
   const connections = new TenantConnections(connectionHost)
   const entries = () => Object.fromEntries(store.keys().map(key => [key, store.get(key)]))
   const enroll = () => connections.enroll(TENANT, { method: "ownApp", clientId: OWN }, raw, staged(OWN))
@@ -187,37 +186,33 @@ describe("in-place sign-in change", () => {
     expect(f.entries()).toMatchObject(preserved)
     f.connections.saveProfiles(raw)
     expect(JSON.parse(f.store.get(TENANT_LIST_KEY)!)[0].credentials.appId).toBe(OWN)
-    await expect(f.connections.switch(TENANT, { method: "graphCli" })).resolves.toMatchObject({ connection: { clientId: GRAPH_CLI_CLIENT_ID, ownClientId: OWN } })
     await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: NEXT })).resolves.toMatchObject({ connection: { clientId: NEXT, ownClientId: NEXT } })
   })
 
-  it.each([
-    ["0.5.3.json", "graphCli", GRAPH_CLI_CLIENT_ID],
-    ["0.5.4-nightly.json", "tenuvaultApp", TENUVAULT_CLIENT_ID],
-  ] as const)("keeps the %s credential slot safe after switching to %s", async (name, method, publicId) => {
+  it("keeps the 0.5.4-nightly.json credential slot safe after switching to tenuvaultApp", async () => {
     const f = fixture()
-    const legacySettings = JSON.parse(readFileSync(new URL(`./fixtures/tenant-connections/${name}`, import.meta.url), "utf8"))
+    const legacySettings = JSON.parse(readFileSync(new URL("./fixtures/tenant-connections/0.5.4-nightly.json", import.meta.url), "utf8"))
     const legacyProfile = JSON.parse(legacySettings[TENANT_LIST_KEY])[0]
     legacyProfile.credentials.tenantId = TENANT
     f.connections.enroll(TENANT, { method: "ownApp", clientId: OWN }, JSON.stringify([legacyProfile]), staged(OWN))
-    await f.connections.switch(TENANT, { method })
+    await f.connections.switch(TENANT, { method: "tenuvaultApp" })
     const oldAppId = () => JSON.parse(f.reopen().get(TENANT_LIST_KEY)!)[0].credentials.appId
     expect(oldAppId()).toBe(OWN)
     expect(accountStore(f.reopen()).list()).toEqual([])
-    expect(currentAccounts(f.reopen(), f.connections).list()).toMatchObject([{ clientId: publicId }])
+    expect(currentAccounts(f.reopen(), f.connections).list()).toMatchObject([{ clientId: TENUVAULT_CLIENT_ID }])
     const active = f.connections.activeProfiles()!
-    expect(JSON.parse(active)[0].credentials.appId).toBe(publicId)
+    expect(JSON.parse(active)[0].credentials.appId).toBe(TENUVAULT_CLIENT_ID)
     f.connections.saveProfiles(active)
     expect(oldAppId()).toBe(OWN)
     // A wizard tenant that only ever used a public registration needs setup in 0.5.x.
     f.connections.saveProfiles("[]")
-    legacyProfile.credentials.appId = publicId
-    f.connections.enroll(TENANT, { method }, JSON.stringify([legacyProfile]), staged(publicId))
+    legacyProfile.credentials.appId = TENUVAULT_CLIENT_ID
+    f.connections.enroll(TENANT, { method: "tenuvaultApp" }, JSON.stringify([legacyProfile]), staged(TENUVAULT_CLIENT_ID))
     expect(oldAppId()).toBe("")
-    expect(JSON.parse(f.connections.activeProfiles()!)[0].credentials.appId).toBe(publicId)
+    expect(JSON.parse(f.connections.activeProfiles()!)[0].credentials.appId).toBe(TENUVAULT_CLIENT_ID)
   })
 
-  it.each(["ownApp", "graphCli"] as const)("requires fresh sign-in after a downgrade reauthenticates a %s connection", async method => {
+  it.each(["ownApp", "tenuvaultApp"] as const)("requires fresh sign-in after a downgrade reauthenticates a %s connection", async method => {
     const f = fixture()
     f.enroll()
     await f.connections.switch(TENANT, method === "ownApp" ? { method, clientId: NEXT } : { method })
@@ -247,11 +242,11 @@ describe("in-place sign-in change", () => {
   it("moves a public sign-in and repairs legacy settings written by an earlier 0.6 build", async () => {
     const f = fixture()
     f.enroll()
-    await f.connections.switch(TENANT, { method: "graphCli" })
+    await f.connections.switch(TENANT, { method: "tenuvaultApp" })
     f.store.setMany({ [TENANT_LIST_KEY]: f.connections.activeProfiles()! }, [publicAccountKey(TENANT)])
-    accountStore(f.store).set(staged(GRAPH_CLI_CLIENT_ID).account)
+    accountStore(f.store).set(staged(TENUVAULT_CLIENT_ID).account)
     const migrated = f.restart()
-    expect(migrated.accounts.get(TENANT)?.clientId).toBe(GRAPH_CLI_CLIENT_ID)
+    expect(migrated.accounts.get(TENANT)?.clientId).toBe(TENUVAULT_CLIENT_ID)
     expect(accountStore(migrated.store).get(TENANT)).toBeNull()
     expect(JSON.parse(migrated.store.get(TENANT_LIST_KEY)!)[0].credentials.appId).toBe(OWN)
   })
@@ -300,13 +295,14 @@ describe("in-place sign-in change", () => {
     expect(f.connections.get(TENANT)).toBeNull()
   })
 
-  it("validates input and keeps Azure storage usable when Start now cannot use it", async () => {
+  it("validates input and rejects the setup helper client ID or removed methods", async () => {
     const f = fixture(); f.enroll()
-    await expect(f.connections.switch("invalid", { method: "graphCli" })).rejects.toThrow("connected tenant")
-    await expect(f.connections.switch(TENANT, { method: "graphCli", clientId: OWN })).rejects.toThrow("fixed client ID")
-    await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: GRAPH_CLI_CLIENT_ID })).rejects.toThrow("method that uses this client ID")
-    f.connections.saveProfiles(raw.replace(storage, "fixtureaccount"))
-    await expect(f.connections.switch(TENANT, { method: "graphCli" })).rejects.toThrow("Choose local storage")
+    await expect(f.connections.switch("invalid", { method: "tenuvaultApp" })).rejects.toThrow("connected tenant")
+    await expect(f.connections.switch(TENANT, { method: "tenuvaultApp", clientId: OWN })).rejects.toThrow("fixed client ID")
+    await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: TENUVAULT_CLIENT_ID })).rejects.toThrow("method that uses this client ID")
+    await expect(f.connections.switch(TENANT, { method: "ownApp", clientId: SETUP_HELPER_CLIENT_ID })).rejects.toThrow("setup helper")
+    await expect(f.connections.switch(TENANT, { method: "graphCli" as SignInMethod })).rejects.toThrow("Unsupported sign-in method")
+    expect(() => f.connections.enroll(OTHER, { method: "ownApp", clientId: SETUP_HELPER_CLIENT_ID }, raw.replaceAll(TENANT, OTHER), staged(SETUP_HELPER_CLIENT_ID, OTHER))).toThrow("setup helper")
     expect(f.signIn).not.toHaveBeenCalled()
   })
 
@@ -333,14 +329,13 @@ describe("in-place sign-in change", () => {
   })
 })
 
-describe("Start now capability", () => {
-  it.each(["source", "destination"] as const)("stops copy batches if the %s switches after admission", async side => {
-    const f = fixture()
-    const changedTenant = side === "source" ? TENANT : OTHER
-    const account = staged(OWN, changedTenant)
-    f.signIn.mockImplementation(async (id, client) => staged(client, id))
-    f.connections.enroll(changedTenant, { method: "ownApp", clientId: OWN }, raw.replaceAll(TENANT, changedTenant), account)
-    const cap = new ConnectionCapabilities(id => f.connections.get(id))
+describe("Removed Start now connection guard", () => {
+  it.each(["source", "destination"] as const)("stops copy batches if the %s needs a sign-in method after admission", async side => {
+    const own: TenantConnection = { version: 1, method: "ownApp", clientId: OWN, origin: "wizard", createdAt: NOW, updatedAt: NOW }
+    const needsMethod: TenantConnection = { ...own, method: null, clientId: "", needsSignInMethod: true }
+    let source = own
+    let dest = own
+    const cap = new ConnectionCapabilities(id => id === TENANT ? source : id === OTHER ? dest : null)
     const network = vi.fn(async () => new Response("{}"))
     const fetch = createBridgedFetch({
       dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
@@ -353,11 +348,12 @@ describe("Start now capability", () => {
     const host = new ApiHost({ bindConnections: tenants => cap.bindConnections(tenants), guard: request => cap.guard(request), routes: {
       "/api/restore-backup": { POST: async () => {
         await batch("POST")
-        await f.connections.switch(changedTenant, { method: "graphCli" })
-        await expect(batch("POST")).rejects.toThrow(READ_ONLY)
-        await expect(batch("POST", "Bearer opaque")).rejects.toThrow(READ_ONLY)
+        if (side === "source") source = needsMethod
+        else dest = needsMethod
+        await expect(batch("POST")).rejects.toThrow(START_NOW_REMOVED_REASON)
+        await expect(batch("POST", "Bearer opaque")).rejects.toThrow(START_NOW_REMOVED_REASON)
         if (side === "source") await expect(batch("GET")).resolves.toBeInstanceOf(Response)
-        else await expect(batch("GET")).rejects.toThrow("method changed")
+        else await expect(batch("GET")).rejects.toThrow(START_NOW_REMOVED_REASON)
         return Response.json({ ok: true })
       } },
     } })
@@ -368,7 +364,7 @@ describe("Start now capability", () => {
     expect(network).toHaveBeenCalledTimes(side === "source" ? 2 : 1)
   })
 
-  it("stops Copy to Tenants if the source switches after the bridge starts authorization", async () => {
+  it("stops Copy to Tenants if the source loses its sign-in method after the bridge starts authorization", async () => {
     const own: TenantConnection = { version: 1, method: "ownApp", clientId: OWN, origin: "wizard", createdAt: NOW, updatedAt: NOW }
     let source = own
     const cap = new ConnectionCapabilities(id => id === TENANT ? source : own)
@@ -377,7 +373,7 @@ describe("Start now capability", () => {
       dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
       authorizeRequest: (url, input, init, tenant) => {
         const authorization = cap.authorizeRequest(url, input, init, tenant)
-        queueMicrotask(() => { source = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID } })
+        queueMicrotask(() => { source = { ...own, method: null, clientId: "", needsSignInMethod: true } })
         return authorization
       },
     })
@@ -386,7 +382,7 @@ describe("Start now capability", () => {
       "/api/restore-backup": { POST: async () => {
         await expect(fetch("https://graph.microsoft.com/beta/deviceManagement/configurationPolicies", {
           method: "POST", headers: { authorization: "Bearer opaque-destination" },
-        })).rejects.toThrow(READ_ONLY)
+        })).rejects.toThrow(START_NOW_REMOVED_REASON)
         return Response.json({ ok: true })
       } },
     } })
@@ -400,7 +396,7 @@ describe("Start now capability", () => {
   it.each(["POST", "PATCH", "PUT", "DELETE", "batch"])("stops a single-tenant restore %s in the bridge's last turn", async method => {
     const own: TenantConnection = { version: 1, method: "ownApp", clientId: OWN, origin: "wizard", createdAt: NOW, updatedAt: NOW }
     let record = own
-    let nextConnection = { ...own, clientId: NEXT }
+    let nextConnection: TenantConnection = { ...own, clientId: NEXT }
     const cap = new ConnectionCapabilities(() => record)
     cap.requireIssuedToken(TENANT, OWN, RESOURCE_SCOPES.graph, "opaque-restore")
     const network = vi.fn(async () => new Response("{}"))
@@ -429,16 +425,15 @@ describe("Start now capability", () => {
     expect(await (await restore()).json()).toEqual({ ok: true })
     expect(network).toHaveBeenCalledOnce()
     record = own
-    nextConnection = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
-    expect(await (await restore()).json()).toEqual({ error: READ_ONLY })
+    nextConnection = { ...own, method: null, clientId: "", needsSignInMethod: true }
+    expect(await (await restore()).json()).toEqual({ error: `${START_NOW_REMOVED_REASON} Choose a sign-in method.` })
     expect(network).toHaveBeenCalledOnce()
   })
 
-  it("blocks writes even with a write token, including copy from or to the tenant", async () => {
-    const f = fixture()
-    const cap = new ConnectionCapabilities(id => f.connections.get(id), undefined, async () => true)
-    f.enroll()
-    await f.connections.switch(TENANT, { method: "graphCli" })
+  it("blocks writes and Graph calls for a tenant needing a sign-in method", async () => {
+    const needsMethod: TenantConnection = { version: 1, method: null, clientId: "", origin: "wizard", needsSignInMethod: true, createdAt: NOW, updatedAt: NOW }
+    const cap = new ConnectionCapabilities(id => id === TENANT ? needsMethod : null, undefined, async () => true)
+    const expectedError = `${START_NOW_REMOVED_REASON} Choose a sign-in method.`
     for (const [path, input] of [
       ["restore-backup", {}], ["revert-policy", { action: "revert" }], ["oib", { action: "oib-deploy" }],
       ["oib", { action: "oib-assign" }], ["cis-remediation", { action: "apply" }], ["promotion", { action: "apply" }],
@@ -448,37 +443,22 @@ describe("Start now capability", () => {
     ] as const) {
       const response = await cap.guard(new Request(`http://test/api/${path}`, { method: "POST", body: JSON.stringify({ tenantId: TENANT, ...input }) }))
       expect(response?.status).toBe(403)
-      expect(await response?.json()).toEqual(path === "restore-backup" ? { error: READ_ONLY, code: CONNECTION_WRITE_REFUSED } : { error: READ_ONLY })
+      expect(await response?.json()).toEqual(path === "restore-backup" ? { error: expectedError, code: CONNECTION_WRITE_REFUSED } : { error: expectedError })
     }
-    const startBackup = (storageAccountName: string) => cap.guard(new Request("http://test/api/backup/start", {
-      method: "POST", body: JSON.stringify({ tenantId: TENANT, storageAccountName }),
-    }))
-    expect((await startBackup("exampleazure"))?.status).toBe(403)
-    expect(await startBackup(storage)).toBeNull()
-    expect(() => cap.requireWrite([TENANT])).toThrow(READ_ONLY)
+    expect(() => cap.requireWrite([TENANT])).toThrow(START_NOW_REMOVED_REASON)
     expect(() => cap.requireWrite([OTHER])).not.toThrow()
-    const graph = "https://graph.microsoft.com/beta"
     const network = vi.fn(async () => new Response("{}"))
     const fetch = createBridgedFetch({
       dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
       authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
       authorizeResource: (tenant, scope) => cap.requireResource(tenant, scope),
     })
-    const headers = { Authorization: `Bearer ${jwt({ tid: TENANT, appid: GRAPH_CLI_CLIENT_ID, scp: "DeviceManagementConfiguration.ReadWrite.All" })}` }
-    await expect(fetch(graph + "/deviceManagement/configurationPolicies", { method: "POST", headers })).rejects.toThrow(READ_ONLY)
-    await expect(withRouteTenant(TENANT, () => fetch(graph + "/$batch", { method: "POST", body: JSON.stringify({ requests: [{ method: "PATCH" }] }) }))).rejects.toThrow(READ_ONLY)
-    await expect(fetch(graph + "/$batch", { method: "POST", headers, body: JSON.stringify({ requests: [{ method: "GET" }] }) })).resolves.toBeInstanceOf(Response)
-    await expect(fetch(graph + "/organization", { headers })).resolves.toBeInstanceOf(Response)
-    await expect(fetch("https://graph.microsoft.com/v1.0/organization?$select=id", { headers })).resolves.toBeInstanceOf(Response)
-    expect(network).toHaveBeenCalledTimes(3)
-    expect(network).toHaveBeenLastCalledWith(expect.objectContaining({ url: graph + "/organization?$select=id", redirect: "error" }), undefined)
-    for (const scope of [RESOURCE_SCOPES.management, RESOURCE_SCOPES.storage, "https://api.securitycenter.microsoft.com/.default"]) {
-      expect(() => cap.requireResource(TENANT, scope)).toThrow("only connects to Microsoft Graph")
-      const response = await fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, { method: "POST", body: new URLSearchParams({ grant_type: "client_credentials", client_id: OWN, scope }) })
-      expect(response.status).toBe(403)
-    }
-    expect(() => cap.requireResource(TENANT, RESOURCE_SCOPES.graph)).not.toThrow()
-    expect(() => cap.requireConnection(TENANT, OWN, RESOURCE_SCOPES.graph)).toThrow("method changed")
+    const headers = { Authorization: `Bearer ${jwt({ tid: TENANT, appid: OWN, scp: "DeviceManagementConfiguration.ReadWrite.All" })}` }
+    await expect(fetch("https://graph.microsoft.com/beta/organization", { headers })).rejects.toThrow(START_NOW_REMOVED_REASON)
+    await expect(withRouteTenant(TENANT, () => fetch("https://graph.microsoft.com/beta/$batch", { method: "POST", body: JSON.stringify({ requests: [{ method: "PATCH" }] }) }))).rejects.toThrow(START_NOW_REMOVED_REASON)
+    expect(network).not.toHaveBeenCalled()
+    expect(() => cap.requireResource(TENANT, RESOURCE_SCOPES.graph)).toThrow(START_NOW_REMOVED_REASON)
+    expect(() => cap.requireConnection(TENANT, OWN, RESOURCE_SCOPES.graph)).toThrow(START_NOW_REMOVED_REASON)
   })
 })
 
@@ -487,7 +467,7 @@ describe("dispatch after asynchronous authorization", () => {
   it.each([
     ["ARM deployment", "https://management.azure.com/subscriptions/fixture/providers/Microsoft.Resources/deployments/watcher?api-version=2022-09-01", RESOURCE_SCOPES.management],
     ["watcher alerts.json", "https://backupfixture.blob.core.windows.net/tenuvault-notification-state/alerts.json", RESOURCE_SCOPES.storage],
-  ])("stops the %s PUT when its tenant switches to Start now", async (_, url, scope) => {
+  ])("stops the %s PUT when its tenant loses its sign-in method", async (_, url, scope) => {
     const own = { version: 1, clientId: OWN, method: "ownApp", origin: "wizard", createdAt: NOW, updatedAt: NOW } as const
     let current: TenantConnection = own
     let next: TenantConnection = { ...own, clientId: NEXT }
@@ -514,14 +494,12 @@ describe("dispatch after asynchronous authorization", () => {
     expect(network).toHaveBeenCalledExactlyOnceWith(url, expect.objectContaining({ method: "PUT" }))
 
     current = own
-    next = { ...own, clientId: GRAPH_CLI_CLIENT_ID, method: "graphCli" }
-    await expect(run()).rejects.toThrow(READ_ONLY)
+    next = { ...own, clientId: "", method: null, needsSignInMethod: true }
+    await expect(run()).rejects.toThrow(START_NOW_REMOVED_REASON)
     expect(network).toHaveBeenCalledTimes(1)
   })
 
   it.each([
-    ["graphCli", GRAPH_CLI_CLIENT_ID, "GET"],
-    ["graphCli", GRAPH_CLI_CLIENT_ID, "POST"],
     ["tenuvaultApp", TENUVAULT_CLIENT_ID, "GET"],
     ["tenuvaultApp", TENUVAULT_CLIENT_ID, "POST"],
   ] as const)("stops a read when cached availability changes for %s (%#)", async (method, clientId, verb) => {
@@ -548,7 +526,7 @@ describe("dispatch after asynchronous authorization", () => {
     })
     await expect(send()).resolves.toMatchObject({ status: 200 })
     disableBeforeDispatch = true
-    await expect(send()).rejects.toThrow("currently unavailable")
+    await expect(send()).rejects.toThrow("temporarily unavailable")
     expect(network).toHaveBeenCalledTimes(1)
   })
 })
@@ -600,7 +578,7 @@ describe("TenuVault app capabilities", () => {
     await expect(send(allowed, "applications")).rejects.toThrow("restore permission pack")
     await expect(send({ ...allowed, azp: OWN })).rejects.toThrow("method changed")
     enabled = false
-    await expect(send(allowed)).rejects.toThrow("currently unavailable")
+    await expect(send(allowed)).rejects.toThrow("temporarily unavailable")
   })
 
   it("stops already issued tokens across resources when health changes or the tenant switches", async () => {
@@ -629,7 +607,7 @@ describe("TenuVault app capabilities", () => {
       fetch(path, { ...init, headers: { authorization: `Bearer ${accessToken}` } })
     for (const [path, init] of paths) await send(path, init)
     enabled = false
-    for (const [path, init] of paths) await expect(send(path, init)).rejects.toThrow("currently unavailable")
+    for (const [path, init] of paths) await expect(send(path, init)).rejects.toThrow("temporarily unavailable")
     expect(network).toHaveBeenCalledTimes(paths.length)
 
     enabled = true
@@ -675,9 +653,9 @@ describe("TenuVault app capabilities", () => {
     expect(() => cap.requireConnection(TENANT, NEXT, RESOURCE_SCOPES.graph)).toThrow("method changed")
   })
 
-  it.each([["tenuvaultApp", TENUVAULT_CLIENT_ID], ["graphCli", GRAPH_CLI_CLIENT_ID]] as const)(
-    "uses trusted acquisition for an opaque %s token and still checks the switch",
-    async (method, clientId) => {
+  it("uses trusted acquisition for an opaque TenuVault app token and still checks the switch", async () => {
+      const method = "tenuvaultApp" as const
+      const clientId = TENUVAULT_CLIENT_ID
       const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: true, audit: false })
       const scopes = resourcePackScopes(packs, "graph")
       const record = { version: 1 as const, clientId, method, origin: "wizard" as const, createdAt: NOW, updatedAt: NOW, graphScopes: scopes }
@@ -689,17 +667,14 @@ describe("TenuVault app capabilities", () => {
       expect(() => cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, jwt({ tid: OTHER, azp: clientId }))).toThrow("could not verify")
       cap.requireIssuedToken(TENANT, clientId, RESOURCE_SCOPES.graph, "opaque-shared-token", { grantedScopes: scopes })
       const read = cap.authorizeRequest(url, url, { headers }, TENANT)
-      if (method === "graphCli") await expect(read).resolves.toMatchObject({ url: { href: url.href } })
-      else await expect(read).resolves.toMatchObject({ beforeDispatch: expect.any(Function) })
+      await expect(read).resolves.toMatchObject({ beforeDispatch: expect.any(Function) })
       const write = cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
         .then(authorization => authorization?.beforeDispatch?.())
-      if (method === "graphCli") await expect(write).rejects.toThrow(READ_ONLY)
-      else await expect(write).resolves.toBeUndefined()
+      await expect(write).resolves.toBeUndefined()
       enabled = false
-      await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).rejects.toThrow("currently unavailable")
-      await expect(cap.requireConnectionEnabled(TENANT, clientId)).rejects.toThrow("currently unavailable")
-    },
-  )
+      await expect(cap.authorizeRequest(url, url, { headers }, TENANT)).rejects.toThrow("temporarily unavailable")
+      await expect(cap.requireConnectionEnabled(TENANT, clientId)).rejects.toThrow("temporarily unavailable")
+    })
 
   it.each([["user", "usersAndDevices"], ["group", "groups"]] as const)(
     "requires checked deleted-object type and admitted scopes for %s recycle requests",
@@ -739,59 +714,41 @@ describe("TenuVault app capabilities", () => {
   })
 })
 
-describe("Start now enrollment and coverage", () => {
-  it("enrolls a wizard tenant in local storage with known partial coverage and prevents a later Azure change", async () => {
+describe("Migrated Start now profiles", () => {
+  it("marks stored graphCli connections as needing a sign-in method without switching silently and drops Graph CLI tokens", async () => {
     const f = fixture()
-    const accessToken = jwt({ tid: TENANT, azp: GRAPH_CLI_CLIENT_ID, scp: "DeviceManagementConfiguration.ReadWrite.All" })
-    const graphScopes = verifyGraphCliGrant(accessToken, ["Directory.ReadWrite.All"])
-    const settings = f.modules.choiceEntries(TENANT, { intune: { access: "backup" } })
-    f.connections.enroll(TENANT, { method: "graphCli" }, raw, { ...staged(GRAPH_CLI_CLIENT_ID), accessToken, graphScopes }, settings)
-    const saved = f.restart()
-    expect(saved.connections.get(TENANT)).toMatchObject({ origin: "wizard", method: "graphCli", graphScopes: ["DeviceManagementConfiguration.ReadWrite.All"] })
-    expect(saved.accounts.get(TENANT)?.clientId).toBe(GRAPH_CLI_CLIENT_ID)
-    expect(f.modules.get(TENANT).intune).toMatchObject({ enabled: true, access: "backup" })
-    expect(f.modules.get(TENANT).entra.enabled).toBe(false)
-    const byService = graphCliCoverage(new Set(graphScopes))
-    expect(byService.map(entry => entry.service)).toEqual(["entra", "intune"])
-    expect(byService[0]?.readable).toEqual([])
-    expect(byService[1]?.readable?.length).toBeGreaterThan(0)
-    expect(byService[1]?.readable?.length).toBeLessThan(byService[1]!.folders.length)
-    expect(() => f.connections.saveProfiles(raw.replace(storage, "exampleazure"))).toThrow("Choose local storage")
-    expect(f.restart().connections.activeProfiles()).toContain(storage)
-  })
+    const profile = [{ id: 1, name: "Contoso", resources: { storageAccountName: storage }, credentials: { tenantId: TENANT, appId: SETUP_HELPER_CLIENT_ID, clientSecret: "" } }]
+    f.store.setMany({
+      [TENANT_LIST_KEY]: JSON.stringify(profile),
+      [`auth.connection.${TENANT}`]: JSON.stringify({
+        version: 1, method: "graphCli", clientId: SETUP_HELPER_CLIENT_ID, ownClientId: OWN,
+        origin: "wizard", createdAt: NOW, updatedAt: NOW, graphScopes: ["DeviceManagementConfiguration.Read.All"],
+      }),
+      [publicAccountKey(TENANT)]: JSON.stringify(staged(SETUP_HELPER_CLIENT_ID).account),
+      [`auth.account.${TENANT}`]: JSON.stringify(staged(SETUP_HELPER_CLIENT_ID).account),
+      [`msal.${SETUP_HELPER_CLIENT_ID}`]: "graph-cli-cache-appstore",
+      [`msal.${OWN}`]: "own-app-cache-intact",
+    })
+    f.legacyCache.set(`msal.${SETUP_HELPER_CLIENT_ID}`, "graph-cli-cache-legacy")
+    f.legacyCache.set(`msal.${OWN}`, "own-app-legacy-intact")
 
-  it.each(["opaque", "explicit"] as const)("switches with %s delegated coverage and retains the customer's configuration", async evidence => {
-    const f = fixture()
-    f.enroll()
-    const grantedScopes = evidence === "explicit" ? ["DeviceManagementConfiguration.Read.All"] : undefined
-    const graphScopes = verifyGraphCliGrant("opaque", grantedScopes)
-    f.signIn.mockResolvedValueOnce({ ...staged(GRAPH_CLI_CLIENT_ID), accessToken: "opaque", graphScopes, grantedScopes })
-    const result = await f.connections.switch(TENANT, { method: "graphCli" })
-    expect(result.connection.ownClientId).toBe(OWN)
-    expect(result.coverage?.[1]?.readable === null).toBe(evidence === "opaque")
-    if (evidence === "opaque") expect(result.missing).toEqual([])
-    else expect(result.missing.length).toBeGreaterThan(0)
-    expect(f.modules.get(TENANT)).toEqual(defaultSettings)
-  })
+    const migrated = f.restart()
+    expect(migrated.connections.needsSignInMethod(TENANT)).toBe(true)
+    expect(migrated.connections.get(TENANT)).toMatchObject({
+      method: null, clientId: "", ownClientId: OWN, origin: "wizard", needsSignInMethod: true,
+    })
+    expect(migrated.connections.get(TENANT)?.graphScopes).toBeUndefined()
+    expect(migrated.store.get(publicAccountKey(TENANT))).toBeNull()
+    expect(migrated.store.get(`auth.account.${TENANT}`)).toBeNull()
+    expect(migrated.store.get(`msal.${SETUP_HELPER_CLIENT_ID}`)).toBeNull()
+    expect(f.reopenLegacy().get(`msal.${SETUP_HELPER_CLIENT_ID}`)).toBeNull()
+    expect(migrated.store.get(`msal.${OWN}`)).toBe("own-app-cache-intact")
+    expect(f.reopenLegacy().get(`msal.${OWN}`)).toBe("own-app-legacy-intact")
+    expect(JSON.parse(migrated.connections.activeProfiles()!)[0].credentials.appId).toBe("")
 
-  it("stops issued tokens on the next request and cannot send one outside Graph", async () => {
-    const f = fixture()
-    f.enroll()
-    await f.connections.switch(TENANT, { method: "graphCli" })
-    let enabled = true
-    const health = vi.fn(async () => enabled)
-    const cap = new ConnectionCapabilities(id => f.connections.get(id), undefined, health)
-    cap.requireIssuedToken(TENANT, GRAPH_CLI_CLIENT_ID, RESOURCE_SCOPES.graph, "opaque")
-    const headers = { authorization: "Bearer opaque" }
-    const request = (url: string) => cap.authorizeRequest(new URL(url), url, { headers }, TENANT)
-    await expect(request("https://graph.microsoft.com/beta/organization")).resolves.toMatchObject({ url: { pathname: "/beta/organization" } })
-    expect(health).toHaveBeenLastCalledWith("graphCli", true)
-    for (const host of ["management.azure.com", "fixture.blob.core.windows.net", "api.securitycenter.microsoft.com", "api.security.microsoft.com", "outlook.office365.com"]) {
-      await expect(request(`https://${host}/test`)).rejects.toThrow("only connects to Microsoft Graph")
-    }
-    expect(() => cap.requireNonGraphCli(TENANT)).toThrow(READ_ONLY)
-    enabled = false
-    await expect(request("https://graph.microsoft.com/beta/organization")).rejects.toThrow("currently unavailable")
-    expect(() => cap.requireNonGraphCli(OTHER)).not.toThrow()
+    const switched = await migrated.connections.switch(TENANT, { method: "tenuvaultApp" })
+    expect(switched.connection).toMatchObject({ method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, ownClientId: OWN })
+    expect(switched.connection.needsSignInMethod).toBeUndefined()
+    expect(migrated.connections.needsSignInMethod(TENANT)).toBe(false)
   })
 })

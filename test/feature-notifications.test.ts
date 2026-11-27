@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import { routes } from "../src/main/features/notifications"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_NEXT_STEP, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { DOMAINS } from "../src/main/features/domains"
 import { TenantRecords, type Stored } from "../src/main/features/records"
 import { SecureStore } from "../src/main/storage/secure-store"
@@ -76,7 +76,6 @@ function encryptedWorkspace() {
 describe("notification channels and rules", () => {
   it.each([
     ["own registration", "99999999-9999-4999-8999-999999999999"],
-    ["Start now", GRAPH_CLI_CLIENT_ID],
     ["TenuVault app", TENUVAULT_CLIENT_ID],
   ])("keeps destination credentials out of encrypted revisions for %s", async (_, clientId) => {
     const workspace = encryptedWorkspace()
@@ -286,8 +285,8 @@ describe("notification channels and rules", () => {
 
   it.each([
     ["an own registration", "99999999-9999-4999-8999-999999999999", "Test administrator"],
-    ["Start now", GRAPH_CLI_CLIENT_ID, "Test administrator"],
-    ["Start now without a display name", GRAPH_CLI_CLIENT_ID, "tester@example.test"],
+    ["TenuVault app", TENUVAULT_CLIENT_ID, "Test administrator"],
+    ["TenuVault app without a display name", TENUVAULT_CLIENT_ID, "tester@example.test"],
   ])("keeps test attribution in channel history with %s", async (_method, clientId, name) => {
     const w = world()
     const originalProfile = w.deps.tenant(TENANT_A)!
@@ -379,22 +378,6 @@ describe("editing and removing channels", () => {
 })
 
 describe("email delivery and group resolution", () => {
-  it("refuses a group-addressed email test on Start now before looking up members", async () => {
-    const graph = vi.fn(() => async () => ({
-      status: 200, body: { value: [{ "@odata.type": "#microsoft.graph.user" }] },
-    }))
-    const w = world({ graph })
-    const profile = w.deps.tenant(TENANT_A)!
-    w.deps.tenant = id => id === TENANT_A ? { ...profile, clientId: GRAPH_CLI_CLIENT_ID } : null
-    const created = await call(w.routes, PATH, {
-      tenantId: TENANT_A, action: "add-channel", kind: "email",
-      recipients: [{ type: "group", groupId: "44444444-4444-4444-4444-444444444444" }],
-    })
-    const result = await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-channel", channelId: created.body.channel.id })
-    expect(result.body.delivery).toMatchObject({ ok: false, error: expect.stringContaining(GRAPH_CLI_NEXT_STEP) })
-    expect(graph).not.toHaveBeenCalled()
-  })
-
   it("expands group recipients without guests and sends through Graph", async () => {
     const graphCalls: Array<{ method: string; path: string; body?: unknown }> = []
     const w = world({

@@ -15,7 +15,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: {
 } }))
 vi.mock("@desktop/lib/plan-dialog", () => ({ showFeaturePlanError: vi.fn() }))
 
-import { CONNECTION_WRITE_REFUSED, GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
+import { CONNECTION_WRITE_REFUSED, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
 import { servicePack } from "../../src/shared/services/permission-packs"
 import { COMPANION_DEADLINE_MS, RestoreWizard } from "../../src/portal/components/backup/restore-wizard"
 
@@ -105,15 +105,6 @@ it("shows missing permissions and repairs the existing registration before check
   expect(container.querySelector("[data-permission-routes]")).toBeNull()
 })
 
-it("offers Start now upgrades and keeps the restore items disabled", async () => {
-  const container = await renderItems(false, GRAPH_CLI_CLIENT_ID)
-  const notice = [...container.querySelectorAll("[data-notice-tone]")].find(card => card.textContent?.includes("Start now is read-only"))
-  expect(notice?.textContent).toContain("Start now is read-only")
-  expect(notice?.querySelector("a")?.getAttribute("href")).toContain("section=signin")
-  expect(itemBoxes(container).every(box => box.disabled)).toBe(true)
-  expect(buttonNamed(container, "Next")?.disabled).toBe(true)
-})
-
 it("reads access policies only at the review step", async () => {
   const container = await renderItems(false)
   const requests = () => vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url) === "/api/restore-backup" && JSON.parse(String(init?.body)).approvalAction === "detect")
@@ -128,8 +119,8 @@ it("reads access policies only at the review step", async () => {
 
 it.each([
   { action: undefined, partial: true, error: "Outcome unknown.", uncertain: true, blocked: false },
-  { action: "skipped", partial: false, error: "Start now is read-only.", uncertain: false, blocked: false },
-  { action: undefined, partial: false, error: "Start now is read-only.", uncertain: false, blocked: true },
+  { action: "skipped", partial: false, error: "Choose a sign-in method before restoring.", uncertain: false, blocked: false },
+  { action: undefined, partial: false, error: "Choose a sign-in method before restoring.", uncertain: false, blocked: true },
 ])("shows uncertainty only after a possible write ($error, blocked at dispatch: $blocked)", async ({ action, partial, error, uncertain, blocked }) => {
   const path = "backup-1/NamedLocations/corporate.json"
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

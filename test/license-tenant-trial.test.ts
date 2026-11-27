@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { LicenseService } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
 const { publicKey, privateKey } = generateKeyPairSync("ed25519")
@@ -40,8 +40,8 @@ async function connect(license: LicenseService) {
 beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start); store = memoryStore(); store.set("license.installId", install); calls = []; requests = 0; healthFields = {}; enabled = true; canEnd = true; end = start + 14 * day; response = undefined; vi.spyOn(console, "warn").mockImplementation(() => {}) })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe("tenant trials", () => {
-  it("starts and refreshes a Start now trial with the existing trial proof contract", async () => {
-    const license = service([], GRAPH_CLI_CLIENT_ID)
+  it("starts and refreshes a TenuVault app trial with the existing trial proof contract", async () => {
+    const license = service([], TENUVAULT_CLIENT_ID)
     await expect(connect(license)).resolves.toBe("pro")
     await license.refreshAll()
     for (const action of ["start_trial", "refresh"]) {
@@ -49,7 +49,7 @@ describe("tenant trials", () => {
       expect(call).toMatchObject({ idToken: "signed.id.token" })
       expect(call).not.toHaveProperty("publicClientProof")
     }
-    expect(calls.some(body => body.action === "activate")).toBe(false)
+    expect(calls.map(body => body.action)).toEqual(["activate", "start_trial", "activate", "refresh"])
   })
 
   it.each([false, true])("checks for a wizard trial without claiming an organization slot (licensed: %s)", async licensed => {

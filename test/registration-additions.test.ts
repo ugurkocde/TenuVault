@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest"
 import { AddPermissionsFlow } from "../src/main/auth/add-permissions-flow"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
-import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
-import { GRAPH_CLI_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { START_NOW_REMOVED_REASON, type TenantConnection } from "../src/shared/tenant-connection"
 import { RegistrationAdditions, sameAdditionConnection } from "../src/main/auth/registration-additions"
 import { additionConnection, additionGraph } from "./fixtures/registration-additions"
 
@@ -317,7 +317,7 @@ it.each(["declaration", "consent"])("stops the permission %s write when the tena
   const network: typeof fetch = async (input, init) => {
     const response = await fake.request(input, init)
     if (init?.method === "GET" && new URL(String(input)).pathname.endsWith(target)) {
-      record = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+      record = { ...own, method: null, clientId: "", needsSignInMethod: true }
       switched = true
     }
     return response
@@ -335,7 +335,7 @@ it.each(["declaration", "consent"])("stops the permission %s write when the tena
   expect(switched).toBe(true)
   expect(fake.writes.map(write => write.path.replace(/^\/(?:beta|v1\.0)/, ""))).toEqual(phase === "declaration" ? [] : ["/applications/app-object"])
   expect(result).toMatchObject({ state: "partial", missingConsent: ["Policy.Read.All"] })
-  expect(result.message).toContain(READ_ONLY)
+  expect(result.message).toContain(START_NOW_REMOVED_REASON)
   expect(result.message).not.toContain("may have been applied")
 })
 

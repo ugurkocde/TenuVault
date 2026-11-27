@@ -1,7 +1,6 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { GRAPH_CLI_CLIENT_ID } from "../../src/shared/tenant-connection"
 import type { SignInRequiredEvent } from "../../src/shared/ipc"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -101,31 +100,6 @@ describe("Sign-in banner", () => {
     expect(container.textContent).toContain("Fabrikam")
     expect(container.textContent).not.toContain("more sign-in")
     expect(container.textContent).not.toContain("Contoso")
-  })
-
-  it("recovers a Start now session for the scheduled backup prompt and keeps later prompts", async () => {
-    state.reauthenticate.mockClear().mockResolvedValueOnce({ error: {
-      code: "browser_sign_in_required", message: "Sign in to Microsoft in your browser first, then try again.",
-    } })
-    const container = mount()
-    const scheduled = { ...event("tenant-a"), clientId: GRAPH_CLI_CLIENT_ID }
-    act(() => {
-      state.listener!(scheduled)
-      state.listener!(event("tenant-b"))
-    })
-    const click = (label: string) => act(async () => {
-      [...container.querySelectorAll("button")].find(button => button.textContent === label)!.click()
-    })
-    await click("Sign in")
-    expect(container.textContent).toContain("Sign in to Microsoft in your browser first, then try again.")
-    await click("Open Microsoft sign-in")
-    expect(state.openExternal).toHaveBeenCalledExactlyOnceWith("https://intune.microsoft.com")
-    expect(state.reauthenticate).toHaveBeenCalledExactlyOnceWith(scheduled.tenantId, GRAPH_CLI_CLIENT_ID, scheduled.scope)
-    await click("Try again")
-    expect(state.reauthenticate).toHaveBeenCalledTimes(2)
-    expect(state.reauthenticate).toHaveBeenLastCalledWith(scheduled.tenantId, GRAPH_CLI_CLIENT_ID, scheduled.scope)
-    expect(container.textContent).toContain("Fabrikam")
-    expect(container.textContent).not.toContain("Open Microsoft sign-in")
   })
 
   it("keeps later prompts after signing in to the first tenant", async () => {

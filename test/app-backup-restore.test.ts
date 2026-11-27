@@ -24,8 +24,8 @@ import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash,
 import { executionMetadata } from "../src/main/api/execution-metadata"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
-import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { START_NOW_REMOVED_REASON, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
 import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
 
@@ -96,7 +96,7 @@ it.each(["before block", "before block list", "read-only switch", "Intune downgr
   const progress = vi.fn((value: import("../src/shared/app-sources/types").AppRestoreProgress) => {
     if (value.phase !== "uploading") return
     if (boundary === "before block" || (boundary === "before block list" && value.uploadedBytes > 0)) enabled = false
-    if (boundary === "read-only switch") connection = { ...connection, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+    if (boundary === "read-only switch") connection = { ...connection, method: null, clientId: "", needsSignInMethod: true }
     if (boundary === "Intune downgrade before block" || (boundary === "Intune downgrade before block list" && value.uploadedBytes > 0)) {
       packs = tenantPermissionPacks({ intune: { access: "backup" }, entra: { access: "restore" } }, packOptions)
     }
@@ -109,7 +109,7 @@ it.each(["before block", "before block list", "read-only switch", "Intune downgr
   await expect(restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
     getGraphToken: async () => "fixture-token", fetch, signal: new AbortController().signal, progress, operationId: randomUUID(),
     authorizeUpload: () => caps.requireAppRestoreWrite(target, TENUVAULT_CLIENT_ID),
-  })).rejects.toThrow(boundary === "read-only switch" ? READ_ONLY : boundary.startsWith("Intune") ? "Approve the restore permission pack" : "currently unavailable")
+  })).rejects.toThrow(boundary === "read-only switch" ? START_NOW_REMOVED_REASON : boundary.startsWith("Intune") ? "Approve the restore permission pack" : "temporarily unavailable")
   expect(d.fetcher).toHaveBeenCalledTimes(boundary.endsWith("before block list") ? 1 : 0)
 })
 
@@ -158,11 +158,11 @@ it.each([
   }
 })
 
-it.each(["during preflight", "during token acquisition", "during bridge availability", "before app creation dispatch", "between uploads"] as const)("stops an installer restore when its source switches to Start now %s", async boundary => {
+it.each(["during preflight", "during token acquisition", "during bridge availability", "before app creation dispatch", "between uploads"] as const)("stops an installer restore when its source needs a sign-in method %s", async boundary => {
   const f = await fixture(snapshot, boundary === "between uploads"), d = destination()
   const own: TenantConnection = { version: 1, method: "ownApp", clientId: appId, origin: "wizard", createdAt: "", updatedAt: "", graphScopes: [] }
   let sourceConnection = own
-  const switchSource = () => { sourceConnection = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID } }
+  const switchSource = () => { sourceConnection = { ...own, method: null, clientId: "", needsSignInMethod: true } }
   const beforeCreation = boundary === "before app creation dispatch"
   const throughBridge = boundary === "during bridge availability" || beforeCreation
   const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
@@ -210,7 +210,7 @@ it.each(["during preflight", "during token acquisition", "during bridge availabi
     pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(),
     signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(),
   })
-  await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))).rejects.toThrow(READ_ONLY)
+  await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))).rejects.toThrow(START_NOW_REMOVED_REASON)
   if (throughBridge) expect(availabilityChecks).toBe(beforeCreation ? 4 : 2)
   expect(d.fetcher).toHaveBeenCalledTimes(boundary === "between uploads" ? 1 : 0)
   if (beforeCreation) {
@@ -244,7 +244,7 @@ it.each(["block", "blocklist"])("checks both installer participants before the b
         if (url.searchParams.get("comp") === upload) {
           attempted = true
           queueMicrotask(() => {
-            if (reason === "switch") source = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+            if (reason === "switch") source = { ...own, method: null, clientId: "", needsSignInMethod: true }
             else enabled = false
           })
         }
@@ -256,7 +256,7 @@ it.each(["block", "blocklist"])("checks both installer participants before the b
       restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
         getGraphToken: async () => "fixture-token", fetch, signal: new AbortController().signal, operationId: randomUUID(), progress: vi.fn(),
         authorizeDispatch: authorization.authorize, authorizeUpload: authorization.authorize,
-      })), reason).rejects.toThrow(reason === "switch" ? READ_ONLY : "currently unavailable")
+      })), reason).rejects.toThrow(reason === "switch" ? START_NOW_REMOVED_REASON : "temporarily unavailable")
     expect(attempted).toBe(true)
     expect(d.fetcher.mock.calls.map(([input]) => new URL(String(input)).searchParams.get("comp"))).toEqual(upload === "blocklist" ? ["block"] : [])
     expect(d.calls.some(([method, path]) => method === "PATCH" || path.endsWith("/commit"))).toBe(false)

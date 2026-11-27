@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { AppPreferences } from "../../src/shared/ipc"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
 import type { Tenant } from "~/contexts/TenantContext"
 
 vi.mock("../../src/renderer/components/ServiceBackupNotice", () => ({ ServiceBackupNotice: () => null }))
@@ -118,26 +118,8 @@ describe("Settings tenant sign-in", () => {
     expect(button(container, "Sign in")?.disabled).toBe(false)
   })
 
-  it("recovers a Start now session when signing in again from Settings", async () => {
-    state.reauthenticate.mockResolvedValueOnce({ error: {
-      code: "browser_sign_in_required", message: "Sign in to Microsoft in your browser first, then try again.",
-    } }).mockResolvedValueOnce(account)
-    state.openExternal.mockResolvedValue(undefined)
-    const container = await renderTenant(GRAPH_CLI_CLIENT_ID, true)
-    await act(async () => button(container, "Sign in again")!.click())
-    expect(container.textContent).toContain("Sign in to Microsoft in your browser first, then try again.")
-    expect(state.toast).not.toHaveBeenCalled()
-    await act(async () => button(container, "Open Microsoft sign-in")!.click())
-    expect(state.openExternal).toHaveBeenCalledExactlyOnceWith("https://intune.microsoft.com")
-    expect(state.reauthenticate).toHaveBeenCalledExactlyOnceWith(tenantId, GRAPH_CLI_CLIENT_ID)
-    await act(async () => button(container, "Try again")!.click())
-    expect(state.reauthenticate).toHaveBeenLastCalledWith(tenantId, GRAPH_CLI_CLIENT_ID)
-    expect(state.reauthenticate).toHaveBeenCalledTimes(2)
-    expect(button(container, "Open Microsoft sign-in")).toBeUndefined()
-    expect(state.toast).toHaveBeenCalledWith(`Signed in as ${account.username}.`, "success")
-  })
-
-  it.each([GRAPH_CLI_CLIENT_ID, "bbbbbbbb-1111-1111-1111-111111111111"])("keeps generic reauthentication for %s", async clientId => {
+  it("keeps generic reauthentication for an own app registration", async () => {
+    const clientId = "bbbbbbbb-1111-1111-1111-111111111111"
     state.reauthenticate.mockResolvedValue(account)
     const container = await renderTenant(clientId)
     await act(async () => { button(container, "Sign in")!.click() })

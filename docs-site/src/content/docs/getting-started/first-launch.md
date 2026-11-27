@@ -25,7 +25,7 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 
 Select **Connect your tenant**. Intune starts selected. Select any additional service you want to connect. Entra ID includes Conditional Access.
 
-Choose a sign-in method and sign in with Microsoft. TenuVault uses your signed-in tenant for **Start now** and **Set up with Microsoft sign-in**. If you administer a different tenant as a guest, open **Different tenant?** before signing in. An existing app registration still needs its tenant ID and client ID.
+Choose a sign-in method and sign in with Microsoft. TenuVault uses your signed-in tenant for **TenuVault app** and **Set up with Microsoft sign-in**. If you administer a different tenant as a guest, open **Different tenant?** before signing in. An existing app registration still needs its tenant ID and client ID.
 
 **Check** moves to **Storage** when all selected services have backup access. If only some services can be read, select **Continue with** the services listed. Open **Details** to review access and check again.
 

@@ -74,9 +74,8 @@ If several admins in one tenant use TenuVault, the key holder can share the lice
 1. On the machine that holds the key, open **License**.
 2. In the **Tenants** card, find the tenant.
 3. Select **Let other admins in this tenant use this license**.
-4. To include admins who connect with **Start now**, also select **Let admins who sign in with Start now use this license**. This checkbox appears after tenant sharing is enabled if the license service supports Start now sharing.
 
-Anyone who then signs in to this tenant with the same TenuVault app registration is licensed automatically. The key stays on the key holder's machine. Clear the checkbox to stop sharing.
+Anyone who then signs in to this tenant with the same TenuVault app or app registration is licensed automatically. The key stays on the key holder's machine. Clear the checkbox to stop sharing.
 
 Things to know:
 
@@ -95,7 +94,7 @@ TenuVault proves your sign-in to the licensing service with a fresh Microsoft ID
 
 ### Community although the tenant has an organization license
 
-An organization license is tied to the app registration it was shared from. If you connected with **Start now**, ask the key holder to enable the Start now sharing option, then select **Retry** on the **License** page. If you sign in to the tenant through another app registration, for example a second one that was created in the same tenant, the licensing service treats that sign-in as unlicensed, and it cannot start a trial either, because the tenant has a license. The tenant then shows **Community (free)** and TenuVault explains:
+An organization license is tied to the sign-in app it was shared from. If you sign in to the tenant through another app registration, for example a second one that was created in the same tenant, the licensing service treats that sign-in as unlicensed, and it cannot start a trial either, because the tenant has a license. The tenant then shows **Community (free)** and TenuVault explains:
 
 > This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.
 

@@ -83,8 +83,6 @@ For the Azure watcher, **Copy for Azure watcher** copies the layout as JSON. Sav
 
 ### Email
 
-If the tenant uses **Start now**, select **Use your own app registration** in **Settings > Sign-in and access** before testing or sending email alerts.
-
 Email is sent through Microsoft Graph as the signed-in admin. It needs the optional delegated `Mail.Send` permission, and Entra group recipients also need `GroupMember.Read.All` and `User.Read.All`. New app registrations include `GroupMember.Read.All` by default. The `-IncludeNotifications` switch adds `Mail.Send` and `User.Read.All`. For an existing registration, add any missing delegated permissions in Entra, grant admin consent and select **Check again** in **Settings > Services and permissions**. See [Permissions](/security/permissions/). Without `Mail.Send`, email deliveries fail with a Graph permission error while other channels keep working.
 
 In **Services and permissions**, **Entra group recipients of notification email** checks `User.Read.All` or `User.ReadWrite.All`. Check the **Group read** row for group membership access.

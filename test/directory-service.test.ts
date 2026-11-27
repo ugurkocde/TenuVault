@@ -1,6 +1,6 @@
 vi.hoisted(() => vi.stubGlobal("__TV_LAB_EXPANDED_ENTRA__", true))
 
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { graphWorkloadPolicy, graphUserCreateResponse } from "./fixtures/directory-graph-v1"
 import { graphNotFound, unsetUserFields, unsetGroupFields } from "./fixtures/directory-response"
 import { rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
@@ -93,7 +93,8 @@ it.each(["Users", "Groups"])("previews a %s restore with only the TenuVault ente
   expect(env.writes).toEqual([])
 })
 
-it.each([TENUVAULT_CLIENT_ID, GRAPH_CLI_CLIENT_ID])("protects a shared app ID and its tenant service principal (%s)", async clientId => {
+it("protects the TenuVault app ID and its tenant service principal", async () => {
+  const clientId = TENUVAULT_CLIENT_ID
   const identity = { tenantId: tenant, clientId, userId: admin }
   const reader = {
     get: vi.fn(async () => ({ appId: clientId, id: id(5) })),

@@ -7,22 +7,16 @@ Open **Connect a tenant** and start at **How do you want to connect?**. The same
 
 | Sign-in method | What it creates in your tenant |
 | --- | --- |
-| **Start now** | Nothing. Uses the permissions Microsoft Graph Command Line Tools already has. |
+| **TenuVault app** (recommended) | One enterprise app entry when an administrator approves the requested permissions. |
 | **Your own app registration** | One app registration if you create one. You can also use the setup script or an existing registration. |
 
-If Start now is unavailable, choose **Your own app registration**. The TenuVault app is coming in a later release.
+If the TenuVault app is temporarily unavailable, choose **Your own app registration**.
 
-## Start now
+## TenuVault app
 
-**Start now** is a read-only option in **How do you want to connect?** when the license service enables it. Sign in to Microsoft in your browser with the work account you want to use before selecting **Sign in with Microsoft**. Start now uses that session and the permissions already granted to Microsoft Graph Command Line Tools. If TenuVault asks you to sign in first, select **Open Microsoft sign-in**. It opens the [Microsoft Intune admin center](https://intune.microsoft.com) in your default browser to establish a Microsoft session without asking for consent to Microsoft Graph Command Line Tools. Sign in with your work account, return to TenuVault and select **Try again**. If Microsoft says consent is required, choose **Your own app registration**.
+**TenuVault app** is the recommended option in **How do you want to connect?**. You sign in with Microsoft and approve backup permissions for the services you choose. Restore permissions are requested separately when you first need them.
 
-1. For an eligible tenant, open **Settings > Sign-in and access**, then select **Use Start now**. Switch to backup storage on this device first if you use Azure storage.
-2. Use a browser session already signed in with an account in the same tenant, then select **Continue to Microsoft**.
-3. Open **Services and permissions** to see which backup types the granted scopes cover for Entra ID and Intune. If TenuVault cannot read the grant, it shows coverage as unknown. Your Microsoft role and service licenses also affect which reads succeed.
-
-The tenant keeps its schedules, settings and backup history when you switch. Start now supports local policy backups. For restore, deployment, Copy to Tenants, remediation, installer capture or Azure storage, select **Use your own app registration**. See [Start now troubleshooting](/troubleshooting/#start-now-sign-in).
-
-If you switch a tenant to Start now while a change is running, TenuVault stops sending further changes for that operation. This applies to every tenant involved in a Promotion, Sync or installer restore. Any changes already accepted by Microsoft stay in place.
+The tenant keeps its schedules, settings and backup history if you switch between the TenuVault app and your own app registration under **Settings > Sign-in and access**.
 
 After signing in with any method, open the tenant name or **Connected tenant** on **Check** or **Storage** to confirm the tenant ID. TenuVault also shows the organization name when the sign-in can read it. If Microsoft signed you into another tenant, select **Different tenant?** and sign in to the intended tenant.
 
@@ -39,7 +33,7 @@ The wizard has four steps: **Connect**, **Check**, **Storage** and **First backu
 
 ### Continue where you left off
 
-TenuVault saves your progress on this computer, in its encrypted app store: the step, the tenant ID, the client ID, the display name, and a sign-in to a tenant that is not saved yet. No token is kept in this record. Your progress survives a restart, so you can close TenuVault while you run the setup script or wait for another administrator. When you come back, TenuVault skips the welcome screen and the setup says **Welcome back. Continue where you left off.**. A saved sign-in is resumed only while it is still signed in on this computer; otherwise you sign in again. A staged Start now sign-in stays in memory until storage is confirmed. If you quit before confirming storage, start that sign-in again. The **First backup** step is not resumed.
+TenuVault saves your progress on this computer, in its encrypted app store: the step, the tenant ID, the client ID, the display name, and a sign-in to a tenant that is not saved yet. No token is kept in this record. Your progress survives a restart, so you can close TenuVault while you run the setup script or wait for another administrator. When you come back, TenuVault skips the welcome screen and the setup says **Welcome back. Continue where you left off.**. A saved sign-in is resumed only while it is still signed in on this computer; otherwise you sign in again. The **First backup** step is not resumed.
 
 ## Set up your own app registration
 
@@ -193,15 +187,13 @@ See [Activate and manage your license](/licensing/manage/) for all license messa
 
 TenuVault keeps your sign-in in a token cache encrypted with Windows data protection or the macOS Keychain. Background tasks such as scheduled backups never open a sign-in window. When Microsoft needs you to sign in again, a banner appears with a **Sign in** button, or you use **Settings** > **Sign-in**. See [Settings reference](/settings/#sign-in).
 
-When you sign in again with **Start now**, TenuVault checks availability and uses your saved account to find its browser session. If the session has ended, use **Open Microsoft sign-in** and **Try again** in Settings or in the scheduled backup sign-in banner.
-
 ## Next step
 
 [Choose where backups are stored](/getting-started/choose-storage/).
 
 ## Follow your service choice
 
-Setup asks for backup access only. You can add restore permissions when you first need them. Manage optional areas and access levels later under **Settings > Services and permissions**. Start now shows what the current sign-in can back up on **Check**.
+Setup asks for backup access only. You can add restore permissions when you first need them. Manage optional areas and access levels later under **Settings > Services and permissions**.
 
 Your own app registration routes use the same permissions for the chosen services:
 
@@ -217,6 +209,6 @@ Your own app registration routes use the same permissions for the chosen service
 
 Expand **Details** for area names, instructions for your sign-in method, and **Check again**. Permission names are under **Show permission names**. If none of your chosen services can be read, follow the access instructions on **Check** before continuing.
 
-Your chosen services stay enabled. A service with no readable areas shows **Needs access** in the sidebar and under **Settings > Services and permissions**. Backups skip settings the current sign-in cannot read and include them in the coverage report. With Start now, switch to your own app registration to add access.
+Your chosen services stay enabled. A service with no readable areas shows **Needs access** in the sidebar and under **Settings > Services and permissions**. Backups skip settings the current sign-in cannot read and include them in the coverage report.
 
-Continue to **Storage**. Start now keeps backups on this device. With your own app registration, eligible plans can choose [Azure storage](/getting-started/choose-storage/). Open **Plan details** to see your tenant's plan. If it shows a new trial, you can choose to receive email tips and an end-of-trial reminder there. The address is sent only when you select **Email me setup tips and a reminder before the trial ends**. Select **Start first backup** to confirm storage and begin the backup.
+Continue to **Storage**. Eligible plans can choose **This device, encrypted** or [Azure storage](/getting-started/choose-storage/). Open **Plan details** to see your tenant's plan. If it shows a new trial, you can choose to receive email tips and an end-of-trial reminder there. The address is sent only when you select **Email me setup tips and a reminder before the trial ends**. Select **Start first backup** to confirm storage and begin the backup.

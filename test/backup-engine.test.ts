@@ -1,5 +1,5 @@
 import { AuthError } from "@azure/msal-node"
-import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { mkdtempSync, rmSync } from "node:fs"
 import { DEFAULT_SELECTION, disabledFolders } from "../src/shared/services/modules"
 import { randomBytes } from "node:crypto"
@@ -79,7 +79,7 @@ async function finished(engine: BackupEngine, id: string) {
 }
 
 describe("BackupEngine", () => {
-  it.each([["Start now", GRAPH_CLI_CLIENT_ID], ["own registration", CLIENT]])(
+  it.each([["TenuVault app", TENUVAULT_CLIENT_ID], ["own registration", CLIENT]])(
     "keeps a silent sign-in failure out of backup logs and history with %s",
     async (_method, clientId) => {
       const username = "private-admin@example.test"

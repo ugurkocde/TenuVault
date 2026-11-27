@@ -392,14 +392,6 @@ describe("license banners after tenant trials", () => {
   })
 })
 
-it.each(["/portal/dashboard", "/portal/backup", "/portal/settings"])("omits the global Start now strip on %s", async route => {
-  licenseStatus.current = statusFor("pro")
-  selectTenant("14d82eec-204b-4c2f-b7e8-296a70dab67e")
-  const container = await render(createElement(DesktopLayout), route)
-  expect(container.querySelector('[aria-label="Start now sign-in"]')).toBeNull()
-  expect(container.textContent).not.toContain("Start now provides read-only backups on this device.")
-})
-
 describe("License badge in the sidebar", () => {
   const TRIAL_ENDS = new Date(Date.now() + 13.5 * 86_400_000).toISOString()
   // One tenant runs the Pro trial, the other is licensed through its organization (MSP).

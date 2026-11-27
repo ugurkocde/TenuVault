@@ -11,10 +11,10 @@ import type { SyncRunRecord, SyncSkip } from "../src/main/features/sync/engine"
 import { recordSyncLinks, syncLinks, type SyncLink, type SyncLinksRecord } from "../src/main/features/sync/links"
 import { ApiHost } from "../src/main/api/host"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
-import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { executionMetadata } from "../src/main/api/execution-metadata"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
+import { START_NOW_REMOVED_REASON, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
 import { planGuard, requiredFeatures } from "../src/main/api/plan-gates"
 import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -1498,7 +1498,7 @@ it.each(["Promotion", "Sync"] as const)("stops %s writes in the bridge when the 
         if (!attempted && init?.method !== "GET") {
           attempted = true
           queueMicrotask(() => {
-            if (reason === "switch") source = { ...own, method: "graphCli", clientId: GRAPH_CLI_CLIENT_ID }
+            if (reason === "switch") source = { ...own, method: null, clientId: "", needsSignInMethod: true }
             else enabled = false
           })
         }
@@ -1525,6 +1525,6 @@ it.each(["Promotion", "Sync"] as const)("stops %s writes in the bridge when the 
     }))
     expect(attempted).toBe(true)
     expect(context.targets[TENANT_B]!.writeCount(), `${feature}: ${reason}`).toBe(0)
-    expect(await response.text()).toContain(reason === "switch" ? READ_ONLY : "currently unavailable")
+    expect(await response.text()).toContain(reason === "switch" ? START_NOW_REMOVED_REASON : "temporarily unavailable")
   }
 })

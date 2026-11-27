@@ -213,7 +213,6 @@ describe("temporary app metadata access", () => {
     expect(GRANT_REMOVAL_SCOPE).toBe("DelegatedPermissionGrant.ReadWrite.All")
     expect(APPLICATION_METADATA_RESTORE_PACK.scopes).toEqual(["Application.ReadWrite.All", GRANT_REMOVAL_SCOPE])
     expect(privilegedRestoreConsent("tenuvaultApp", "Applications")?.pack).toBe(APPLICATION_METADATA_RESTORE_PACK)
-    expect(privilegedRestoreConsent("graphCli", "Applications")).toBeNull()
     expect(privilegedRestoreConsent("ownApp", "Applications")).toBeNull()
     for (const access of ["backup", "restore"] as const) {
       const packs = tenantPermissionPacks({

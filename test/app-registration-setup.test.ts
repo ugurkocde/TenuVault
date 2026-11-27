@@ -23,6 +23,7 @@ import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { executionMetadata } from "../src/main/api/execution-metadata"
 import { suggestsCreatingByHand } from "../src/shared/app-registration"
+import { SETUP_HELPER_CLIENT_ID } from "../src/shared/tenant-connection"
 const TENANT = "4c1e5b0a-7d3f-4e2a-9b61-0f8d2c7a9e15"
 const host = () => ({ fetch: vi.fn<typeof fetch>(async () => Response.json({ issuer: `https://login.microsoftonline.com/${TENANT}/v2.0` })), openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
 beforeEach(() => { vi.clearAllMocks() })
@@ -46,6 +47,7 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
   })
   state.provision.mockResolvedValueOnce({ tenantId: TENANT, clientId: "client", username: "admin", reused: false, ready: true })
   const result = await new AppRegistrationSetup(h).create({ tenant: "example.test" })
+  expect(state.configuration?.auth.clientId).toBe(SETUP_HELPER_CLIENT_ID)
   expect(state.configuration?.auth.authority).toBe(`https://login.microsoftonline.com/${TENANT}`)
   expect(state.configuration).not.toHaveProperty("cache")
   expect(state.configuration?.system?.networkClient).toBeDefined()

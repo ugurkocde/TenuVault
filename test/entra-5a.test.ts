@@ -10,7 +10,6 @@ import { adminCenterLink } from "../src/shared/intune/admin-links"
 import { LEGACY_FOLDERS, includedTypes } from "../src/shared/intune/scope"
 import { MODULE_BY_ID, moduleForFolder, signedInOnly } from "../src/shared/services/modules"
 import { backupTypeUse } from "../src/shared/services/backup-use"
-import { GRAPH_CLI_CLIENT_ID } from "../src/shared/tenant-connection"
 import { ModuleSettings } from "../src/main/services/settings"
 import { GraphSession } from "../src/main/backup/graph-session"
 import { GraphError } from "../src/main/backup/request"
@@ -149,10 +148,8 @@ describe("Entra backup integration", () => {
     expect(backup).toEqual({ ...policy, id: type.singleton!.id })
   })
 
-  it.each([
-    ["Start now", GRAPH_CLI_CLIENT_ID, "/beta/policies/authorizationPolicy/authorizationPolicy"],
-    ["own registration", CLIENT, "/v1.0/policies/authorizationPolicy"],
-  ])("saves Authorization Policy through its entity route with %s", async (_method, clientId, entityPath) => {
+  it("saves Authorization Policy through its entity route with own registration", async () => {
+    const entityPath = "/v1.0/policies/authorizationPolicy"
     const policy = { id: "authorizationPolicy", displayName: "Authorization Policy", allowInvitesFrom: "everyone" }
     const overrides = "/beta/policies/authorizationPolicy/authorizationPolicy/defaultUserRoleOverrides"
     const setup = fixture(scriptedGraph({
@@ -163,48 +160,14 @@ describe("Entra backup integration", () => {
     }), {
       services: () => ({ services: ["entra"] }),
       getToken: async () => jwt({ scp: "Policy.Read.All" }),
-      graphCliGrant: () => new Set(["Policy.Read.All"]),
     })
-    const job = await setup.run({ clientId, scope: only("AuthorizationPolicy") })
+    const job = await setup.run({ clientId: CLIENT, scope: only("AuthorizationPolicy") })
     expect(job.outcomes?.types).toEqual([{ folder: "AuthorizationPolicy", service: "entra", outcome: "saved", saved: 1 }])
     expect(job.coverage).toBe("complete")
     expect(setup.requests.map(request => request.path)).toEqual([entityPath, entityPath, overrides])
     expect(await setup.file(job, "AuthorizationPolicy/Authorization policy.json")).toMatchObject({
       id: "AuthorizationPolicy", allowInvitesFrom: "everyone", defaultUserRoleOverrides: [{ id: "override", isDefault: true }],
     })
-  })
-
-  it("backs up Directory Settings from its beta collection with Start now", async () => {
-    const setup = fixture(scriptedGraph({
-      "/beta/groupSettings": refusal(400, "BadRequest", "Resource not found for the segment 'groupSettings'."),
-      "/beta/settings": { value: [] },
-    }), {
-      services: () => ({ services: ["entra"] }),
-      graphCliGrant: () => new Set(["GroupSettings.Read.All"]),
-    })
-    const job = await setup.run({ clientId: GRAPH_CLI_CLIENT_ID, scope: only("DirectorySettings") })
-    expect(job.outcomes?.types).toEqual([{ folder: "DirectorySettings", service: "entra", outcome: "saved", saved: 0 }])
-    expect(job.coverage).toBe("complete")
-    expect(setup.requests.map(request => request.path)).toEqual(["/beta/settings"])
-  })
-
-  it("saves a populated Directory Settings detail from beta with Start now", async () => {
-    const setting = {
-      id: "setting-1", displayName: "Group.Unified", templateId: "template-1",
-      values: [{ name: "EnableGroupCreation", value: "false" }],
-    }
-    const setup = fixture(scriptedGraph({
-      "/beta/settings": { value: [{ id: setting.id, displayName: setting.displayName }] },
-      "/beta/settings/setting-1": { "@odata.context": "https://graph.microsoft.com/beta/$metadata#settings/$entity", ...setting },
-    }), {
-      services: () => ({ services: ["entra"] }),
-      graphCliGrant: () => new Set(["GroupSettings.Read.All"]),
-    })
-    const job = await setup.run({ clientId: GRAPH_CLI_CLIENT_ID, scope: only("DirectorySettings") })
-    expect(job.outcomes?.types).toEqual([{ folder: "DirectorySettings", service: "entra", outcome: "saved", saved: 1 }])
-    expect(job.coverage).toBe("complete")
-    expect(setup.requests.map(request => request.path)).toEqual(["/beta/settings", "/beta/settings/setting-1"])
-    expect(await setup.file(job, "DirectorySettings/Group.Unified.json")).toEqual(setting)
   })
 
   it("keeps a pre-update everything tenant's exact folder set and sends no Entra request", async () => {

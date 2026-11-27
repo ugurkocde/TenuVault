@@ -27,7 +27,7 @@ import { fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
 import { registerTestTypes, testType } from "./helpers/backup-fixture"
 import { withoutRestoreCapability } from "./helpers/restore-capability"
 import { RELEASE_FOLDERS } from "./fixtures/release-0.5-import"
-import { GRAPH_CLI_CLIENT_ID, GRAPH_CLI_READ_ONLY, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 
 /**
  * Every type has a restore capability, and a type that declares none can never be written. The
@@ -181,7 +181,6 @@ describe("Intune policy set restore permission", () => {
   const readOnly = tokenWith("DeviceManagementConfiguration.Read.All DeviceManagementApps.ReadWrite.All")
 
   it.each([
-    [GRAPH_CLI_CLIENT_ID, GRAPH_CLI_READ_ONLY],
     [TENUVAULT_CLIENT_ID, "Review the restore permission pack for this service in Sign-in and access."],
     [credentials.appId, "Add it to your app registration. Services and permissions shows how to add it."],
   ])("gives connection-specific reasons in the item list and live preview for %s", async (appId, message) => {
@@ -193,14 +192,6 @@ describe("Intune policy set restore permission", () => {
       expect(await response.json()).toMatchObject({ items: [{ blocker, replaceBlocker: blocker }] })
     }
     expect(writes(seen)).toEqual([])
-  })
-
-  it("blocks Start now in the item list even for an Intune type without a permission precheck", async () => {
-    const type = typeForFolder("DeviceConfigurations")!
-    const seen = world(type, {}, tokenWith(permission))
-    const response = await restorePreview(post("restore-preview", { ...credentials, appId: GRAPH_CLI_CLIENT_ID, backupId: BACKUP, paths: [fileOf(type)] }))
-    expect(await response.json()).toMatchObject({ items: [{ blocker: GRAPH_CLI_READ_ONLY, replaceBlocker: GRAPH_CLI_READ_ONLY }] })
-    expect(seen.graph).toEqual([])
   })
 
   it.each([false, true])("shows the missing write scope in the preview with live=%s", async (live) => {
@@ -234,16 +225,11 @@ describe("Intune policy set restore permission", () => {
 })
 
 describe("restore permission guidance", () => {
-  it("explains Start now without a prior permission check", () => {
-    expect(restoreAccessGuidance(GRAPH_CLI_CLIENT_ID)).toBe(GRAPH_CLI_READ_ONLY)
-  })
-
   it("gives general permission guidance when the client ID is missing", () => {
     expect(restoreAccessGuidance()).toBe("Review the restore permissions for this service. Services and permissions shows how to add them.")
   })
 
   it.each([
-    ["Start now", GRAPH_CLI_CLIENT_ID, GRAPH_CLI_READ_ONLY],
     ["TenuVault app", TENUVAULT_CLIENT_ID, "This restore needs Group.ReadWrite.All. Review the restore permission pack for this service in Sign-in and access."],
     ["your own app registration", credentials.appId, "This restore needs Group.ReadWrite.All. Add it to your app registration. Services and permissions shows how to add it."],
   ])("explains the directory restore blocker for %s", (_method, clientId, blocker) => {

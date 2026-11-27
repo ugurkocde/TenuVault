@@ -9,7 +9,7 @@ import { memoryStore } from './helpers'
 import { parseBackupName } from '../src/shared/intune/backup-names'
 import { POST as backupChanges } from '../src/portal/app/api/backup-changes/route'
 import { POST as listBackups } from '../src/portal/app/api/list-backups/route'
-import { GRAPH_CLI_CLIENT_ID, TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { compareBackups, summarize } from '../src/shared/intune/backup-changes'
 import { createAuditRecorder } from '../src/main/api/audit'
 import { CANCELLED_HEADER, registerDriftScan } from '../src/portal/lib/drift/scan-hooks'
@@ -442,7 +442,6 @@ describe('Drift item matching', () => {
   it.each([
     ['own registration', 'own-app', 'TermsOfUseAgreements', 'NamedLocations', 'DeviceConfigurations'],
     ['TenuVault app', TENUVAULT_CLIENT_ID, 'NamedLocations', 'DeviceConfigurations', 'TermsOfUseAgreements'],
-    ['Start now', GRAPH_CLI_CLIENT_ID, 'DeviceConfigurations', 'TermsOfUseAgreements', 'NamedLocations'],
   ])('omits unread types in all services from backup changes and drift for %s', async (_method, appId, excluded, refused, unresolved) => {
     const covered = 'CompliancePolicies'
     const folders = [excluded, refused, unresolved, covered]

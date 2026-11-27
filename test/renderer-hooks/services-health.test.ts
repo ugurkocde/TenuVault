@@ -311,24 +311,6 @@ it.each(Object.entries(storageExpectations))("explains storage %s independently 
   if (!["healthy", "local"].includes(state)) expect(storage.querySelector('a[href="/portal/settings?section=storage"]')).not.toBeNull()
 })
 
-
-
-it("keeps Entra ID on with a Needs access badge and the Start now repair link", async () => {
-  const report = healthScene("entra-all-areas")
-  mocks.check.mockResolvedValue({
-    ...report,
-    readOnly: true,
-    coverage: [{ service: "entra", folders: ["TermsOfUseAgreements"], readable: [] }],
-  })
-  await render()
-  const entra = container.querySelector('[data-service="entra"]')!
-  expect(entra.textContent).toContain("Needs access")
-  expect(entra.textContent).toContain("Entra ID needs more access.")
-  expect(entra.textContent).toContain("Terms of use")
-  expect(entra.querySelector<HTMLInputElement>('input[role="switch"]')?.checked).toBe(true)
-  expect(entra.querySelector("a")?.getAttribute("href")).toBe(`/portal/settings?section=signin#sign-in-${report.tenantId}`)
-})
-
 it("shows the plain status when the Backup Reader covers a service and notes when the sign-in lacks access", async () => {
   const report = healthScene("entra-all-areas")
   const folder = "Entra IDSecureScoreControlStates"
@@ -360,18 +342,6 @@ it("clears Needs access from Settings after permissions are added and checked ag
   await click("Check again")
   expect(mocks.check).toHaveBeenLastCalledWith(HEALTH_TENANT, true)
   expect(entra.textContent).not.toContain("Needs access")
-})
-
-it("shows Start now as read-only and omits permission grant instructions", async () => {
-  const report = restoreGapFixture()
-  mocks.check.mockResolvedValue({ ...report, graph: { ...report.graph, state: "consentMissing" }, readOnly: true })
-  await render()
-  expect(container.textContent).toContain("Unavailable with Start now")
-  expect(container.textContent).toContain("Start now is unavailable in this tenant")
-  expect(container.textContent).not.toContain("grant consent")
-  expect(container.textContent).not.toContain("Add the missing permissions")
-  expect(container.textContent).not.toContain("Feature permissions")
-  expect(container.querySelector('select[aria-label="Intune access to request"]')).toBeNull()
 })
 
 it("defaults Services and permissions to the selected sidebar tenant when no query tenant is passed", async () => {

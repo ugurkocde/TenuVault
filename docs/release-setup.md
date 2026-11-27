@@ -131,7 +131,7 @@ Set these variables before building.
 - Set `TENUVAULT_LAB_LICENSE_PUBLIC_KEY` to the Ed25519 public verification key matching that service.
 - Optionally set `TENUVAULT_LAB_RUN` to a run name of up to 40 letters, digits or hyphens. Guided app setup adds unique IDs to the `TV06-TEST-` registration name.
 
-The separate lab profile enables Start now and the TenuVault app independently of the
+The separate lab profile enables the TenuVault app independently of the
 server's availability flags. The app shows **Lab build** and has no update feed. Without
 a lab key, the placeholder supports UI testing only.
 

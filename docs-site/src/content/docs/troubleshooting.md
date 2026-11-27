@@ -76,26 +76,6 @@ If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration
 | `AADSTS65001` or `AADSTS650057` | Check the registration's permissions and consent for the resource named in the error. |
 | `AADSTS70044` | Sign in again. If scheduled desktop backups repeatedly stop when your session ends, review the [Backup Reader](/backups/backup-reader/) option. |
 
-### Start now sign-in
-
-Start now uses existing browser sessions and permissions. If TenuVault asks you to sign in first, select **Open Microsoft sign-in**. Sign in to the Microsoft Intune admin center with your work account in the default browser, return to TenuVault and select **Try again**. If consent is required, choose **Your own app registration** in setup or select **Use your own app registration** in **Settings > Sign-in and access** for an existing tenant.
-
-| What you see | What to do |
-| --- | --- |
-| `consent_required`, `AADSTS65001`, `AADSTS65004`, `AADSTS90094`, `AADSTS90095` | Microsoft did not find an existing grant that allows this sign-in. Choose another sign-in method. |
-| `login_required`, `account_selection_required`, `AADSTS50058` | Use **Open Microsoft sign-in** to sign in with the work account for this tenant, then select **Try again**. |
-| `interaction_required` | Follow the recovery action in TenuVault. If the error indicates missing consent, choose another sign-in method. |
-| `AADSTS50105` | Your account lacks an assignment to Microsoft Graph Command Line Tools. Choose a sign-in method your organization allows. |
-| `AADSTS53000`, `AADSTS53001`, `AADSTS53003` | Conditional Access requires a compliant or joined device, or blocked the sign-in. Ask your Entra administrator which device and sign-in method the policy allows. |
-| `AADSTS50076`, `AADSTS50079` | Complete or set up multifactor authentication for your admin account in Microsoft, then try Start now again. Choose another method if Start now remains unavailable. |
-| `AADSTS700016`, `AADSTS500011`, `AADSTS7000112`, `AADSTS7000229` | Microsoft Graph Command Line Tools or its resource is unavailable in this tenant. Choose another sign-in method. |
-| `AADSTS7000218` | Microsoft rejected public-client sign-in. Choose another sign-in method. |
-| `AADSTS50020`, `AADSTS90072` | Use an admin account that belongs to the target tenant, or choose another method. |
-| Graph HTTP 403 | Check **Services and permissions** for the affected backup types. If the scope is present, ask your administrator to check your role. If the scope is missing, choose another sign-in method. |
-| Intune is not licensed | Check whether the tenant has an Intune license. An unavailable service has no verified backup coverage. |
-
-Microsoft can show a refusal on its own page without returning to TenuVault. Cancel the waiting sign-in and select another method. If Start now is unavailable, choose **Your own app registration**.
-
 [Microsoft Entra sign-in error reference](https://learn.microsoft.com/en-us/entra/identity-platform/reference-error-codes)
 
 ### Read the connection health report

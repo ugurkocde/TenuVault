@@ -3,11 +3,11 @@ import { routes } from "../src/main/features/notifications"
 import { DOMAINS } from "../src/main/features/domains"
 import { advanceWatcherDeploy, markInterruptedWatcherDeploys, resumePendingWatcherHandovers, resumeWatcherDeploy, watcherDeployOf } from "../src/main/features/notifications/watcher-deploy/engine"
 import { createArmCaller, type ArmRequest, type ArmResponse } from "../src/main/azure/arm"
-import { ConnectionCapabilities, READ_ONLY } from "../src/main/auth/connection-capabilities"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { executionMetadata } from "../src/main/api/execution-metadata"
 import { RESOURCE_SCOPES } from "../src/shared/constants"
-import { GRAPH_CLI_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
+import { START_NOW_REMOVED_REASON, type TenantConnection } from "../src/shared/tenant-connection"
 import { watcherAlertsHash } from "../src/shared/notifications/alerts"
 import { auditWatchOf } from "../src/main/features/notifications/service"
 import { call, fakeDeps, TENANT_A } from "./feature-helpers"
@@ -289,7 +289,7 @@ describe("watcher deployment preflight", () => {
 })
 
 describe("watcher deployment engine", () => {
-  it.each(["graphCli", "ownApp"] as const)("keeps the runner's connection when a deployment step waits and switches to %s", async method => {
+  it.each(["needsMethod", "ownApp"] as const)("keeps the runner's connection when a deployment step waits and switches to %s", async method => {
     const w = await world({ accountExists: false })
     const own: TenantConnection = {
       version: 1, method: "ownApp", origin: "wizard", clientId: "99999999-9999-9999-9999-999999999999",
@@ -324,19 +324,21 @@ describe("watcher deployment engine", () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(watcherDeployOf(w.deps, TENANT_A)).toMatchObject({ state: "running", phase: "deploy" })
       expect(w.arm.calls.every(call => call.method === "GET")).toBe(true)
-      current = { ...own, method, clientId: method === "graphCli" ? GRAPH_CLI_CLIENT_ID : SUBSCRIPTION }
+      current = method === "needsMethod"
+        ? { ...own, method: null, clientId: "", needsSignInMethod: true }
+        : { ...own, method: "ownApp", clientId: SUBSCRIPTION }
       await vi.advanceTimersByTimeAsync(2000)
 
       const writes = w.arm.calls.filter(call => call.method !== "GET")
-      if (method === "graphCli") {
+      if (method === "needsMethod") {
         expect(writes).toEqual([])
-        expect(watcherDeployOf(w.deps, TENANT_A)).toMatchObject({ state: "failed", error: READ_ONLY })
+        expect(watcherDeployOf(w.deps, TENANT_A)).toMatchObject({ state: "failed", error: expect.stringContaining(START_NOW_REMOVED_REASON) })
       } else {
         expect(writes.map(call => call.method)).toEqual(["POST", "PUT"])
         expect(w.arm.deploymentPuts).toBe(1)
       }
       // The next step can bind on its own. The runner must keep the ID from startup.
-      expect(authorizedWrites).toEqual(method === "graphCli" ? [own.clientId] : [own.clientId, own.clientId])
+      expect(authorizedWrites).toEqual(method === "needsMethod" ? [own.clientId] : [own.clientId, own.clientId])
     } finally {
       markInterruptedWatcherDeploys(w.deps)
       await vi.advanceTimersByTimeAsync(2000)
