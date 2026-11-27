@@ -7,7 +7,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { legacyAzureReader, legacyRecoveryFingerprint, registerStorageToken } from "../src/main/storage/azure-seal"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { BlobLeaseConflictError, LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { BlobLeaseConflictError, BlobLeaseUnsupportedError, LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -706,7 +706,10 @@ describe("Item 3: permanent lease or local lock unavailability warnings", () => 
     expect(readRetentionProgress(progress.get(`${TENANT}/contoso/false`)).leaseFailures).toEqual({ key: "azure:403:AuthorizationPermissionMismatch", count: 1 })
   })
 
-  it("shows a clear local folder setup warning after 3 consecutive runs with local lock failures", async () => {
+  it.each([
+    ["an unsupported folder", true],
+    ["a lock held by another instance", false],
+  ])("warns about the local folder after 3 consecutive runs only for %s", async (_name, unsupported) => {
     const root = mkdtempSync(join(tmpdir(), "tv-local-lock-perm-")); tempRoots.push(root)
     const account = localStorageAccountName(TENANT)
     const store = new LocalBlobStore(root, [MASTER])
@@ -720,7 +723,11 @@ describe("Item 3: permanent lease or local lock unavailability warnings", () => 
     let failLock = true
     const originalAcquire = store.acquireRetentionLock.bind(store)
     vi.spyOn(store, "acquireRetentionLock").mockImplementation(async (...args) => {
-      if (failLock) throw new BlobLeaseConflictError("The backup folder does not support exclusive lock creation (EOPNOTSUPP).")
+      if (failLock) {
+        throw unsupported
+          ? new BlobLeaseUnsupportedError("The backup folder does not support the local retention lock (EOPNOTSUPP).")
+          : new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
+      }
       return originalAcquire(...args)
     })
 
@@ -752,8 +759,12 @@ describe("Item 3: permanent lease or local lock unavailability warnings", () => 
     expect(run2.log.join("\n")).not.toContain("3 consecutive runs")
     const run3 = await runLocal()
     const log3 = run3.log.join("\n")
-    expect(log3).toContain("3 consecutive runs")
-    expect(log3).toContain("does not support the local retention lock")
+    if (unsupported) {
+      expect(log3).toContain("3 consecutive runs")
+      expect(log3).toContain("does not support the local retention lock")
+    } else {
+      expect(log3).not.toContain("does not support the local retention lock")
+    }
 
     failLock = false
     await runLocal()
