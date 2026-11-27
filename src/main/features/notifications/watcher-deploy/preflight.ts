@@ -3,9 +3,12 @@ import { armErrorMessage, type ArmResponse } from "../../../azure/arm"
 import {
   armActionAllowed,
   graphRolesFor,
+  minimumWatcherRunbookVersion,
   NO_WATCHER,
   UNKNOWN_CAPABILITIES,
   watcherDeployPlanHash,
+  watcherRunbookUpgradeMessage,
+  versionAtLeast,
   type ExistingWatcher,
   type WatcherDeployCapabilities,
   type WatcherDeployPlan,
@@ -15,6 +18,7 @@ import {
 } from "../../../../shared/notifications/watcher-deploy"
 import type { WatcherDestination } from "../../../../shared/notifications/alerts"
 import { watcherAlertsHash } from "../../../../shared/notifications/alerts"
+import { needsMassChange } from "../../../../shared/notifications/mass-change"
 import { channelsOf, rulesOf, watcherAlertsDocument, brief } from "../service"
 import { isValidEmailAddress, WATCHER_STALE_HOURS } from "../model"
 import { checkGraphRoles } from "./graph-roles"
@@ -448,9 +452,9 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
       existing = { ...existing, heartbeatRunAt: heartbeat.runAt }
       const heartbeatAge = heartbeat.runAt ? deps.now().getTime() - Date.parse(heartbeat.runAt) : Number.POSITIVE_INFINITY
       const recentHeartbeat = Number.isFinite(heartbeatAge) && heartbeatAge <= WATCHER_STALE_HOURS * 3_600_000
-      const version = heartbeat.runbookVersion?.split(".").map((part) => Number.parseInt(part, 10) || 0) ?? []
-      if (recentHeartbeat && heartbeat.runbookVersion && (version[0]! < 1 || (version[0] === 1 && (version[1] ?? 0) < 3))) {
-        findings.push({ severity: "block", code: "runbook-version", message: `The watcher runbook is ${heartbeat.runbookVersion}; this setup cannot attribute its runs to the selected watcher and job. Run the current setup script once to upgrade it, then check again.` })
+      const mass = needsMassChange(rulesOf(deps, tenant))
+      if (recentHeartbeat && heartbeat.runbookVersion && !versionAtLeast(heartbeat.runbookVersion, minimumWatcherRunbookVersion(mass))) {
+        findings.push({ severity: "block", code: "runbook-version", message: watcherRunbookUpgradeMessage(heartbeat.runbookVersion, mass) })
       }
       if (recentHeartbeat && !existing.found) findings.push({ severity: "block", code: "unseen-watcher", message: "A watcher already runs against this storage account, but this sign-in cannot see its Automation account. Use an account that can, so a second watcher is not created." })
     } else if (heartbeat.status === "error") {

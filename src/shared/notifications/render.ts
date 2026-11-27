@@ -246,7 +246,7 @@ export const ENTRA_CONDITIONAL_ACCESS = BUTTON_TARGETS.entra.href
 
 /** Fixed Microsoft destinations per event type. Never built from tenant data. */
 export function actionLink(envelope: NotificationEnvelope): { href: string; label: string } | null {
-  if (envelope.type === "intune.change") return BUTTON_TARGETS.intune
+  if (envelope.type === "intune.change" || envelope.type === "intune.massChange") return BUTTON_TARGETS.intune
   if (envelope.type === "entra.change") return BUTTON_TARGETS.entra
   return null
 }

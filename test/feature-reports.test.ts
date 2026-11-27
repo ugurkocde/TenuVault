@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { afterScheduledBackup, MAX_AUDIT_EVENTS, MAX_REPORTS, readAudit, retentionStart, routes } from "../src/main/features/reports"
+import { afterScheduledBackup, alertOnBackupComparison, MAX_AUDIT_EVENTS, MAX_REPORTS, readAudit, retentionStart, routes } from "../src/main/features/reports"
+import { routes as notificationRoutes } from "../src/main/features/notifications"
+import { outboxOf } from "../src/main/features/notifications/service"
 import { DOMAINS } from "../src/main/features/domains"
 import type { Drift, DriftResult } from "../src/shared/intune/drift"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
@@ -303,5 +305,30 @@ describe("reports after scheduled backups", () => {
     await expect(afterScheduledBackup(w.deps, TENANT_A, "backup-2026-11-06-020000")).resolves.toBeUndefined()
     const status = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })
     expect(status.body.settings.lastAutomatic).toMatchObject({ outcome: "failed", message: "Storage unreachable" })
+  })
+})
+
+
+describe("mass change alerts after backup", () => {
+  it("compares the completed backup and queues one alert without saving a report", async () => {
+    const w = world()
+    const backup = "backup-2026-11-06-020000"
+    const notifications = notificationRoutes(w.deps)
+    const request = (action: string, body: Record<string, unknown> = {}) =>
+      call(notifications, "/api/notifications", { action, tenantId: TENANT_A, ...body })
+    const channel = await request("add-channel", { title: "Local", kind: "local" })
+    expect(channel.status).toBe(200)
+    const rule = { title: "Mass change", eventTypes: ["intune.massChange"], channelIds: [channel.body.channel.id] }
+    expect((await request("add-rule", rule)).status).toBe(400)
+    const added = await request("add-rule", { ...rule, massChange: { deleted: null, changed: 1, changeTypes: ["updated"] } })
+    expect(added.status).toBe(200)
+    await alertOnBackupComparison(w.deps, TENANT_A, backup)
+    await alertOnBackupComparison(w.deps, TENANT_A, backup)
+    expect(w.deps.records.list(DOMAINS.changeReports, TENANT_A)).toEqual([])
+    expect(outboxOf(w.deps, TENANT_A).map((entry) => entry.envelope)).toMatchObject([{
+      type: "intune.massChange", severity: "critical", items: [{ title: "Defender", detail: "updated" }],
+    }])
+    expect(w.apiCalls[0]).toEqual({ path: "/api/detect-drifts", body: { comparison: backup, documentItems: false } })
+    expect(w.graphCalls).toEqual([])
   })
 })

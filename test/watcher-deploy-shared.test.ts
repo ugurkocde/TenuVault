@@ -38,6 +38,7 @@ const ready: WatcherHandoverEvidence = {
   destinationOk: true,
   needsConditionalAccess: true,
   watchConditionalAccess: true,
+  needsMassChange: false,
   alertsHash: "abc123",
   alertsWrittenAt: "2026-11-07T10:00:00.000Z",
   heartbeat: { runAt: "2026-11-07T10:02:00.000Z", lastError: null, alertsHash: "abc123", identityPrincipalId: PRINCIPAL, jobId: JOB },
@@ -83,6 +84,11 @@ describe("watcher deployment plan", () => {
 describe("watcher hand-over gate", () => {
   it("opens only for a clean run of the alerts just written", () => {
     expect(handoverGate(ready)).toEqual({ ok: true, missing: [] })
+  })
+
+  it("requires runbook 1.6.0 to hand over mass change alerts even when the heartbeat hash matches", () => {
+    expect(handoverGate({ ...ready, needsMassChange: true, runbookVersion: "1.5.9" }).missing).toEqual(["runbook-version"])
+    expect(handoverGate({ ...ready, needsMassChange: true, runbookVersion: "1.6.0" }).ok).toBe(true)
   })
 
   it.each([

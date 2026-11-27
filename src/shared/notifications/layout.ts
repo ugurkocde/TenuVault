@@ -57,7 +57,7 @@ export const EVENT_GROUPS = {
   backups: ["backup.failed", "backup.warning", "backup.succeeded", "backup.missed"],
   restores: ["restore.completed", "restore.partial", "restore.failed"],
   drift: ["drift.detected"],
-  changes: ["intune.change", "entra.change"],
+  changes: ["intune.change", "intune.massChange", "entra.change"],
   alerts: ["credential.expiring", "watcher.stale", "health.finding"],
 } as const satisfies Record<string, readonly NotificationEventType[]>
 

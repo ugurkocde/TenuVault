@@ -7,6 +7,7 @@
  */
 import { WATCHER_STALE_HOURS, type WatcherDestination } from "./alerts"
 import { canonicalJson, sha256Hex } from "./envelope"
+import { MASS_CHANGE_RUNBOOK_VERSION } from "./mass-change"
 
 export type WatcherDeployMode = "adopt" | "create"
 export type WatcherDeployState = "running" | "blocked" | "failed" | "cancelled" | "complete" | "interrupted"
@@ -266,6 +267,7 @@ export interface WatcherHandoverEvidence {
   failureAlertOk: boolean
   destinationOk: boolean
   needsConditionalAccess: boolean
+  needsMassChange: boolean
   watchConditionalAccess: boolean | null
   alertsHash: string | null
   alertsWrittenAt: string | null
@@ -276,13 +278,24 @@ export interface WatcherHandoverEvidence {
   heartbeat: { runAt: string | null; lastError: string | null; alertsHash: string | null; identityPrincipalId?: string | null; jobId?: string | null } | null
 }
 
-function versionAtLeast(version: string, minimum: string): boolean {
+export function versionAtLeast(version: string, minimum: string): boolean {
   const parts = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10) || 0)
   const [a, b] = [parts(version), parts(minimum)]
   for (let index = 0; index < Math.max(a.length, b.length); index++) {
     if ((a[index] ?? 0) !== (b[index] ?? 0)) return (a[index] ?? 0) > (b[index] ?? 0)
   }
   return true
+}
+
+export function minimumWatcherRunbookVersion(needsMassChange: boolean): string {
+  return needsMassChange ? MASS_CHANGE_RUNBOOK_VERSION : "1.3.0"
+}
+
+export function watcherRunbookUpgradeMessage(version: string, needsMassChange: boolean): string {
+  const reason = needsMassChange
+    ? `mass Intune policy change alerts require ${MASS_CHANGE_RUNBOOK_VERSION} or later`
+    : "this setup cannot attribute its runs to the selected watcher and job"
+  return `The watcher runs version ${version}, and ${reason}. Run the current setup script to upgrade it.`
 }
 
 /**
@@ -298,7 +311,7 @@ export function handoverGate(evidence: WatcherHandoverEvidence): { ok: boolean; 
   if (!evidence.accountExists) missing.push("account")
   if (evidence.identityTenantMatches !== true) missing.push("identity-tenant")
   if (evidence.runbookPublished !== true) missing.push("runbook")
-  if (!evidence.runbookVersion || !versionAtLeast(evidence.runbookVersion, "1.3.0")) missing.push("runbook-version")
+  if (!evidence.runbookVersion || !versionAtLeast(evidence.runbookVersion, minimumWatcherRunbookVersion(evidence.needsMassChange))) missing.push("runbook-version")
   if (evidence.scheduleLinked !== true) missing.push("schedule")
   if (!evidence.failureAlertOk) missing.push("failure-alert")
   if (!evidence.destinationOk) missing.push("destination")

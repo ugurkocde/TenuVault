@@ -4,6 +4,7 @@ import { AuditEventType } from "../../../portal/lib/audit/types"
 import { AUDIT_EVENT_SELECT, mapAuditEvent, type AuditChange, type AuditEventRaw } from "../../../shared/notifications/audit"
 import { ENTRA_AUDIT_FILTER, ENTRA_AUDIT_SELECT, mapEntraAuditEvent, type EntraAuditRaw } from "../../../shared/notifications/entra"
 import { buildEnvelope } from "../../../shared/notifications/envelope"
+import { isIntunePolicyType, type BackupMassChange } from "../../../shared/notifications/mass-change"
 import { emailHtml, emailSubject } from "../../../shared/notifications/render"
 import type { DriftResult } from "../../../shared/intune/drift"
 import { isBackupName } from "../../../shared/intune/backup-names"
@@ -24,7 +25,7 @@ import type { Stored } from "../records"
 import { recordGovernanceAudit } from "../governance-audit"
 import { featureRoute, FeatureError, type Body } from "../route"
 import { parseRecipients, type EmailRecipient } from "../notifications/model"
-import { brief, graphError, nextPath, resolveRecipients } from "../notifications/service"
+import { auditWatchOf, backupMassChangeRules, brief, emitBackupMassChange, graphError, nextPath, resolveRecipients } from "../notifications/service"
 
 /** Reports kept per tenant; the oldest are dropped first. */
 export const MAX_REPORTS = 12
@@ -256,15 +257,7 @@ export async function generateReport(
   const tenant = tenantId.toLowerCase()
   const profile = deps.tenant(tenant)
   if (!profile) throw new FeatureError("This tenant is not connected.", 404)
-  const response = await deps.api("/api/detect-drifts", tenant, {
-    ...(input.baseline && input.comparison ? { baseline: input.baseline, comparison: input.comparison } : input.comparison ? { comparison: input.comparison } : {}),
-    documentItems: true,
-  })
-  const body = (await response.json().catch(() => null)) as (DriftResult & { error?: string; code?: string }) | null
-  if (!response.ok || !body || !Array.isArray(body.drifts)) {
-    const status = response.status === 404 || response.status === 409 ? response.status : 502
-    throw new FeatureError(body?.error ?? `The backups could not be compared (${response.status}).`, status)
-  }
+  const body = await compareBackups(deps, tenant, input.baseline, input.comparison, true)
   const settings = currentSettings(deps, tenant)
   const audit = await readAudit(deps, tenant, body)
   const report = buildChangeReport(body, audit, {
@@ -284,6 +277,50 @@ export async function generateReport(
   }, { actor: input.actor, reason: `Change report generated (${input.trigger})` })
   deps.records.prune<ReportRecord>(DOMAINS.changeReports, tenant, MAX_REPORTS, (record) => record.id !== created.id)
   return created
+}
+
+async function compareBackups(deps: FeatureDeps, tenant: string, baseline: string | null, comparison: string | null, documentItems: boolean): Promise<DriftResult> {
+  const response = await deps.api("/api/detect-drifts", tenant, {
+    ...(baseline && comparison ? { baseline: baseline, comparison: comparison } : comparison ? { comparison: comparison } : {}),
+    documentItems,
+  })
+  const body = (await response.json().catch(() => null)) as (DriftResult & { error?: string; code?: string }) | null
+  if (!response.ok || !body || !Array.isArray(body.drifts)) {
+    const status = response.status === 404 || response.status === 409 ? response.status : 502
+    throw new FeatureError(body?.error ?? `The backups could not be compared (${response.status}).`, status)
+  }
+  return body
+}
+
+/** Evaluate a successful backup even if no automatic change report was configured. */
+export async function alertOnBackupComparison(deps: FeatureDeps, tenantId: string, backup: string): Promise<void> {
+  const tenant = tenantId.toLowerCase()
+  if (!backupMassChangeRules(deps, tenant).length || !allows(await deps.plan(tenant), "notifications")) return
+  let drift: DriftResult
+  try {
+    drift = await compareBackups(deps, tenant, null, backup, false)
+  } catch (error) {
+    if (error instanceof FeatureError && (error.status === 404 || error.status === 409)) return
+    throw error
+  }
+  const drifts = drift.drifts.filter((item) => isIntunePolicyType(item.type))
+  if (!drifts.length) return
+  const includeActors = auditWatchOf(deps, tenant)?.includeActor ?? false
+  const audit = includeActors ? await readAudit(deps, tenant, { ...drift, drifts }) : { changes: [], note: null }
+  const report = buildChangeReport({ ...drift, drifts }, audit, {
+    tenantId: tenant, tenantName: deps.tenant(tenant)?.name ?? tenant, generatedAt: deps.now().toISOString(),
+    trigger: "scheduled", includeValues: false, includeActors,
+  })
+  const comparison: BackupMassChange = {
+    deleted: { count: 0, items: [] }, updated: { count: 0, items: [] }, created: { count: 0, items: [] },
+  }
+  for (const item of report.items) {
+    const kind = item.change === "deleted" ? "deleted" : item.change === "modified" ? "updated" : "created"
+    const group = comparison[kind]
+    group.count++
+    if (group.items.length < 5) group.items.push({ title: item.name, detail: kind, actor: item.activity.find((entry) => entry.who)?.who ?? undefined })
+  }
+  await emitBackupMassChange(deps, tenant, comparison, backup, drift.comparison.timestamp)
 }
 
 const CONDITIONAL_ACCESS_TYPES = /conditional access|named location|authentication strength/i

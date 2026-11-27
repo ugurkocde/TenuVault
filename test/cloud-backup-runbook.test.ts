@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
@@ -28,7 +29,7 @@ function runAuditSetup(shell: (file: string, args: string[], options: { encoding
 type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
 type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
 let plainRuns: Run[] | undefined
-/** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
+/** The scenarios of the plain-run fixture, including a comparison of two complete backups. */
 function runPlainFixture(): Run[] {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
   plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
@@ -64,7 +65,7 @@ describe("Cloud audit contract", () => {
       expect(write.uri).toMatch(new RegExp(`-event-${TENANT}-${entry.job.runId}\\.json$`))
       expect(file).toMatchObject({ version: "2.0", metadata: { entryCount: 1, createdAt: entry.timestamp } })
       expect(entry).toMatchObject({ user: { tenantId: TENANT, name: "Cloud backup managed identity" },
-        job: { status, producer: "cloud-runbook", producerVersion: "1.5.0", stage: "terminal" } })
+        job: { status, producer: "cloud-runbook", producerVersion: "1.6.0", stage: "terminal" } })
       const note = JSON.parse(scenario.calls.find(call => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!)
       expect(entry.job.runId).toBe(note.runId)
       const name = new URL(write.uri).pathname.slice("/audit-logs/".length)
@@ -584,7 +585,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it("carries a plain runbook version, which the app does not flag for upgrade", () => {
     const version = RUNBOOK_VERSION
     // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0; 1.4.0 records how a run started.
-    expect(version).toBe("1.5.0")
+    expect(version).toBe("1.6.0")
     expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
@@ -651,6 +652,48 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(warnings!.error).toBeNull()
     expect(warnings!.output).toContain("No change report: the backup completed with warnings.")
     expect(warnings!.calls.some((call) => call.uri.includes("/intune-backups?") && call.uri.includes("comp=list"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("preserves comparison counts in the bounded outcome note and sends them through the watcher", () => {
+    const run = runPlainFixture()[9]!
+    const report = run.calls.findIndex((call) => call.method === "Put" && call.uri.includes("/cloud-change-reports/"))
+    const outcome = run.calls.findIndex((call) => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))
+    expect(report).toBeGreaterThanOrEqual(0)
+    expect(outcome).toBeGreaterThan(report)
+    const body = run.calls[outcome]!.body!
+    expect(Buffer.byteLength(body)).toBeLessThanOrEqual(4096)
+    const note = JSON.parse(body)
+    expect(note.status).toBe("Success")
+    for (const type of ["deleted", "updated", "created"]) {
+      expect(note.comparison[type].count).toBe(5)
+      expect(note.comparison[type].items).toHaveLength(1)
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "tv-backup-comparison-"))
+    try {
+      const blobPath = join(dir, "alerts.json")
+      const variablePath = join(dir, "variable.json")
+      const outcomePath = join(dir, "outcome.json")
+      writeFileSync(blobPath, JSON.stringify({ schema: "tenuvault.watcher-alerts/v1", alerts: [{
+        id: "mass", title: "Mass change", eventTypes: ["intune.massChange"], minSeverity: "critical",
+        destinations: ["webhook"], delivery: "digest", conditions: null,
+        massChange: { deleted: 5, changed: 10, changeTypes: ["updated", "created"] },
+      }] }))
+      writeFileSync(variablePath, "")
+      writeFileSync(outcomePath, body)
+      const script = fileURLToPath(new URL("./fixtures/notifications/run-watcher.ps1", import.meta.url))
+      const watcher = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-AlertsBlobPath", blobPath, "-AlertsVariablePath", variablePath, "-BackupOutcomePath", outcomePath], { encoding: "utf8" }))
+      expect(watcher.heartbeat.lastError).toBeNull()
+      expect(watcher.outcomeConsumed).toBe(true)
+      expect(watcher.posts).toHaveLength(1)
+      expect(watcher.webhookEnvelopes.map((envelope: string) => JSON.parse(envelope))).toEqual([expect.objectContaining({
+        type: "intune.massChange", severity: "critical", occurredAt: note.finishedAt, moreCount: 12,
+        summary: "One backup comparison found 5 deleted and 10 changed policies.",
+        items: ["deleted", "updated", "created"].map((type) => ({ title: note.comparison[type].items[0].title, detail: type })),
+      })])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("puts only plain JSON blobs during a run, records early failures and never calls Key Vault", () => {

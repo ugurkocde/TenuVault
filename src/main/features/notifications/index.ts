@@ -3,6 +3,7 @@ import { allows } from "../../../shared/plans"
 import { typeForFolder } from "../../../shared/intune/registry"
 import { NOTIFICATION_EVENT_TYPES, testEvent } from "../../../shared/notifications/envelope"
 import { changeEvent } from "../../../shared/notifications/audit"
+import { MASS_CHANGE_EVENT, MASS_CHANGE_RUNBOOK_VERSION, massChangeEnvelope, parseMassChange } from "../../../shared/notifications/mass-change"
 import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, watcherAlertsHash } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, isDefaultLayout, parseCardLayout, styleIssues } from "../../../shared/notifications/layout"
 import type { FeatureDeps } from "../deps"
@@ -28,7 +29,7 @@ import {
 } from "./model"
 import { watcherPreflight } from "./watcher-deploy/preflight"
 import { cancelWatcherDeploy, confirmWatcherDeploy, markInterruptedWatcherDeploys, publicWatcherDeploy, resumePendingWatcherHandovers, resumeWatcherDeploy, startWatcherDeploy, watcherDeployOf, WatcherDeployError } from "./watcher-deploy/engine"
-import { EMPTY_WATCHER_DEPLOY_ACK, type WatcherDeployAck, type WatcherDeployPlanInput } from "../../../shared/notifications/watcher-deploy"
+import { EMPTY_WATCHER_DEPLOY_ACK, versionAtLeast, type WatcherDeployAck, type WatcherDeployPlanInput } from "../../../shared/notifications/watcher-deploy"
 import {
   alertMatcher,
   auditWatchOf,
@@ -252,7 +253,9 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         mode: body.mode === "digest" ? "digest" : "immediate",
         conditions: conditions(body.conditions),
         delivery: delivery(body.delivery),
+        ...(body.massChange !== undefined ? { massChange: massChange(body.massChange) } : {}),
       }
+      requireMassChangeThresholds(value)
       value.summary = ruleSummary(value)
       value.status = value.enabled ? "enabled" : "disabled"
       const created = deps.records.create<RuleRecord>(DOMAINS.notificationRules, tenantId, value, { actor, reason: "Alert added" })
@@ -272,6 +275,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       if (body.mode !== undefined) changes.mode = body.mode === "digest" ? "digest" : "immediate"
       if (body.conditions !== undefined) changes.conditions = conditions(body.conditions)
       if (body.delivery !== undefined) changes.delivery = delivery(body.delivery)
+      if (body.massChange !== undefined) changes.massChange = massChange(body.massChange)
+      requireMassChangeThresholds({ ...rule, ...changes })
       const updated = deps.records.update<RuleRecord>(DOMAINS.notificationRules, tenantId, rule.id, (value) => {
         const next = { ...value, ...changes }
         next.summary = ruleSummary(next)
@@ -410,10 +415,10 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     // audit logs; nothing is queued, sent or remembered.
     "preview-rule": async ({ tenantId, body, deps }) => {
       const types = eventTypes(body.eventTypes)
-      if (!types.some(isChangeEventType)) throw new FeatureError("A preview reads the audit logs, so the alert needs Intune change or Conditional Access change.")
+      if (!types.some((type) => type === MASS_CHANGE_EVENT || isChangeEventType(type))) throw new FeatureError("A preview reads the audit logs, so the alert needs Intune change or Conditional Access change.")
       if (!deps.actor(tenantId)) throw new FeatureError("Sign in to this tenant to read its audit logs.")
       const days = Math.min(30, Math.max(1, Math.round(Number(body.days ?? 7)) || 7))
-      return previewChangeAlert(deps, tenantId, { id: "preview", enabled: true, eventTypes: types, minSeverity: severity(body.minSeverity), conditions: conditions(body.conditions), delivery: delivery(body.delivery) }, days)
+      return previewChangeAlert(deps, tenantId, { id: "preview", enabled: true, eventTypes: types, minSeverity: severity(body.minSeverity), conditions: conditions(body.conditions), delivery: delivery(body.delivery), massChange: massChange(body.massChange) }, days)
     },
 
     // One delivery with the event it carried, for the delivery view. Stored data only.
@@ -616,6 +621,7 @@ function watcherAlertsStatus(deps: FeatureDeps, tenantId: string) {
     source: watch?.watcherCheck?.alertsSource ?? null,
     runbookVersion,
     // Null while the heartbeat has not said which runbook runs.
+    supportsMassChange: runbookVersion === null ? null : versionAtLeast(runbookVersion, MASS_CHANGE_RUNBOOK_VERSION),
     readsAlertsFile: runbookVersion === null ? null : versionAtLeast(runbookVersion, WATCHER_ALERTS_FILE_RUNBOOK),
     auto: sync?.auto ?? false,
     pushedAt: sync?.pushedAt ?? null,
@@ -623,15 +629,6 @@ function watcherAlertsStatus(deps: FeatureDeps, tenantId: string) {
     error: sync?.error ?? null,
     errorAt: sync?.errorAt ?? null,
   }
-}
-
-function versionAtLeast(version: string, minimum: string): boolean {
-  const parts = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10) || 0)
-  const [a, b] = [parts(version), parts(minimum)]
-  for (let index = 0; index < Math.max(a.length, b.length); index++) {
-    if ((a[index] ?? 0) !== (b[index] ?? 0)) return (a[index] ?? 0) > (b[index] ?? 0)
-  }
-  return true
 }
 
 /** Background work while the app runs: outbox retries and due audit polls every minute. */
@@ -674,6 +671,19 @@ function conditions(value: unknown): RuleRecord["conditions"] {
   return hasConditions(parsed) ? parsed : null
 }
 
+function massChange(value: unknown) {
+  if (value === undefined || value === null) return null
+  const parsed = parseMassChange(value)
+  if (!parsed) throw new FeatureError("Set at least one positive whole-number threshold. A changed policy threshold needs a change type.")
+  return parsed
+}
+
+function requireMassChangeThresholds(rule: RuleRecord) {
+  if (rule.eventTypes.includes(MASS_CHANGE_EVENT) && !parseMassChange(rule.massChange)) {
+    throw new FeatureError("Set a threshold for the mass Intune policy change alert.")
+  }
+}
+
 function delivery(value: unknown): RuleRecord["delivery"] {
   if (value === undefined || value === null) return "digest"
   if (value !== "digest" && value !== "each") throw new FeatureError("delivery must be digest or each")
@@ -683,6 +693,16 @@ function delivery(value: unknown): RuleRecord["delivery"] {
 /** A made up change that passes the alert's conditions, so a test shows what the alert sends. */
 function sampleAlertEnvelope(deps: FeatureDeps, tenantId: string, rule: Stored<RuleRecord>) {
   const matcher = alertMatcher(rule)
+  if (rule.eventTypes.includes(MASS_CHANGE_EVENT) && matcher.massChange) {
+    const occurredAt = deps.now().toISOString()
+    const deleted = matcher.massChange.deleted ?? 0
+    const changed = matcher.massChange.changed ?? 0
+    const sample = massChangeEnvelope({ tenantId, tenantName: deps.tenant(tenantId)?.name, occurredAt, source: "desktop" },
+      `test:${occurredAt}:${rule.id}`, "audit",
+      { count: deleted, items: deleted ? [{ title: "Contoso Windows compliance", detail: "deleted" }] : [] },
+      { count: changed, items: changed ? [{ title: "Contoso device encryption", detail: matcher.massChange.changeTypes[0] }] : [] })
+    return { ...sample, title: `Test: ${sample.title}`, summary: `This is a test of the alert "${rule.title}". ${sample.summary}`, test: true as const }
+  }
   const service = rule.eventTypes.includes("entra.change") && !rule.eventTypes.includes("intune.change") ? "conditionalAccess" : "intune"
   const c = matcher.conditions
   const settingHint = c?.settingNames[0]
@@ -808,7 +828,7 @@ export function publicChannel(channel: Stored<ChannelRecord>) {
 
 export function publicRule(rule: Stored<RuleRecord>) {
   const { history, ...rest } = rule
-  return { ...rest, conditions: parseConditions(rule.conditions), delivery: parseDelivery(rule.delivery), history: history.map(({ at, actor, reason }) => ({ at, actor, reason })) }
+  return { ...rest, conditions: parseConditions(rule.conditions), delivery: parseDelivery(rule.delivery), massChange: parseMassChange(rule.massChange), history: history.map(({ at, actor, reason }) => ({ at, actor, reason })) }
 }
 
 export function publicAuditWatch(watch: Stored<AuditWatchRecord> | null) {

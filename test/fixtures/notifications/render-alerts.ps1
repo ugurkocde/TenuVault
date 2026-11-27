@@ -64,3 +64,37 @@ $nobody = Get-TvIntendedDestinations -Alerts $alerts -Envelope ([pscustomobject]
 Write-Output (ConvertTo-TenuVaultCanonicalJson ([pscustomobject][ordered]@{ legacy = $legacy; routed = $routed; planned = $planned; nobody = $nobody }))
 $taking = Get-TvAlertsTaking -Alerts $alerts -Envelope ([pscustomobject]@{ type = "backup.failed"; severity = "critical" })
 Write-Output (ConvertTo-TenuVaultCanonicalJson $taking)
+
+$mass = @($intunePlan | Where-Object { $_.envelope.type -eq "intune.massChange" })[0].envelope
+Write-Output (ConvertTo-TenuVaultCanonicalJson (New-TvTeamsPayload $mass (Get-TvCardStyleFor $null "intune.massChange")))
+Write-Output (ConvertTo-TenuVaultCanonicalJson (Get-TvEmailHtml $mass))
+
+$note = @{
+    schema = "tenuvault.cloud-backup-outcome/v1"
+    tenantId = $fixture.tenantId
+    status = "Success"
+    runId = "test-run"
+    backupFolder = "backup-2026-11-06-120000"
+    finishedAt = "2026-11-06T12:00:00.000Z"
+    comparison = @{
+        deleted = @{ count = 1; items = @(@{ title = "Contoso removed profile" }) }
+        updated = @{ count = 2; items = @(@{ title = "Contoso encryption"; actor = "Contoso automation" }) }
+        created = @{ count = 0; items = @() }
+    }
+}
+$outcome = ConvertFrom-TenuVaultBackupOutcome $note $fixture.tenantId
+$backupPlan = @(Get-TvBackupMassChangePlan $outcome $alerts $fixture.tenantId $fixture.tenantName $true)
+Write-Output (ConvertTo-TenuVaultCanonicalJson $backupPlan)
+
+# Audit pages can return the newest event before older events.
+$updatedThenDeleted = $intune[1] | Select-Object *
+$updatedThenDeleted.auditId = "updated-before-deletion"
+$updatedThenDeleted.resourceId = "removed-policy"
+$updatedThenDeleted.at = $intune[0].at
+$deletion = $updatedThenDeleted | Select-Object *
+$deletion.auditId = "deletion"
+$deletion.changeType = "deleted"
+$deletion.at = $intune[1].at
+$unsortedPlan = Get-TvChangeAlertPlan -Service intune -Changes @($intune[2], $deletion, $intune[0], $intune[1], $updatedThenDeleted) -Alerts $alerts -TenantId $fixture.tenantId -TenantName $fixture.tenantName -IncludeActor $true
+$unsortedMass = @($unsortedPlan | Where-Object { $_.envelope.type -eq "intune.massChange" })[0].envelope
+Write-Output (ConvertTo-TenuVaultCanonicalJson $unsortedMass)

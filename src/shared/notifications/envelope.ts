@@ -26,6 +26,7 @@ export const NOTIFICATION_EVENT_TYPES = [
   "drift.detected",
   "health.finding",
   "intune.change",
+  "intune.massChange",
   "entra.change",
   "credential.expiring",
   "watcher.stale",

@@ -7,7 +7,8 @@
  * note to its own container `tenuvault-backup-results` under `cloud-backup-outcomes/`.
  * A container of its own, because the backup identity may write there: in the watcher's state
  * container it could rewrite the watcher's state. It holds only what a backup alert shows anyway: status, folder
- * name, counts, failed type names and the time. Never policy content, names or messages.
+ * name, counts, failed type names and the time. With cloud change reports enabled, the note
+ * may also hold bounded policy and actor names for the mass change alert.
  *
  * The watcher (Invoke-TenuVaultNotificationCheck.ps1, ConvertFrom-TenuVaultBackupOutcome)
  * validates a note the same way as this module and turns it into the same backup event the

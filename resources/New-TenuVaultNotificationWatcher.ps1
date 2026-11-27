@@ -296,7 +296,7 @@ if (-not $Remove -and $AlertRulesPath) {
     try { $parsedAlerts = $alertRulesText | ConvertFrom-Json } catch { throw "The alerts file is not valid JSON. Copy it again from TenuVault." }
     if ($parsedAlerts.schema -cne "tenuvault.watcher-alerts/v1") { throw "The alerts file is not a TenuVault alerts file (schema tenuvault.watcher-alerts/v1)." }
     # The same event types and destinations the runbook accepts (ConvertFrom-TvWatcherAlerts).
-    $knownTypes = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed", "restore.completed", "restore.partial", "restore.failed", "drift.detected", "health.finding", "intune.change", "entra.change", "credential.expiring", "watcher.stale")
+    $knownTypes = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed", "restore.completed", "restore.partial", "restore.failed", "drift.detected", "health.finding", "intune.change", "intune.massChange", "entra.change", "credential.expiring", "watcher.stale")
     $knownDestinations = @("webhook", "teams", "mail")
     $usable = @($parsedAlerts.alerts | Where-Object {
         $_ -and @(@($_.eventTypes) | Where-Object { $knownTypes -ccontains $_ }).Count -gt 0 -and

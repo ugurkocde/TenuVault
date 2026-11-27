@@ -2,6 +2,7 @@ import type { Tenant } from "~/contexts/TenantContext"
 import { featureCall } from "../../lib/feature-api"
 import type { NotificationEnvelope, NotificationEventType, NotificationSeverity } from "../../../shared/notifications/envelope"
 import type { CardLayout } from "../../../shared/notifications/layout"
+import type { MassChangeThresholds } from "../../../shared/notifications/mass-change"
 import type { AlertConditions, AlertDelivery, WatcherAlerts } from "../../../shared/notifications/alerts"
 import type { WatcherDeployAck, WatcherDeployPlanInput, WatcherDeployView, WatcherPreflight } from "../../../shared/notifications/watcher-deploy"
 
@@ -45,6 +46,7 @@ export interface NotificationRule {
   channelIds: string[]
   mode: "immediate" | "digest"
   conditions: AlertConditions | null
+  massChange?: MassChangeThresholds | null
   delivery: AlertDelivery
   summary?: string
 }
@@ -91,6 +93,7 @@ export interface WatcherAlertsStatus {
   runbookVersion: string | null
   /** Whether the watcher's runbook reads alerts.json; null while unknown. */
   readsAlertsFile: boolean | null
+  supportsMassChange?: boolean | null
   auto: boolean
   pushedAt: string | null
   pushedHash: string | null
@@ -185,6 +188,7 @@ export interface RuleBody {
   mode?: "immediate" | "digest"
   /** Null clears the conditions: the alert sends every change. */
   conditions?: AlertConditions | null
+  massChange?: MassChangeThresholds | null
   delivery?: AlertDelivery
 }
 
@@ -279,6 +283,7 @@ export const EVENT_TYPE_LABELS: Record<NotificationEventType, string> = {
   "drift.detected": "Drift detected",
   "health.finding": "Health review finding",
   "intune.change": "Intune change (audit watch)",
+  "intune.massChange": "Mass Intune policy change",
   "entra.change": "Conditional Access change (audit watch)",
   "credential.expiring": "Backup Reader certificate expiring",
   "watcher.stale": "Watcher stale",

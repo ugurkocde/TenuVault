@@ -152,16 +152,16 @@ export function parseCloudStatus(value: unknown, tenantId: string, auditStatus?:
 export const PLAIN_CLOUD_RUNBOOK = "1.2.0"
 
 /**
- * True when the runbook that reported this status still seals backups with the recovery key
- * from Key Vault (before 1.2.0), so setup should run again. Unknown versions are not flagged.
+ * True when the reported runbook version is below the minimum, which defaults to the first
+ * runbook that writes plain backups. Unknown versions are ignored.
  */
-export function cloudRunbookNeedsUpgrade(version: string): boolean {
+export function cloudRunbookNeedsUpgrade(version: string, minimum = PLAIN_CLOUD_RUNBOOK): boolean {
   const parse = (text: string) => /^(\d+)\.(\d+)\.(\d+)$/.exec(text.trim())?.slice(1).map(Number)
   const current = parse(version)
-  const plain = parse(PLAIN_CLOUD_RUNBOOK)!
-  if (!current) return false
+  const required = parse(minimum)
+  if (!current || !required) return false
   for (let index = 0; index < 3; index++) {
-    if (current[index]! !== plain[index]!) return current[index]! < plain[index]!
+    if (current[index]! !== required[index]!) return current[index]! < required[index]!
   }
   return false
 }

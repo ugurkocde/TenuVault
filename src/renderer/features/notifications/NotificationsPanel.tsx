@@ -1,3 +1,5 @@
+import { DEFAULT_MASS_CHANGE, MASS_CHANGE_EVENT, MASS_CHANGE_RUNBOOK_VERSION, MASS_CHANGE_TYPES, MAX_MASS_CHANGE_THRESHOLD, parseMassChange, type MassChangeThresholds, type MassChangeType } from "../../../shared/notifications/mass-change"
+import { cloudRunbookNeedsUpgrade } from "../../../shared/cloud-backup"
 import { PausedOnCommunity } from "../../components/PausedOnCommunity"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
@@ -10,6 +12,7 @@ import { DEFAULT_CARD_LAYOUT, styleFor } from "../../../shared/notifications/lay
 import { canUse } from "../../components/PlanGate"
 import { PlanBadge, UpgradeNote } from "../../components/UpgradeNote"
 import { settingsHref } from "../../lib/settings-section"
+import { useCloudBackup } from "../../lib/cloud-backup"
 import { CardPreview } from "./CardPreview"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip, Tile } from "~/components/dashboard/tiles"
@@ -97,7 +100,7 @@ function watcherStale(check: { stale: boolean; lastRunAt: string | null } | unde
 /** The Alerts guide on the docs site; each link opens the section about what it sits next to. */
 export const ALERTS_DOCS_URL = "https://docs.tenuvault.com/notifications/"
 
-export type AlertsDocsSection = "alerts" | "which-changes-an-alert-sends" | "channels" | "change-watching" | "alerts-while-this-computer-is-off-the-azure-watcher" | "alerts-in-the-watcher" | "troubleshooting"
+export type AlertsDocsSection = "alerts" | "mass-intune-policy-change" | "which-changes-an-alert-sends" | "channels" | "change-watching" | "alerts-while-this-computer-is-off-the-azure-watcher" | "alerts-in-the-watcher" | "troubleshooting"
 
 function DocsLink({ section, children }: { section: AlertsDocsSection; children: ReactNode }) {
   const url = `${ALERTS_DOCS_URL}#${section}`
@@ -652,9 +655,15 @@ function useAlertBlockers(tenant: Tenant, data: NotificationsStatus, onChanged: 
     }
   }
   return (rule) => {
-    if (!rule.enabled || watch?.externalWatcher) return []
+    if (!rule.enabled) return []
+    if (watch?.externalWatcher) {
+      if (rule.eventTypes.includes(MASS_CHANGE_EVENT) && data.watcherAlerts?.supportsMassChange === false) {
+        return [{ message: "Update the Azure watcher runbook to 1.6.0 or later to send mass change alerts." }]
+      }
+      return []
+    }
     const blockers: AlertBlocker[] = []
-    const intune = rule.eventTypes.includes("intune.change")
+    const intune = rule.eventTypes.includes("intune.change") || rule.eventTypes.includes(MASS_CHANGE_EVENT)
     const ca = rule.eventTypes.includes("entra.change")
     if (intune && !watch?.enabled) blockers.push({ message: "Intune change watching is off, so this alert gets no Intune changes.", fix: { label: "Turn on Intune watching", run: turnOn({ enabled: true }, "Intune") } })
     else if (intune && watch?.lastError) blockers.push({ message: `The last Intune check failed: ${watch.lastError}`, href: { label: "Open Change watching", to: ALERTS_TAB_HREF.watching } })
@@ -881,6 +890,11 @@ function RuleRow({ tenant, rule, licensed, blockers, onChanged, onEdit, channelT
         {liveChannels === 0 && <Chip tone="danger">Sends nowhere</Chip>}
       </div>
       <p className="text-sm text-gray-600">{rule.eventTypes.map((type) => EVENT_TYPE_LABELS[type] ?? type).join(", ")}</p>
+      {rule.eventTypes.includes(MASS_CHANGE_EVENT) && rule.massChange && (
+        <p className="text-xs text-gray-500">
+          {[rule.massChange.deleted && `${rule.massChange.deleted}+ deleted`, rule.massChange.changed && `${rule.massChange.changed}+ changed`].filter(Boolean).join(" or ")} policies per check or backup
+        </p>
+      )}
       {narrowed && <p className="text-sm text-gray-600">Changes: {narrowed}</p>}
       <p className="text-sm text-gray-500">To: {rule.channelIds.map(channelTitle).join(", ") || "no channels"}</p>
       <BlockerList blockers={blockers} />
@@ -902,7 +916,7 @@ const INERT_EVENT_TYPES: ReadonlySet<NotificationEventType> = new Set(["test", "
 const EVENT_TYPE_GROUPS: Array<{ label: string; types: NotificationEventType[] }> = [
   { label: "Backups", types: ["backup.failed", "backup.warning", "backup.succeeded", "backup.missed"] },
   { label: "Restores and drift", types: ["restore.completed", "restore.partial", "restore.failed", "drift.detected"] },
-  { label: "Policy changes", types: ["intune.change", "entra.change"] },
+  { label: "Policy changes", types: ["intune.change", MASS_CHANGE_EVENT, "entra.change"] },
   { label: "Expiring and watcher", types: ["credential.expiring", "watcher.stale", "health.finding", "test"] },
 ]
 
@@ -931,14 +945,16 @@ export interface AlertDraft {
   minSeverity?: NotificationSeverity
   delivery?: AlertDelivery
   conditions?: Partial<AlertConditions> | null
+  massChange?: MassChangeThresholds | null
 }
 
-const PICKABLE_TYPES = NOTIFICATION_EVENT_TYPES.filter((type) => !INERT_EVENT_TYPES.has(type))
+const PICKABLE_TYPES = NOTIFICATION_EVENT_TYPES.filter((type) => !INERT_EVENT_TYPES.has(type) && type !== MASS_CHANGE_EVENT)
 
 /** Starting points for a first alert. Each fills the dialog; everything stays editable. */
 export const ALERT_TEMPLATES: Array<{ id: string; label: string; draft: AlertDraft }> = [
   { id: "backups", label: "Backup problems", draft: { title: "Backup problems", eventTypes: ["backup.failed", "backup.warning", "backup.missed", "restore.failed", "restore.partial"], minSeverity: "info", delivery: "digest", conditions: null } },
   { id: "intune", label: "Every Intune change, one by one", draft: { title: "Intune changes", eventTypes: ["intune.change"], minSeverity: "info", delivery: "each", conditions: null } },
+  { id: "mass-change", label: "Mass Intune policy change", draft: { title: "Mass Intune policy change", eventTypes: [MASS_CHANGE_EVENT], minSeverity: "critical", massChange: DEFAULT_MASS_CHANGE } },
   { id: "compliance", label: "Compliance policy changes", draft: { title: "Compliance policy changes", eventTypes: ["intune.change"], minSeverity: "info", delivery: "each", conditions: { categories: ["Compliance"], changeTypes: ["updated", "deleted", "unassigned"] } } },
   { id: "ca", label: "Conditional Access changes", draft: { title: "Conditional Access changes", eventTypes: ["entra.change"], minSeverity: "info", delivery: "each", conditions: null } },
   { id: "deletions", label: "Deletions and removed assignments", draft: { title: "Deletions and removed assignments", eventTypes: ["intune.change", "entra.change"], minSeverity: "info", delivery: "each", conditions: { changeTypes: ["deleted", "unassigned"] } } },
@@ -976,7 +992,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
   const known = new Set(channels.map((channel) => channel.id))
   // Types a rule can no longer pick stay on the rule untouched when it is edited.
   const keptInert = (rule?.eventTypes ?? []).filter((type) => INERT_EVENT_TYPES.has(type))
-  const start: AlertDraft = rule ? { title: rule.title, eventTypes: rule.eventTypes, minSeverity: rule.minSeverity, delivery: rule.delivery, conditions: rule.conditions } : draft ?? {}
+  const start: AlertDraft = rule ? { title: rule.title, eventTypes: rule.eventTypes, minSeverity: rule.minSeverity, delivery: rule.delivery, conditions: rule.conditions, massChange: rule.massChange } : draft ?? {}
   const [title, setTitle] = useState(start.title ?? "")
   const [eventTypes, setEventTypes] = useState<NotificationEventType[]>((start.eventTypes ?? ["backup.failed"]).filter((type) => !INERT_EVENT_TYPES.has(type)))
   const [minSeverity, setMinSeverity] = useState<NotificationSeverity>(start.minSeverity ?? "info")
@@ -988,10 +1004,17 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
   const [settingNames, setSettingNames] = useState((start.conditions?.settingNames ?? []).join("\n"))
   const [excludeActors, setExcludeActors] = useState((start.conditions?.excludeActors ?? []).join("\n"))
   const [delivery, setDelivery] = useState<AlertDelivery>(start.delivery ?? "digest")
+  const [deletedThreshold, setDeletedThreshold] = useState((start.massChange ?? DEFAULT_MASS_CHANGE).deleted?.toString() ?? "")
+  const [changedThreshold, setChangedThreshold] = useState((start.massChange ?? DEFAULT_MASS_CHANGE).changed?.toString() ?? "")
+  const [massChangeTypes, setMassChangeTypes] = useState<MassChangeType[]>((start.massChange ?? DEFAULT_MASS_CHANGE).changeTypes)
   const [addingChannel, setAddingChannel] = useState(false)
   const [preview, setPreview] = useState<AlertPreview | null>(null)
   const applyTemplate = (template: AlertDraft) => {
     setTitle(template.title ?? "")
+    const thresholds = template.massChange ?? DEFAULT_MASS_CHANGE
+    setDeletedThreshold(thresholds.deleted?.toString() ?? "")
+    setChangedThreshold(thresholds.changed?.toString() ?? "")
+    setMassChangeTypes(thresholds.changeTypes)
     setEventTypes(template.eventTypes ?? [])
     setMinSeverity(template.minSeverity ?? "info")
     setDelivery(template.delivery ?? "digest")
@@ -1004,15 +1027,18 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
     setPreview(null)
   }
   const changes = watchesChanges(eventTypes)
+  const mass = eventTypes.includes(MASS_CHANGE_EVENT)
+  const { status: cloudBackupStatus } = useCloudBackup(mass ? tenant : null)
+  const thresholds = mass ? parseMassChange({ deleted: Number(deletedThreshold), changed: Number(changedThreshold), changeTypes: massChangeTypes }) : null
   const intune = eventTypes.includes("intune.change")
   const ca = eventTypes.includes("entra.change")
   const watch = data.auditWatch
   // Saving a change alert while its watching is off offers to switch watching on with it.
-  const watchingOff = [intune && !watch?.externalWatcher && !watch?.enabled ? "Intune" : null, ca && !watch?.externalWatcher && !watch?.conditionalAccess?.enabled ? "Conditional Access" : null].filter((entry): entry is string => entry !== null)
+  const watchingOff = [(intune || mass) && !watch?.externalWatcher && !watch?.enabled ? "Intune" : null, ca && !watch?.externalWatcher && !watch?.conditionalAccess?.enabled ? "Conditional Access" : null].filter((entry): entry is string => entry !== null)
   const [turnOnWatching, setTurnOnWatching] = useState(true)
   const categoryList = useQuery({ queryKey: ["notifications-audit-categories", tenant.credentials?.tenantId], queryFn: () => notificationsApi.listAuditCategories(tenant), staleTime: 60 * 60_000, enabled: open && intune && !!tenant.credentials?.tenantId })
   const suggestions = useQuery({ queryKey: ["notifications-alert-suggestions", tenant.credentials?.tenantId], queryFn: () => notificationsApi.listAlertSuggestions(tenant), staleTime: 10 * 60_000, enabled: open && changes && !!tenant.credentials?.tenantId })
-  const valid = eventTypes.length + keptInert.length > 0 && channelIds.length > 0
+  const valid = eventTypes.length + keptInert.length > 0 && channelIds.length > 0 && (!mass || Boolean(thresholds))
   const conditions = (): AlertConditions | null => {
     if (!changes) return null
     const value: AlertConditions = { changeTypes, categories: intune ? categories : [], policyNames: lines(policyNames), settingNames: lines(settingNames), excludeActors: lines(excludeActors) }
@@ -1021,7 +1047,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
   }
   const save = useMutation({
     mutationFn: async () => {
-      const body = { title: title.trim() || undefined, eventTypes: [...eventTypes, ...keptInert], minSeverity, channelIds, conditions: conditions(), delivery: changes ? delivery : "digest" as const }
+      const body = { title: title.trim() || undefined, eventTypes: [...eventTypes, ...keptInert], minSeverity, channelIds, conditions: conditions(), delivery: changes ? delivery : "digest" as const, ...(mass || rule?.massChange ? { massChange: thresholds } : {}) }
       if (rule) await notificationsApi.updateRule(tenant, rule.id, body)
       else await notificationsApi.addRule(tenant, { ...body, mode: "immediate" })
       // The alert is saved now. Turning watching on is a second step: its failure must not
@@ -1043,7 +1069,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
     onError: failed,
   })
   const check = useMutation({
-    mutationFn: () => notificationsApi.previewRule(tenant, { eventTypes, minSeverity, conditions: conditions(), delivery }),
+    mutationFn: () => notificationsApi.previewRule(tenant, { eventTypes, minSeverity, conditions: conditions(), delivery, massChange: thresholds }),
     onSuccess: setPreview,
     onError: failed,
   })
@@ -1106,6 +1132,40 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
               </select>
             </label>
           </div>
+          {mass && (
+            <fieldset className="space-y-3 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+              <legend className="px-1 text-sm font-medium text-gray-900">Mass change thresholds</legend>
+              <p className="text-sm text-gray-600">Send a critical alert when either count reaches its threshold in one audit check or backup comparison. Leave a threshold blank to disable it.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-sm text-gray-700">Deleted policies
+                  <Input className="mt-1" type="number" min={1} max={MAX_MASS_CHANGE_THRESHOLD} step={1} value={deletedThreshold} onChange={(event) => { setPreview(null); setDeletedThreshold(event.target.value) }} />
+                </label>
+                <label className="text-sm text-gray-700">Changed policies
+                  <Input className="mt-1" type="number" min={1} max={MAX_MASS_CHANGE_THRESHOLD} step={1} value={changedThreshold} onChange={(event) => { setPreview(null); setChangedThreshold(event.target.value) }} />
+                </label>
+              </div>
+              <p className="text-sm text-gray-700" id="mass-change-types">Count as changed</p>
+              <div className="flex flex-wrap gap-2" role="group" aria-labelledby="mass-change-types">
+                {MASS_CHANGE_TYPES.map((type) => (
+                  <button key={type} type="button" className={pillClass(massChangeTypes.includes(type))} aria-pressed={massChangeTypes.includes(type)} disabled={!changedThreshold} onClick={() => {
+                    setPreview(null)
+                    setMassChangeTypes((current) => current.includes(type) ? current.filter((entry) => entry !== type) : [...current, type])
+                  }}>{type === "changed" ? "Other changes" : type[0]!.toUpperCase() + type.slice(1)}</button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500">Backup comparisons count creations and updates, including assignment edits as updates. <DocsLink section="mass-intune-policy-change">Mass change alert guide</DocsLink></p>
+              <p className="text-xs text-gray-500">Each audit check reads up to 500 events. Thresholds above 500 can only be reached by backup comparisons.</p>
+              {cloudBackupStatus && cloudRunbookNeedsUpgrade(cloudBackupStatus.runbookVersion, MASS_CHANGE_RUNBOOK_VERSION) && (
+                <p className="text-sm text-amber-800 dark:text-amber-300">Cloud backup runbook {cloudBackupStatus.runbookVersion} needs to be upgraded to {MASS_CHANGE_RUNBOOK_VERSION} or later to send mass change alerts from cloud backup comparisons.</p>
+              )}
+            </fieldset>
+          )}
+          {mass && !changes && (
+            <div className="space-y-2">
+              <Button type="button" variant="outline" size="sm" disabled={check.isPending || !thresholds || data.signedIn === false} onClick={() => check.mutate()}>{check.isPending ? "Checking" : "Preview against audit logs"}</Button>
+              {preview && <PreviewResult preview={preview} />}
+            </div>
+          )}
           {changes && (
             <fieldset className="space-y-3 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
               <legend className="px-1 text-sm font-medium text-gray-900">Which changes</legend>
