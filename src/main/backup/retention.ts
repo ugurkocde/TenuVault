@@ -4,6 +4,7 @@ import { typeForFolder } from "../../shared/intune/registry"
 import { resolveBackupOwnership } from "../../shared/backup-ownership"
 import { FetchApplicationError, FetchPreconditionError } from "../api/network-error"
 import { isLocalAccount } from "../storage/blob-emulator"
+import { releaseLocalRetentionGuard } from "../storage/local-blob-store"
 import { BlobLeaseError, wasDeleteConfirmedUnchanged, type BlobWriter, type RetentionBlob } from "./blob-writer"
 import { createRetentionLeaseManager, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
 import { RetentionBudget, RetentionBudgetError, type RetentionLimits } from "./retention-budget"
@@ -730,6 +731,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
   let completedPlan = true
   let leaseAcquiredThisRun = false
   let leaseFailureKeyThisRun: string | undefined
+  let leaseFailureErrorThisRun: BlobLeaseError | undefined
   let hadLeaseAcquireFailure = false
   for (const { prefix, identities, types, noTypes, untagged, replacements, resumed } of plan) {
     if (prefix === latestPrefix || prefix === anchorPrefix) continue
@@ -747,7 +749,11 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         } catch (error) {
           if (!(error instanceof BlobLeaseError)) throw error
           hadLeaseAcquireFailure = true
-          leaseFailureKeyThisRun ??= leaseFailureKey(true, error)
+          const failureKey = leaseFailureKey(true, error)
+          if (!leaseFailureKeyThisRun && failureKey) {
+            leaseFailureKeyThisRun = failureKey
+            leaseFailureErrorThisRun = error
+          }
           warning = true
           const reason = error.message
           notice(`Kept backup ${prefix} because the local retention lock could not be acquired: ${reason.replace(/\.$/, "")}.`, "warning")
@@ -779,7 +785,11 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
         } catch (error) {
           if (!(error instanceof BlobLeaseError)) throw error
           hadLeaseAcquireFailure = true
-          leaseFailureKeyThisRun ??= leaseFailureKey(false, error)
+          const failureKey = leaseFailureKey(false, error)
+          if (!leaseFailureKeyThisRun && failureKey) {
+            leaseFailureKeyThisRun = failureKey
+            leaseFailureErrorThisRun = error
+          }
           warning = true
           const reason = error.message
           notice(`Kept backup ${prefix} because replacement backups could not be leased before deletion: ${reason.replace(/\.$/, "")}.`, "warning")
@@ -888,10 +898,14 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
       }
     } finally {
       if (localLockId) {
-        const releaseWarning = await storage.releaseContainerLease(localLockId).catch(() => undefined)
-        if (releaseWarning) {
-          warning = true
-          notice(releaseWarning, "warning")
+        try {
+          const releaseWarning = await storage.releaseContainerLease(localLockId).catch(() => undefined)
+          if (releaseWarning) {
+            warning = true
+            notice(releaseWarning, "warning")
+          }
+        } finally {
+          releaseLocalRetentionGuard(localLockId)
         }
       }
       if (leaseManager) await leaseManager.cleanup()
@@ -909,7 +923,7 @@ export async function applyRetention(run: RetentionRun): Promise<boolean> {
     save()
     if (count >= PERMANENT_LEASE_FAILURE_RUNS) {
       warning = true
-      notice(permanentLeaseFailureWarning(local, count), "warning")
+      notice(permanentLeaseFailureWarning(local, count, leaseFailureErrorThisRun), "warning")
     }
   } else if (hadLeaseAcquireFailure && state.leaseFailures) {
     delete state.leaseFailures

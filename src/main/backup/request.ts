@@ -49,7 +49,8 @@ export class InventoryDamagedError extends StorageError {}
 export async function storageFailure(response: Response, account: string): Promise<StorageError> {
   const code = response.headers.get("x-ms-error-code")
   if (code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined"
-    || code === "LeaseAlreadyPresent" || code === "LeaseUnavailable" || code === "RetentionLockLost" || code === "BackupProtectedByRetention") {
+    || code === "LeaseAlreadyPresent" || code === "LeaseUnavailable" || code === "RetentionLockLost"
+    || code === "RetentionLockManualIntervention" || code === "BackupProtectedByRetention") {
     const text = await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
     if (message || code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined") {

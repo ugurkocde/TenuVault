@@ -3,6 +3,7 @@ import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constan
 import { createHash, randomUUID } from "node:crypto"
 import { backupReadKeyFingerprint, wasBackupReadAuthenticated } from "../storage/authenticated-read"
 import { isLocalAccount } from "../storage/blob-emulator"
+import { releaseLocalRetentionGuard } from "../storage/local-blob-store"
 import { withHeaderOnlyBackupRead, type RetentionBudget } from "./retention-budget"
 import { readBytesCapped } from "../../shared/capped-body"
 import { oversizedOwnershipFile } from "../../shared/backup-ownership"
@@ -21,9 +22,24 @@ export function wasDeleteConfirmedUnchanged(error: unknown): boolean {
 
 /** Lease acquisition or renewal failed (conflict, missing permission, or storage error). */
 export class BlobLeaseError extends FetchApplicationError {
-  constructor(cause: unknown, readonly status?: number, readonly code?: string) {
+  constructor(
+    cause: unknown,
+    readonly status?: number,
+    readonly code?: string,
+    readonly lockPath?: string,
+    readonly lockHolder?: string,
+  ) {
     super(cause)
     this.name = "BlobLeaseError"
+  }
+}
+
+function decodeHeaderValue(value: string | null): string | undefined {
+  if (!value) return undefined
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
   }
 }
 
@@ -219,9 +235,19 @@ export class BlobWriter {
     return this.acquireLeaseAt(`${BACKUP_CONTAINER}?restype=container&comp=lease`, undefined, headers)
   }
 
-  /** Best-effort release of a container lock; returns any lock-mismatch warning reported by local storage. */
+  /** Best-effort release of a container lock; retries once and always clears the local in-process guard. */
   async releaseContainerLease(leaseId: string, signal?: AbortSignal): Promise<string | undefined> {
-    return this.releaseLeaseAt(`${BACKUP_CONTAINER}?restype=container&comp=lease`, leaseId, signal)
+    const path = `${BACKUP_CONTAINER}?restype=container&comp=lease`
+    try {
+      try {
+        return await this.releaseLeaseAt(path, leaseId, signal)
+      } catch (error) {
+        if (signal?.aborted) throw error
+        return await this.releaseLeaseAt(path, leaseId, signal)
+      }
+    } finally {
+      if (isLocalAccount(this.account)) releaseLocalRetentionGuard(leaseId)
+    }
   }
 
   private async leaseResponseCode(response: Response): Promise<string | undefined> {
@@ -252,9 +278,12 @@ export class BlobWriter {
           await this.releaseLeaseAt(path, proposedId).catch(() => undefined)
         }
         const code = await this.leaseResponseCode(response)
-        throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code)
+        const lockPath = decodeHeaderValue(response.headers.get("x-tenuvault-lock-path"))
+        const lockHolder = decodeHeaderValue(response.headers.get("x-tenuvault-lock-holder"))
+        throw new BlobLeaseError(await storageFailure(response, this.account), response.status, code, lockPath, lockHolder)
       })
     } catch (error) {
+      if (isLocalAccount(this.account)) releaseLocalRetentionGuard(proposedId)
       if (this.network?.signal.aborted) throw error
       if (error instanceof BlobLeaseError) throw error
       throw new BlobLeaseError(error)
@@ -310,6 +339,10 @@ export class BlobWriter {
       })
       void pendingFetch.catch(() => undefined)
       const response = await withAbort(() => pendingFetch, effective)
+      if (response.status >= 500) {
+        void response.body?.cancel().catch(() => undefined)
+        throw new StorageError(`Lease release failed with HTTP ${response.status}.`)
+      }
       const warning = response.headers.get("x-tenuvault-lock-warning") ?? undefined
       void response.body?.cancel().catch(() => undefined)
       return warning

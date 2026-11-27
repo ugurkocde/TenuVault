@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
 import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises"
 import { hostname } from "node:os"
 import { dirname, join, resolve } from "node:path"
+import { promisify } from "node:util"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
 import { mapLimit } from "../../shared/map-limit"
@@ -163,7 +165,23 @@ export class BlobAlreadyExistsError extends Error {}
 export class BlobConditionNotMetError extends Error {}
 export class BlobQuarantinedError extends BlobConditionNotMetError {}
 export class BlobDeleteInterruptedError extends Error {}
-export class BlobLeaseConflictError extends Error {}
+export interface RetentionLockConflictDetails {
+  code?: "LeaseAlreadyPresent" | "RetentionLockManualIntervention"
+  lockPath?: string
+  holderId?: string
+}
+
+export class BlobLeaseConflictError extends Error {
+  readonly code?: "LeaseAlreadyPresent" | "RetentionLockManualIntervention"
+  readonly lockPath?: string
+  readonly holderId?: string
+  constructor(message: string, options?: ErrorOptions & RetentionLockConflictDetails) {
+    super(message, options)
+    this.code = options?.code
+    this.lockPath = options?.lockPath
+    this.holderId = options?.holderId
+  }
+}
 export class BlobLeaseUnsupportedError extends Error {}
 export class BlobProtectedError extends Error {}
 
@@ -175,9 +193,85 @@ export interface RetentionLockRecord {
   app: "TenuVault"
 }
 
+interface LegacyRetentionLockRecord {
+  id: string
+  expiresAt: number
+  pid?: number
+  durationMs?: number
+}
+
+export interface ProcessInfoReader {
+  isPidAlive(pid: number): boolean
+  readProcessStart(pid: number): Promise<string | "gone" | null>
+}
+
+export type ExecFileRunner = (
+  file: string,
+  args: string[],
+  options: { timeout?: number; env?: NodeJS.ProcessEnv; windowsHide?: boolean },
+) => Promise<{ stdout: string }>
+
+const execFileAsync = promisify(execFile)
+const PROCESS_START_TIMEOUT_MS = 5_000
+const UNPARSEABLE_LOCK_REREAD_MS = 50
 const FALLBACK_PROCESS_START = Math.round(Date.now() - process.uptime() * 1000)
+const COMPARABLE_START_KINDS = new Set(["proc", "wmi", "ps"])
+const MONTHS: Record<string, number> = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+}
 let cachedBootId: string | null | undefined
-let cachedCurrentProcessStart: Promise<string | number> | undefined
+let cachedCurrentProcessStart: Promise<string | null> | undefined
+
+/** Extracts the comparable start-token kind ("proc", "wmi", or "ps"), or null for unknown/uncomparable tokens. */
+export function processStartKind(token: string | number): string | null {
+  if (typeof token !== "string") return null
+  const sep = token.indexOf(":")
+  if (sep <= 0 || sep === token.length - 1) return null
+  const kind = token.slice(0, sep)
+  return COMPARABLE_START_KINDS.has(kind) ? kind : null
+}
+
+/** Parses Linux `/proc/<pid>/stat` text into a `proc:` token, `"gone"` for dead/zombie processes, or null. */
+export function parseLinuxProcStat(statText: string, bootId: string | null): string | "gone" | null {
+  const closeParen = statText.lastIndexOf(")")
+  if (closeParen < 0) return null
+  const fields = statText.slice(closeParen + 1).trim().split(/\s+/)
+  const state = fields[0]
+  const startTicks = fields[19]
+  if (state === "Z" || state === "X") return "gone"
+  if (startTicks && /^\d+$/.test(startTicks)) {
+    return bootId ? `proc:${bootId}:${startTicks}` : `proc:${startTicks}`
+  }
+  return null
+}
+
+/** Parses `ps -o lstart=` output (with LC_ALL=C, TZ=UTC) into a `ps:<epoch-seconds>` token, or null. */
+export function parseDarwinPsStart(stdout: string): string | null {
+  const trimmed = stdout.trim()
+  if (!trimmed) return null
+  const match = /^[A-Z][a-z]{2}\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/.exec(trimmed)
+  if (!match) return null
+  const month = MONTHS[match[1]!]
+  if (month === undefined) return null
+  const day = Number(match[2])
+  const hour = Number(match[3])
+  const minute = Number(match[4])
+  const second = Number(match[5])
+  const year = Number(match[6])
+  const ms = Date.UTC(year, month, day, hour, minute, second)
+  if (!Number.isFinite(ms)) return null
+  return `ps:${Math.floor(ms / 1000)}`
+}
+
+/** Parses PowerShell Win32_Process CreationDate UTC ISO output into a `wmi:<iso>` token, or null. */
+export function parseWindowsCreationDate(stdout: string): string | null {
+  const trimmed = stdout.trim()
+  if (!trimmed) return null
+  const ms = Date.parse(trimmed)
+  if (!Number.isFinite(ms)) return null
+  return `wmi:${new Date(ms).toISOString()}`
+}
 
 async function linuxBootId(): Promise<string | null> {
   if (cachedBootId !== undefined) return cachedBootId
@@ -189,50 +283,103 @@ async function linuxBootId(): Promise<string | null> {
   return cachedBootId
 }
 
-/**
- * Reads a stable process start token for `pid` on this host:
- * - `"gone"` when the process does not exist or is a zombie,
- * - a start token when observable (Linux `/proc/<pid>/stat` field 22 + boot id, or fallback for this process),
- * - `null` when start time cannot be observed for another process on this platform.
- */
-async function readProcessStart(pid: number): Promise<string | number | "gone" | null> {
-  if (process.platform === "linux") {
-    try {
-      const statText = await readFile(`/proc/${pid}/stat`, "utf8")
-      const closeParen = statText.lastIndexOf(")")
-      if (closeParen < 0) return null
-      const fields = statText.slice(closeParen + 1).trim().split(/\s+/)
-      const state = fields[0]
-      const startTicks = fields[19]
-      if (state === "Z" || state === "X") return "gone"
-      if (startTicks && /^\d+$/.test(startTicks)) {
-        const bootId = await linuxBootId()
-        return bootId ? `linux:${bootId}:${startTicks}` : `linux:${startTicks}`
-      }
-      return null
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code === "ENOENT" || code === "ESRCH") return "gone"
-      return pid === process.pid ? FALLBACK_PROCESS_START : null
-    }
-  }
-  return pid === process.pid ? FALLBACK_PROCESS_START : null
-}
-
-function currentProcessStart(): Promise<string | number> {
-  cachedCurrentProcessStart ??= readProcessStart(process.pid).then(start =>
-    start && start !== "gone" ? start : FALLBACK_PROCESS_START,
-  )
-  return cachedCurrentProcessStart
-}
-
-function isPidAlive(pid: number): boolean {
+function defaultIsPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH"
   }
+}
+
+const defaultExecFile: ExecFileRunner = async (file, args, options) => {
+  const result = await execFileAsync(file, args, { ...options, encoding: "utf8" })
+  return { stdout: String(result.stdout ?? "") }
+}
+
+/**
+ * Builds a platform process-info reader that observes stable start tokens with explicit kinds:
+ * - linux: `proc:<bootId>:<ticks>` (or `proc:<ticks>`) from `/proc/<pid>/stat`
+ * - darwin: `ps:<epoch-seconds>` from `ps -o lstart= -p <pid>` with `LC_ALL=C` and `TZ=UTC`
+ * - win32: `wmi:<iso>` from PowerShell `Get-CimInstance Win32_Process` without a shell
+ */
+export function createProcessInfoReader(options: {
+  platform?: NodeJS.Platform
+  execFile?: ExecFileRunner
+  isPidAlive?: (pid: number) => boolean
+  readProcStat?: (pid: number) => Promise<string>
+  readBootId?: () => Promise<string | null>
+} = {}): ProcessInfoReader {
+  const platform = options.platform ?? process.platform
+  const runExec = options.execFile ?? defaultExecFile
+  const alive = options.isPidAlive ?? defaultIsPidAlive
+  const readStat = options.readProcStat ?? ((pid: number) => readFile(`/proc/${pid}/stat`, "utf8"))
+  const readBoot = options.readBootId ?? linuxBootId
+
+  return {
+    isPidAlive: alive,
+    async readProcessStart(pid: number): Promise<string | "gone" | null> {
+      if (!Number.isInteger(pid) || pid <= 0) return null
+      if (platform === "linux") {
+        try {
+          const statText = await readStat(pid)
+          const parsed = parseLinuxProcStat(statText, await readBoot())
+          return parsed
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code
+          if (code === "ENOENT" || code === "ESRCH") return "gone"
+          return null
+        }
+      }
+      if (platform === "darwin") {
+        try {
+          const { stdout } = await runExec("ps", ["-o", "lstart=", "-p", String(pid)], {
+            env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+            timeout: PROCESS_START_TIMEOUT_MS,
+            windowsHide: true,
+          })
+          const parsed = parseDarwinPsStart(stdout)
+          if (parsed) return parsed
+          return alive(pid) ? null : "gone"
+        } catch (error) {
+          const killed = Boolean((error as { killed?: unknown; signal?: unknown } | null)?.killed || (error as { signal?: unknown } | null)?.signal)
+          if (killed) return null
+          return alive(pid) ? null : "gone"
+        }
+      }
+      if (platform === "win32") {
+        try {
+          const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p -and $p.CreationDate) { $p.CreationDate.ToUniversalTime().ToString('O') }`
+          const { stdout } = await runExec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+            timeout: PROCESS_START_TIMEOUT_MS,
+            windowsHide: true,
+          })
+          const parsed = parseWindowsCreationDate(stdout)
+          if (parsed) return parsed
+          return alive(pid) ? null : "gone"
+        } catch (error) {
+          const killed = Boolean((error as { killed?: unknown; signal?: unknown } | null)?.killed || (error as { signal?: unknown } | null)?.signal)
+          if (killed) return null
+          return alive(pid) ? null : "gone"
+        }
+      }
+      return null
+    },
+  }
+}
+
+const defaultProcessInfoReader = createProcessInfoReader()
+
+async function defaultCurrentProcessStart(): Promise<string> {
+  if (!cachedCurrentProcessStart) {
+    cachedCurrentProcessStart = defaultProcessInfoReader.readProcessStart(process.pid).then(start =>
+      start && start !== "gone" ? start : null,
+    )
+  }
+  const observed = await cachedCurrentProcessStart
+  if (observed) return observed
+  cachedCurrentProcessStart = undefined
+  return `unknown:${FALLBACK_PROCESS_START}`
 }
 
 function parseRetentionLock(raw: string): RetentionLockRecord | null {
@@ -258,8 +405,30 @@ function parseRetentionLock(raw: string): RetentionLockRecord | null {
   }
 }
 
+function parseLegacyRetentionLock(raw: string): LegacyRetentionLockRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<LegacyRetentionLockRecord & { app?: unknown; host?: unknown; processStart?: unknown }> | null
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
+    if (parsed.app !== undefined || parsed.host !== undefined || parsed.processStart !== undefined) return null
+    if (typeof parsed.id !== "string" || !parsed.id) return null
+    if (typeof parsed.expiresAt !== "number" || !Number.isFinite(parsed.expiresAt)) return null
+    if (parsed.pid !== undefined && (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0)) return null
+    if (parsed.durationMs !== undefined && (typeof parsed.durationMs !== "number" || !Number.isFinite(parsed.durationMs) || parsed.durationMs <= 0)) return null
+    return { id: parsed.id, expiresAt: parsed.expiresAt, pid: parsed.pid, durationMs: parsed.durationMs }
+  } catch {
+    return null
+  }
+}
+
 function manualLockWarning(lockPath: string, reason: string): string {
   return `Retention lock file ${lockPath} (${reason}) was not reclaimed automatically. Delete it only if no other computer is running TenuVault on this backup folder.`
+}
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
 }
 
 /**
@@ -297,6 +466,29 @@ function removeProtectedPrefix(entry: { dir: string; prefix: string }): void {
   if (next > 0) prefixes.set(entry.prefix, next)
   else prefixes.delete(entry.prefix)
   if (prefixes.size === 0) protectedPrefixesByDir.delete(entry.dir)
+}
+
+/**
+ * Releases any in-process write-guard entries registered for the given local retention lock id.
+ * Idempotent and infallible so callers can always clear guards in a finally block even when
+ * the storage release request fails, aborts, or times out.
+ */
+export function releaseLocalRetentionGuard(lockId: string): void {
+  const suffix = `\0${lockId}`
+  for (const [key, entries] of lockProtectedEntries) {
+    if (!key.endsWith(suffix)) continue
+    lockProtectedEntries.delete(key)
+    for (const entry of entries) removeProtectedPrefix(entry)
+  }
+}
+
+function isPrefixProtected(dir: string, name: string): boolean {
+  const prefixes = protectedPrefixesByDir.get(resolve(dir))
+  if (!prefixes || prefixes.size === 0) return false
+  for (const prefix of prefixes.keys()) {
+    if (name.startsWith(prefix)) return true
+  }
+  return false
 }
 
 function assertPrefixNotProtected(dir: string, name: string): void {
@@ -493,11 +685,13 @@ export class LocalBlobStore {
    * @param root   Folder that holds the encrypted backups.
    * @param masterKeys Current master key first, then older keys that must stay readable.
    * @param writeFormat Format for new files and overwrites; see WRITE_FORMAT.
+   * @param processInfo Optional process-info reader override (for tests).
    */
   constructor(
     private readonly root: string,
     masterKeys: Buffer[],
     private readonly writeFormat: Version = WRITE_FORMAT,
+    private readonly processInfo?: ProcessInfoReader,
   ) {
     if (masterKeys.length === 0) throw new Error("A backup encryption key is required.")
     this.keyring = masterKeys.map(deriveKeys)
@@ -864,6 +1058,39 @@ export class LocalBlobStore {
     }
   }
 
+  private async ownProcessStart(): Promise<string> {
+    if (!this.processInfo) return defaultCurrentProcessStart()
+    const observed = await this.processInfo.readProcessStart(process.pid)
+    return observed && observed !== "gone" ? observed : `unknown:${FALLBACK_PROCESS_START}`
+  }
+
+  private isPidAlive(pid: number): boolean {
+    return (this.processInfo ?? defaultProcessInfoReader).isPidAlive(pid)
+  }
+
+  private readProcessStart(pid: number): Promise<string | "gone" | null> {
+    return (this.processInfo ?? defaultProcessInfoReader).readProcessStart(pid)
+  }
+
+  private async publishLockFile(tmpPath: string, lockPath: string): Promise<void> {
+    if (this.hardLinks) {
+      try {
+        await link(tmpPath, lockPath)
+        return
+      } catch (error) {
+        if (!NO_HARD_LINKS.has((error as NodeJS.ErrnoException).code ?? "")) throw error
+        this.hardLinks = false
+      }
+    }
+    await (await open(lockPath, "wx", 0o600)).close()
+    try {
+      await rename(tmpPath, lockPath)
+    } catch (error) {
+      await rm(lockPath, { force: true }).catch(() => undefined)
+      throw error
+    }
+  }
+
   /**
    * Acquires an owner-and-process cross-process retention lock file scoped to one container directory.
    * Never expires while its holding process is alive; no time-based expiry or renewal.
@@ -877,69 +1104,92 @@ export class LocalBlobStore {
       id,
       host: hostname(),
       pid: process.pid,
-      processStart: await currentProcessStart(),
+      processStart: await this.ownProcessStart(),
       app: "TenuVault",
     }
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const tmpPath = join(dir, `${RETENTION_LOCK_FILE}.${randomBytes(8).toString("hex")}.tmp`)
+    try {
+      const handle = await open(tmpPath, "wx", 0o600)
       try {
-        const handle = await open(lockPath, "wx", 0o600)
+        await handle.writeFile(JSON.stringify(record))
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+    } catch (error) {
+      await rm(tmpPath, { force: true }).catch(() => undefined)
+      const code = (error as NodeJS.ErrnoException).code
+      if (code && UNSUPPORTED_LOCK_ERRORS.has(code)) {
+        throw new BlobLeaseUnsupportedError(`The backup folder does not support the local retention lock (${code}).`, { cause: error })
+      }
+      throw error
+    }
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          await handle.writeFile(JSON.stringify(record))
-          await handle.sync()
-        } finally {
-          await handle.close()
-        }
-        this.registerLockProtectedPrefixes(dir, id, protectedPrefixes)
-        return id
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code
-        if (code !== "EEXIST") {
-          if (code && UNSUPPORTED_LOCK_ERRORS.has(code)) {
-            throw new BlobLeaseUnsupportedError(`The backup folder does not support the local retention lock (${code}).`, { cause: error })
+          await this.publishLockFile(tmpPath, lockPath)
+          await rm(tmpPath, { force: true }).catch(() => undefined)
+          if (process.platform !== "win32") await syncDirectory(dir)
+          this.registerLockProtectedPrefixes(dir, id, protectedPrefixes)
+          return id
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code
+          if (code !== "EEXIST") {
+            if (code && UNSUPPORTED_LOCK_ERRORS.has(code)) {
+              throw new BlobLeaseUnsupportedError(`The backup folder does not support the local retention lock (${code}).`, { cause: error })
+            }
+            throw error
           }
-          throw error
-        }
-        if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath))) {
-          throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
+          if (attempt > 0 || !(await this.reclaimStaleRetentionLock(lockPath))) {
+            throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
+              code: "LeaseAlreadyPresent",
+              lockPath,
+            })
+          }
         }
       }
+      throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
+        code: "LeaseAlreadyPresent",
+        lockPath,
+      })
+    } finally {
+      await rm(tmpPath, { force: true }).catch(() => undefined)
     }
-    throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
   }
 
-  private async reclaimStaleRetentionLock(lockPath: string): Promise<boolean> {
+  private async readRetentionLockState(lockPath: string): Promise<
+    | { kind: "missing" }
+    | { kind: "current"; lock: RetentionLockRecord }
+    | { kind: "legacy"; lock: LegacyRetentionLockRecord }
+    | { kind: "unparseable" }
+  > {
     let raw: string
     try {
       const info = await lstat(lockPath, { bigint: true })
       if (!info.isFile()) {
-        throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock path is not a regular file"))
+        throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock path is not a regular file"), {
+          code: "RetentionLockManualIntervention",
+          lockPath,
+        })
       }
       raw = await readFile(lockPath, "utf8")
     } catch (error) {
-      if (isMissing(error)) return true
+      if (isMissing(error)) return { kind: "missing" }
       if (error instanceof BlobLeaseConflictError) throw error
-      throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be read"), { cause: error })
+      throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be read"), {
+        cause: error,
+        code: "RetentionLockManualIntervention",
+        lockPath,
+      })
     }
-    const lock = parseRetentionLock(raw)
-    if (!lock) {
-      throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be parsed"))
-    }
-    const localHost = hostname()
-    if (lock.host !== localHost) {
-      throw new BlobLeaseConflictError(manualLockWarning(lockPath, `held by another computer (${lock.host})`))
-    }
-    let stale = false
-    if (!isPidAlive(lock.pid)) {
-      stale = true
-    } else {
-      const observedStart = await readProcessStart(lock.pid)
-      if (observedStart === "gone" || (observedStart !== null && observedStart !== lock.processStart)) {
-        stale = true
-      }
-    }
-    if (!stale) {
-      throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
-    }
+    const current = parseRetentionLock(raw)
+    if (current) return { kind: "current", lock: current }
+    const legacy = parseLegacyRetentionLock(raw)
+    if (legacy) return { kind: "legacy", lock: legacy }
+    return { kind: "unparseable" }
+  }
+
+  private async reclaimLockAside(lockPath: string, matches: (movedRaw: string) => boolean): Promise<boolean> {
     const aside = `${lockPath}.${randomBytes(8).toString("hex")}.stale`
     try {
       await rename(lockPath, aside)
@@ -948,8 +1198,7 @@ export class LocalBlobStore {
       throw error
     }
     const movedRaw = await readFile(aside, "utf8").catch(() => null)
-    const moved = movedRaw === null ? null : parseRetentionLock(movedRaw)
-    if (moved?.id === lock.id) {
+    if (movedRaw !== null && matches(movedRaw)) {
       await rm(aside, { force: true })
       return true
     }
@@ -961,9 +1210,88 @@ export class LocalBlobStore {
     } catch {
       throw new BlobLeaseConflictError(
         `A live retention lock changed while reclaiming ${lockPath}. The moved lock file was kept at ${aside} and was not deleted; retention stopped for this run.`,
+        { code: "RetentionLockManualIntervention", lockPath },
       )
     }
-    throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.")
+    const movedLock = movedRaw === null ? null : parseRetentionLock(movedRaw)
+    throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
+      code: "LeaseAlreadyPresent",
+      lockPath,
+      ...(movedLock ? { holderId: movedLock.id } : {}),
+    })
+  }
+
+  private async reclaimStaleRetentionLock(lockPath: string): Promise<boolean> {
+    let state = await this.readRetentionLockState(lockPath)
+    if (state.kind === "unparseable") {
+      await waitMs(UNPARSEABLE_LOCK_REREAD_MS)
+      state = await this.readRetentionLockState(lockPath)
+    }
+    if (state.kind === "missing") return true
+    if (state.kind === "unparseable") {
+      throw new BlobLeaseConflictError(manualLockWarning(lockPath, "the lock file could not be parsed"), {
+        code: "RetentionLockManualIntervention",
+        lockPath,
+      })
+    }
+    if (state.kind === "legacy") {
+      const legacy = state.lock
+      if (legacy.expiresAt > Date.now()) {
+        throw new BlobLeaseConflictError(
+          manualLockWarning(lockPath, "a legacy retention lock from an earlier version has not expired"),
+          { code: "RetentionLockManualIntervention", lockPath },
+        )
+      }
+      return this.reclaimLockAside(lockPath, movedRaw => {
+        const moved = parseLegacyRetentionLock(movedRaw)
+        return moved?.id === legacy.id && moved.expiresAt === legacy.expiresAt
+      })
+    }
+    const { lock } = state
+    const localHost = hostname()
+    if (lock.host !== localHost) {
+      throw new BlobLeaseConflictError(manualLockWarning(lockPath, `held by another computer (${lock.host})`), {
+        code: "RetentionLockManualIntervention",
+        lockPath,
+      })
+    }
+    let stale = false
+    if (!this.isPidAlive(lock.pid)) {
+      stale = true
+    } else {
+      const observedStart = await this.readProcessStart(lock.pid)
+      if (observedStart === "gone") {
+        stale = true
+      } else if (observedStart === null) {
+        throw new BlobLeaseConflictError(
+          manualLockWarning(lockPath, `could not verify whether process ${lock.pid} is still the original holder`),
+          { code: "RetentionLockManualIntervention", lockPath },
+        )
+      } else {
+        const observedKind = processStartKind(observedStart)
+        const recordedKind = processStartKind(lock.processStart)
+        if (!observedKind || !recordedKind || observedKind !== recordedKind) {
+          throw new BlobLeaseConflictError(
+            manualLockWarning(lockPath, `could not compare process start token for process ${lock.pid}`),
+            { code: "RetentionLockManualIntervention", lockPath },
+          )
+        }
+        if (observedStart !== lock.processStart) {
+          stale = true
+        }
+      }
+    }
+    if (!stale) {
+      throw new BlobLeaseConflictError("Another TenuVault instance is currently running retention on this backup folder.", {
+        code: "LeaseAlreadyPresent",
+        lockPath,
+        holderId: lock.id,
+      })
+    }
+    return this.reclaimLockAside(lockPath, movedRaw => {
+      const moved = parseRetentionLock(movedRaw)
+      return moved?.id === lock.id
+    })
   }
 
   async releaseRetentionLock(account: string, container: string, id: string): Promise<{ warning?: string }> {
@@ -1244,7 +1572,7 @@ export class LocalBlobStore {
           const entry = await this.readEntry(join(dir, folder), account, container, file)
           if (entry !== VANISHED && !(entry instanceof Unreadable)) {
             backup = backupFolderOf(entry.name)
-            if (counts.get(file) === 1 && Date.now() - since > RETIRED_GRACE_MS) {
+            if (counts.get(file) === 1 && Date.now() - since > RETIRED_GRACE_MS && !isPrefixProtected(dir, entry.name)) {
               // A link publishes the whole file and never overwrites an occupied live path.
               await link(path, join(dir, file))
               await rm(path)
