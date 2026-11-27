@@ -14,6 +14,7 @@ Azure writes on origin/main already used plain JSON.
 
 The Windows packaged smoke run wraps the frozen state in Electron safeStorage
 using the runner's DPAPI account. It copies the encrypted blobs unchanged, asks
-the app's Backup History route to list both snapshots, and uses the same OS
-account to decrypt and compare the stored keyring after the packaged app exits.
+the app to list and export both snapshots, compares every exported policy and
+manifest with the original, and uses the same OS account to verify the stored
+keyring after exit. The Linux smoke exercises the same payload comparisons.
 macOS CI runs the frozen fixture tests alongside its normal packaged smoke.

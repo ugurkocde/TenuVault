@@ -253,6 +253,16 @@ changes reach nightly users first.
 The audit log (viewing, searching, exporting and removing old entries) is Pro and MSP. Every
 plan records events; Community sees a locked preview on the Audit Log page.
 
+## Verify a signed macOS upgrade
+
+Use a test macOS account and the signed 0.5.x and 0.6 installers. In 0.5.x, save
+a local backup and download its archive. Save a separate copy of the backup
+folder before upgrading. Install 0.6 over 0.5.x in the same account and open it
+with the existing Keychain and profile. Open Backup History and download every
+backup in the test profile. Compare the archive entries and each policy and
+manifest with the originals. Check for missing entries and unreadable backup
+warnings. Stop the release if any backup cannot be read or a payload differs.
+
 ## Compatibility notes for 0.6.0
 
 - **Local backup folders.** Lab defaults to `Documents/TenuVault Lab Backups`. A saved Lab override pointing to `Documents/TenuVault Backups` opens for browsing only. In **Settings > Storage and recovery**, switch to the Lab folder or copy backups you can verify with your Lab-created recovery key. The original files are kept. Stable keeps its existing folder settings.

@@ -311,6 +311,17 @@ jobs:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
         run: npm run smoke -- out/smoke
 
+      - name: Check out the workflow's upgrade gate
+        if: runner.os == 'Windows'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .upgrade-test
+          sparse-checkout: |
+            scripts
+            test/fixtures/backup-upgrade
+          persist-credentials: false
+
       - name: Smoke test a packaged upgrade from 0.5.x with DPAPI
         if: runner.os == 'Windows'
         timeout-minutes: 3
@@ -318,7 +329,7 @@ jobs:
         env:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
           TENUVAULT_SMOKE_SECTION: backup-upgrade
-        run: npm run smoke -- out/smoke-upgrade
+        run: node .upgrade-test/scripts/smoke.mjs out/smoke-upgrade
 
       - name: Check frozen 0.5.x backups and keyring
         if: runner.os == 'macOS'

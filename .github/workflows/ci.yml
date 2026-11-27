@@ -127,6 +127,12 @@ jobs:
       # A complete first sign-in in every browser engine, in the packaged Linux app, against a
       # local stand-in for login.microsoftonline.com and the licensing service that the runner's
       # hosts file and trust store point to (scripts/sign-in-e2e).
+      - name: Check historical backup payloads on Linux
+        timeout-minutes: 3
+        env:
+          TENUVAULT_SMOKE_SECTION: backup-upgrade
+        run: xvfb-run -a node scripts/smoke.mjs out/smoke-upgrade
+
       - name: Package the Linux app
         run: npx electron-builder --config electron-builder.config.cjs --linux dir --publish never
 
@@ -342,7 +348,7 @@ jobs:
         env:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
           TENUVAULT_SMOKE_SECTION: backup-upgrade
-        run: npm run smoke -- out/smoke-upgrade
+        run: node scripts/smoke.mjs out/smoke-upgrade
 
       - name: Check frozen 0.5.x backups and keyring
         if: runner.os == 'macOS'

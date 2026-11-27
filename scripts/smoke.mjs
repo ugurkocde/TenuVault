@@ -14,6 +14,7 @@ import { checkIdentityRestoreSafety } from "./identity-restore-safety-smoke.mjs"
  * renderer-to-main API bridge and the per tenant license gate. No tenant is signed in, so
  * the licensing service is never called. Screenshots are written to screenshot-dir.
  */
+import { deepStrictEqual } from "node:assert"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -25,7 +26,7 @@ import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
 import { checkRestoreService } from "./restore-service-smoke.mjs"
 import { disableAutoUpdate, RUN_SWITCH } from "./smoke-update-policy.mjs"
 
-const require = createRequire(import.meta.url)
+const require = createRequire(join(process.cwd(), "package.json"))
 const desktopDir = resolve(import.meta.dirname, "..")
 const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "out", "smoke"))
 const packagedApp = process.env.TENUVAULT_SMOKE_APP
@@ -97,6 +98,7 @@ if (!packagedApp) args.push(`--inspect=127.0.0.1:${inspectorPort}`)
 // The policy's mark, so recovery after a killed run can tell this app is still running.
 if (updatePolicy?.token) args.push(`${RUN_SWITCH}=${updatePolicy.token}`)
 if (process.platform === "linux") args.push("--no-sandbox")
+if (process.platform === "linux" && upgradeProfile && !packagedApp) args.push("--password-store=basic")
 // On a Wayland desktop the compositor stops sending frame callbacks to a window it does not draw
 // (an idle or locked screen, another workspace), so CSS animations stall and a dialog's exit
 // animation never ends. X11 (XWayland on a desktop, Xvfb in CI) keeps producing frames.
@@ -109,10 +111,10 @@ delete env.ELECTRON_RUN_AS_NODE
 function historicalProfile(mode) {
   // Windows DPAPI binds the fixture to this runner's account. The unsigned Electron helper on
   // macOS is a different Keychain client from the packaged app, so this section runs on Windows.
-  if (packagedApp && process.platform !== "win32") throw new Error("The packaged upgrade profile requires Windows DPAPI")
-  const flags = process.platform === "linux" ? ["--no-sandbox", "--ozone-platform=x11"] : []
+  if (packagedApp && process.platform === "darwin") throw new Error("Run the signed macOS upgrade check in RELEASING.md")
+  const flags = process.platform === "linux" ? ["--no-sandbox", "--ozone-platform=x11", ...(!packagedApp ? ["--password-store=basic"] : [])] : []
   execFileSync(require("electron"), [...flags, join(desktopDir, "scripts", "backup-upgrade-profile.cjs")], {
-    env: { ...env, TV_SMOKE_UPGRADE_MODE: mode, TV_SMOKE_UPGRADE_PROFILE: profile, TV_SMOKE_UPGRADE_FIXTURE: join(desktopDir, "test", "fixtures", "backup-upgrade") },
+    env: { ...env, TV_SMOKE_UPGRADE_MODE: mode, TV_SMOKE_UPGRADE_PROFILE: profile, TV_SMOKE_UPGRADE_FIXTURE: process.env.TENUVAULT_SMOKE_UPGRADE_FIXTURE ?? join(desktopDir, "test", "fixtures", "backup-upgrade") },
     stdio: "inherit", timeout: 30_000,
   })
 }
@@ -280,13 +282,13 @@ async function disableAnimations() {
 }
 
 if (upgradeProfile) {
+  const tenantId = "11111111-1111-1111-1111-111111111111"
+  const request = {
+    tenantId, appId: "22222222-2222-2222-2222-222222222222",
+    clientSecret: "tenuvault-desktop-delegated-auth", subscriptionId: "local",
+    resourceGroupName: "local", storageAccountName: `tvlocal-${tenantId}`,
+  }
   await check("Backup History lists both historical backups without warnings", async () => {
-    const tenantId = "11111111-1111-1111-1111-111111111111"
-    const request = {
-      tenantId, appId: "22222222-2222-2222-2222-222222222222",
-      clientSecret: "tenuvault-desktop-delegated-auth", subscriptionId: "local",
-      resourceGroupName: "local", storageAccountName: `tvlocal-${tenantId}`,
-    }
     for (const summary of [false, true]) {
       const [status, history] = await evaluate(`fetch("/api/list-backups", { method: "POST", body: JSON.stringify(${JSON.stringify({ ...request, summary })}) }).then(async response => [response.status, await response.json()])`)
       assert(status === 200, `Backup History returned HTTP ${status}: ${history.error ?? ""}`)
@@ -297,6 +299,31 @@ if (upgradeProfile) {
     }
     const problem = await evaluate(`window.tenuvault.backups.inventoryProblem(${JSON.stringify(tenantId)})`)
     assert(problem === null, "The historical backup inventory reported damage")
+  })
+  await check("Every historical policy and manifest downloads with its original content", async () => {
+    const JSZip = require("jszip")
+    const items = {
+      "CompliancePolicies/alpha": { file: "alpha.json" },
+      "DeviceConfigurations/beta": { file: "beta.json" },
+    }
+    for (const backupId of ["backup-2026-11-01-020000", "backup-2026-11-02-020000"]) {
+      const [status, body] = await evaluate(`fetch("/api/download-backup", {
+        method: "POST", body: JSON.stringify(${JSON.stringify({ ...request, backupId })})
+      }).then(async response => [response.status, Array.from(new Uint8Array(await response.arrayBuffer()))])`)
+      assert(status === 200, `${backupId} download returned HTTP ${status}: ${Buffer.from(body).toString("utf8").slice(0, 200)}`)
+      const zip = await JSZip.loadAsync(Buffer.from(body), { checkCRC32: true })
+      const expected = {
+        "metadata.json": { Status: "Success", TenantId: tenantId, RunId: backupId, Items: items },
+        "CompliancePolicies/alpha.json": { id: "alpha", displayName: "Synthetic compliance policy" },
+        "DeviceConfigurations/beta.json": { id: "beta", displayName: "Synthetic device configuration" },
+        "tenuvault-manifest.json": { version: 1, sourceTenantId: tenantId, backupId },
+      }
+      const paths = Object.values(zip.files).filter(file => !file.dir).map(file => file.name)
+      deepStrictEqual(paths.sort(), Object.keys(expected).sort(), `${backupId} archive inventory changed`)
+      for (const [path, value] of Object.entries(expected)) {
+        deepStrictEqual(JSON.parse(await zip.file(path).async("string")), value, `${backupId}/${path} changed`)
+      }
+    }
   })
   await finish()
 }
