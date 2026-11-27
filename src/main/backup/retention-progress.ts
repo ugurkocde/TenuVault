@@ -12,6 +12,12 @@ export interface VerificationProgress {
   attempts: number
 }
 
+export interface FreshVerificationProgress {
+  binding: string
+  files: Record<string, string>
+  done?: boolean
+}
+
 export interface DeletionJournalEntry {
   prefixes: string[]
   remnant: boolean
@@ -21,6 +27,7 @@ export interface DeletionJournalEntry {
   remaining: Record<string, string>
   deleted: string[]
   absent?: string[]
+  fresh?: Record<string, FreshVerificationProgress>
 }
 
 export interface LeaseFailureProgress {
@@ -70,6 +77,14 @@ function isVerificationProgress(value: unknown): value is VerificationProgress {
   return true
 }
 
+function isFreshVerificationProgress(value: unknown): value is FreshVerificationProgress {
+  if (!isPlainRecord(value)) return false
+  if (typeof value.binding !== "string" || !value.binding) return false
+  if (!isPlainRecord(value.files) || !Object.values(value.files).every(receipt => typeof receipt === "string")) return false
+  if (value.done !== undefined && typeof value.done !== "boolean") return false
+  return true
+}
+
 function isDeletionJournalEntry(value: unknown): value is DeletionJournalEntry {
   if (!isPlainRecord(value)) return false
   if (!Array.isArray(value.prefixes) || value.prefixes.length === 0
@@ -82,6 +97,10 @@ function isDeletionJournalEntry(value: unknown): value is DeletionJournalEntry {
     || !Object.values(value.remaining).every(etag => typeof etag === "string" && etag.length > 0)) return false
   if (!Array.isArray(value.deleted) || !value.deleted.every(name => typeof name === "string")) return false
   if (value.absent !== undefined && (!Array.isArray(value.absent) || !value.absent.every(name => typeof name === "string"))) return false
+  if (value.fresh !== undefined) {
+    if (!isPlainRecord(value.fresh) || !Object.entries(value.fresh).every(([repPrefix, entry]) =>
+      repPrefix.endsWith("/") && isFreshVerificationProgress(entry))) return false
+  }
   return true
 }
 

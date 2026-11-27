@@ -19,7 +19,7 @@ import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-
 import { BlobLeaseError, BlobWriter, ReplacementChangedError, wasDeleteConfirmedUnchanged, type ExpectedReplacement } from "./blob-writer"
 import { createRetentionLeaseManager, LEASE_DURATION_MS, LEASE_DURATION_SECONDS, leaseFailureKey, PERMANENT_LEASE_FAILURE_RUNS, permanentLeaseFailureWarning } from "./retention-lease"
 import { RetentionBudget, RetentionBudgetError, RETENTION_LIMITS, type RetentionLimits } from "./retention-budget"
-import { readRetentionProgress, type DeletionJournalEntry, type RetentionProgressStore } from "./retention-progress"
+import { readRetentionProgress, retentionIdentity, type DeletionJournalEntry, type FreshVerificationProgress, type RetentionProgressStore } from "./retention-progress"
 import { RetentionManifestMismatch, verifyHalf, type VerifiedHalf } from "./retention-verification"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
@@ -1652,18 +1652,21 @@ export class BackupEngine {
       if (start + limit < ordered.length) state.cursor = backups.at(-1)?.prefix
       else {
         delete state.cursor
-        if (state.latest) {
-          delete state.reviews[state.latest]
-          delete state.latest
-        }
-        if (latestCompanionPrefix) delete state.reviews[latestCompanionPrefix]
-        if (state.newest) {
-          delete state.reviews[state.newest]
-          delete state.newest
-        }
-        if (state.newestCompanion) {
-          delete state.reviews[state.newestCompanion]
-          delete state.newestCompanion
+        const hasPendingFresh = Object.values(state.deletions ?? {}).some(entry => Boolean(entry.fresh && Object.keys(entry.fresh).length > 0))
+        if (!hasPendingFresh) {
+          if (state.latest) {
+            delete state.reviews[state.latest]
+            delete state.latest
+          }
+          if (latestCompanionPrefix) delete state.reviews[latestCompanionPrefix]
+          if (state.newest) {
+            delete state.reviews[state.newest]
+            delete state.newest
+          }
+          if (state.newestCompanion) {
+            delete state.reviews[state.newestCompanion]
+            delete state.newestCompanion
+          }
         }
       }
       if (state.cursor) this.write(job, "Retention will continue reviewing older backups on the next run.", "info")
@@ -2405,6 +2408,13 @@ export class BackupEngine {
         const freshCovered = new Set<string>()
         let freshAnchorOk = false
         for (const replacement of replacements) {
+          const clearFreshEntry = () => {
+            if (journal.fresh && Object.hasOwn(journal.fresh, replacement.prefix)) {
+              delete journal.fresh[replacement.prefix]
+              if (Object.keys(journal.fresh).length === 0) delete journal.fresh
+              saveProgress()
+            }
+          }
           try {
             let freshClaim: OwnershipFile | undefined
             const resolved = await resolveBackupOwnership(async file => {
@@ -2412,13 +2422,88 @@ export class BackupEngine {
               if (file === BACKUP_OWNER_FILE) freshClaim = read
               return read
             }, tenant)
-            if (resolved.manifest.kind !== "found" || resolved.owner.kind === "unreadable" || resolved.owner.kind === "other") continue
-            if (resolved.owner.kind === "untagged" && shared) continue
-            if (replacement.prefix === latestPrefix && written && JSON.stringify(resolved.manifest.metadata) !== JSON.stringify(written)) continue
-            if (replacement.prefix === latestCompanionPrefix && writtenCompanion && JSON.stringify(resolved.manifest.metadata) !== JSON.stringify(writtenCompanion)) continue
-            // Full fresh verification without receipts (progress = undefined).
-            const verifiedFresh = await verifyHalf(metered(), replacement.prefix, resolved.manifest.metadata, undefined, freshClaim, undefined, keyFingerprint)
-            if (!sameIdentities(replacement.blobs, verifiedFresh.blobs)) {
+            if (resolved.manifest.kind !== "found" || resolved.owner.kind === "unreadable" || resolved.owner.kind === "other") {
+              clearFreshEntry()
+              continue
+            }
+            if (resolved.owner.kind === "untagged" && shared) {
+              clearFreshEntry()
+              continue
+            }
+            if (replacement.prefix === latestPrefix && written && JSON.stringify(resolved.manifest.metadata) !== JSON.stringify(written)) {
+              clearFreshEntry()
+              continue
+            }
+            if (replacement.prefix === latestCompanionPrefix && writtenCompanion && JSON.stringify(resolved.manifest.metadata) !== JSON.stringify(writtenCompanion)) {
+              clearFreshEntry()
+              continue
+            }
+            const freshWriter = metered()
+            const freshListing = await freshWriter.listFolder(replacement.prefix)
+            const sortedExpected = [...replacement.blobs.entries()].sort(([a], [b]) => a.localeCompare(b))
+            const sortedListed = [...freshListing.blobs].sort().map(name => [name, freshListing.etags.get(name) ?? null])
+            const binding = retentionIdentity([
+              "fresh-journal",
+              replacement.prefix,
+              sortedExpected,
+              sortedListed,
+              resolved.manifest.metadata,
+              freshClaim ?? null,
+              keyFingerprint ?? null,
+              [...(journal.absent ?? [])].sort(),
+            ])
+            const existingFresh = journal.fresh?.[replacement.prefix]
+            let resetFresh = false
+            let freshEntry: FreshVerificationProgress
+            if (existingFresh && existingFresh.binding === binding) {
+              freshEntry = existingFresh
+            } else {
+              freshEntry = { binding, files: {} }
+              if (existingFresh) {
+                journal.fresh![replacement.prefix] = freshEntry
+                resetFresh = true
+              }
+            }
+            const uniqueListed = new Set(freshListing.blobs)
+            const hasAllListedEtags = uniqueListed.size === freshListing.blobs.length
+              && freshListing.blobs.every(name => Boolean(freshListing.etags.get(name)))
+            let verifiedBlobs: Map<string, string>
+            if (freshEntry.done && hasAllListedEtags
+              && sameIdentities(replacement.blobs, new Map(freshListing.blobs.map(name => [name, freshListing.etags.get(name)!])))) {
+              verifiedBlobs = new Map(freshListing.blobs.map(name => [name, freshListing.etags.get(name)!]))
+            } else {
+              // Persist fresh verification progress separately from ordinary provider receipts in state.reviews.
+              const freshProgress = { files: { ...freshEntry.files }, attempts: 0 }
+              const beforeFresh = Object.keys(freshProgress.files).length
+              try {
+                const verifiedFresh = await verifyHalf(freshWriter, replacement.prefix, resolved.manifest.metadata, freshListing, freshClaim, freshProgress, keyFingerprint)
+                verifiedBlobs = verifiedFresh.blobs
+              } catch (verifyError) {
+                if (Object.keys(freshProgress.files).length > beforeFresh) {
+                  freshEntry.files = freshProgress.files
+                  journal.fresh ??= {}
+                  journal.fresh[replacement.prefix] = freshEntry
+                  saveProgress()
+                } else if (resetFresh) {
+                  saveProgress()
+                }
+                throw verifyError
+              }
+              if (!sameIdentities(replacement.blobs, verifiedBlobs)) {
+                clearFreshEntry()
+                replacementChangedDuringRun = replacement.prefix
+                plan.length = 0
+                this.write(job, `Kept remaining backups because replacement backup ${replacement.prefix} changed during retention.`, "warning")
+                return
+              }
+              freshEntry.done = true
+              freshEntry.files = {}
+              journal.fresh ??= {}
+              journal.fresh[replacement.prefix] = freshEntry
+              saveProgress()
+            }
+            if (!sameIdentities(replacement.blobs, verifiedBlobs)) {
+              clearFreshEntry()
               replacementChangedDuringRun = replacement.prefix
               plan.length = 0
               this.write(job, `Kept remaining backups because replacement backup ${replacement.prefix} changed during retention.`, "warning")
@@ -2429,6 +2514,7 @@ export class BackupEngine {
           } catch (error) {
             signal.throwIfAborted()
             if ((error instanceof InventoryDamagedError && !error.recoveryConflict) || error instanceof TokenError || error instanceof RetentionClockError || error instanceof RetentionBudgetError) throw error
+            clearFreshEntry()
           }
         }
         const coveredFresh = freshAnchorOk && journal.folders.every(folder => freshCovered.has(folder) && Boolean(typeForFolder(folder)))
@@ -2742,8 +2828,9 @@ export class BackupEngine {
           const markers = new Set(unit.prefixes.map(prefix => `${prefix}${BACKUP_OWNER_FILE}`))
           const names = [...verified.keys()]
           const existingJournal = state.deletions?.[primaryPrefix]
+          const { fresh: _consumedFresh, ...keptJournal } = existingJournal ?? {}
           const journal: DeletionJournalEntry = existingJournal
-            ? { ...existingJournal, remaining: Object.fromEntries(verified) }
+            ? { ...keptJournal as DeletionJournalEntry, remaining: Object.fromEntries(verified) }
             : {
                 prefixes: unit.prefixes,
                 remnant: unit.remnant,

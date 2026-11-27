@@ -51,6 +51,8 @@ const DEVICE_CONFIG_SCOPE = {
 function setupAzure(options: {
   count?: number
   progress?: RetentionProgressStore
+  limits?: { candidates: number; requests: number; bytes: number }
+  payloadPadding?: string
   override?: (url: URL, request: Request) => Response | Promise<Response> | undefined
 } = {}) {
   vi.useFakeTimers()
@@ -77,9 +79,9 @@ function setupAzure(options: {
     if (url.hostname === "graph.microsoft.com") {
       if (url.pathname.endsWith("/deviceCompliancePolicies")) return Response.json({ value: [] })
       if (url.pathname.endsWith("/deviceConfigurations")) {
-        return Response.json({ value: Array.from({ length: options.count ?? 1 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
+        return Response.json({ value: Array.from({ length: options.count ?? 1 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}`, ...(options.payloadPadding ? { padding: options.payloadPadding } : {}) })) })
       }
-      return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
+      return Response.json({ id: url.pathname.split("/").at(-1), assignments: [], ...(options.payloadPadding ? { padding: options.payloadPadding } : {}) })
     }
     if (url.searchParams.get("comp") === "list") {
       const prefix = url.searchParams.get("prefix") ?? ""
@@ -126,6 +128,7 @@ function setupAzure(options: {
     fetch,
     getToken: async () => { registerStorageToken("token", TENANT); return "token" },
     retentionDays: () => 30,
+    retentionLimits: options.limits,
     retentionProgress: progress,
     recoveryKeyFingerprint: () => legacyRecoveryFingerprint(keys),
   })
@@ -142,7 +145,7 @@ function setupAzure(options: {
     seed(`${prefix}${BACKUP_OWNER_FILE}`, OWNER)
     seed(`${prefix}metadata.json`, twoItems ? TWO_ITEM_MANIFEST : ONE_ITEM_MANIFEST)
   }
-  return { createEngine, engine: createEngine(), saved, calls, seed, has, etag, keyOf, seedExpired, progress }
+  return { createEngine, engine: createEngine(), saved, calls, seed, has, etag, keyOf, seedExpired, progress, keys }
 }
 
 async function runJob(engine: BackupEngine) {
@@ -1147,5 +1150,162 @@ describe("Round 3 findings: version-tied replacement coverage and outer-loop sto
       expect(deletes.some(name => name.startsWith(candidate2))).toBe(true)
       expect(job.log.join("\n")).toContain("could not be leased before deletion")
     }
+  })
+})
+
+describe("Round 10 findings: checkpointed fresh verification for deletion journals", () => {
+  it("4723063805: checkpoints fresh verification across consecutive 110 KB budgeted runs for two 70 KB payloads and keeps remaining files until complete", async () => {
+    const progress = memoryStore()
+    const expired = "backup-2026-08-01-020000/"
+    const padding = "x".repeat(70_000)
+
+    const ctx = setupAzure({
+      count: 2,
+      payloadPadding: padding,
+      progress,
+      limits: { candidates: 32, requests: 200, bytes: 110_000 },
+      override: (url, req) => {
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+          return new Response(null, { status: 200 })
+        }
+        return undefined
+      },
+    })
+
+    ctx.seedExpired(expired)
+    const progressKey = `${TENANT}/contoso/false`
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletions: {
+        [expired]: {
+          prefixes: [expired],
+          remnant: false,
+          folders: ["DeviceConfigurations"],
+          untagged: false,
+          remaining: {
+            [`${expired}DeviceConfigurations/Absent.json`]: '"absent-etag"',
+            [`${expired}DeviceConfigurations/Old.json`]: ctx.etag(`${expired}DeviceConfigurations/Old.json`),
+            [`${expired}metadata.json`]: ctx.etag(`${expired}metadata.json`),
+            [`${expired}${BACKUP_OWNER_FILE}`]: ctx.etag(`${expired}${BACKUP_OWNER_FILE}`),
+          },
+          deleted: [],
+        },
+      },
+    }))
+
+    let sawPartialFreshCheckpoint = false
+    for (let run = 0; run < 8; run++) {
+      if (run > 0) vi.setSystemTime(new Date(NOW.getTime() + run * 60_000))
+      await runJob(ctx.createEngine())
+      const state = readRetentionProgress(progress.get(progressKey))
+      const journal = state.deletions?.[expired]
+      if (journal?.fresh) {
+        const entries = Object.values(journal.fresh)
+        if (entries.some(entry => !entry.done && Object.keys(entry.files).length === 1)) {
+          sawPartialFreshCheckpoint = true
+          expect(ctx.has(`${expired}DeviceConfigurations/Old.json`)).toBe(true)
+          expect(ctx.has(`${expired}metadata.json`)).toBe(true)
+          expect(ctx.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(true)
+        }
+      }
+      if (!ctx.has(`${expired}metadata.json`)) break
+    }
+
+    expect(sawPartialFreshCheckpoint).toBe(true)
+    expect(ctx.has(`${expired}DeviceConfigurations/Old.json`)).toBe(false)
+    expect(ctx.has(`${expired}metadata.json`)).toBe(false)
+    expect(ctx.has(`${expired}${BACKUP_OWNER_FILE}`)).toBe(false)
+    expect(readRetentionProgress(progress.get(progressKey)).deletions).toBeUndefined()
+  })
+
+  it("4723063805: resets persisted fresh verification progress when keyring fingerprint changes", async () => {
+    const progress = memoryStore()
+    const expired = "backup-2026-08-01-020000/"
+    const padding = "y".repeat(70_000)
+
+    const ctx = setupAzure({
+      count: 2,
+      payloadPadding: padding,
+      progress,
+      limits: { candidates: 32, requests: 200, bytes: 110_000 },
+      override: (url, req) => {
+        if (req.method === "PUT" && url.searchParams.get("comp") === "lease") {
+          const action = req.headers.get("x-ms-lease-action")
+          if (action === "acquire") return new Response(null, { status: 201, headers: { "x-ms-lease-id": req.headers.get("x-ms-proposed-lease-id") || "lease" } })
+          return new Response(null, { status: 200 })
+        }
+        return undefined
+      },
+    })
+
+    ctx.seedExpired(expired)
+    const progressKey = `${TENANT}/contoso/false`
+    progress.set(progressKey, JSON.stringify({
+      reviews: {},
+      deletions: {
+        [expired]: {
+          prefixes: [expired],
+          remnant: false,
+          folders: ["DeviceConfigurations"],
+          untagged: false,
+          remaining: {
+            [`${expired}DeviceConfigurations/Absent.json`]: '"absent-etag"',
+            [`${expired}DeviceConfigurations/Old.json`]: ctx.etag(`${expired}DeviceConfigurations/Old.json`),
+            [`${expired}metadata.json`]: ctx.etag(`${expired}metadata.json`),
+            [`${expired}${BACKUP_OWNER_FILE}`]: ctx.etag(`${expired}${BACKUP_OWNER_FILE}`),
+          },
+          deleted: [],
+        },
+      },
+    }))
+
+    let anchorPrefix = ""
+    let bindingBefore = ""
+    let firstPayload = ""
+    let step = 0
+    for (; step < 8; step++) {
+      if (step > 0) vi.setSystemTime(new Date(NOW.getTime() + step * 60_000))
+      await runJob(ctx.createEngine())
+      const freshMap = readRetentionProgress(progress.get(progressKey)).deletions?.[expired]?.fresh
+      if (freshMap) {
+        const hit = Object.entries(freshMap).find(([, entry]) => !entry.done && Object.keys(entry.files).length === 1)
+        if (hit) {
+          anchorPrefix = hit[0]
+          bindingBefore = hit[1].binding
+          firstPayload = Object.keys(hit[1].files)[0]!
+          break
+        }
+      }
+    }
+    expect(bindingBefore).not.toBe("")
+    expect(ctx.has(`${expired}metadata.json`)).toBe(true)
+
+    // Rotate keyring fingerprint: fresh verification resets and re-reads firstPayload instead of completing from stale progress.
+    ctx.keys.unshift(Buffer.alloc(32, 9))
+    let sawResetCheckpoint = false
+    for (let extra = 1; extra <= 8; extra++) {
+      const callsBefore = ctx.calls.length
+      vi.setSystemTime(new Date(NOW.getTime() + (step + extra) * 60_000))
+      await runJob(ctx.createEngine())
+      const freshAfterKey = readRetentionProgress(progress.get(progressKey)).deletions?.[expired]?.fresh?.[anchorPrefix]
+      if (freshAfterKey && freshAfterKey.binding !== bindingBefore && !freshAfterKey.done) {
+        sawResetCheckpoint = true
+        const reReadFirst = ctx.calls.slice(callsBefore).filter(c => c.request.method === "GET" && c.name === `${anchorPrefix}${firstPayload}`)
+        expect(reReadFirst.length).toBeGreaterThanOrEqual(1)
+        expect(ctx.has(`${expired}metadata.json`)).toBe(true)
+        break
+      }
+    }
+    expect(sawResetCheckpoint).toBe(true)
+    expect(ctx.has(`${expired}metadata.json`)).toBe(true)
+
+    for (let extra = 9; extra <= 16; extra++) {
+      vi.setSystemTime(new Date(NOW.getTime() + (step + extra) * 60_000))
+      await runJob(ctx.createEngine())
+      if (!ctx.has(`${expired}metadata.json`)) break
+    }
+    expect(ctx.has(`${expired}metadata.json`)).toBe(false)
   })
 })
