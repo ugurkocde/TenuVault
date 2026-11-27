@@ -93,6 +93,37 @@ export async function verifyBackup(
   return { identities, types, covers }
 }
 
+export function manifestTypes(manifest: Record<string, unknown>, prefix: string): Set<string> | null {
+  const items = itemsOf(manifest)
+  if (!items) return null
+  if (manifest.BackupFolder !== undefined && manifest.BackupFolder !== prefix.slice(0, -1)) return null
+  const counts = new Map<string, number>()
+  for (const [key, entry] of Object.entries(items)) {
+    const slash = key.indexOf("/")
+    const folder = key.slice(0, slash)
+    const type = typeForFolder(folder)
+    if (!type || !key.slice(slash + 1) || typeof entry?.file !== "string"
+      || !/^[^/\\]+\.json$/.test(entry.file) || !isSafeArchivePath(`${folder}/${entry.file}`)) {
+      return null
+    }
+    counts.set(folder, (counts.get(folder) ?? 0) + 1)
+  }
+  const declared = manifest.ItemCounts
+  if (declared !== undefined) {
+    if (!declared || typeof declared !== "object" || Array.isArray(declared)) return null
+    const totalPolicies = [...counts.entries()].reduce((sum, [folder, count]) => (typeForFolder(folder)?.inventory ? sum : sum + count), 0)
+    for (const [folder, count] of Object.entries(declared)) {
+      if (folder === "TotalPolicies") {
+        if (count !== totalPolicies) return null
+      } else if (count !== (counts.get(folder) ?? 0)) {
+        return null
+      }
+    }
+  }
+  return new Set([...counts.keys(), ...coveredFolders(manifest)].filter(folder =>
+    counts.has(folder) || Object.hasOwn(declared ?? {}, folder) || Array.isArray((manifest.Scope as { Included?: unknown })?.Included)))
+}
+
 export function checkOwner(marker: RetentionBlob, manifest: Record<string, unknown>, tenant: string, prefix: string): void {
   const { TenantId, RunId } = marker.value as Record<string, unknown>
   if (typeof TenantId !== "string" || TenantId.toLowerCase() !== tenant

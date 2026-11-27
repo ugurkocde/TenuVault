@@ -1020,6 +1020,135 @@ describe("retention verification", () => {
       expired + BACKUP_OWNER_FILE,
     ])
   })
+
+  it("rejects and discards tampered deletion journals with emptied types, foreign ownership, ownership mismatch, or protected targets", async () => {
+    const key = `${TENANT}/contoso`
+    const etagOf = (saved: Map<string, Buffer>, name: string) => `"${createHash("sha256").update(saved.get(name)!).digest("hex")}"`
+    const appItem = { id: "app1" }
+    const appManifest = {
+      TenantId: TENANT, Status: "Success", Scope: { Included: ["Apps"] },
+      Items: { "Apps/app1": { file: "App.json", hash: snapshotHash(appItem), sha256: createHash("sha256").update(JSON.stringify(appItem)).digest("hex") } },
+    }
+
+    // 1. Tampered journal with emptied types (both without noTypes and with forged noTypes: true) cannot delete an uncovered Apps backup.
+    for (const tampered of [
+      { prefix: expired, types: [], untagged: false },
+      { prefix: expired, types: [], noTypes: false, untagged: false },
+      { prefix: expired, types: [], noTypes: true, untagged: false },
+      { prefix: expired, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+    ]) {
+      const { engine, saved, calls, seed, progressData } = setup()
+      seed(expired + "Apps/App.json", appItem)
+      seed(expired + BACKUP_OWNER_FILE, owner)
+      seed(expired + "metadata.json", appManifest)
+      const remaining = Object.fromEntries([...saved.keys()].filter(name => name.startsWith(expired)).map(name => [name, etagOf(saved, name)]))
+      progressData.set(key, JSON.stringify({ reviews: {}, deletes: { [expired]: { ...tampered, remaining } } }))
+      await complete(engine)
+      expect(saved.has(expired + "Apps/App.json")).toBe(true)
+      expect(saved.has(expired + "metadata.json")).toBe(true)
+      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+    }
+
+    // 2. Tampered journal pointing to another tenant's expired backup is rejected by ownership resolution and protects untagged backups too.
+    {
+      const theirs = "backup-2026-08-01-020000/"
+      const untagged = "backup-2026-08-02-020000/"
+      const { engine, saved, calls, seed, folder, progressData } = setup()
+      folder(theirs, { ...owner, TenantId: OTHER })
+      seed(theirs + "metadata.json", { ...manifest, TenantId: OTHER })
+      folder(untagged, null)
+      seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+      const remaining = Object.fromEntries([...saved.keys()].filter(name => name.startsWith(theirs)).map(name => [name, etagOf(saved, name)]))
+      progressData.set(key, JSON.stringify({
+        reviews: {},
+        deletes: { [theirs]: { prefix: theirs, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+      await complete(engine)
+      expect(saved.has(theirs + "metadata.json")).toBe(true)
+      expect(saved.has(untagged + "metadata.json")).toBe(true)
+      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+    }
+
+    // 3. Tampered journal claiming untagged: false for an actually untagged backup is discarded.
+    {
+      const untagged = "backup-2026-08-01-020000/"
+      const { engine, saved, calls, seed, folder, progressData } = setup()
+      folder(untagged, null)
+      seed(untagged + "metadata.json", { Status: "Success", Items: indexed, Scope: { Included: ["DeviceConfigurations"] } })
+      const remaining = Object.fromEntries([...saved.keys()].filter(name => name.startsWith(untagged)).map(name => [name, etagOf(saved, name)]))
+      progressData.set(key, JSON.stringify({
+        reviews: {},
+        deletes: { [untagged]: { prefix: untagged, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false } },
+      }))
+      await complete(engine)
+      expect(saved.has(untagged + "metadata.json")).toBe(true)
+      expect(calls.filter(call => call.request.method === "DELETE")).toEqual([])
+      expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+    }
+
+    // 4. Journals targeting the newest backup or the resumed anchor are discarded and never delete them.
+    {
+      const big = "p".repeat(70_000)
+      const { engine, saved, calls, seed, folder, progressData } = setup({
+        count: 2,
+        limits: { candidates: 32, requests: 100, bytes: 110_000 },
+        override: url => {
+          if (url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) {
+            return withBackupServerTime(Response.json({ id: url.pathname.split("/").at(-1), description: big }), new Date())
+          }
+        },
+      })
+      folder(expired)
+      seed(expired + "metadata.json", manifest)
+      const first = await complete(engine)
+      const anchor = `${first.backupFolder}/`
+      await vi.advanceTimersByTimeAsync(1_000)
+      const nextLatest = "backup-2026-10-12-120001/"
+      const stored = JSON.parse(progressData.get(key)!) as { latest?: string; reviews: Record<string, unknown> }
+      const anchorRemaining = Object.fromEntries([...saved.keys()].filter(name => name.startsWith(anchor)).map(name => [name, etagOf(saved, name)]))
+      progressData.set(key, JSON.stringify({
+        ...stored,
+        deletes: {
+          [anchor]: { prefix: anchor, remaining: anchorRemaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+          [nextLatest]: { prefix: nextLatest, remaining: { [nextLatest + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+        },
+      }))
+      const second = await complete(engine)
+      expect(`${second.backupFolder}/`).toBe(nextLatest)
+      expect(saved.has(anchor + "metadata.json")).toBe(true)
+      expect(saved.has(nextLatest + "metadata.json")).toBe(true)
+      expect(calls.some(call => call.request.method === "DELETE" && (call.name.startsWith(anchor) || call.name.startsWith(nextLatest)))).toBe(false)
+      expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
+    }
+  })
+
+  it("resumes a genuinely typeless backup through the deletion journal with noTypes set", async () => {
+    let blockOwner = true
+    const { engine, saved, calls, seed, progressData } = setup({
+      override: (url, req) => {
+        if (blockOwner && req.method === "DELETE" && url.pathname.endsWith(`${expired}${BACKUP_OWNER_FILE}`)) {
+          return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
+        }
+      },
+    })
+    seed(expired + BACKUP_OWNER_FILE, owner)
+    seed(expired + "metadata.json", { TenantId: TENANT, Status: "Success", Scope: { Included: [] }, Items: {}, ItemCounts: { TotalPolicies: 0 } })
+
+    await complete(engine)
+    expect(saved.has(expired + "metadata.json")).toBe(false)
+    expect(saved.has(expired + BACKUP_OWNER_FILE)).toBe(true)
+    const journal = readRetentionProgress(progressData.get(`${TENANT}/contoso`)).deletes?.[expired]
+    expect(journal).toMatchObject({ prefix: expired, types: [], noTypes: true, untagged: false })
+
+    blockOwner = false
+    const beforeResume = calls.length
+    await vi.advanceTimersByTimeAsync(1_000)
+    await complete(engine)
+    expect([...saved.keys()].some(name => name.startsWith(expired))).toBe(false)
+    expect(calls.slice(beforeResume).filter(call => call.request.method === "DELETE").map(call => call.name)).toEqual([expired + BACKUP_OWNER_FILE])
+  })
 })
 
 describe("retention server time", () => {
@@ -1119,9 +1248,17 @@ describe("retention progress and manifest validation", () => {
       JSON.stringify({ reviews: { [expired]: { attempts: 0, files: {}, failures: -1 } } }),
       JSON.stringify({ reviews: { [expired]: { attempts: 0, files: {}, reason: 123 } } }),
       JSON.stringify({ reviews: {}, deletes: [] }),
-      JSON.stringify({ reviews: {}, deletes: { [expired]: { remaining: [], types: [], untagged: false } } }),
-      JSON.stringify({ reviews: {}, deletes: { [expired]: { remaining: {}, types: [1], untagged: false } } }),
-      JSON.stringify({ reviews: {}, deletes: { [expired]: { remaining: {}, types: [], untagged: "no" } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: [], types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: {}, types: [1], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: {}, types: ["DeviceConfigurations"], noTypes: false, untagged: "no" } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: "backup-2026-08-02-020000/", remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { ["backup-2026-08-02-020000/metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: "*" }, types: ["DeviceConfigurations"], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: '"etag"' }, types: [], untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: '"etag"' }, types: [], noTypes: false, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: true, untagged: false } } }),
+      JSON.stringify({ reviews: {}, deletes: { [expired]: { prefix: expired, remaining: { [expired + "DeviceConfigurations/Old.json"]: '"etag"' }, types: [], noTypes: true, untagged: false } } }),
     ]
     for (const raw of invalidCases) {
       expect(readRetentionProgress(raw)).toEqual({ reviews: {} })
@@ -1131,7 +1268,10 @@ describe("retention progress and manifest validation", () => {
       latest: "backup-2026-10-12-120000/",
       latestAttempts: 1,
       reviews: { [expired]: { attempts: 1, files: { "DeviceConfigurations/Old.json": "abc" }, failures: 2, reason: "missing" } },
-      deletes: { [expired]: { remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], untagged: false } },
+      deletes: {
+        [expired]: { prefix: expired, remaining: { [expired + "metadata.json"]: '"etag"' }, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
+        "backup-2026-07-01-020000/": { prefix: "backup-2026-07-01-020000/", remaining: { "backup-2026-07-01-020000/metadata.json": '"etag"' }, types: [], noTypes: true, untagged: false },
+      },
     }
     expect(readRetentionProgress(JSON.stringify(valid))).toEqual(valid)
 
