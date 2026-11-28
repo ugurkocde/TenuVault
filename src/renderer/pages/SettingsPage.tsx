@@ -946,7 +946,7 @@ export default function SettingsPage() {
   // except when a deep link targets a control inside the storage section.
   useEffect(() => {
     if (hash.startsWith("#sign-in-") && isGuid(hash.slice("#sign-in-".length))) {
-      const frame = requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView({ block: "nearest" }))
+      const frame = requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView?.({ block: "nearest" }))
       return () => cancelAnimationFrame(frame)
     }
     if (hash !== "#recovery-key") window.scrollTo({ top: 0 })

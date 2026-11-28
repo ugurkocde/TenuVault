@@ -245,7 +245,7 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
   const hasReport = Boolean(report)
   useEffect(() => {
     if (!active || !hasReport || !BACKUP_SERVICES.some(service => hash === `#service-${service.id}`)) return
-    const frame = requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView({ block: "nearest" }))
+    const frame = requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView?.({ block: "nearest" }))
     return () => cancelAnimationFrame(frame)
   }, [active, hasReport, hash])
 
