@@ -257,10 +257,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
-- macOS: the `DisableAutoUpdate` and `DisableSetupDiagnostics` policies are read only from a
-  configuration profile (`/Library/Managed Preferences`). A value written with `defaults write`
-  to a user's own preferences no longer locks updates or diagnostics. Admins who set them that
-  way deploy a profile instead (see the deploy page).
+None at the moment.
 
 ## Cutting a stable release
 
