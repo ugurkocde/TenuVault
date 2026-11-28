@@ -63,7 +63,7 @@ export function TenantSwitcher() {
       <button
         type="button"
         onClick={() => void navigate("/portal/onboarding")}
-        className="flex w-full items-center gap-3 rounded-full bg-secondary py-1.5 pl-1.5 pr-4 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+        className="flex w-full items-center gap-3 rounded-full bg-secondary py-1.5 pl-1.5 pr-4 text-sm font-medium text-secondary-foreground hover:bg-secondary/80"
       >
         <span className="flex size-9 items-center justify-center rounded-full bg-card" aria-hidden="true"><Plus className="h-4 w-4" /></span> Connect a tenant
       </button>
@@ -75,13 +75,13 @@ export function TenantSwitcher() {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex w-full items-center gap-3 rounded-full bg-secondary py-1.5 pl-1.5 pr-3 text-left transition-colors hover:bg-accent"
+          className="flex w-full items-center gap-3 rounded-full bg-secondary py-1.5 pl-1.5 pr-3 text-left text-secondary-foreground hover:bg-secondary/80"
           aria-label={`Switch tenant. Current: ${selectedTenant?.name ?? "None"}, ${selectedTenant?.domain ?? ""}${stateLabel ? `, ${stateLabel}` : ""}`}
           title={`${selectedTenant?.name ?? "Choose a tenant"} ${selectedTenant?.domain ?? ""}${stateLabel ? `, ${stateLabel}` : ""}`}
         >
           <TenantBadge name={selectedTenant?.name} unlicensed={unlicensed(selectedTenant?.credentials?.tenantId)} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium text-gray-900">{selectedTenant?.name ?? "Choose a tenant"}</span>
+            <span className="block truncate text-sm font-medium">{selectedTenant?.name ?? "Choose a tenant"}</span>
             {unlicensed(selectedTenant?.credentials?.tenantId) ? (
               <span className="block truncate text-xs text-amber-800">Not licensed</span>
             ) : (

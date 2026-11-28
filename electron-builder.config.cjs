@@ -21,6 +21,7 @@ const azureSignOptions = env.AZURE_TRUSTED_SIGNING_ENDPOINT
   : undefined
 
 module.exports = {
+  beforePack: () => require("./scripts/check-release-bundle.cjs").checkReleaseBundle("out"),
   afterPack: require("./scripts/sign-capture-helper.cjs"),
   electronFuses: {
     runAsNode: false,
@@ -105,7 +106,7 @@ module.exports = {
 
   // Releases and the auto-update feed live in this repository's GitHub releases: stable builds
   // write latest.yml, nightly builds (TENUVAULT_RELEASE_CHANNEL=nightly) write nightly.yml.
-  publish: {
+  publish: env.TENUVAULT_INSTALLERS_ONLY === "1" ? null : {
     provider: "github",
     owner: "ugurkocde",
     repo: "TenuVault",

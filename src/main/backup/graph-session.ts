@@ -1,90 +1,209 @@
+import { graphContinuation } from "../../shared/graph-continuation"
+import { GraphResponseValidationError } from "../../shared/graph-response-validation"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
+import { signInRefused } from "../../shared/backup-outcomes"
+import type { GrantedPermissions } from "../../shared/services/modules"
+import type { Item } from "../../shared/intune/registry"
 import type { NetworkCircuit } from "./engine"
-import { GRAPH, MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, RequestTimeoutError, TokenError, graphError, requestFailure, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, GraphUnansweredError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
 
 export type GraphItem = Record<string, unknown> & { id: string }
 
-/** Graph reads for one backup. A throttled request (429) pauses every reader until Graph allows requests again. */
+export interface GraphSessionOptions {
+  /** The service the session reads for. Its auth failures are counted apart from other services'. */
+  service?: string
+  /**
+   * The session of a service that isolates its failures (see ServiceModule.isolated). A pause longer
+   * than the bound fails the request that got it and leaves the other readers of the service alone.
+   * Requests that get no answer count for this service only: too many in a row stop the service,
+   * never the job. A 401 that names no token error is asked once more with a new token before it
+   * counts as the endpoint's own answer. Without it, the pause stops every reader of the session
+   * and unanswered requests count toward the job's circuit, as they always have.
+   */
+  isolated?: boolean
+  requireGrantEvidence?: boolean
+  grantForToken?: (token: string) => GrantedPermissions | undefined
+}
+
+export interface ReadControl {
+  /** A type budget can stop its requests without stopping the service or the run. */
+  signal?: AbortSignal
+  /** Counts actual GET attempts, including retries and continuation pages. */
+  beforeRequest?: () => void
+}
+
+export interface ListOptions extends ReadControl {
+  /** Headers of the type the list belongs to, sent with every page. */
+  headers?: Readonly<Record<string, string>>
+  /** The type's mandatory $filter. A continuation link that left it out gets it back; one with another filter is refused. */
+  filter?: string
+  idKey?: string
+  singlePage?: boolean
+  /** The page already included in a detail response through $expand. */
+  expandedPage?: unknown
+}
+
+/**
+ * Graph reads of one service for one backup. A throttled request (429) pauses every reader of the
+ * service until Graph allows requests again; other services have their own session and read on.
+ */
 export class GraphSession {
   private resumeAt = 0
   private throttleError: Error | undefined
+  /** A service that isolates its failures: its requests in a row without an answer, and the error once they stopped it. */
+  private unanswered = 0
+  private stopped: GraphUnansweredError | undefined
 
   constructor(
     private readonly fetchImpl: typeof fetch,
-    private readonly token: () => Promise<string>,
+    /** `fresh`: a token Microsoft issues now instead of a cached one. */
+    private readonly token: (options?: { fresh: true }) => Promise<string>,
     private readonly network: NetworkCircuit,
+    private readonly options: GraphSessionOptions = {},
   ) {}
 
-  async list(url: string): Promise<GraphItem[]> {
-    const items: GraphItem[] = []
-    let next: string | undefined = url
-    const seen = new Set<string>()
-    while (next) {
-      if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
-      const parsed = new URL(next)
-      if (parsed.origin !== GRAPH || !parsed.pathname.startsWith("/beta/") || seen.has(next)) throw new Error("Invalid Graph continuation link")
-      seen.add(next)
-      const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(next)
-      if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
-      items.push(...page.value)
-      next = page["@odata.nextLink"]
-    }
+  async list(url: string, options: ListOptions = {}): Promise<Item[]> {
+    const items: Item[] = []
+    for await (const page of this.pages(url, options)) items.push(...page)
     return items
   }
 
-  /** GET with bounded retries for throttling, transient status codes and network failures. */
-  async get<T = Record<string, unknown>>(url: string): Promise<T> {
-    for (let attempt = 0; ; attempt++) {
+  /** Every page is validated before a buffered or streamed reader can use it. */
+  async *pages(url: string, options: ListOptions = {}): AsyncGenerator<Item[]> {
+    const seen = new Set<string>()
+    const request = graphContinuation(url, url, seen, options.filter)
+    let page = "expandedPage" in options ? options.expandedPage : await this.get(request, options.headers, options)
+    for (;;) {
       this.network.signal.throwIfAborted()
-      while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now(), this.network.signal)
+      options.signal?.throwIfAborted()
+      const validated = validateListPage(page, url, seen, options)
+      yield validated.items
+      if (!validated.next) return
+      if (seen.size > MAX_LIST_PAGES) throw new GraphResponseValidationError(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
+      try {
+        page = await this.get(validated.next, options.headers, options)
+      } catch (error) {
+        // A later refusal cannot establish that a collection was never configured.
+        if (error instanceof GraphError) error.continuationPage = true
+        throw error
+      }
+    }
+  }
+
+  /** GET with bounded retries for throttling, transient status codes and network failures. */
+  async get<T = Record<string, unknown>>(url: string, headers?: Readonly<Record<string, string>>, control: ReadControl = {}): Promise<T> {
+    const signal = control.signal ? AbortSignal.any([this.network.signal, control.signal]) : this.network.signal
+    // Set when the request is asked once more with a new token (see the 401 below).
+    let confirming = false
+    let fresh: string | undefined
+    for (let attempt = 0; ; attempt++) {
+      signal.throwIfAborted()
+      if (this.stopped) throw this.stopped
+      while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now(), signal)
       if (this.throttleError) throw this.throttleError
       let response: Response | undefined
       let attempted = false
       try {
         return await withRequestTimeout(async (signal) => {
-          const token = await this.token()
+          const token = confirming ? (fresh ??= await this.token({ fresh: true })) : await this.token()
           signal.throwIfAborted()
           if (this.throttleError) throw this.throttleError
           if (this.resumeAt > Date.now()) throw new GraphPauseError()
+          control.beforeRequest?.()
+          const grant = this.options.grantForToken?.(token)
           attempted = true
-          response = await this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
+          // The sign-in comes last, so no type can replace it.
+          response = await this.fetchImpl(url, { signal, headers: { ...headers, Authorization: `Bearer ${token}` } })
           if (response.ok) {
             const result = await response.json().catch(error => {
               if (error instanceof SyntaxError) throw new SyntaxError("Microsoft Graph returned invalid JSON.")
               throw error
             }) as T
             signal.throwIfAborted()
-            this.network.succeeded("Microsoft Graph")
+            this.answered()
             return result
           }
-          throw new GraphError(await graphError(response), response.status)
-        }, this.network.signal)
+          throw await graphFailure(response, grant, this.options.requireGrantEvidence === true && !grant)
+        }, signal)
       } catch (error) {
-        this.network.signal.throwIfAborted()
-        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network") this.network.failed("Microsoft Graph", error)
+        signal.throwIfAborted()
+        const unanswered = (attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network"
+        if (unanswered) this.notAnswered(error)
+        // A refusal is an answer too: the endpoint was reached, so the service's streak of unanswered requests is over.
+        // Intune and Conditional Access keep counting as they always did, where only a successful read ends the streak.
+        else if (this.options.isolated && response) this.unanswered = 0
         if (error instanceof GraphPauseError) {
           attempt--
           continue
         }
         if (this.throttleError && error === this.throttleError) throw error
+        // Some endpoints of a service that isolates its failures answer 401 on their own, for a missing permission
+        // or to a Backup Reader. A sign-in that just ended is answered the same way. The request is asked once more
+        // with a token Microsoft issues now: a sign-in that ended gets none, which ends the backup, and only an
+        // answer to the new token is taken as the endpoint's own.
+        if (this.options.isolated && !confirming && error instanceof GraphError && error.status === 401 && !signInRefused({ status: 401, ...error.answer })) {
+          confirming = true
+          attempt = -1
+          continue
+        }
         if (error instanceof FetchApplicationError || error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status))) throw error
         let delay: number
         try {
           delay = retryDelay(response, attempt)
         } catch (delayError) {
           // A pause beyond our bound stops readers instead of sending requests before Graph permits them.
-          if (response?.status === 429 && delayError instanceof Error) this.throttleError = delayError
+          if (response?.status === 429 && delayError instanceof Error && !this.options.isolated) this.throttleError = delayError
           throw delayError
         }
         if (response?.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
         if (attempt >= REQUEST_ATTEMPTS - 1) {
           if (!attempted && error instanceof RequestTimeoutError) throw new TokenError(error.message, { cause: error })
+          // Named, so the backup ends the type this request belongs to instead of asking for each of its objects in vain.
+          if (this.options.isolated && unanswered) throw new GraphUnansweredError(error instanceof Error ? error.message : String(error), { cause: error })
           throw error
         }
-        await sleep(delay, this.network.signal)
+        await sleep(delay, signal)
       }
     }
   }
+
+  /** A request was answered: the streak of unanswered ones is over, for the job or for this service alone. */
+  private answered(): void {
+    if (!this.options.isolated) return this.network.succeeded("Microsoft Graph", this.options.service)
+    this.network.signal.throwIfAborted()
+    this.unanswered = 0
+  }
+
+  /**
+   * A request got no answer. For a service that isolates its failures it counts for that service
+   * only, with the job's own limit: at the limit the service stops and its remaining requests are
+   * not sent, while the other services read on. For any other service it counts toward the job's circuit.
+   */
+  private notAnswered(error: unknown): void {
+    if (!this.options.isolated) return this.network.failed("Microsoft Graph", error)
+    if (++this.unanswered < this.network.threshold) return
+    this.stopped ??= new GraphUnansweredError(`Microsoft Graph did not respond for ${this.unanswered} consecutive requests of this service, so the rest of the service was not read.`, { cause: error })
+    throw this.stopped
+  }
 }
 
+function validateListPage(page: unknown, url: string, seen: Set<string>, options: ListOptions): { items: Item[]; next?: string } {
+  if (!page || typeof page !== "object" || Array.isArray(page) || !("value" in page) || !Array.isArray(page.value)) {
+    throw new GraphResponseValidationError("Graph returned an invalid policy collection")
+  }
+  const idKey = options.idKey ?? "id"
+  for (const entry of page.value) {
+    const id = entry?.[idKey]
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof id !== "string" || !id.trim()) {
+      throw new GraphResponseValidationError(`Microsoft Graph returned a collection entry without ${idKey}`)
+    }
+  }
+  if (!("@odata.nextLink" in page)) return { items: page.value }
+  if (options.singlePage) throw new GraphResponseValidationError("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
+  const next = page["@odata.nextLink"]
+  if (typeof next !== "string" || !/^https?:\/\/[^/]/i.test(next) || next !== next.trim() || /[\s\\]/u.test(next.split("?")[0]!) || /[\t\r\n\\]/u.test(next) || !URL.canParse(next)) {
+    throw new GraphResponseValidationError("Graph returned an invalid continuation link")
+  }
+  return { items: page.value, next: graphContinuation(url, next, seen, options.filter) }
+}

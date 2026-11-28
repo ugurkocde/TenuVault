@@ -1,7 +1,8 @@
-import { isHeaderOnlyBackupRead, meterLegacyBackupResponse } from '../backup/retention-budget'
+import { meterLegacyBackupResponse } from '../backup/retention-budget'
 import { authenticatedBackupRead } from './authenticated-read'
 import { createDecipheriv, createHash, hkdfSync } from 'node:crypto'
 import { FetchApplicationError, FetchPreconditionError, LegacySealedError, OversizedSealedError } from '../api/network-error'
+import { LARGE_BACKUP_CONTAINER } from '../../shared/backup-storage'
 import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from '../../shared/constants'
 
 /**
@@ -53,7 +54,7 @@ export function openLegacySealed(raw: Buffer, masters: Buffer[], tenant: string,
 /** A blob read in the backup container: a GET without a query (listings and versions pass through). */
 function isBackupBlobRead(url: URL, method: string): boolean {
   return method === 'GET' && !url.search && /^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname)
-    && url.pathname.startsWith(`/${BACKUP_CONTAINER}/`)
+    && [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].some(container => url.pathname.startsWith(`/${container}/`))
 }
 
 /** Reads at least `size` bytes from the start of a stream, or all of it when it is shorter. */
@@ -126,7 +127,7 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
     try { url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url) }
     catch { return fetchImpl(input, init) }
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
-    if (!isBackupBlobRead(url, method) || isHeaderOnlyBackupRead()) return fetchImpl(input, init)
+    if (!isBackupBlobRead(url, method)) return fetchImpl(input, init)
     const response = meterLegacyBackupResponse(await fetchImpl(input, init))
     if (!response.ok || !response.body) return response
     // Only the first bytes are read to tell the formats apart, so a plain blob streams through to the

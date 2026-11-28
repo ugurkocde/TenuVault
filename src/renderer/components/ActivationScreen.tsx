@@ -1,13 +1,12 @@
-import { useLicense } from "../lib/license"
 import { ArrowRight, DatabaseBackup, GitCompare, RotateCcw } from "lucide-react"
 import { Button } from "~/components/ui/button"
+import { onboardingCard, onboardingPrimary } from "./OnboardingCard"
 import { BrandMark } from "./BrandMark"
 import { TrialOrKey } from "./PlanChoice"
-import { SetupCallLink } from "./SetupCallLink"
-import { recordSetup, SetupDiagnosticsCard } from "./SetupDiagnostics"
+import { recordSetup, WhatTenuVaultSends } from "./SetupDiagnostics"
 
 const POINTS = [
-  { icon: DatabaseBackup, text: "Back up your Intune policies, encrypted on this computer." },
+  { icon: DatabaseBackup, text: "Back up the Microsoft services you choose and keep your backups encrypted." },
   { icon: RotateCcw, text: "Restore a single policy or a whole set when something breaks." },
   { icon: GitCompare, text: "See what changed between backups, down to the setting." },
 ]
@@ -21,21 +20,17 @@ const POINTS = [
  * tenant runs on Community, and a license shared by the tenant's organization is picked up then.
  */
 export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
-  const { status } = useLicense()
-  // The vertical spacing is tight on purpose: without the setup diagnostics question the card fits
-  // the smallest window (1024x700), and with it the window as it opens (1440x920).
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-3">
-      <div className="w-full max-w-lg space-y-4 rounded-3xl bg-card px-9 py-7 shadow-[0_24px_60px_-30px_rgba(22,21,20,0.25)]">
-        <div className="flex items-center gap-3">
+      <div className={`${onboardingCard} max-w-[640px] space-y-6 text-center`}>
+        <div className="flex flex-col items-center gap-4">
           <BrandMark className="size-12" />
           <div>
             <h1 className="text-3xl font-medium tracking-tight text-gray-900">Welcome to TenuVault</h1>
-            <p className="text-base text-gray-500">TenuVault Desktop</p>
           </div>
         </div>
 
-        <ul className="space-y-3 text-sm text-gray-700">
+        <ul className="mx-auto w-fit space-y-3 text-left text-sm text-gray-700">
           {POINTS.map(({ icon: Icon, text }) => (
             <li key={text} className="flex items-center gap-3">
               <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Icon className="h-4 w-4" /></span>
@@ -45,27 +40,16 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
         </ul>
 
         <div className="space-y-3">
-          <Button size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => { recordSetup({ name: "welcome_continue" }); onSignIn() }}>
+          <Button className={onboardingPrimary} onClick={() => { recordSetup({ name: "welcome_continue" }); onSignIn() }}>
             Connect your tenant <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Button>
-          <p className="text-xs text-gray-600">
-            {status?.tenantTrialsEnabled
-              ? "New tenants start with a Pro trial, no card and no email needed. Setup takes a few minutes: connect your tenant with Microsoft sign-in and take a first backup. Afterwards, one tenant continues on Community Free."
-              : "Setup takes a few minutes: connect your tenant with Microsoft sign-in and take a first backup. It is free on Community for one tenant, and a TenuVault license your organization shares with the tenant is picked up when you sign in."}
-          </p>
-          <SetupCallLink source="welcome" variant="row" />
         </div>
 
-        <SetupDiagnosticsCard />
-
-        <div className="border-t border-gray-100 pt-4">
+        <div className="text-left">
           <TrialOrKey source="welcome" />
         </div>
 
-        <p className="text-center text-xs text-gray-500">
-          License checks go to tenuvault.com and send the license key or your Microsoft sign-in token, the tenant ID and a
-          random installation ID. Tenant configuration and backups are never sent. Trials store a keyed hash of the tenant ID. An optional email is sent only when you submit it. Setup diagnostics are sent only if you choose to share them.
-        </p>
+        <WhatTenuVaultSends />
       </div>
     </div>
   )

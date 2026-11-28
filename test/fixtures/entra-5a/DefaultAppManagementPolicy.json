@@ -1,0 +1,41 @@
+{
+  "folder": "DefaultAppManagementPolicy",
+  "path": "policies/defaultAppManagementPolicy",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/defaultAppManagementPolicy": {
+      "status": 200,
+      "body": {
+        "id": "00000000-0000-4000-8000-12b9377cbe7e",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "isEnabled": true,
+        "applicationRestrictions": {
+          "passwordCredentials": [],
+          "keyCredentials": [],
+          "identifierUris": {
+            "nonDefaultUriAddition": null,
+            "uriAdditionWithoutUniqueTenantIdentifier": {
+              "state": "enabled",
+              "isStateSetByMicrosoft": true,
+              "restrictForAppsCreatedAfterDateTime": "0001-01-01T00:00:00Z",
+              "excludeAppsReceivingV2Tokens": true,
+              "excludeSaml": true,
+              "excludeActors": null
+            }
+          }
+        },
+        "servicePrincipalRestrictions": {
+          "passwordCredentials": [],
+          "keyCredentials": []
+        }
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, JOB_DEADLINE_MS, MANIFEST_COMMIT_GRACE_MS, type BackupJob } from "../src/main/backup/engine"
 import { BackupScheduler } from "../src/main/backup/scheduler"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
-import { memoryStore, withBackupServerTime } from "./helpers"
+import { memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const OTHER = "33333333-3333-3333-3333-333333333333"
@@ -20,34 +20,37 @@ function setup(options: { count?: number; retention?: number; retentionDays?: ()
     fetch: async (input, init = {}) => {
       const url = new URL(String(input))
       calls.push({ url, init })
-      const overridden = options.override?.(url, init)
-      if (overridden) return overridden
-      if (url.hostname === "graph.microsoft.com") {
-        return url.pathname.endsWith("/deviceConfigurations")
-          ? Response.json({ value: Array.from({ length: options.count ?? 0 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
-          : Response.json({ id: url.pathname.split("/").at(-1) })
-      }
-      if (url.searchParams.get("comp") === "list") {
-        const names = [...saved.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
-        const entries = url.searchParams.get("delimiter")
-          ? [...new Set(names.map(name => `${name.split("/")[0]}/`))].map(name => `<BlobPrefix><Name>${name}</Name></BlobPrefix>`)
-          : names.map(name => `<Blob><Name>${name}</Name></Blob>`)
-        return new Response(`<Blobs>${entries.join("")}</Blobs>`)
-      }
-      const name = decodeURIComponent(url.pathname.slice(prefix.length))
-      if (init.method === "PUT") {
-        if (!url.search) {
-          saved.set(name, String(init.body))
+      const respond = async (): Promise<Response> => {
+        const overridden = options.override?.(url, init)
+        if (overridden) return overridden
+        if (url.hostname === "graph.microsoft.com") {
+          return url.pathname.endsWith("/deviceConfigurations")
+            ? Response.json({ value: Array.from({ length: options.count ?? 0 }, (_, index) => ({ id: `p${index}`, displayName: `Policy ${index}` })) })
+            : Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
         }
-        return withBackupServerTime(new Response(null, { status: 201 }), options.now?.())
+        if (url.searchParams.get("comp") === "list") {
+          const names = [...saved.keys()].filter(name => name.startsWith(url.searchParams.get("prefix") ?? ""))
+          const entries = url.searchParams.get("delimiter")
+            ? [...new Set(names.map(name => `${name.split("/")[0]}/`))].map(name => `<BlobPrefix><Name>${name}</Name></BlobPrefix>`)
+            : names.map(name => `<Blob><Name>${name}</Name></Blob>`)
+          return new Response(`<Blobs>${entries.join("")}</Blobs>`)
+        }
+        const name = decodeURIComponent(url.pathname.slice(prefix.length))
+        if (init.method === "PUT") {
+          if (!url.search) {
+            saved.set(name, String(init.body))
+          }
+          return new Response(null, { status: 201 })
+        }
+        if (init.method === "DELETE") {
+          saved.delete(name)
+          return new Response(null, { status: 202 })
+        }
+        return saved.has(name)
+          ? new Response(saved.get(name), { headers: { etag: '"fixture"' } })
+          : new Response(null, { status: 404 })
       }
-      if (init.method === "DELETE") {
-        saved.delete(name)
-        return new Response(null, { status: 202 })
-      }
-      return saved.has(name)
-        ? new Response(saved.get(name), { headers: { etag: '"v1"' } })
-        : new Response(null, { status: 404 })
+      return withServerDate(await respond(), options.now?.() ?? new Date())
     },
   })
   return { engine, saved, calls }
@@ -82,6 +85,33 @@ describe("bounded backup jobs", () => {
     expect(next.status).toBe("Completed")
   })
 
+  it("keeps storage account identifiers out of failed-manifest recovery logs", async () => {
+    vi.useFakeTimers()
+    const username = "admin@contoso.test"
+    let storageTokens = 0
+    const { engine, calls } = setup({
+      getToken: async (_tenant, _client, scope) => {
+        if (!scope.includes("storage.azure.com")) return "token"
+        if (++storageTokens === 3) return new Promise(() => {})
+        if (storageTokens === 4) {
+          throw Object.assign(new Error(`AADSTS50058: No session for ${username}.`), { errorCode: "interaction_required" })
+        }
+        return "token"
+      },
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storageTokens).toBe(3)
+    engine.cancel(job.id)
+    await engine.waitForJob(job)
+    expect(storageTokens).toBe(4)
+    expect(job.status).toBe("Cancelled")
+    expect(calls.some(({ url }) => url.pathname.endsWith("/metadata.json"))).toBe(false)
+    const log = job.log.join("\n")
+    expect(log).not.toContain(username)
+    expect(log).toContain("Could not record this backup as cancelled: Microsoft sign-in (AADSTS50058). Sign in again to this tenant.")
+  })
+
   it("stops a healthy but endless listing at 30 minutes and never retries a pause past the deadline", async () => {
     vi.useFakeTimers()
     let pages = 0
@@ -89,7 +119,7 @@ describe("bounded backup jobs", () => {
       if (url.hostname !== "graph.microsoft.com") return
       pages++
       if (pages === 29) return new Response(null, { status: 429, headers: { "Retry-After": "300" } })
-      return new Promise(resolve => { setTimeout(() => resolve(Response.json({ value: [], "@odata.nextLink": `https://graph.microsoft.com/beta/page?n=${pages}` })), 60_000) })
+      return new Promise(resolve => { setTimeout(() => resolve(Response.json({ value: [], "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?n=${pages}` })), 60_000) })
     } })
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(JOB_DEADLINE_MS - 1)
@@ -159,7 +189,7 @@ function expectFailedManifestOnly(job: BackupJob, saved: Map<string, string>, ca
 function nearDeadlineListing(url: URL, page: number, lastPage = 30, lastDelay = 59_500): Promise<Response> | undefined {
   if (url.hostname !== "graph.microsoft.com") return
   return new Promise(resolve => { setTimeout(() => resolve(Response.json({ value: [],
-    ...(page < lastPage ? { "@odata.nextLink": `https://graph.microsoft.com/beta/page?n=${page}` } : {}),
+    ...(page < lastPage ? { "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?n=${page}` } : {}),
   })), page < lastPage ? 60_000 : lastDelay) })
 }
 
@@ -179,7 +209,7 @@ describe("storage read retries", () => {
         if (attempts.length === 2) throw new TypeError("Connection reset")
       }
     } })
-    saved.set(old, JSON.stringify({ Status: "Success", TenantId: TENANT, Items: {}, Scope: { Excluded: scope.excluded } }))
+    saved.set(old, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: scope.excluded } }))
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(999)
     expect(attempts).toEqual([0])
@@ -190,7 +220,8 @@ describe("storage read retries", () => {
     expect(attempts).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(1)
     await engine.waitForJob(job)
-    expect(attempts).toEqual([0, 1000, 3000])
+    // After ownership is read, retention verifies the manifest again with the payload.
+    expect(attempts).toEqual(operation === "readJson" ? [0, 1000, 3000, 3000] : [0, 1000, 3000])
     expect(job.status).toBe("Completed")
     expect(job.progressMessage).toBe("Backup completed successfully")
     expect(saved.has(old)).toBe(false)
@@ -261,7 +292,7 @@ describe("manifest commit and retention interruption", () => {
     expect(job.status).toBe("Completed")
     expect(job.exception).toBeUndefined()
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
-    expect(job.log.join("\n")).toContain("Retention was interrupted; remaining backups will be reconsidered on the next run")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
     expect(calls.some(call => call.url.searchParams.get("comp") === "list")).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
   })
@@ -409,7 +440,7 @@ describe("manifest commit and retention interruption", () => {
     expect(job.status).toBe("Completed")
     expect(job.exception).toBeUndefined()
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
-    expect(job.log.join("\n")).toContain("Retention was interrupted; remaining backups will be reconsidered on the next run")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
     expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: "Success", Failures: 0 })
     expect(calls.some(call => call.init.method === "DELETE")).toBe(false)
     expect(calls.some(call => call.url.searchParams.get("comp") === "list")).toBe(false)
@@ -440,7 +471,7 @@ describe("manifest commit and retention interruption", () => {
       if (interrupt === "deadline" && url.hostname === "graph.microsoft.com") return nearDeadlineListing(url, ++pages)
       if (init.method === "DELETE" && url.pathname.includes(old)) return new Promise(() => {})
     } })
-    saved.set(`${old}/metadata.json`, JSON.stringify({ Status: "Success", TenantId: TENANT, Items: {}, Scope: { Excluded: scope.excluded } }))
+    saved.set(`${old}/metadata.json`, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: scope.excluded } }))
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(interrupt === "deadline" ? JOB_DEADLINE_MS - 500 : 0)
     const deletion = calls.find(call => call.init.method === "DELETE")!
@@ -452,7 +483,7 @@ describe("manifest commit and retention interruption", () => {
     expect(job.status).toBe("Completed")
     expect(job.exception).toBeUndefined()
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
-    expect(job.log.join("\n")).toContain("Retention was interrupted; remaining backups will be reconsidered on the next run")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
     expect(deletion.init.signal!.aborted).toBe(true)
     expect(saved.has(`${old}/metadata.json`)).toBe(true)
     const count = calls.length
@@ -477,7 +508,7 @@ describe("manifest commit and retention interruption", () => {
     await vi.advanceTimersByTimeAsync(JOB_DEADLINE_MS)
     await engine.waitForJob(job)
     expect(job.status).toBe("Completed")
-    expect(job.log.join("\n")).toContain("Retention was interrupted; remaining backups will be reconsidered on the next run")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
     expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(true)
     expect(saved.has(old)).toBe(true)
     expect(calls.some(call => call.init.method === "DELETE")).toBe(false)

@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
   if (e2e) {
     return {
       resolve: { alias },
+      define: { __TV_LAB_EXPANDED_ENTRA__: JSON.stringify(process.env.TENUVAULT_LAB_EXPANDED_ENTRA === "1"), __TV_LAB_PRIVILEGED_RESTORE__: JSON.stringify(process.env.TENUVAULT_LAB_PRIVILEGED_RESTORE === "1") },
       test: {
         include: ["test/**/*.e2e.test.ts"],
         testTimeout: 120_000,

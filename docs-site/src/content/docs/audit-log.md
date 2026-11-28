@@ -3,7 +3,7 @@ title: "Audit log"
 description: See what TenuVault did for a tenant, who did it and whether it worked, and export the history.
 ---
 
-The audit log is TenuVault's own operation history. It is not a complete Microsoft tenant audit: it does not show changes made in the Intune admin center, by other tools or by other administrators. Use the Microsoft Entra and Intune audit logs for those.
+The audit log is TenuVault's own operation history. It is not a complete Microsoft tenant audit: it does not show changes made in Microsoft admin centers, through other tools or by other administrators. Use the Microsoft Entra and Intune audit logs for those.
 
 The audit log records the actions TenuVault performs for a tenant: backups, downloads, restores, reverts, baseline deployments and change set applies and rollbacks. Each job records what ran, which identity ran it and the result. The log is stored with the tenant’s backups, in your own storage.
 

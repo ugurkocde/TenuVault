@@ -1,5 +1,7 @@
+vi.mock("@desktop/components/ServiceBackupNotice", () => ({ ServiceBackupNotice: () => null }))
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
@@ -47,12 +49,12 @@ function statusFor(plan: "community" | "pro" | "msp") {
   return { hasKey: paid, keyState: paid ? "active" : "none", keyMessage: null, keyHint: null, persisted: true, offline: false, message: null, plan: paid ? plan : null, tenantLimit: paid ? 2 : null, validUntil: null, communityTenantId: paid ? null : "tenant", tenants: [entry] }
 }
 
-async function renderPage(): Promise<HTMLElement> {
-  vi.stubGlobal("fetch", vi.fn(async () => Response.json({})))
+async function renderPage(driftResult: Record<string, unknown> = {}): Promise<HTMLElement> {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url === "/api/detect-drifts" ? driftResult : {})))
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
   roots.push(root)
-  await act(async () => root.render(createElement(BackupProgressProvider, null, createElement(TenantsPage))))
+  await act(async () => root.render(createElement(BackupProgressProvider, null, createElement(MemoryRouter, null, createElement(TenantsPage)))))
   return container
 }
 
@@ -95,5 +97,22 @@ describe("Tenants page plan hints", () => {
     expect(checkAll.title).toBe("Actions across several tenants: included in TenuVault MSP. Upgrade on the License page.")
     await act(async () => checkAll.click())
     expect(document.body.textContent).toContain("Actions across several tenants: included in TenuVault MSP.")
+  })
+})
+
+describe("Tenants page drift coverage", () => {
+  it.each([
+    { result: { summary: { total: 1, critical: 1 }, unknownTypes: ["Users"] }, count: "1 change, 1 critical", warning: "1 type not compared" },
+    { result: { summary: { total: 0, critical: 0 }, legacyReadFailure: true }, count: "0 changes", warning: "Older backup has an unassigned read failure" },
+  ])("shows $warning alongside $count", async ({ result, count, warning }) => {
+    licenseStatus.current = statusFor("msp")
+    const container = await renderPage(result)
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="List view"]')!.click())
+    const checkAll = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Check all")!
+    await act(async () => checkAll.click())
+    const drift = container.querySelector("tbody td:nth-last-child(2)")!.textContent
+    expect(drift).toContain(warning)
+    expect(drift).toContain(count)
+    expect(drift).not.toContain("No drift")
   })
 })

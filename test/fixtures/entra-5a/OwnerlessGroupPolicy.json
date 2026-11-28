@@ -1,0 +1,23 @@
+{
+  "folder": "OwnerlessGroupPolicy",
+  "path": "policies/ownerlessGroupPolicy",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "admin",
+  "objectCount": 0,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "skipped",
+  "cause": "permission",
+  "responses": {
+    "/v1.0/policies/ownerlessGroupPolicy": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "UnknownError",
+          "message": ""
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,1979 @@
+{
+  "folder": "PermissionGrantPolicies",
+  "path": "policies/permissionGrantPolicies",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 14,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/permissionGrantPolicies": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "microsoft-all-application-permissions",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-aed991d0e869",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-all-application-permissions-for-chat",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-for-chat')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-9761e7cf9377",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-for-chat')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-all-application-permissions-for-team",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-for-team')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-bcc6f5297019",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-for-team')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-all-application-permissions-verified",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-verified')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-fdcfec359453",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": true
+              },
+              {
+                "id": "00000000-0000-4000-8000-a9801911b3b1",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "00000000-0000-4000-8000-836b20d0164d"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-verified')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-application-admin",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-application-admin')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-dcdc8e39a6d1",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              },
+              {
+                "id": "00000000-0000-4000-8000-20b8a1946f5f",
+                "permissionClassification": "all",
+                "permissionType": "delegated",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-application-admin')/excludes",
+            "excludes": [
+              {
+                "id": "00000000-0000-4000-8000-8bf58c2fb26d",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              },
+              {
+                "id": "00000000-0000-4000-8000-71c3763ea1be",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "00000000-0000-4000-8000-eb622c25dbef",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ]
+          },
+          {
+            "id": "microsoft-company-admin",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-company-admin')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-aba64325095e",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              },
+              {
+                "id": "00000000-0000-4000-8000-41dc6d463066",
+                "permissionClassification": "all",
+                "permissionType": "delegated",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-company-admin')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-dynamically-managed-permissions-for-chat",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-dynamically-managed-permissions-for-chat')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-70ee381f72e4",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-dynamically-managed-permissions-for-chat')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-dynamically-managed-permissions-for-team",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-dynamically-managed-permissions-for-team')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-6fece7dea5da",
+                "permissionClassification": "all",
+                "permissionType": "application",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-dynamically-managed-permissions-for-team')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-pre-approval-apps-for-chat",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-pre-approval-apps-for-chat')/includes",
+            "includes": [],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-pre-approval-apps-for-chat')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-pre-approval-apps-for-team",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-pre-approval-apps-for-team')/includes",
+            "includes": [],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-pre-approval-apps-for-team')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-user-default-allow-consent-apps",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-allow-consent-apps')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-70e8af77276b",
+                "permissionClassification": "all",
+                "permissionType": "delegated",
+                "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+                "permissions": [
+                  "00000000-0000-4000-8000-777164dade17",
+                  "00000000-0000-4000-8000-5d8024278aed",
+                  "00000000-0000-4000-8000-f562ceff1a09",
+                  "00000000-0000-4000-8000-945c2555e6de",
+                  "00000000-0000-4000-8000-196d0770ccb7",
+                  "00000000-0000-4000-8000-ca71b8f9aac1",
+                  "00000000-0000-4000-8000-b93cd1c38b01",
+                  "00000000-0000-4000-8000-5fd83d6632a8",
+                  "00000000-0000-4000-8000-05687c82ef02",
+                  "00000000-0000-4000-8000-b4027466f648",
+                  "00000000-0000-4000-8000-ec2c96559232",
+                  "00000000-0000-4000-8000-8d61df3fdd2f",
+                  "00000000-0000-4000-8000-ed5f56666d97",
+                  "00000000-0000-4000-8000-848dcc46d8c4",
+                  "00000000-0000-4000-8000-1eef2996438a",
+                  "00000000-0000-4000-8000-afd07052f9d8",
+                  "00000000-0000-4000-8000-4c4368a9e9ba",
+                  "00000000-0000-4000-8000-4d0a4899c79c",
+                  "00000000-0000-4000-8000-95220ac9485c",
+                  "00000000-0000-4000-8000-0a88e8a3a14a",
+                  "00000000-0000-4000-8000-3c8f538ba832",
+                  "00000000-0000-4000-8000-991013e57b9f",
+                  "00000000-0000-4000-8000-51464f9264b5",
+                  "00000000-0000-4000-8000-92b44c4b9bf7",
+                  "00000000-0000-4000-8000-8a3eb3b31eaa",
+                  "00000000-0000-4000-8000-802c1b3ee62a",
+                  "00000000-0000-4000-8000-e504fe70f74e",
+                  "00000000-0000-4000-8000-8f3c4802a5e4",
+                  "00000000-0000-4000-8000-fe583b708535",
+                  "00000000-0000-4000-8000-616a8226f39c",
+                  "00000000-0000-4000-8000-1f05e7a7f449",
+                  "00000000-0000-4000-8000-bdc6f3b5feb3",
+                  "00000000-0000-4000-8000-8cb67686c569",
+                  "00000000-0000-4000-8000-b8cdf6649a60",
+                  "00000000-0000-4000-8000-64ee99b6391a",
+                  "00000000-0000-4000-8000-6ddff2312fea"
+                ],
+                "clientApplicationIds": [
+                  "00000000-0000-4000-8000-95a274a0cec1",
+                  "00000000-0000-4000-8000-a575c30a1a32",
+                  "00000000-0000-4000-8000-87e8d592a500",
+                  "00000000-0000-4000-8000-17447253f83b",
+                  "00000000-0000-4000-8000-60569883bb44",
+                  "00000000-0000-4000-8000-a3b71a3e048e"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              },
+              {
+                "id": "00000000-0000-4000-8000-7fdcbf7abf7f",
+                "permissionClassification": "all",
+                "permissionType": "delegated",
+                "resourceApplication": "00000000-0000-4000-8000-4c50288dd07d",
+                "permissions": [
+                  "00000000-0000-4000-8000-6e219ba46d9e",
+                  "00000000-0000-4000-8000-0745f085e28c",
+                  "00000000-0000-4000-8000-1e3b58d86ccc",
+                  "00000000-0000-4000-8000-671bcec6f9d4"
+                ],
+                "clientApplicationIds": [
+                  "00000000-0000-4000-8000-95a274a0cec1",
+                  "00000000-0000-4000-8000-a575c30a1a32",
+                  "00000000-0000-4000-8000-87e8d592a500",
+                  "00000000-0000-4000-8000-17447253f83b",
+                  "00000000-0000-4000-8000-60569883bb44",
+                  "00000000-0000-4000-8000-a3b71a3e048e"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-allow-consent-apps')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-user-default-legacy",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-legacy')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-c16c1f190d6a",
+                "permissionClassification": "all",
+                "permissionType": "delegatedUserConsentable",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-legacy')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-user-default-low",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-low')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-4744dc3c60d0",
+                "permissionClassification": "low",
+                "permissionType": "delegated",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "00000000-0000-4000-8000-836b20d0164d"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              },
+              {
+                "id": "00000000-0000-4000-8000-e20b31e8bfe0",
+                "permissionClassification": "low",
+                "permissionType": "delegated",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": true
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-low')/excludes",
+            "excludes": []
+          },
+          {
+            "id": "microsoft-user-default-recommended",
+            "displayName": "Example displayName",
+            "description": "Example description",
+            "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-recommended')/includes",
+            "includes": [
+              {
+                "id": "00000000-0000-4000-8000-48b9f556882b",
+                "permissionClassification": "all",
+                "permissionType": "delegated",
+                "resourceApplication": "any",
+                "permissions": [
+                  "all"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ],
+            "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-recommended')/excludes",
+            "excludes": [
+              {
+                "id": "00000000-0000-4000-8000-6bdca7f501df",
+                "permissionClassification": "all",
+                "permissionType": "delegated",
+                "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+                "permissions": [
+                  "00000000-0000-4000-8000-777164dade17",
+                  "00000000-0000-4000-8000-5d8024278aed",
+                  "00000000-0000-4000-8000-f562ceff1a09",
+                  "00000000-0000-4000-8000-945c2555e6de",
+                  "00000000-0000-4000-8000-196d0770ccb7",
+                  "00000000-0000-4000-8000-ca71b8f9aac1",
+                  "00000000-0000-4000-8000-b93cd1c38b01",
+                  "00000000-0000-4000-8000-5fd83d6632a8",
+                  "00000000-0000-4000-8000-05687c82ef02",
+                  "00000000-0000-4000-8000-b4027466f648",
+                  "00000000-0000-4000-8000-ec2c96559232",
+                  "00000000-0000-4000-8000-8d61df3fdd2f",
+                  "00000000-0000-4000-8000-ed5f56666d97",
+                  "00000000-0000-4000-8000-848dcc46d8c4",
+                  "00000000-0000-4000-8000-1eef2996438a",
+                  "00000000-0000-4000-8000-afd07052f9d8",
+                  "00000000-0000-4000-8000-4c4368a9e9ba",
+                  "00000000-0000-4000-8000-4d0a4899c79c",
+                  "00000000-0000-4000-8000-95220ac9485c",
+                  "00000000-0000-4000-8000-0a88e8a3a14a",
+                  "00000000-0000-4000-8000-3c8f538ba832",
+                  "00000000-0000-4000-8000-991013e57b9f",
+                  "00000000-0000-4000-8000-51464f9264b5",
+                  "00000000-0000-4000-8000-92b44c4b9bf7",
+                  "00000000-0000-4000-8000-8a3eb3b31eaa",
+                  "00000000-0000-4000-8000-802c1b3ee62a",
+                  "00000000-0000-4000-8000-e504fe70f74e",
+                  "00000000-0000-4000-8000-8f3c4802a5e4",
+                  "00000000-0000-4000-8000-fe583b708535",
+                  "00000000-0000-4000-8000-616a8226f39c",
+                  "00000000-0000-4000-8000-1f05e7a7f449",
+                  "00000000-0000-4000-8000-bdc6f3b5feb3",
+                  "00000000-0000-4000-8000-8cb67686c569",
+                  "00000000-0000-4000-8000-b8cdf6649a60",
+                  "00000000-0000-4000-8000-64ee99b6391a",
+                  "00000000-0000-4000-8000-6ddff2312fea"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              },
+              {
+                "id": "00000000-0000-4000-8000-cc9cfb7e204a",
+                "permissionClassification": "all",
+                "permissionType": "delegated",
+                "resourceApplication": "00000000-0000-4000-8000-4c50288dd07d",
+                "permissions": [
+                  "00000000-0000-4000-8000-6e219ba46d9e",
+                  "00000000-0000-4000-8000-0745f085e28c",
+                  "00000000-0000-4000-8000-1e3b58d86ccc",
+                  "00000000-0000-4000-8000-671bcec6f9d4"
+                ],
+                "clientApplicationIds": [
+                  "all"
+                ],
+                "clientApplicationTenantIds": [
+                  "all"
+                ],
+                "clientApplicationPublisherIds": [
+                  "all"
+                ],
+                "clientApplicationsFromVerifiedPublisherOnly": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-all-application-permissions",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-aed991d0e869",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-aed991d0e869",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-for-chat": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-all-application-permissions-for-chat",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-for-chat')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-9761e7cf9377",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-for-chat')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-for-chat/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-9761e7cf9377",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-for-chat/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-for-team": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-all-application-permissions-for-team",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-for-team')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-bcc6f5297019",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-for-team')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-for-team/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-bcc6f5297019",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-for-team/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-verified": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-all-application-permissions-verified",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-verified')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-fdcfec359453",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": true
+          },
+          {
+            "id": "00000000-0000-4000-8000-a9801911b3b1",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "00000000-0000-4000-8000-836b20d0164d"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-all-application-permissions-verified')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-verified/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-fdcfec359453",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": true
+          },
+          {
+            "id": "00000000-0000-4000-8000-a9801911b3b1",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "00000000-0000-4000-8000-836b20d0164d"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-all-application-permissions-verified/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-application-admin": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-application-admin",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-application-admin')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-dcdc8e39a6d1",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-20b8a1946f5f",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-application-admin')/excludes",
+        "excludes": [
+          {
+            "id": "00000000-0000-4000-8000-8bf58c2fb26d",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-71c3763ea1be",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "00000000-0000-4000-8000-eb622c25dbef",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-application-admin/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-dcdc8e39a6d1",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-20b8a1946f5f",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-application-admin/excludes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-8bf58c2fb26d",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-71c3763ea1be",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "00000000-0000-4000-8000-eb622c25dbef",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-company-admin": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-company-admin",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-company-admin')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-aba64325095e",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-41dc6d463066",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-company-admin')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-company-admin/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-aba64325095e",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-41dc6d463066",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-company-admin/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-dynamically-managed-permissions-for-chat": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-dynamically-managed-permissions-for-chat",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-dynamically-managed-permissions-for-chat')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-70ee381f72e4",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-dynamically-managed-permissions-for-chat')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-dynamically-managed-permissions-for-chat/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-70ee381f72e4",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-dynamically-managed-permissions-for-chat/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-dynamically-managed-permissions-for-team": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-dynamically-managed-permissions-for-team",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-dynamically-managed-permissions-for-team')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-6fece7dea5da",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-dynamically-managed-permissions-for-team')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-dynamically-managed-permissions-for-team/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-6fece7dea5da",
+            "permissionClassification": "all",
+            "permissionType": "application",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-dynamically-managed-permissions-for-team/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-pre-approval-apps-for-chat": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-pre-approval-apps-for-chat",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-pre-approval-apps-for-chat')/includes",
+        "includes": [],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-pre-approval-apps-for-chat')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-pre-approval-apps-for-chat/includes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-pre-approval-apps-for-chat/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-pre-approval-apps-for-team": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-pre-approval-apps-for-team",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-pre-approval-apps-for-team')/includes",
+        "includes": [],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-pre-approval-apps-for-team')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-pre-approval-apps-for-team/includes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-pre-approval-apps-for-team/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-allow-consent-apps": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-user-default-allow-consent-apps",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-allow-consent-apps')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-70e8af77276b",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+            "permissions": [
+              "00000000-0000-4000-8000-777164dade17",
+              "00000000-0000-4000-8000-5d8024278aed",
+              "00000000-0000-4000-8000-f562ceff1a09",
+              "00000000-0000-4000-8000-945c2555e6de",
+              "00000000-0000-4000-8000-196d0770ccb7",
+              "00000000-0000-4000-8000-ca71b8f9aac1",
+              "00000000-0000-4000-8000-b93cd1c38b01",
+              "00000000-0000-4000-8000-5fd83d6632a8",
+              "00000000-0000-4000-8000-05687c82ef02",
+              "00000000-0000-4000-8000-b4027466f648",
+              "00000000-0000-4000-8000-ec2c96559232",
+              "00000000-0000-4000-8000-8d61df3fdd2f",
+              "00000000-0000-4000-8000-ed5f56666d97",
+              "00000000-0000-4000-8000-848dcc46d8c4",
+              "00000000-0000-4000-8000-1eef2996438a",
+              "00000000-0000-4000-8000-afd07052f9d8",
+              "00000000-0000-4000-8000-4c4368a9e9ba",
+              "00000000-0000-4000-8000-4d0a4899c79c",
+              "00000000-0000-4000-8000-95220ac9485c",
+              "00000000-0000-4000-8000-0a88e8a3a14a",
+              "00000000-0000-4000-8000-3c8f538ba832",
+              "00000000-0000-4000-8000-991013e57b9f",
+              "00000000-0000-4000-8000-51464f9264b5",
+              "00000000-0000-4000-8000-92b44c4b9bf7",
+              "00000000-0000-4000-8000-8a3eb3b31eaa",
+              "00000000-0000-4000-8000-802c1b3ee62a",
+              "00000000-0000-4000-8000-e504fe70f74e",
+              "00000000-0000-4000-8000-8f3c4802a5e4",
+              "00000000-0000-4000-8000-fe583b708535",
+              "00000000-0000-4000-8000-616a8226f39c",
+              "00000000-0000-4000-8000-1f05e7a7f449",
+              "00000000-0000-4000-8000-bdc6f3b5feb3",
+              "00000000-0000-4000-8000-8cb67686c569",
+              "00000000-0000-4000-8000-b8cdf6649a60",
+              "00000000-0000-4000-8000-64ee99b6391a",
+              "00000000-0000-4000-8000-6ddff2312fea"
+            ],
+            "clientApplicationIds": [
+              "00000000-0000-4000-8000-95a274a0cec1",
+              "00000000-0000-4000-8000-a575c30a1a32",
+              "00000000-0000-4000-8000-87e8d592a500",
+              "00000000-0000-4000-8000-17447253f83b",
+              "00000000-0000-4000-8000-60569883bb44",
+              "00000000-0000-4000-8000-a3b71a3e048e"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-7fdcbf7abf7f",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "00000000-0000-4000-8000-4c50288dd07d",
+            "permissions": [
+              "00000000-0000-4000-8000-6e219ba46d9e",
+              "00000000-0000-4000-8000-0745f085e28c",
+              "00000000-0000-4000-8000-1e3b58d86ccc",
+              "00000000-0000-4000-8000-671bcec6f9d4"
+            ],
+            "clientApplicationIds": [
+              "00000000-0000-4000-8000-95a274a0cec1",
+              "00000000-0000-4000-8000-a575c30a1a32",
+              "00000000-0000-4000-8000-87e8d592a500",
+              "00000000-0000-4000-8000-17447253f83b",
+              "00000000-0000-4000-8000-60569883bb44",
+              "00000000-0000-4000-8000-a3b71a3e048e"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-allow-consent-apps')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-allow-consent-apps/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-70e8af77276b",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+            "permissions": [
+              "00000000-0000-4000-8000-777164dade17",
+              "00000000-0000-4000-8000-5d8024278aed",
+              "00000000-0000-4000-8000-f562ceff1a09",
+              "00000000-0000-4000-8000-945c2555e6de",
+              "00000000-0000-4000-8000-196d0770ccb7",
+              "00000000-0000-4000-8000-ca71b8f9aac1",
+              "00000000-0000-4000-8000-b93cd1c38b01",
+              "00000000-0000-4000-8000-5fd83d6632a8",
+              "00000000-0000-4000-8000-05687c82ef02",
+              "00000000-0000-4000-8000-b4027466f648",
+              "00000000-0000-4000-8000-ec2c96559232",
+              "00000000-0000-4000-8000-8d61df3fdd2f",
+              "00000000-0000-4000-8000-ed5f56666d97",
+              "00000000-0000-4000-8000-848dcc46d8c4",
+              "00000000-0000-4000-8000-1eef2996438a",
+              "00000000-0000-4000-8000-afd07052f9d8",
+              "00000000-0000-4000-8000-4c4368a9e9ba",
+              "00000000-0000-4000-8000-4d0a4899c79c",
+              "00000000-0000-4000-8000-95220ac9485c",
+              "00000000-0000-4000-8000-0a88e8a3a14a",
+              "00000000-0000-4000-8000-3c8f538ba832",
+              "00000000-0000-4000-8000-991013e57b9f",
+              "00000000-0000-4000-8000-51464f9264b5",
+              "00000000-0000-4000-8000-92b44c4b9bf7",
+              "00000000-0000-4000-8000-8a3eb3b31eaa",
+              "00000000-0000-4000-8000-802c1b3ee62a",
+              "00000000-0000-4000-8000-e504fe70f74e",
+              "00000000-0000-4000-8000-8f3c4802a5e4",
+              "00000000-0000-4000-8000-fe583b708535",
+              "00000000-0000-4000-8000-616a8226f39c",
+              "00000000-0000-4000-8000-1f05e7a7f449",
+              "00000000-0000-4000-8000-bdc6f3b5feb3",
+              "00000000-0000-4000-8000-8cb67686c569",
+              "00000000-0000-4000-8000-b8cdf6649a60",
+              "00000000-0000-4000-8000-64ee99b6391a",
+              "00000000-0000-4000-8000-6ddff2312fea"
+            ],
+            "clientApplicationIds": [
+              "00000000-0000-4000-8000-95a274a0cec1",
+              "00000000-0000-4000-8000-a575c30a1a32",
+              "00000000-0000-4000-8000-87e8d592a500",
+              "00000000-0000-4000-8000-17447253f83b",
+              "00000000-0000-4000-8000-60569883bb44",
+              "00000000-0000-4000-8000-a3b71a3e048e"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-7fdcbf7abf7f",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "00000000-0000-4000-8000-4c50288dd07d",
+            "permissions": [
+              "00000000-0000-4000-8000-6e219ba46d9e",
+              "00000000-0000-4000-8000-0745f085e28c",
+              "00000000-0000-4000-8000-1e3b58d86ccc",
+              "00000000-0000-4000-8000-671bcec6f9d4"
+            ],
+            "clientApplicationIds": [
+              "00000000-0000-4000-8000-95a274a0cec1",
+              "00000000-0000-4000-8000-a575c30a1a32",
+              "00000000-0000-4000-8000-87e8d592a500",
+              "00000000-0000-4000-8000-17447253f83b",
+              "00000000-0000-4000-8000-60569883bb44",
+              "00000000-0000-4000-8000-a3b71a3e048e"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-allow-consent-apps/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-legacy": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-user-default-legacy",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-legacy')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-c16c1f190d6a",
+            "permissionClassification": "all",
+            "permissionType": "delegatedUserConsentable",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-legacy')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-legacy/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-c16c1f190d6a",
+            "permissionClassification": "all",
+            "permissionType": "delegatedUserConsentable",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-legacy/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-low": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-user-default-low",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-low')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-4744dc3c60d0",
+            "permissionClassification": "low",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "00000000-0000-4000-8000-836b20d0164d"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-e20b31e8bfe0",
+            "permissionClassification": "low",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": true
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-low')/excludes",
+        "excludes": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-low/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-4744dc3c60d0",
+            "permissionClassification": "low",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "00000000-0000-4000-8000-836b20d0164d"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-e20b31e8bfe0",
+            "permissionClassification": "low",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": true
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-low/excludes": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-recommended": {
+      "status": 200,
+      "body": {
+        "id": "microsoft-user-default-recommended",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "user-c032ff98805d@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-recommended')/includes",
+        "includes": [
+          {
+            "id": "00000000-0000-4000-8000-48b9f556882b",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ],
+        "user-6556f047b56e@example.test": "https://graph.microsoft.com/v1.0/$metadata#policies/permissionGrantPolicies('microsoft-user-default-recommended')/excludes",
+        "excludes": [
+          {
+            "id": "00000000-0000-4000-8000-6bdca7f501df",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+            "permissions": [
+              "00000000-0000-4000-8000-777164dade17",
+              "00000000-0000-4000-8000-5d8024278aed",
+              "00000000-0000-4000-8000-f562ceff1a09",
+              "00000000-0000-4000-8000-945c2555e6de",
+              "00000000-0000-4000-8000-196d0770ccb7",
+              "00000000-0000-4000-8000-ca71b8f9aac1",
+              "00000000-0000-4000-8000-b93cd1c38b01",
+              "00000000-0000-4000-8000-5fd83d6632a8",
+              "00000000-0000-4000-8000-05687c82ef02",
+              "00000000-0000-4000-8000-b4027466f648",
+              "00000000-0000-4000-8000-ec2c96559232",
+              "00000000-0000-4000-8000-8d61df3fdd2f",
+              "00000000-0000-4000-8000-ed5f56666d97",
+              "00000000-0000-4000-8000-848dcc46d8c4",
+              "00000000-0000-4000-8000-1eef2996438a",
+              "00000000-0000-4000-8000-afd07052f9d8",
+              "00000000-0000-4000-8000-4c4368a9e9ba",
+              "00000000-0000-4000-8000-4d0a4899c79c",
+              "00000000-0000-4000-8000-95220ac9485c",
+              "00000000-0000-4000-8000-0a88e8a3a14a",
+              "00000000-0000-4000-8000-3c8f538ba832",
+              "00000000-0000-4000-8000-991013e57b9f",
+              "00000000-0000-4000-8000-51464f9264b5",
+              "00000000-0000-4000-8000-92b44c4b9bf7",
+              "00000000-0000-4000-8000-8a3eb3b31eaa",
+              "00000000-0000-4000-8000-802c1b3ee62a",
+              "00000000-0000-4000-8000-e504fe70f74e",
+              "00000000-0000-4000-8000-8f3c4802a5e4",
+              "00000000-0000-4000-8000-fe583b708535",
+              "00000000-0000-4000-8000-616a8226f39c",
+              "00000000-0000-4000-8000-1f05e7a7f449",
+              "00000000-0000-4000-8000-bdc6f3b5feb3",
+              "00000000-0000-4000-8000-8cb67686c569",
+              "00000000-0000-4000-8000-b8cdf6649a60",
+              "00000000-0000-4000-8000-64ee99b6391a",
+              "00000000-0000-4000-8000-6ddff2312fea"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-cc9cfb7e204a",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "00000000-0000-4000-8000-4c50288dd07d",
+            "permissions": [
+              "00000000-0000-4000-8000-6e219ba46d9e",
+              "00000000-0000-4000-8000-0745f085e28c",
+              "00000000-0000-4000-8000-1e3b58d86ccc",
+              "00000000-0000-4000-8000-671bcec6f9d4"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-recommended/includes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-48b9f556882b",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "any",
+            "permissions": [
+              "all"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    },
+    "/v1.0/policies/permissionGrantPolicies/microsoft-user-default-recommended/excludes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-6bdca7f501df",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "00000000-0000-4000-8000-e90240b115bb",
+            "permissions": [
+              "00000000-0000-4000-8000-777164dade17",
+              "00000000-0000-4000-8000-5d8024278aed",
+              "00000000-0000-4000-8000-f562ceff1a09",
+              "00000000-0000-4000-8000-945c2555e6de",
+              "00000000-0000-4000-8000-196d0770ccb7",
+              "00000000-0000-4000-8000-ca71b8f9aac1",
+              "00000000-0000-4000-8000-b93cd1c38b01",
+              "00000000-0000-4000-8000-5fd83d6632a8",
+              "00000000-0000-4000-8000-05687c82ef02",
+              "00000000-0000-4000-8000-b4027466f648",
+              "00000000-0000-4000-8000-ec2c96559232",
+              "00000000-0000-4000-8000-8d61df3fdd2f",
+              "00000000-0000-4000-8000-ed5f56666d97",
+              "00000000-0000-4000-8000-848dcc46d8c4",
+              "00000000-0000-4000-8000-1eef2996438a",
+              "00000000-0000-4000-8000-afd07052f9d8",
+              "00000000-0000-4000-8000-4c4368a9e9ba",
+              "00000000-0000-4000-8000-4d0a4899c79c",
+              "00000000-0000-4000-8000-95220ac9485c",
+              "00000000-0000-4000-8000-0a88e8a3a14a",
+              "00000000-0000-4000-8000-3c8f538ba832",
+              "00000000-0000-4000-8000-991013e57b9f",
+              "00000000-0000-4000-8000-51464f9264b5",
+              "00000000-0000-4000-8000-92b44c4b9bf7",
+              "00000000-0000-4000-8000-8a3eb3b31eaa",
+              "00000000-0000-4000-8000-802c1b3ee62a",
+              "00000000-0000-4000-8000-e504fe70f74e",
+              "00000000-0000-4000-8000-8f3c4802a5e4",
+              "00000000-0000-4000-8000-fe583b708535",
+              "00000000-0000-4000-8000-616a8226f39c",
+              "00000000-0000-4000-8000-1f05e7a7f449",
+              "00000000-0000-4000-8000-bdc6f3b5feb3",
+              "00000000-0000-4000-8000-8cb67686c569",
+              "00000000-0000-4000-8000-b8cdf6649a60",
+              "00000000-0000-4000-8000-64ee99b6391a",
+              "00000000-0000-4000-8000-6ddff2312fea"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-cc9cfb7e204a",
+            "permissionClassification": "all",
+            "permissionType": "delegated",
+            "resourceApplication": "00000000-0000-4000-8000-4c50288dd07d",
+            "permissions": [
+              "00000000-0000-4000-8000-6e219ba46d9e",
+              "00000000-0000-4000-8000-0745f085e28c",
+              "00000000-0000-4000-8000-1e3b58d86ccc",
+              "00000000-0000-4000-8000-671bcec6f9d4"
+            ],
+            "clientApplicationIds": [
+              "all"
+            ],
+            "clientApplicationTenantIds": [
+              "all"
+            ],
+            "clientApplicationPublisherIds": [
+              "all"
+            ],
+            "clientApplicationsFromVerifiedPublisherOnly": false
+          }
+        ]
+      }
+    }
+  }
+}

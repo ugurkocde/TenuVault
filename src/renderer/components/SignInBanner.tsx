@@ -24,6 +24,9 @@ export function SignInBanner({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => bridge.auth.onSignInRequired((event) =>
     setQueue((current) => (current.some((entry) => promptKey(entry) === promptKey(event)) ? current : [...current, event]))), [])
 
+  useEffect(() => bridge.auth.onAccountsChanged((tenantId) =>
+    setQueue((current) => current.filter((entry) => entry.tenantId.toLowerCase() !== tenantId.toLowerCase()))), [])
+
   const pending = queue[0]
   if (!pending || hidden) return null
   const others = queue.length - 1

@@ -1,5 +1,12 @@
 "use client"
 
+import { NoticeCard } from "@desktop/components/NoticeCard"
+
+import { RestoreAccess, useRestoreAccess } from "@desktop/components/RestoreAccess"
+
+import { UnknownComparisonTypes } from "~/components/backup/unknown-comparison-types"
+
+import { LargeComparison } from "~/components/backup/large-inventory"
 import { useState, useEffect, useMemo, useRef } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { useTenants, useSelectedTenant } from "~/contexts/TenantContext"
@@ -200,7 +207,7 @@ export default function DriftDetectionPage() {
     isComplete: boolean
     isSuccess: boolean
     newPolicyId?: string
-    policyType?: string
+    folder?: string
   }>({
     isOpen: false,
     action: "revert",
@@ -273,7 +280,8 @@ export default function DriftDetectionPage() {
   // The loaded list decides, so a backup made after a scan found too few lifts the notice.
   const insufficient = !running && !result && (backupsLoaded ? completeBackups.length < 2 : failedJob?.code === "INSUFFICIENT_BACKUPS")
   const showResult = !!result && !!selectedTenant
-  const noDriftText = result ? `No drift between ${formatDate(result.baseline.timestamp)} and ${formatDate(result.comparison.timestamp)}` : ""
+  const hasCoverageNotice = Boolean(result?.unknownTypes?.length || result?.legacyReadFailure || result?.largeFolders?.length)
+  const noDriftText = result?.largeFolders?.length ? "No policy drift. Compare inventory in pages below." : hasCoverageNotice ? "No drift found in the types compared." : result ? `No drift between ${formatDate(result.baseline.timestamp)} and ${formatDate(result.comparison.timestamp)}` : ""
   const counts = {
     added: drifts.filter(d => d.changeType === "added").length,
     modified: drifts.filter(d => d.changeType === "modified").length,
@@ -328,6 +336,10 @@ export default function DriftDetectionPage() {
     })
   }
 
+  const restoreAccess = useRestoreAccess(selectedTenant?.credentials, Boolean(confirmDialog))
+  const restoreFolder = confirmDialog && drifts.find(drift => drift.id === confirmDialog.driftId)?.backupFile?.split("/")[0]
+  const restoreIssues = restoreFolder ? restoreAccess.issuesFor([restoreFolder]) : []
+
   const executeRevert = async () => {
     if (!confirmDialog || !selectedTenant?.credentials || !selectedTenant?.resources?.storageAccountName) return
 
@@ -347,7 +359,7 @@ export default function DriftDetectionPage() {
       error: null,
       isComplete: false,
       isSuccess: false,
-      policyType: drift.type
+      folder: drift.backupFile?.split("/")[0]
     })
 
     try {
@@ -364,7 +376,7 @@ export default function DriftDetectionPage() {
       setProgressModal(prev => ({ ...prev, currentStep: 1 }))
       await new Promise(resolve => setTimeout(resolve, 500)) // Small delay for visual feedback
 
-      // Step 3: Applying changes to Intune
+      // Step 3: Applying changes to the tenant
       setProgressModal(prev => ({ ...prev, currentStep: 2 }))
 
       const response = await fetch("/api/revert-policy", {
@@ -394,11 +406,11 @@ export default function DriftDetectionPage() {
       const result = await response.json()
 
       // Step 4: Updating metadata
-      setProgressModal(prev => ({ ...prev, currentStep: 3, newPolicyId: result.policyId }))
+      setProgressModal(prev => ({ ...prev, currentStep: 3, newPolicyId: result.policyId ?? drift.configId }))
       await new Promise(resolve => setTimeout(resolve, 500))
 
       // Step 5: Refreshing drift detection
-      setProgressModal(prev => ({ ...prev, currentStep: 4, newPolicyId: result.policyId }))
+      setProgressModal(prev => ({ ...prev, currentStep: 4, newPolicyId: result.policyId ?? drift.configId }))
 
       // Clear any existing errors
       setError("")
@@ -497,8 +509,8 @@ export default function DriftDetectionPage() {
   )
 
   const insufficientState = (
-    <EmptyState icon={<Database className="h-6 w-6" />} title="Two complete backups are needed">
-      <p>Drift detection compares two complete backups of this tenant. {failedJob?.code === "INSUFFICIENT_BACKUPS" && failedJob.error ? failedJob.error : "This tenant has fewer than two. Backups that failed, are still running or stopped early are not compared."}</p>
+    <EmptyState icon={<Database className="h-6 w-6" />} title="Drift detection starts after your second complete backup">
+      <p>Then you can compare backups to see what changed in this tenant.</p>
       <div className="mt-4 flex flex-wrap justify-center gap-2">
         {canBackUp && <Button className="h-10 rounded-full bg-coral-600 px-5 text-white hover:bg-coral-700" onClick={() => setBackingUp(true)}>Back up now</Button>}
         <Link to="/portal/backup" className="inline-flex h-10 items-center rounded-full px-5 text-sm font-medium text-gray-700 hover:bg-gray-100">Open Backup & Restore</Link>
@@ -516,7 +528,7 @@ export default function DriftDetectionPage() {
           title={driftRunHeading(job.phase, finishing)}
           subtitle={result
             ? "Your previous result is kept if this scan does not finish. The scan keeps running if you open another page."
-            : "TenuVault only reads your saved backups. Nothing in Intune is changed. The scan keeps running if you open another page."}
+            : "TenuVault only reads your saved backups. Nothing in the tenant is changed. The scan keeps running if you open another page."}
           percent={finishing ? 100 : job.percent}
           progressLabel="Drift scan progress"
           detail={finishing ? "Loading the result" : job.detail}
@@ -569,6 +581,8 @@ export default function DriftDetectionPage() {
               </div>
             </div>
             
+            {selectedTenant?.credentials && <RestoreAccess credentials={selectedTenant.credentials} issues={restoreIssues}
+              checking={restoreAccess.checking} error={restoreAccess.error} onCheck={() => restoreAccess.refresh(true)} />}
             {/* Actions */}
             <div className="flex items-center gap-3">
               <Button
@@ -578,7 +592,7 @@ export default function DriftDetectionPage() {
               >
                 Cancel
               </Button>
-              {confirmDialog.action === "revert" ? (
+              {restoreIssues.length === 0 && (confirmDialog.action === "revert" ? (
                 <Button variant="destructive" className="flex-1 font-medium" onClick={executeRevert}>
                   <RefreshCw className="h-4 w-4 mr-2" />
                   {confirmDialog.recreate ? "Recreate policy" : "Revert policy"}
@@ -588,7 +602,7 @@ export default function DriftDetectionPage() {
                   <Plus className="h-4 w-4 mr-2" />
                   Create copy
                 </Button>
-              )}
+              ))}
             </div>
           </DialogContent>
         )}
@@ -605,7 +619,7 @@ export default function DriftDetectionPage() {
         isComplete={progressModal.isComplete}
         isSuccess={progressModal.isSuccess}
         newPolicyId={progressModal.newPolicyId}
-        policyType={progressModal.policyType}
+        folder={progressModal.folder}
         onComplete={() => {
           setProgressModal(prev => ({ ...prev, isOpen: false }))
           // Reset the progress modal state
@@ -641,11 +655,11 @@ export default function DriftDetectionPage() {
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Drift Detection</h1>
-          <p className="mt-2 text-base text-gray-500">See what changed in Intune between two backups</p>
+          <p className="mt-2 text-base text-gray-500">See what changed between two backups</p>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="lg" disabled={!result || shownDrifts.length === 0}>
+            <Button variant="outline" size="lg" disabled={!result || (shownDrifts.length === 0 && !hasCoverageNotice)}>
               <Download className="h-4 w-4 mr-2" />
               Export
               <ChevronDown className="h-4 w-4 ml-1" />
@@ -761,32 +775,14 @@ export default function DriftDetectionPage() {
             </p>
           )}
 
-          {result.warnings.length > 0 && (
-            <Alert className="rounded-3xl border-transparent bg-amber-50 p-5 [&>svg]:left-5 [&>svg]:top-5">
-              <AlertTriangle className="h-4 w-4 text-amber-700" />
-              <AlertDescription className="text-amber-900">
-                <strong>{result.warnings.length} {result.warnings.length === 1 ? "file was" : "files were"} not compared</strong> because {result.warnings.length === 1 ? "it" : "they"} could not be read. Changes to {result.warnings.length === 1 ? "this item" : "these items"} are not shown.
-                <ul className="mt-2 space-y-0.5 text-xs">
-                  {result.warnings.slice(0, 10).map((warning) => <li key={`${warning.backup}/${warning.file}`}><span className="font-mono">{warning.backup}/{warning.file}</span>: {warning.message}</li>)}
-                  {result.warnings.length > 10 && <li>and {result.warnings.length - 10} more</li>}
-                </ul>
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {counts.added > 50 && (
-            <Alert className="rounded-3xl border-transparent bg-white p-5 [&>svg]:left-5 [&>svg]:top-5">
-              <Info className="h-4 w-4" />
-              <AlertDescription>
-                <strong>High number of new policies detected.</strong> This typically happens when comparing against older backups without a proper baseline.
-                Compare two consecutive backups for a more accurate picture.
-              </AlertDescription>
-            </Alert>
-          )}
+          {!!result.largeFolders?.length && selectedTenant && <LargeComparison key={`${tenantId}/${storageAccountName}/${result.baseline.id}/${result.comparison.id}`} credentials={{ ...selectedTenant.credentials, storageAccountName }} baseline={result.baseline.id} backupId={result.comparison.id} folders={result.largeFolders} />}
+          <UnknownComparisonTypes folders={result.unknownTypes} legacyReadFailure={result.legacyReadFailure} warnings={result.warnings} />
+          {counts.added > 50 && <NoticeCard summary="This comparison found many new policies."
+            details="Older backups may not provide a full baseline. Compare two consecutive backups for a more accurate picture." />}
 
           {drifts.length === 0 && (
             <EmptyState icon={<Check className="h-6 w-6" />} title={noDriftText}>
-              <p>Every item both backups include is the same in each. Choose other backups above to compare a different period.</p>
+              <p>Choose other backups above to compare a different period.</p>
             </EmptyState>
           )}
 
@@ -980,7 +976,7 @@ export default function DriftDetectionPage() {
                   })}
                 </section>
               ))}
-              <p className="px-1 text-xs text-gray-500">Added items named "[Restored] ..." are marked as likely restored copies, because a policy created in Intune can carry the same prefix.</p>
+              <p className="px-1 text-xs text-gray-500">Added items named "[Restored] ..." are marked as likely restored copies, because a policy created outside TenuVault can carry the same prefix.</p>
             </div>
           )}
         </>

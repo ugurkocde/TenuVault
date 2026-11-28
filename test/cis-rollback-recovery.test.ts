@@ -1,4 +1,3 @@
-import { withBackupServerTime } from "./helpers"
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyCisRemediation, approveCisRemediation, createCisRollback, planCisRemediation, previewCisRemediation, previewCisRollback } from "../src/main/features/cis-remediation/engine"
@@ -11,7 +10,7 @@ import { CommunityLimitError } from "../src/shared/plan-errors"
 import type { Finding } from "../src/shared/frameworks/policies"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting } from "./feature-change-sets-fakes"
 import { fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore, withServerDate } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -205,7 +204,7 @@ describe("CIS rollback after an MSP license expired", () => {
 
 describe("the recovery backup in the real backup engine and API host", () => {
   const OLD_BACKUP = "backup-2026-08-01-020000"
-  const graph = (url: URL) => (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`) || url.pathname.endsWith("/assignments") ? Response.json({ value: [] }) : Response.json({}))
+  const graph = (url: URL) => (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`) || url.pathname.endsWith("/assignments") ? emptyIntuneRead(url.pathname) : Response.json({}))
 
   /**
    * The backup engine, its routes and the API host's plan guard as src/main/index.ts builds them
@@ -219,7 +218,7 @@ describe("the recovery backup in the real backup engine and API host", () => {
     for (const tenantId of [TENANT_A, TENANT_B, TENANT_C]) {
       const account = localStorageAccountName(tenantId)
       await store.createContainer(account, "intune-backups")
-      await store.put(account, "intune-backups", `${OLD_BACKUP}/metadata.json`, Buffer.from('{"Items":{}}'), "application/json")
+      await store.put(account, "intune-backups", `${OLD_BACKUP}/metadata.json`, Buffer.from("{}"), "application/json")
     }
     const access = backupAuthorization({ license, tokenFor: async () => ({ accessToken: "token" }), retentionDays: () => 30 })
     // The fetch bridge's license check of local backup storage, as createBridgedFetch makes it.
@@ -234,7 +233,7 @@ describe("the recovery backup in the real backup engine and API host", () => {
         }
         return handleLocalBlobRequest(store, request)
       }
-      return withBackupServerTime(graph(url), new Date("2026-11-03T12:00:00Z"))
+      return withServerDate(graph(url), new Date("2026-11-03T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: storageFetch, getToken: access.getToken, retentionDays: access.retentionDays, now: () => new Date("2026-11-03T12:00:00Z") })
     const host: ApiHost = new ApiHost({
@@ -260,6 +259,15 @@ describe("the recovery backup in the real backup engine and API host", () => {
     }
     return { engine, deps, scope: { changeSetId: applied.id }, folders, start }
   }
+
+  it("hands the backup engine a new token instead of a cached one only when it asks for one", async () => {
+    const { license } = await mspLicense()
+    const asked: unknown[][] = []
+    const access = backupAuthorization({ license, tokenFor: async (...request) => (asked.push(request), { accessToken: request[3] ? "fresh" : "cached" }), retentionDays: () => 30 })
+    expect(await access.getToken(TENANT_A, "client", "scope")).toBe("cached")
+    expect(await access.getToken(TENANT_A, "client", "scope", true)).toBe("fresh")
+    expect(asked).toEqual([[TENANT_A, "client", "scope"], [TENANT_A, "client", "scope", true]])
+  })
 
   it("runs a rollback's backup for a tenant outside Community without deleting older backups, queued or not", async () => {
     const context = await engineSetup()

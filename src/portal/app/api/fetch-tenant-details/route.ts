@@ -1,3 +1,5 @@
+import { isBearerToken } from "../../../../shared/security"
+import { signInLogCode } from "../../../../shared/sign-in-errors"
 import { type NextRequest, NextResponse } from "next/server";
 
 interface GraphApiResponse {
@@ -36,18 +38,22 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text();
-      console.error("Graph auth error:", errorData);
+      console.error("Graph auth error:", signInLogCode(errorData) ?? "token_request_failed");
       return NextResponse.json(
         { error: "Failed to authenticate with Microsoft Graph", details: errorData },
         { status: 401 }
       );
     }
 
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
+    const tokenData = await tokenResponse.json().catch(() => null);
+    const accessToken = tokenData?.access_token;
+    if (!isBearerToken(accessToken)) {
+      console.error("Graph auth error:", "token_invalid_response");
+      return NextResponse.json({ error: "Microsoft returned an invalid sign-in response. Try again." }, { status: 502 });
+    }
 
     // Helper function to make Graph API calls
-    const callGraphApi = async (endpoint: string, useBeta: boolean = false): Promise<GraphApiResponse | null> => {
+    const callGraphApi = async (endpoint: string, useBeta: boolean = false, logEndpoint = endpoint.split("?")[0]): Promise<GraphApiResponse | null> => {
       try {
         const apiVersion = useBeta ? "beta" : "v1.0";
         const response = await fetch(`https://graph.microsoft.com/${apiVersion}${endpoint}`, {
@@ -58,8 +64,8 @@ export async function POST(request: NextRequest) {
         });
         
         if (!response.ok) {
-          const errorText = await response.text();
-          console.error(`Graph API error for ${endpoint}: ${response.status} - ${errorText}`);
+          console.error("graph_request_failed", logEndpoint, response.status);
+          await response.body?.cancel().catch(() => undefined);
           return null;
         }
         
@@ -69,24 +75,24 @@ export async function POST(request: NextRequest) {
         
         // If no content or content-length is 0, return empty result
         if (contentLength === "0" || !contentType?.includes("application/json")) {
-          console.log(`Empty or non-JSON response for ${endpoint}`);
+          console.log(`Empty or non-JSON response for ${logEndpoint}`);
           return { value: [] };
         }
         
         const text = await response.text();
         if (!text || text.trim() === "") {
-          console.log(`Empty response body for ${endpoint}`);
+          console.log(`Empty response body for ${logEndpoint}`);
           return { value: [] };
         }
         
         try {
           return JSON.parse(text);
-        } catch (parseError) {
-          console.error(`Failed to parse JSON for ${endpoint}:`, parseError, "Response text:", text);
+        } catch {
+          console.error("graph_invalid_response", logEndpoint, response.status);
           return null;
         }
-      } catch (error) {
-        console.error(`Error calling ${endpoint}:`, error);
+      } catch {
+        console.error("graph_request_unavailable", logEndpoint);
         return null;
       }
     };
@@ -111,7 +117,7 @@ export async function POST(request: NextRequest) {
       let next: string | undefined = `${endpoint}?$select=id&$top=100`;
       let total = 0;
       for (let page = 0; next && page < MAX_COUNT_PAGES; page++) {
-        const data = await callGraphApi(next, true);
+        const data = await callGraphApi(next, true, endpoint);
         if (!data || !Array.isArray(data.value)) break;
         total += data.value.length;
         const link: unknown = data["@odata.nextLink"];
@@ -141,7 +147,7 @@ export async function POST(request: NextRequest) {
       compliantDevices,
       userCount,
     ] = await Promise.all([
-      callGraphApi("/organization"),
+      callGraphApi("/organization", true),
       countEndpoint("/deviceManagement/deviceConfigurations", "device configurations"),
       countEndpoint("/deviceManagement/deviceCompliancePolicies", "compliance policies"),
       // Settings Catalog policies need the beta API for full results.
@@ -175,8 +181,8 @@ export async function POST(request: NextRequest) {
     // Prepare tenant details
     const tenantDetails = {
       organization: {
-        id: organization.id || tenantId,
-        displayName: organization.displayName || "Unknown Organization",
+        id: organization.id,
+        displayName: organization.displayName,
         verifiedDomains: organization.verifiedDomains || [],
         primaryDomain: organization.verifiedDomains?.find((d: any) => d.isDefault)?.name || 
                        organization.verifiedDomains?.[0]?.name || 

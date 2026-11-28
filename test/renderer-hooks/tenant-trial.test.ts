@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: 
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: state.refresh }) }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialWorkflowsConfigured: state.configured, trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
-import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges, TrialResume, TrialShortcuts, TrialStartedRow } from "../../src/renderer/components/TenantTrial"
+import { TenantTrialCard, TenantTrialLine, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges, TrialResume, TrialShortcuts, TrialStartedRow } from "../../src/renderer/components/TenantTrial"
 import { TrialReminderBanner } from "../../src/renderer/components/DesktopLayout"
 import { TrialOrKey } from "../../src/renderer/components/PlanChoice"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -50,7 +50,7 @@ describe("tenant trial UI", () => {
   ] as const)("handles a rejected %s action and a rejected refresh", async (label, action) => {
     state.action.mockRejectedValueOnce(new Error("Trial action failed"))
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
-    await render(createElement(TenantTrialCard, { tenant, welcome: action !== "extend_trial" }))
+    await render(createElement(action === "extend_trial" ? TenantTrialCard : TenantTrialLine, { tenant }))
     await click(label)
     expect(state.action).toHaveBeenCalledWith("tenant", action)
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Trial action failed")
@@ -58,7 +58,7 @@ describe("tenant trial UI", () => {
   })
   describe("ending the trial early", () => {
     it("is offered on the License page card, not in the welcome", async () => {
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialLine, { tenant }))
       expect(container.textContent).not.toContain("Use Community instead")
       await render(createElement(TenantTrialCard, { tenant }))
       expect(container.textContent).toContain("Use Community instead")
@@ -261,12 +261,16 @@ describe("tenant trial UI", () => {
     })
   })
   it("says on a running trial that nothing is charged and what happens at its end", async () => {
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
+    expect(container.textContent).not.toContain("Nothing is charged")
+    await click("What's included")
     expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, this tenant continues on Community Free by itself. Backups and settings are kept. Community keeps 30 days of backup history.")
   })
   it("says with several tenants that the admin chooses the one that continues", async () => {
     state.status!.tenants = [tenant, { ...tenant, tenantId: "ended" }]
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
+    expect(container.textContent).not.toContain("Nothing is charged")
+    await click("What's included")
     expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, you choose which one tenant continues on Community Free. Backups and settings are kept.")
     expect(container.textContent).not.toContain("by itself")
   })
@@ -274,7 +278,9 @@ describe("tenant trial UI", () => {
     // Two tenants, but the choice was made before: the end of this trial opens none.
     state.status!.tenants = [tenant, { ...tenant, tenantId: "other", trial: false, source: null, trialEndsAt: undefined, plan: "community" }]
     state.status!.communityTenantId = "other"
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
+    expect(container.textContent).not.toContain("Nothing is charged")
+    await click("What's included")
     expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, this tenant needs a license: Community Free covers one tenant and another tenant already uses it. Backups and settings are kept.")
     expect(container.textContent).not.toContain("you choose which")
     expect(container.textContent).not.toContain("by itself")
@@ -282,27 +288,32 @@ describe("tenant trial UI", () => {
   })
   it("shows a refresh failure without retrying or rejecting the handler", async () => {
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
     await click("Dismiss Pro trial message")
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Status refresh failed")
     expect(state.refresh).toHaveBeenCalledTimes(1)
   })
   it.each([true, false])("shows the start card with the correct days and no decision to make (%s)", async starter => {
     tenant.canEnd = starter
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
-    expect(container.textContent).toContain("Pro trial started")
+    await render(createElement(TenantTrialLine, { tenant }))
+    expect(container.textContent).toContain("Pro trial ·")
     expect(container.textContent).toContain("5 days left")
     expect(container.textContent).not.toContain("Use Community instead")
     expect(container.textContent).not.toContain("Got it")
+    expect(container.textContent).not.toContain("30 days of backup history")
+    await click("What's included")
     expect(container.textContent).toContain("30 days of backup history")
     expect([...container.querySelectorAll("a")].map(a => a.textContent)).toEqual(expect.arrayContaining(["Daily backup schedule", "Full restore", "Drift revert", "CIS Benchmarks"]))
     expect(container.querySelector('a[href="/portal/backup?tab=restore"]')).toBeTruthy()
-    expect([...container.querySelectorAll("button")].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends")?.className).toContain("border")
+    expect(container.querySelector("input")).toBeNull()
     await click("Dismiss Pro trial message")
     expect(state.action).toHaveBeenCalledWith("tenant", "acknowledge")
   })
   it("prefills contact without sending and submits only on click", async () => {
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
+    expect(container.querySelector("input")).toBeNull()
+    expect(state.action).not.toHaveBeenCalled()
+    await click("Get trial reminders")
     expect(container.querySelector("input")?.value).toBe("admin@contoso.example")
     expect(state.action).not.toHaveBeenCalled()
     expect(container.textContent).not.toContain("Remove the saved email address for this trial")
@@ -337,11 +348,11 @@ describe("tenant trial UI", () => {
   })
   it("lets a page own the welcome card without hiding an independent end notice", async () => {
     await render(createElement(TenantTrialNotices, { showWelcome: false }))
-    expect(container.textContent).not.toContain("Pro trial started")
+    expect(container.textContent).not.toContain("Pro trial ·")
     state.status!.tenants.push({ ...tenant, tenantId: "ended", entitled: false, trial: false, source: null, trialEndsAt: new Date(Date.now() - day).toISOString() })
     await render(createElement(TenantTrialNotices, { showWelcome: false }))
     expect(container.textContent).toContain("Pro trial ended")
-    expect(container.textContent).not.toContain("Pro trial started")
+    expect(container.textContent).not.toContain("Pro trial ·")
   })
   it("extends explicitly", async () => {
     await render(createElement(TenantTrialCard, { tenant }))
@@ -392,7 +403,7 @@ describe("tenant trial UI", () => {
     const ended = { ...tenant, tenantId: "ended", entitled: false, activated: false, source: null, trial: false, trialEndsAt: new Date(Date.now() - day).toISOString() }
     state.status!.tenants = [tenant, ended]
     await render(createElement(TenantTrialNotices))
-    expect(container.textContent).toContain("Pro trial startedContoso")
+    expect(container.textContent).toContain("Pro trial · 5 days left")
     expect(container.textContent).toContain("Pro trial endedFabrikam")
     await click("Continue on Community")
     expect(state.action).toHaveBeenLastCalledWith("ended", "acknowledge")
@@ -426,17 +437,20 @@ describe("tenant trial UI", () => {
   })
   it("hides removal on a joined start card without a known saved contact", async () => {
     tenant.canEnd = false
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
+    await click("Get trial reminders")
     expect(container.textContent).not.toContain("Remove the saved email address for this trial")
     expect(state.action).not.toHaveBeenCalled()
   })
   it("hides unknown contact removal on a welcome even on the License page", async () => {
-    await render(createElement(TenantTrialCard, { tenant, welcome: true, allowUnknownContactRemoval: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
+    await click("Get trial reminders")
     expect(container.textContent).not.toContain("Remove the saved email address for this trial")
   })
   it("shows a known saved contact on the start card", async () => {
     tenant.trialEmail = "admin@contoso.example"
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
+    await click("Get trial reminders")
     await click("Remove the saved email address for this trial")
     expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", undefined)
   })
@@ -498,10 +512,12 @@ describe("shared trial actions", () => {
   it("keeps extension and purchase details out of the start card", async () => {
     tenant.trialCanExtend = false
     tenant.trialExtensionAvailableAt = new Date(Date.now() + day).toISOString()
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialLine, { tenant }))
     expect(container.textContent).not.toContain("Questions,")
     expect(container.textContent).not.toContain("You can extend once")
     expect(container.textContent).not.toContain("Buy Pro")
+    expect(container.textContent).not.toContain("Optional email")
+    await click("Get trial reminders")
     expect(container.textContent).toContain("Optional email")
     await render(createElement(TenantTrialCard, { tenant }))
     expect(container.textContent).toContain("Questions,")
@@ -551,7 +567,7 @@ it.each(["reminder", "ended", "license", "welcome", "empty", "unreadable"])("sho
   if (place === "ended") { tenant.trial = false; tenant.entitled = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString() }
   if (place === "reminder") await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
   else if (place === "ended") await render(createElement(TenantTrialNotices))
-  else await render(createElement(TenantTrialCard, { tenant, welcome: place === "welcome" }))
+  else await render(createElement(place === "welcome" ? TenantTrialLine : TenantTrialCard, { tenant }))
   expect(container.textContent!.includes("During your trial:")).toBe(!["welcome", "empty", "unreadable"].includes(place))
   if (place === "welcome") expect(state.usage).not.toHaveBeenCalled()
 })
@@ -561,10 +577,10 @@ it.each(["license", "welcome", "ended", "reminder"])("keeps the existing %s inte
   if (place === "ended") { tenant.trial = false; tenant.entitled = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString() }
   if (place === "reminder") await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
   else if (place === "ended") await render(createElement(TenantTrialNotices))
-  else await render(createElement(TenantTrialCard, { tenant, welcome: place === "welcome" }))
+  else await render(createElement(place === "welcome" ? TenantTrialLine : TenantTrialCard, { tenant }))
   expect(container.textContent).not.toContain("Questions, or need a quote")
   expect(state.usage).not.toHaveBeenCalled()
-  if (place !== "reminder") expect(container.textContent).toContain("Need more time? Extend your trial")
+  if (place === "license" || place === "ended") expect(container.textContent).toContain("Need more time? Extend your trial")
 })
 
 

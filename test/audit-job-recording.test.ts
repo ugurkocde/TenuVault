@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { afterEach, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { AuditSink, setMainAuditSink } from "../src/main/api/audit-sink"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { checkpointBackupAudit, reconcileBackupAudit, recordBackupAudit } from "../src/main/backup/audit"
@@ -16,7 +16,7 @@ import { auditChanges } from "../src/portal/lib/audit/restore-changes"
 import { recordRestorePreparationFailure, restoreAuditItem } from "../src/portal/lib/audit/restore"
 import { clearSettingNames, readSettingNames } from "../src/portal/lib/drift/setting-names"
 import { typeForFolder } from "../src/shared/intune/registry"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore } from "./helpers"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const registration = "22222222-2222-2222-2222-222222222222"
@@ -432,8 +432,8 @@ it("still captures and records the Reader terminal result when the encrypted che
   const remote = storage()
   const sink = new AuditSink({ store: local, bind: () => binding, transport: async () => remote.service })
   const terminal: Promise<void>[] = []
-  const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
-    init?.method === "PUT" ? new Response(null, { status: 201 }) : Response.json({ value: [] }))
+  const fetcher = vi.fn<typeof fetch>(async (input, init) =>
+    init?.method === "PUT" ? new Response(null, { status: 201 }) : emptyIntuneRead(new URL(String(input)).pathname))
   const engine = new BackupEngine({
     fetch: fetcher,
     getToken: async () => { throw new Error("No admin session") },
@@ -514,7 +514,8 @@ it.each([
         return new Response(null, { status: 201 })
       }
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations") return Response.json({ value: [{ id: "first", displayName: "Example" }] })
-      return Response.json({ id: "first", value: [] })
+      if (url.pathname.endsWith("/first")) return Response.json({ id: "first", assignments: [] })
+      return emptyIntuneRead(url.pathname)
     }),
     onStarted: (active, request, tokens) => checkpointBackupAudit(first, active, request, tokens, binding.user, "1.2.3"),
   })
@@ -572,7 +573,7 @@ it("reconciles a lost manifest acknowledgement in audit after the Reader job fai
         manifest = String(init.body)
         throw new TypeError("Manifest acknowledgement lost")
       }
-      return init?.method === "PUT" ? new Response(null, { status: 201 }) : Response.json({ value: [] })
+      return init?.method === "PUT" ? new Response(null, { status: 201 }) : emptyIntuneRead(new URL(String(input)).pathname)
     },
     onStarted: (active, request, tokens) => checkpointBackupAudit(sink, active, request, tokens, binding.user, "1.2.3"),
     onFinished: (active, request, tokens) => {
@@ -737,4 +738,58 @@ it("requires fresh Reader audit creation even when the last canary remains reada
   expect(reads).toEqual(auditCreates.slice(0, 2))
   expect(blobs.size).toBe(3)
   expect([...new Set(checks.map(check => check.split("/").slice(0, 2).join("/")))].sort()).toEqual(["DELETE /audit-logs", "DELETE /intune-backups", "PUT /audit-logs"])
+})
+
+describe("audit recovery for a run split across an ordinary and a large backup", () => {
+  const tenantId = "11111111-1111-1111-1111-111111111111", runId = "desktop-7b223058-dfe2-4d7d-94f4-ce7b6ebf80ae"
+  const entry = { id: runId, timestamp: "2026-11-21T00:00:00.000Z", eventType: "BACKUP_COMPLETED", action: "Complete backup", resource: { type: "backup", id: "backup-2026-11-21-000000", name: "Complete backup" },
+    result: "partial", severity: "warning", user: { id: "admin", email: "", name: "Admin", tenantId }, job: { operationId: runId, runId, stage: "terminal", producer: "desktop", status: "uncertain" } } as unknown as Parameters<typeof reconcileBackupAudit>[0]
+  const manifest = (extra: Record<string, unknown>) => Response.json({ RunId: runId, TenantId: tenantId, AuthMode: "delegated", Status: "Success", ...extra })
+  const companion = "backup-large-2026-11-21-000000"
+  it.each([["Failed", "failed"], ["CompletedWithWarnings", "warnings"], ["Success", "completed"], ["Cancelled", "cancelled"]])("confirms a split run only from the final ordinary manifest's run status %s and totals, without reading the large half", async (run, expected) => {
+    const read = vi.fn(async () => manifest({}))
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Failed", RunStatus: run, RunCounts: { saved: 9, failures: 1 }, ItemCounts: { TotalPolicies: 4 }, CompanionBackup: companion, CompletedAt: "2026-11-21T01:00:00.000Z" }), read)
+    expect(result.job).toMatchObject({ status: expected, counts: { saved: 9, failures: 1 } })
+    expect(result.timestamp).toBe("2026-11-21T01:00:00.000Z")
+    expect(read).not.toHaveBeenCalled()
+  })
+  it.each(["Success", "Failed", "Cancelled", "CompletedWithWarnings"])("keeps a split run uncertain from an early or stopped ordinary manifest (%s) whatever the large half says", async status => {
+    const read = vi.fn(async () => manifest({ Status: "Success" }))
+    expect(await reconcileBackupAudit(entry, async () => manifest({ Status: status, CompanionBackup: companion }), read)).toBe(entry)
+  })
+  it("confirms a split run from its own record when storage refused replacing the early ordinary manifest", async () => {
+    const read = vi.fn(async () => manifest({}))
+    const record = vi.fn(async () => manifest({ BackupFolder: "backup-2026-11-21-000000", RunStatus: "CompletedWithWarnings", RunCounts: { saved: 7, failures: 1 }, CompletedAt: "2026-11-21T02:00:00.000Z" }))
+    const result = await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", CompanionBackup: companion }), read, record)
+    expect(record).toHaveBeenCalledWith("backup-2026-11-21-000000")
+    expect(read).not.toHaveBeenCalled()
+    expect(result.job).toMatchObject({ status: "warnings", counts: { saved: 7, failures: 1 } })
+    expect(result.timestamp).toBe("2026-11-21T02:00:00.000Z")
+  })
+  it.each([
+    ["another folder", { BackupFolder: "backup-2026-11-20-000000", RunStatus: "Success" }],
+    ["another run", { RunId: "other", BackupFolder: "backup-2026-11-21-000000", RunStatus: "Success" }],
+    ["no run status", { BackupFolder: "backup-2026-11-21-000000" }],
+  ])("keeps a split run uncertain when its run record names %s", async (_case, extra) => {
+    const record = vi.fn(async () => manifest(extra))
+    expect(await reconcileBackupAudit(entry, async () => manifest({ Status: "Success", CompanionBackup: companion }), vi.fn(async () => manifest({})), record)).toBe(entry)
+  })
+  it("never confirms a split run from its large half", async () => {
+    const read = vi.fn(async (folder: string) => folder.startsWith("backup-large-") ? manifest({ Status: "Success", RunStatus: "Success", CompanionBackup: "backup-2026-11-21-000000" }) : new Response(null, { status: 404 }))
+    expect(await reconcileBackupAudit(entry, async () => new Response(null, { status: 404 }), read)).toBe(entry)
+  })
+  it.each([["missing", new Response(null, { status: 404 })], ["another run", Response.json({ RunId: "other", TenantId: tenantId, AuthMode: "delegated", Status: "Success" })]])("finds a large-only run when the ordinary folder is %s, and records the folder that matched", async (_case, ordinary) => {
+    const read = vi.fn(async (folder: string) => folder.startsWith("backup-large-") ? manifest({}) : new Response(null, { status: 404 }))
+    const result = await reconcileBackupAudit(entry, async () => ordinary, read)
+    expect(read).toHaveBeenCalledWith(companion)
+    expect(result.resource.id).toBe(companion)
+    expect(result.job).toMatchObject({ status: "completed" })
+  })
+})
+
+it("keeps ordinary and large backup folder names as audit resource IDs", async () => {
+  const { auditId } = await import("../src/portal/lib/audit/projection")
+  expect(auditId("backup-2026-11-21-000000")).toBe("backup-2026-11-21-000000")
+  expect(auditId("backup-large-2026-11-21-000000")).toBe("backup-large-2026-11-21-000000")
+  expect(auditId("backup-other-2026-11-21")).toMatch(/^sha256-/)
 })

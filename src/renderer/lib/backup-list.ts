@@ -14,6 +14,7 @@ export interface BackupList {
   backups: BackupSummary[] | null
   /** Why the last refresh failed; `backups` are then from an earlier one, if any. */
   error: string
+  warnings?: string[]
   /** A refresh is running. */
   loading: boolean
   /** Folders the last list left out because their ownership could not be read. */
@@ -102,7 +103,7 @@ export function refreshBackupList(tenant: Tenant, options: { force?: boolean } =
       if (!response.ok) throw new Error(data.details || data.error || "Backups are unavailable. Check this tenant's sign-in, license, and storage access.")
       if (latest.get(key) !== id) return "superseded"
       const damagedFiles = typeof data.damagedFiles === "number" ? data.damagedFiles : 0
-      update(key, { backups: data.backups ?? [], error: "", loading: false, unresolved: typeof data.unresolved === "number" ? data.unresolved : 0, sealed: typeof data.sealed === "number" ? data.sealed : 0, damagedFiles, damagedFileNames: Array.isArray(data.damagedFileNames) ? data.damagedFileNames.filter((name: unknown): name is string => typeof name === "string") : [], damagedKinds: damagedFileKindsFrom(data.damagedKinds, damagedFiles) })
+      update(key, { warnings: Array.isArray(data.warnings) ? data.warnings.filter((value: unknown): value is string => typeof value === "string") : undefined, backups: data.backups ?? [], error: "", loading: false, unresolved: typeof data.unresolved === "number" ? data.unresolved : 0, sealed: typeof data.sealed === "number" ? data.sealed : 0, damagedFiles, damagedFileNames: Array.isArray(data.damagedFileNames) ? data.damagedFileNames.filter((name: unknown): name is string => typeof name === "string") : [], damagedKinds: damagedFileKindsFrom(data.damagedKinds, damagedFiles) })
       return "updated"
     } catch (failure) {
       if (latest.get(key) !== id) return "superseded"
@@ -127,7 +128,11 @@ export function useBackupList(tenant: Tenant | null | undefined): BackupList & {
   const credentials = credentialsOf(tenant)
   const list = useSyncExternalStore(subscribe, () => backupListOf(key))
   useEffect(() => {
-    if (tenant && key) void refreshBackupList(tenant)
+    if (!tenant || !key) return
+    void refreshBackupList(tenant)
+    return window.tenuvault?.backups?.onFinished?.(({ tenantId, storageAccountName }) => {
+      if (key === `${tenantId.toLowerCase()}/${storageAccountName.toLowerCase()}`) void refreshBackupList(tenant, { force: true })
+    })
   }, [key, credentials])
   return { ...list, refresh: (options) => (tenant ? refreshBackupList(tenant, options) : Promise.resolve("failed")) }
 }

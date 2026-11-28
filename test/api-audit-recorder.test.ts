@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAuditRecorder } from "../src/main/api/audit"
 import { memoryStore } from "./helpers"
 import { setRestoreApprovalStore } from "../src/main/storage/restore-approvals"
-import { ApiHost } from "../src/main/api/host"
+import { ApiHost, DOWNLOAD_CANCELLED_HEADER } from "../src/main/api/host"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const credentials = { tenantId: TENANT, appId: "fixture-app", clientSecret: "fixture-secret", storageAccountName: "fixturestore" }
@@ -46,6 +46,83 @@ describe("audit callbacks cannot replace a completed route response", () => {
     expect(accountFor).not.toHaveBeenCalled()
     expect(dispatch).not.toHaveBeenCalled()
     expect(log).not.toHaveBeenCalled()
+  })
+
+  it.each([[false, 1, ""], [true, 0, ""], [true, 0, "/"], [false, 1, "/"]])("records a download only when its archive was not cancelled (cancelled: %s, path suffix %j)", async (cancelled, expected, suffix) => {
+    const dispatch = vi.fn(async () => Response.json({ success: true }))
+    const record = createAuditRecorder(dispatch, () => null)
+    const response = Response.json({ saved: !cancelled }, cancelled ? { headers: { [DOWNLOAD_CANCELLED_HEADER]: "1" } } : undefined)
+    record(new Request(`http://tenuvault.internal/api/download-backup${suffix}`, { method: "POST" }), JSON.stringify({ ...credentials, id: "backup-2026-11-21-000000" }), response)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(dispatch).toHaveBeenCalledTimes(expected)
+  })
+
+  it("records an archive download for the admin who started it, even when another admin is signed in when its save ends", async () => {
+    const { setMainAuditSink } = await import("../src/main/api/audit-sink")
+    const { captureDownloadAudit } = await import("../src/main/api/audit")
+    let admin = "first@contoso.com"
+    const record = vi.fn(async (..._args: unknown[]) => undefined)
+    setMainAuditSink({ bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: admin, email: admin, name: admin } }), record } as never)
+    try {
+      // The page sends the backup as backupId; the audit names that backup.
+      const body = JSON.stringify({ ...credentials, backupId: "backup-2026-11-21-000000" })
+      const metadata = {}
+      captureDownloadAudit(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), body, metadata)
+      // The save outlasts the sign-in: another admin is signed in when it is recorded.
+      admin = "second@contoso.com"
+      const dispatch = vi.fn(async () => Response.json({ success: true }))
+      createAuditRecorder(dispatch, () => null)(new Request("http://tenuvault.internal/api/download-backup", { method: "POST" }), body, Response.json({ saved: true }), metadata)
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(dispatch).not.toHaveBeenCalled()
+      expect(record).toHaveBeenCalledTimes(1)
+      expect(record.mock.calls[0]![0]).toMatchObject({ user: { id: "first@contoso.com" } })
+      expect(record.mock.calls[0]![1]).toMatchObject({ resource: { id: "backup-2026-11-21-000000" } })
+    } finally { setMainAuditSink(undefined) }
+  })
+
+  it("binds an archive download's audit before its route runs, so a sign-in during the route never moves it", async () => {
+    const { setMainAuditSink } = await import("../src/main/api/audit-sink")
+    const { captureDownloadAudit } = await import("../src/main/api/audit")
+    let admin = "first@contoso.com"
+    const record = vi.fn(async (..._args: unknown[]) => undefined)
+    setMainAuditSink({ bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: admin, email: admin, name: admin } }), record } as never)
+    try {
+      // Another admin signs in while the route is still reading manifests, before the archive is saved.
+      const route = vi.fn(async () => { admin = "second@contoso.com"; return new Response("archive", { headers: { "content-type": "application/x-tar" } }) })
+      const recorder = createAuditRecorder(vi.fn(async () => Response.json({ success: true })), () => null)
+      const host = new ApiHost({ routes: { "/api/download-backup": { POST: route } }, beforeRoute: captureDownloadAudit, saveDownload: async response => { await response.text(); return Response.json({ saved: true }) }, onHandled: recorder })
+      await host.handleIpc({ path: "/api/download-backup", method: "POST", headers: {}, body: new TextEncoder().encode(JSON.stringify({ ...credentials, backupId: "backup-2026-11-21-000000" })) })
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(record).toHaveBeenCalledTimes(1)
+      expect(record.mock.calls[0]![0]).toMatchObject({ user: { id: "first@contoso.com" } })
+      // Other routes are never bound this way.
+      const metadata: Record<string, unknown> = {}
+      captureDownloadAudit(new Request("http://tenuvault.internal/api/backup-start", { method: "POST" }), JSON.stringify(credentials), metadata)
+      expect(metadata.downloadAudit).toBeUndefined()
+    } finally { setMainAuditSink(undefined) }
+  })
+
+  it("names the admin whose token authorized an archive download, whatever account was current when it started", async () => {
+    const { setMainAuditSink } = await import("../src/main/api/audit-sink")
+    const { captureDownloadAudit } = await import("../src/main/api/audit")
+    const { captureTokenActor, executionMetadata } = await import("../src/main/api/execution-metadata")
+    const record = vi.fn(async (..._args: unknown[]) => undefined)
+    setMainAuditSink({ bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: "first@contoso.com", email: "first@contoso.com", name: "First" } }), record } as never)
+    try {
+      // The route starts as the first admin; its token is issued for the second, who signed in meanwhile.
+      const route = vi.fn(async () => {
+        captureTokenActor({ username: "second@contoso.com", name: "Second" })
+        captureTokenActor({ username: "third@contoso.com", name: "Third" })
+        return new Response("archive", { headers: { "content-type": "application/x-tar" } })
+      })
+      const recorder = createAuditRecorder(vi.fn(async () => Response.json({ success: true })), () => null)
+      const host = new ApiHost({ routes: { "/api/download-backup": { POST: route } }, beforeRoute: captureDownloadAudit, saveDownload: async response => { await response.text(); return Response.json({ saved: true }) }, onHandled: recorder })
+      await host.handleIpc({ path: "/api/download-backup", method: "POST", headers: {}, body: new TextEncoder().encode(JSON.stringify({ ...credentials, backupId: "backup-2026-11-21-000000" })) })
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(record.mock.calls[0]![0]).toMatchObject({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: "second@contoso.com", name: "Second" } })
+      // Outside a request nothing is captured.
+      expect(executionMetadata.getStore()).toBeUndefined()
+    } finally { setMainAuditSink(undefined) }
   })
 
   it.each(["null", "[]", "42", "true", "{invalid"])("skips malformed audit bodies (%s)", (body) => {
@@ -125,6 +202,8 @@ it.each([
   ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}], assignments: true }, true, "restoreAssignments"],
   ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}] }, true, null],
   ["/api/restore-backup", { restoreType: "full" }, false, null],
+  ["/api/restore-directory", { action: "restore" }, true, "directoryRestore"],
+  ["/api/restore-directory", { action: "reconcile" }, true, null],
   ["/api/revert-policy", { action: "revert" }, true, "driftRevert"],
   ["/api/revert-policy", { action: "revert" }, false, null],
   ["/api/revert-policy", { action: "restore" }, true, null],
@@ -139,7 +218,7 @@ it.each([
     await new Promise<void>(resolve => setTimeout(resolve, 0))
     expect(tally.mock.calls).toEqual(feature ? [[TENANT, feature]] : [])
     expect(network).not.toHaveBeenCalled()
-    expect(dispatch).not.toHaveBeenCalled()
+    expect(dispatch).toHaveBeenCalledTimes(path === "/api/restore-directory" ? 1 : 0)
   } finally { vi.unstubAllGlobals() }
 })
 
@@ -150,6 +229,18 @@ it("does not tally a partially completed restore", async () => {
   await new Promise<void>(resolve => setTimeout(resolve, 0))
   expect(tally).not.toHaveBeenCalled()
   expect(dispatch).not.toHaveBeenCalled()
+})
+
+it("tallies a completed directory restore once and ignores replayed completions", async () => {
+  const tally = vi.fn()
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  const recorder = createAuditRecorder(dispatch, () => null, undefined, tally)
+  const request = () => new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" })
+  const body = JSON.stringify({ ...credentials, action: "restore" })
+  recorder(request(), body, Response.json({ success: true, status: "complete", details: { restoredCount: 1, failedCount: 0, partialCount: 0, results: [] } }))
+  recorder(request(), body, Response.json({ success: true, status: "complete", replayed: true, details: { restoredCount: 1, failedCount: 0, partialCount: 0, results: [] } }))
+  await new Promise<void>(resolve => setTimeout(resolve, 0))
+  expect(tally.mock.calls).toEqual([[TENANT, "directoryRestore"]])
 })
 
 it.each([["replace", false], ["replace", true], ["copy", false], ["copy", true]] as const)("does not tally completed approval items in %s mode (assignments %s)", async (mode, assignments) => {
@@ -202,6 +293,58 @@ it("keeps the OIB audit after a tally recorder throws", async () => {
   createAuditRecorder(dispatch, () => null, undefined, tally)(new Request("http://tenuvault.internal/api/oib", { method: "POST" }), JSON.stringify({ ...credentials, action: "oib-fix" }), Response.json({ updated: [{}, {}], failed: [] }))
   await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
   expect(tally).toHaveBeenCalledOnce()
+})
+
+it("keeps restored directory identities out of audit, notifications and logs while attributing the admin", async () => {
+  const entries: unknown[] = [], notices: unknown[] = []
+  const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error"), vi.spyOn(console, "debug")].map(spy => spy.mockImplementation(() => {}))
+  const account = { username: "admin@example.com", name: "Restoring admin" }
+  const record = createAuditRecorder(async request => { entries.push(await request.json()); return Response.json({ success: true }) }, () => account as ReturnType<Parameters<typeof createAuditRecorder>[1]>, notice => { notices.push(notice) })
+  const privateValues = ["Restored User Private", "restored-upn@example.com", "restored-mail@example.com", "00000000-0000-4000-8000-000000000999", "Restored Group Private", "00000000-0000-4000-8000-000000000998"]
+  for (const folder of ["Users", "Groups"]) {
+    const restoredId = privateValues[folder === "Users" ? 3 : 5], restoredName = privateValues[folder === "Users" ? 0 : 4]
+    record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" }), JSON.stringify({ ...credentials, action: "restore", stage: "object", backupId: "backup", path: `backup/${folder}/${restoredId}.json`, snapshot: { id: restoredId, displayName: restoredName, userPrincipalName: privateValues[1], mail: privateValues[2] } }), Response.json({ success: true, status: "complete", outcomes: [{ key: `${folder}:${restoredId}:update`, targetId: restoredId, state: "applied" }], details: { restoredCount: 1, failedCount: 0, partialCount: 0, duration: 0, results: [] } }), { directoryActor: account })
+  }
+  await vi.waitFor(() => expect(entries).toHaveLength(2))
+  expect(entries.every(entry => (entry as { user: unknown }).user && JSON.stringify(entry).includes(account.username))).toBe(true)
+  const output = JSON.stringify([entries, notices, logs.map(log => log.mock.calls)])
+  for (const value of privateValues) expect(output).not.toContain(value)
+  expect(notices).toHaveLength(2)
+  expect(logs.every(log => log.mock.calls.length === 0)).toBe(true)
+})
+
+it("redacts directory object details from failed audit results and notification fields", async () => {
+  const secret = "Private restored identity 00000000-0000-4000-8000-000000000999 person@example.com"
+  const entries: unknown[] = [], notices: unknown[] = []
+  const record = createAuditRecorder(async request => { entries.push(await request.json()); return Response.json({ success: true }) }, () => null, notice => { notices.push(notice) })
+  record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" }), JSON.stringify({ ...credentials, action: "restore", backupId: "backup", originalName: secret, policyId: secret }), Response.json({ success: false, partial: true, status: secret, error: secret, policyId: secret, jobId: secret, details: { restoredCount: 1, failedCount: 1, partialCount: 0, duration: 0, results: [{ path: secret, error: secret }] } }))
+  await vi.waitFor(() => expect(entries).toHaveLength(1))
+  expect(JSON.stringify([entries, notices])).not.toContain(secret)
+  expect((entries[0] as { logEntry: { details: unknown } }).logEntry.details).toMatchObject({ restoredCount: 1, failedCount: 1, results: [] })
+})
+
+it("never derives a directory execution actor from the current account or untrusted payloads", async () => {
+  const entries: unknown[] = [], accountFor = vi.fn(() => ({ tenantId: TENANT, clientId: "fixture-app", username: "replacement@example.test", name: "Replacement admin" }))
+  const record = createAuditRecorder(async request => { entries.push(await request.json()); return Response.json({ success: true }) }, accountFor)
+  record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST", headers: { "x-directory-actor": "spoof@example.test" } }), JSON.stringify({ ...credentials, action: "restore", directoryActor: { username: "spoof@example.test" } }), Response.json({ success: false, directoryActor: { username: "spoof@example.test" } }))
+  await vi.waitFor(() => expect(entries).toHaveLength(1))
+  expect(entries[0]).toMatchObject({ user: { id: "unknown", email: "unknown", name: "Unknown user" } })
+  expect(accountFor).not.toHaveBeenCalled()
+})
+
+it("records a directory restore in the main audit sink with the captured execution actor, not the bound account", async () => {
+  const { setMainAuditSink } = await import("../src/main/api/audit-sink")
+  const recorded: Array<{ user: unknown; entry: unknown }> = []
+  const sink = { bind: () => ({ tenantId: TENANT, storageAccountName: "fixturestore", user: { id: "replacement@example.test", email: "replacement@example.test", name: "Replacement admin" } }), record: async (binding: { user: unknown }, entry: unknown) => { recorded.push({ user: binding.user, entry }) } }
+  setMainAuditSink(sink as unknown as Parameters<typeof setMainAuditSink>[0])
+  try {
+    const dispatch = vi.fn(async () => Response.json({ success: true }))
+    const record = createAuditRecorder(dispatch, () => null)
+    record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" }), JSON.stringify({ ...credentials, action: "restore", backupId: "backup" }), Response.json({ success: true, details: { restoredCount: 1, failedCount: 0 } }), { directoryActor: { username: "executor@example.test", name: "Executing admin" } })
+    await vi.waitFor(() => expect(recorded).toHaveLength(1))
+    expect(recorded[0]!.user).toMatchObject({ id: "executor@example.test", email: "executor@example.test", name: "Executing admin", tenantId: TENANT })
+    expect(dispatch).not.toHaveBeenCalled()
+  } finally { setMainAuditSink(undefined) }
 })
 
 it("records an OIB assignment run with its counts and mode", async () => {

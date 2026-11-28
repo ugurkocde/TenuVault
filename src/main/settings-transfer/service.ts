@@ -7,7 +7,8 @@ import { includedTypes, normalizeScope, presetOf, type BackupScope } from "../..
 import type { PdfBranding } from "../../shared/pdf/theme"
 import { allows, COMMUNITY_RETENTION_DAYS, type Plan } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
-import { MODULES, type ModuleId } from "../../shared/services/modules"
+import { MODULE_BY_ID, MODULES, type ServiceSelection } from "../../shared/services/modules"
+import { DISPLAY_MODULE_ORDER } from "../../shared/services/presentation"
 import type { AppearanceSetting, SettingsExportOptions, SetupConnection, SetupStorage, TransferApplyResult, TransferGroup, TransferItem, TransferPreview } from "../../shared/settings-transfer"
 import { VALID_TIME, validWeekday } from "../backup/scheduler"
 import type { KeyValueStore } from "../storage/secure-store"
@@ -75,7 +76,8 @@ export interface SettingsTransferDeps {
     validate(value: unknown): PdfBranding
   }
   modules: {
-    enabled(tenantId: string): ModuleId[]
+    /** The services that are on for the tenant. */
+    selection(tenantId: string): ServiceSelection
     set(tenantId: string, id: unknown, enabled: unknown): unknown
   }
   scopes: {
@@ -368,8 +370,8 @@ export class SettingsTransfer {
   }
 
   private exportTenant(tenant: LocalTenant, connection: boolean): Record<string, unknown> {
-    const enabled = new Set(this.deps.modules.enabled(tenant.tenantId))
-    const services = Object.fromEntries(MODULES.filter((module) => module.optIn).map((module) => [module.id, { enabled: enabled.has(module.id) }]))
+    const enabled = new Set(this.deps.modules.selection(tenant.tenantId).services)
+    const services = Object.fromEntries(MODULES.filter((module) => module.switchable).map((module) => [module.id, { enabled: enabled.has(module.id) }]))
     const schedule = scheduleConfig(this.deps.schedules.list().find((entry) => entry.tenantId === tenant.tenantId))
     const cloud = this.cloud(tenant.tenantId)
     return {
@@ -587,20 +589,22 @@ export class SettingsTransfer {
     const prefix = `${tenantId}:`
 
     if (tenant.services !== undefined) {
-      const enabled = new Set(this.deps.modules.enabled(tenantId))
+      const enabled = new Set(this.deps.modules.selection(tenantId).services)
       const services = isObject(tenant.services) ? tenant.services : null
       if (!services) {
         items.push(this.item(`${prefix}services`, "Services", "", "Not valid", false, NOT_VALID))
       } else {
-        for (const [id, value] of Object.entries(services)) {
-          const module = MODULES.find((entry) => entry.id === id)
-          // Modules that are always on (Intune) have nothing to apply; unknown ones are listed by name.
-          if (!module || !module.optIn) continue
+        for (const id of DISPLAY_MODULE_ORDER) {
+          const module = MODULE_BY_ID.get(id)
+          // Services that cannot be switched have nothing to apply; unknown ones are listed by name.
+          if (!module?.switchable || !Object.hasOwn(services, id)) continue
+          const value = services[id]
+          const label = id === "conditionalAccess" ? "Entra ID: Conditional Access" : module.label
           const next = isObject(value) && typeof value.enabled === "boolean" ? value.enabled : null
           const now = enabled.has(module.id)
-          items.push(this.item(`${prefix}service:${module.id}`, module.label, onOff(now), next === null ? "Not valid" : onOff(next), next === now, next === null ? NOT_VALID : null, {
+          items.push(this.item(`${prefix}service:${module.id}`, label, onOff(now), next === null ? "Not valid" : onOff(next), next === now, next === null ? NOT_VALID : null, {
             // Turning a service off removes it from this tenant's backups, so it starts unticked.
-            ...(now && next === false && { warning: `Turns off ${module.label}: its settings are no longer backed up for this tenant.` }),
+            ...(now && next === false && { warning: `Turns off ${label}: its settings are no longer backed up for this tenant.` }),
             state: now,
             apply: () => {
               this.deps.modules.set(tenantId, module.id, next)

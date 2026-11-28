@@ -61,7 +61,7 @@ macOS support means retrieving the installer from Intune, not downloading a subs
 ### Before you start
 
 - Use the current signed TenuVault build on a **Windows PC enrolled in the tenant you are backing up**. The Microsoft Intune Management Extension must be installed and able to contact Intune. A dedicated test PC is useful if you need to change app targeting.
-- Connect that tenant in TenuVault. Its existing Microsoft session is reused; a routine backup does not require a separate sign-in. The Microsoft account must have an active **Intune Administrator** or **Global Administrator** role. Custom Intune roles are not supported by this preview.
+- Connect that tenant using your own app registration. Its existing Microsoft session is reused; a routine backup does not require a separate sign-in. The Microsoft account must have an active **Intune Administrator** or **Global Administrator** role. Custom Intune roles are not supported by this preview.
 - The **Windows account running TenuVault must also be a local administrator** so it can approve the helper. This is separate from the Microsoft account's Intune role. Approving elevation with a different Windows account is not supported.
 - Choose a **system-context Win32 app** with one committed installer payload, up to **2 GiB**. Internet access is required for a new capture. No local `.intunewin` file is needed.
 

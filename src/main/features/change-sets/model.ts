@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
-import { buildRestorePlan } from "../../../shared/intune/restore-plan"
+import { buildRestorePlan, writeBlocker } from "../../../shared/intune/restore-plan"
 import { cleanAssignment, typeForFolder, type IntuneType, type Item, type Json } from "../../../shared/intune/registry"
 import { MAX_SETTING_LEAVES, settingValues, type SettingLeaf } from "../../../shared/frameworks/setting-summary"
 import type { ListedRecord } from "../contracts"
@@ -426,6 +426,9 @@ export function sameAssignments(expected: Item[], actual: Json | undefined): boo
 export function unsupportedReason(folder: string, action: OperationAction): string | undefined {
   const type = typeForFolder(folder)
   if (!type) return `${folder} is not an Intune type TenuVault knows.`
+  // The type's own restore capability comes first: listing a folder below never makes it writable.
+  const blocked = writeBlocker(type, action)
+  if (blocked) return blocked
   const actions = SUPPORTED_OPERATIONS[type.folder]
   if (!actions) return `Change sets do not support ${type.label} yet. Supported: ${Object.keys(SUPPORTED_OPERATIONS).map((folder) => typeForFolder(folder)?.label ?? folder).join(", ")}.`
   if (!actions.includes(action)) return `Change sets do not support ${action} for ${type.label}.`

@@ -235,15 +235,17 @@ try {
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1380, deviceScaleFactor: 1, mobile: false })
   await scene("welcome", { ...base, communityTenantId: null, tenants: [] }, [], "#/", "no card and no email needed")
   const active = days => ({ ...base, plan: "pro", tenantLimit: 2, communityTenantId: null, trial: true, trialEndsAt: new Date(NOW + days * DAY).toISOString(), tenants: [trialTenant(0, days)] })
-  await scene("trial-started", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial started")
+  await scene("trial-started", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial · 9 days left")
   // The welcome asks for no decision: it can only be hidden.
   if (await evaluate(`document.body.innerText.includes("Got it") || document.body.innerText.includes("Use Community instead") || ![...document.querySelectorAll('button')].some(b => b.textContent === "Dismiss Pro trial message")`)) throw new Error("The welcome asks for a decision")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Get trial reminders").click()`)
+  await assertText("Optional email")
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends").click()`)
   await assertText("Email address saved.")
   await screenshot("trial-started-email-saved", true)
-  await scene("trial-joined", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false, canEnd: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial started")
+  await scene("trial-joined", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false, canEnd: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial · 9 days left")
   await scene("trial-license", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/license", "Use Community instead")
-  if (await evaluate(`document.body.innerText.includes("Pro trial started") || [...document.querySelectorAll('h2')].filter(e => e.textContent.startsWith("Pro trial")).length !== 1`)) throw new Error("License page trial card")
+  if (await evaluate(`document.body.innerText.includes("Pro trial ·") || [...document.querySelectorAll('h2')].filter(e => e.textContent.startsWith("Pro trial")).length !== 1`)) throw new Error("License page trial card")
   // Ending the trial early asks first. Afterwards the License page offers Buy Pro, not another trial.
   const inDialog = label => `[...document.querySelectorAll('[role="dialog"] button')].find(b => b.textContent === ${JSON.stringify(label)}).click()`
   const themed = async (name) => {
@@ -285,7 +287,7 @@ try {
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Resume Pro trial").click()`)
   // "9 days left" is already on screen in the offer, so wait for the running trial itself.
   if (!(await waitFor(`!document.body.innerText.includes("Resume Pro trial") && document.body.innerText.includes("Nothing is charged and no card is on file.")`))) throw new Error("The trial was not resumed")
-  if (await evaluate(`document.body.innerText.includes("Pro trial started") || !document.body.innerText.includes("9 days left")`)) throw new Error("License page after resuming the trial")
+  if (await evaluate(`document.body.innerText.includes("Pro trial ·") || !document.body.innerText.includes("9 days left")`)) throw new Error("License page after resuming the trial")
   await scrollAll(0)
   await screenshot("trial-resumed-license", true)
   await scene("trial-license-before-window", active(9), MOCK.tenants.slice(0, 1), "#/license", "You can extend once, from")

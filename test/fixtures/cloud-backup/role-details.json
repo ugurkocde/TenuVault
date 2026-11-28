@@ -1,0 +1,38 @@
+{
+  "/beta/deviceManagement/roleDefinitions": {
+    "value": [
+      { "id": "role-1", "displayName": "Help desk" },
+      { "id": "role-2", "displayName": "Object value" },
+      { "id": "role-3", "displayName": "Array value" }
+    ]
+  },
+  "/beta/deviceManagement/roleDefinitions/role-1": {
+    "id": "role-1",
+    "displayName": "Help desk"
+  },
+  "/beta/deviceManagement/roleDefinitions/role-1/roleAssignments": {
+    "value": [{ "id": "assignment-1", "displayName": "Regional support" }]
+  },
+  "/beta/deviceManagement/roleAssignments/assignment-1": {
+    "value": {
+      "id": "assignment-1",
+      "displayName": "Regional support",
+      "members": ["member-1"],
+      "resourceScopes": [],
+      "scopeMembers": ["scope-member-1"],
+      "roleScopeTagIds": []
+    }
+  },
+  "/beta/deviceManagement/roleDefinitions/role-2": {
+    "id": "role-2",
+    "displayName": "Object value",
+    "value": { "enabled": true }
+  },
+  "/beta/deviceManagement/roleDefinitions/role-2/roleAssignments": { "value": [] },
+  "/beta/deviceManagement/roleDefinitions/role-3": {
+    "id": "role-3",
+    "displayName": "Array value",
+    "value": ["scope-1"]
+  },
+  "/beta/deviceManagement/roleDefinitions/role-3/roleAssignments": { "value": [] }
+}

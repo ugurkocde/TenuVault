@@ -5,7 +5,7 @@ import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { isAppBackupPath, desktopRouteBoundaryKey } from "../lib/app-backup-route"
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
   Activity,
@@ -50,8 +50,9 @@ import { CisJobNotifier } from "../lib/cis-jobs"
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel"
 import { useScoreInvalidation } from "../features/scores/invalidate"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
-import { SetupCallLink } from "./SetupCallLink"
+import { setupCallUrl } from "../../shared/setup-call"
 import { SignInBanner } from "./SignInBanner"
+import { ChooseSignInMethodBanner } from "./ChooseSignInMethodCard"
 import { SupportDialog } from "./SupportDialog"
 import { FeedbackDialog } from "./FeedbackDialog"
 import { feedbackPageLabel, type FeedbackSnapshot } from "../../shared/feedback"
@@ -63,6 +64,8 @@ import { TenantAccessNotice } from "./TenantAccessNotice"
 import { CisBenchmarksNavigation } from "./CisBenchmarksNavigation"
 import { NAV_PLAN_FEATURES, NavPlanBadge } from "./NavPlanBadge"
 import { FrameworkNavigation } from "./FrameworkNavigation"
+import { ServicesNavigation } from "./ServicesNavigation"
+import { parseBackupService } from "../lib/backup-service"
 import { OibJobIndicator } from "./oib/JobIndicator"
 import { NavFoldGroup, useFoldedGroups, useHoverPill } from "./SidebarNavigation"
 import { firstConnected } from "../lib/return-focus"
@@ -466,7 +469,8 @@ function useOverflowing(element: HTMLElement | null): boolean {
 export function DesktopLayout() {
   const { status: licenseStatus } = useLicense()
   const location = useLocation()
-  const { pathname } = location
+  const { pathname, search } = location
+  const serviceFilter = parseBackupService(new URLSearchParams(search).get("service"))
   const appBackupPage = isAppBackupPath(pathname)
   const tenants = useTenants()
   useScoreInvalidation()
@@ -482,8 +486,7 @@ export function DesktopLayout() {
   const capturingFeedback = useRef(false)
   const helpLaunching = useRef(false)
   const helpTrigger = useRef<HTMLButtonElement>(null)
-  // During the guided setup there is no sidebar: dialogs fall back to the header's Support button.
-  const headerSupport = useRef<HTMLButtonElement>(null)
+  const [setupHelpOpen, setSetupHelpOpen] = useState(false)
   // Dialogs opened from Help or the first-run header hand focus back to the control that opened them.
   const supportReturn = useRef<HTMLElement | null>(null)
   const feedbackReturn = useRef<HTMLElement | null>(null)
@@ -518,11 +521,9 @@ export function DesktopLayout() {
     capturingFeedback.current = false
     setFeedback({ open: true, snapshot })
   }
-  // Until a tenant is connected the guided setup is the only job, so it gets the window to itself.
-  // The page keeps its place in the tree either way, so connecting the first tenant during the
-  // setup only brings in the sidebar and never remounts the setup.
-  const focus = tenants.length === 0 && pathname === "/portal/onboarding"
-  const hoverPill = useHoverPill(pathname)
+  const focus = pathname === "/portal/onboarding"
+  useEffect(() => { if (!focus) setSetupHelpOpen(false) }, [focus])
+  const hoverPill = useHoverPill(`${pathname}${search}`)
   // Measured on the mounted nav, so a sidebar that appears after the first-run setup is watched too.
   const navOverflowing = useOverflowing(hoverPill.nav)
   const { folded, toggle: toggleGroup } = useFoldedGroups()
@@ -554,7 +555,7 @@ export function DesktopLayout() {
 
   const renderItem = (item: NavItem, depth = 0) => {
     const active = item.href
-      ? pathname.startsWith(item.href)
+      ? pathname.startsWith(item.href) && (item.href !== "/portal/backup" || serviceFilter === "all")
       : Boolean(item.children?.some((child) => child.href && pathname.startsWith(child.href)))
 
     if (item.children) {
@@ -598,11 +599,20 @@ export function DesktopLayout() {
             <BrandMark className="size-9" />
             <div className="text-base font-semibold tracking-tight text-foreground">TenuVault</div>
           </div>
-          <nav aria-label="Help" className="flex items-center gap-1">
-            <SetupCallLink source="setup-header" variant="nav" className={quiet} />
-            <Link to="/license" className={quiet}>License</Link>
-            <button type="button" onClick={(event) => void openFeedback(event.currentTarget)} className={quiet}>Share feedback</button>
-            <button ref={headerSupport} type="button" onClick={(event) => openSupport(event.currentTarget)} className={quiet}>Support</button>
+          <nav aria-label="Help">
+            <DropdownMenu open={setupHelpOpen} onOpenChange={(open) => {
+              if (!open || (!helpLaunching.current && !capturingFeedback.current)) setSetupHelpOpen(open)
+            }}>
+              <DropdownMenuTrigger ref={helpTrigger} className={cn(quiet, "inline-flex items-center gap-2")}>
+                Help <ChevronDown className="size-4" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-44 animate-none">
+                <DropdownMenuItem data-setup-call="setup-header" onSelect={() => void bridge.app.openExternal(setupCallUrl("setup-header")).catch(() => undefined)}>Free setup call</DropdownMenuItem>
+                <DropdownMenuItem asChild><Link to="/license">License</Link></DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void openFeedback(helpTrigger.current)}>Share feedback</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openSupport(helpTrigger.current)}>Support</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </nav>
         </header>
       ) : (
@@ -626,7 +636,10 @@ export function DesktopLayout() {
               {group.label === "Baselines" && <><CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></>}
             </NavFoldGroup>
           ) : (
-            <div key="start" className="space-y-px">{group.items.map((item) => renderItem(item))}</div>
+            <Fragment key="start">
+              <div className="space-y-px">{group.items.map((item) => renderItem(item))}</div>
+              <ServicesNavigation linkClass={linkClass} />
+            </Fragment>
           ))}
         </nav>
 
@@ -648,9 +661,10 @@ export function DesktopLayout() {
       )}
 
       <div className={focus ? undefined : "pl-64"}>
-        {!appBackupPage && <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/license"} />}
+        {!appBackupPage && <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/portal/dashboard" && pathname !== "/license"} />}
         {!appBackupPage && !trialEndVisible(licenseStatus) && <CommunityChoiceBanner />}
         {!appBackupPage && !focus && <LicenseBanner />}
+        {!focus && <ChooseSignInMethodBanner />}
         {!focus && <SignInBanner hidden={appBackupPage} />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
@@ -668,13 +682,13 @@ export function DesktopLayout() {
       <FrameworkJobNotifier />
       <CisJobNotifier />
       <DriftScanNotifier />
-      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={firstConnected(whatsNewReturn, helpTrigger, headerSupport)} />
-      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={firstConnected(supportReturn, helpTrigger, headerSupport)} />
+      <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} returnFocus={firstConnected(whatsNewReturn, helpTrigger)} />
+      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} returnFocus={firstConnected(supportReturn, helpTrigger)} />
       <FeedbackDialog
         open={feedback.open}
         onOpenChange={(open) => setFeedback((current) => ({ open, snapshot: open ? current.snapshot : null }))}
         snapshot={feedback.snapshot}
-        returnFocus={firstConnected(feedbackReturn, helpTrigger, headerSupport)}
+        returnFocus={firstConnected(feedbackReturn, helpTrigger)}
         // Support opened from the feedback dialog returns to where feedback was opened from.
         onOpenSupport={() => { supportReturn.current = feedbackReturn.current; setSupportOpen(true) }}
       />

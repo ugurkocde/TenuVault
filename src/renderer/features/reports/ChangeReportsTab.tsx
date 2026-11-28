@@ -118,7 +118,7 @@ function NewReport({ tenant, reports, onCreated, onOpen }: { tenant: FeatureTabP
       <div>
         <h3 id="new-report-heading" className="text-lg font-medium text-gray-900">New change report</h3>
         <p className="max-w-3xl text-sm text-gray-600">
-          Names who made each change from the Intune and Entra audit logs. Nothing in the tenant is changed.
+          Names matching actors from the Entra Conditional Access and Intune audit logs. Nothing in the tenant is changed.
         </p>
       </div>
       <div role="radiogroup" aria-label="Report period" className="flex flex-wrap gap-2">
@@ -273,7 +273,7 @@ function ReportRow({ tenant, report, open, onToggle, recipients, readOnly, onCha
           {counts.modified > 0 && <Chip tone="warning">{counts.modified} changed</Chip>}
           {counts.added > 0 && <Chip tone="success">{counts.added} added</Chip>}
           {counts.deleted > 0 && <Chip tone="danger">{counts.deleted} deleted</Chip>}
-          {counts.modified + counts.added + counts.deleted === 0 && <Chip>No changes</Chip>}
+          {report.unchanged && <Chip>No changes</Chip>}
           {report.audit !== "included" && <Chip tone="warning">Audit log not read</Chip>}
         </span>
         {!open && <ReportExportMenu reportTitle={report.title} saving={notice.saving} onExport={save} />}

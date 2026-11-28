@@ -1,18 +1,18 @@
 ---
-title: "Get started: your first Intune backup"
-description: Install TenuVault and take your first Microsoft Intune backup in a few minutes, on Windows or macOS.
+title: "Get started with TenuVault"
+description: Install TenuVault and run your first configuration backup, on Windows or macOS.
 ---
 
-This section takes you from a fresh computer to a first successful Intune backup. Follow the pages in order; each one ends where the next one starts.
+Install TenuVault, connect your Microsoft tenant and run a backup for the services you choose. TenuVault backs up Entra ID and Intune configuration and restores supported policies.
 
-For an overview before you start, see [Intune backup](https://www.tenuvault.com/intune-backup) on the product site.
+See [What gets backed up](/backups/coverage/) to check coverage before setting up.
 
 ## Before you begin
 
 Check the [Requirements](/getting-started/requirements/) first. In short, you need:
 
 * A Windows or macOS computer.
-* An admin account with an Intune role, such as Intune Administrator.
+* An admin account with [roles for the services you choose](/getting-started/requirements/#admins-who-use-tenuvault).
 * Someone who can create an app registration and grant admin consent in Microsoft Entra ID, once per tenant.
 * Outbound HTTPS access to Microsoft and to `www.tenuvault.com`.
 
@@ -46,7 +46,7 @@ The same page opens from the app, in your default browser:
 
 * **Book a free setup call** on the welcome screen.
 * **Free setup call** at the top of the guided setup, while no tenant is connected.
-* **Book a free setup call** in **Still waiting for Microsoft?**, next to the error of a setup or sign-in attempt, and under a first backup that failed.
+* **Book a free setup call** in **Still waiting for Microsoft?**, next to the error of a setup or sign-in attempt, when chosen permissions are missing or their check fails before storage, and under a first backup that failed.
 * **Help** > **Support** > **Book a free setup call** in the sidebar, once a tenant is connected. During the guided setup, **Support** is at the top of the window.
 
 The app only opens the link. See [Links that open in your browser](/security/data-flows/#links-that-open-in-your-browser).

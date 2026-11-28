@@ -36,7 +36,7 @@ describe("fetch-tenant-details counts", () => {
       await new Promise((resolve) => setTimeout(resolve, 5))
       inFlight--
       const parsed = new URL(url)
-      if (parsed.pathname === "/v1.0/organization") {
+      if (parsed.pathname === "/beta/organization") {
         return Response.json({ value: [{ id: "org-1", displayName: "Contoso", verifiedDomains: [{ name: "contoso.com", isDefault: true }] }] })
       }
       if (parsed.pathname === "/beta/deviceManagement/configurationPolicies") {
@@ -75,7 +75,7 @@ describe("fetch-tenant-details counts", () => {
     const policyPages = graphUrls.filter((entry) => entry.pathname === "/beta/deviceManagement/configurationPolicies")
     expect(policyPages).toHaveLength(13)
     for (const entry of policyPages) expect(entry.searchParams.get("$select")).toBe("id")
-    const countUrls = graphUrls.filter((entry) => entry.pathname !== "/v1.0/organization" && !policyPages.includes(entry))
+    const countUrls = graphUrls.filter((entry) => entry.pathname !== "/beta/organization" && !policyPages.includes(entry))
     expect(countUrls).toHaveLength(9)
     for (const entry of countUrls) {
       expect(entry.searchParams.get("$count")).toBe("true")
@@ -89,7 +89,7 @@ describe("fetch-tenant-details counts", () => {
       const url = String(input instanceof Request ? input.url : input)
       if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: "token" })
       const parsed = new URL(url)
-      if (parsed.pathname === "/v1.0/organization") return Response.json({ value: [{ id: "org-1", displayName: "Contoso" }] })
+      if (parsed.pathname === "/beta/organization") return Response.json({ value: [{ id: "org-1", displayName: "Contoso" }] })
       if (parsed.pathname === "/v1.0/users") return Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 })
       if (parsed.searchParams.get("$filter")) return Response.json({ error: { code: "BadRequest" } }, { status: 400 })
       return Response.json({ "@odata.count": 5, value: [{}] })
@@ -114,7 +114,7 @@ describe("fetch-tenant-details counts", () => {
       if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: "token" })
       urls.push(url)
       const parsed = new URL(url)
-      if (parsed.pathname === "/v1.0/organization") return Response.json({ value: [{ id: "org-1", displayName: "Contoso" }] })
+      if (parsed.pathname === "/beta/organization") return Response.json({ value: [{ id: "org-1", displayName: "Contoso" }] })
       if (parsed.pathname === "/beta/deviceManagement/configurationPolicies") {
         return Response.json({ value: [{ id: "p" }], "@odata.nextLink": "https://example.com/beta/deviceManagement/configurationPolicies?page=2" })
       }
@@ -136,7 +136,7 @@ describe("fetch-tenant-details counts", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = String(input instanceof Request ? input.url : input)
       if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: "token" })
-      if (new URL(url).pathname === "/v1.0/organization") return Response.json({ error: {} }, { status: 503 })
+      if (new URL(url).pathname === "/beta/organization") return Response.json({ error: {} }, { status: 503 })
       return Response.json({ "@odata.count": 5, value: [{}] })
     })
     vi.spyOn(console, "error").mockImplementation(() => undefined)

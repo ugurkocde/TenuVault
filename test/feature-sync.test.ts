@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest"
+import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
+import { describe, expect, it, vi } from "vitest"
 import { routes as syncRoutes } from "../src/main/features/sync"
 import { routes as promotionRoutes } from "../src/main/features/promotion"
 import { applyChangeSet, approveChangeSet, createChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
@@ -8,20 +9,27 @@ import { FeatureError } from "../src/main/features/route"
 import { PROMOTION_NOT_FOUND, type PromotionRecord } from "../src/main/features/promotion/engine"
 import type { SyncRunRecord, SyncSkip } from "../src/main/features/sync/engine"
 import { recordSyncLinks, syncLinks, type SyncLink, type SyncLinksRecord } from "../src/main/features/sync/links"
+import { ApiHost } from "../src/main/api/host"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { executionMetadata } from "../src/main/api/execution-metadata"
+import { RESOURCE_SCOPES } from "../src/shared/constants"
+import { START_NOW_REMOVED_REASON, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
 import { planGuard, requiredFeatures } from "../src/main/api/plan-gates"
 import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { FakeTenant, referenceSetting, setting, wire } from "./feature-change-sets-fakes"
 import { withTenantWrite } from "../src/main/features/write-lock"
+import { withoutRestoreCapability } from "./helpers/restore-capability"
 
 const PATH = "/api/sync"
 const TENANT_D = "44444444-4444-4444-4444-444444444444"
 const MSP: Record<string, Plan> = { [TENANT_A]: "msp", [TENANT_B]: "msp", [TENANT_C]: "msp", [TENANT_D]: "msp" }
 
 /** TENANT_A is the source; TENANT_B, TENANT_C and TENANT_D are targets. */
-function setup(options: { plans?: Record<string, Plan>; sameLicense?: boolean } = {}) {
-  let sameLicense = options.sameLicense ?? true
-  const deps = fakeDeps({ plans: options.plans ?? { [TENANT_A]: "pro", [TENANT_B]: "pro" }, sameLicense: () => sameLicense })
+function setup(options: { plans?: Record<string, Plan>; proPair?: boolean } = {}) {
+  let proPair = options.proPair ?? true
+  const deps = fakeDeps({ plans: options.plans ?? { [TENANT_A]: "pro", [TENANT_B]: "pro" }, proPair: () => proPair })
   const source = new FakeTenant(TENANT_A)
   const targets: Record<string, FakeTenant> = { [TENANT_B]: new FakeTenant(TENANT_B), [TENANT_C]: new FakeTenant(TENANT_C), [TENANT_D]: new FakeTenant(TENANT_D) }
   const wired = wire(deps, [source, ...Object.values(targets)])
@@ -39,8 +47,8 @@ function setup(options: { plans?: Record<string, Plan>; sameLicense?: boolean } 
   const promotion = promotionRoutes(deps)
   const post = (body: Record<string, unknown>) => call(sync, PATH, body)
   const promote = (body: Record<string, unknown>) => call(promotion, "/api/promotion", body)
-  const setSameLicense = (value: boolean) => { sameLicense = value }
-  return { deps, source, targets, policy, post, promote, audit, setSameLicense, ...wired }
+  const setProPair = (value: boolean) => { proPair = value }
+  return { deps, source, targets, policy, post, promote, audit, setProPair, ...wired }
 }
 
 type Context = ReturnType<typeof setup>
@@ -101,6 +109,44 @@ function relink(context: Context, key: string, change: Partial<SyncLink>) {
 const changeSets = (context: Context, tenantId: string) => context.deps.records.list<ChangeSetRecord>(DOMAINS.changeSets, tenantId)
 const status = (context: Context, targets: string[] = [TENANT_B]) => context.post({ tenantId: TENANT_A, action: "status", targetTenants: named(targets) })
 const guardRequest = (body: Record<string, unknown>) => new Request(`http://tenuvault.internal${PATH}`, { method: "POST", body: JSON.stringify(body) })
+
+describe("/api/sync and a type without a restore capability", () => {
+  const NOT_WRITTEN = "TenuVault backs this type up and compares it, and never writes it to a tenant."
+  const targetWrites = (context: Context) => context.targets[TENANT_B]!.calls.filter((entry) => entry.method !== "GET")
+
+  it("plans nothing for the type, and writes nothing of a plan that was approved while the type could be written", async () => {
+    const context = setup()
+    // At plan time: no change set is made for the target.
+    const refused = await withoutRestoreCapability("ConfigurationPolicies", () => plan(context))
+    expect(refused.status).toBe(200)
+    expect(refused.body.targets[0]).toMatchObject({ promotion: { status: "blocked", changeSetId: null } })
+    expect(JSON.stringify(refused.body.targets[0].promotion.items[0].findings)).toContain(NOT_WRITTEN)
+    expect(changeSets(context, TENANT_B)).toEqual([])
+
+    // At apply time: a plan approved earlier is refused whole.
+    const { targets } = await planned(context)
+    const id = targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id)
+    const apply = await withoutRestoreCapability("ConfigurationPolicies", () => context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true }))
+    expect(apply).toMatchObject({ status: 409, body: { error: NOT_WRITTEN } })
+    expect(targetWrites(context)).toEqual([])
+    expect(context.targets[TENANT_B]!.policies.size).toBe(0)
+  })
+
+  it("rolls back nothing of the type either", async () => {
+    const context = setup()
+    const id = (await synced(context))[TENANT_B]!
+    expect(context.targets[TENANT_B]!.policies.size).toBe(1)
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-create", id })).status).toBe(200)
+    const review = await context.post({ tenantId: TENANT_B, action: "rollback-review", id })
+    await context.post({ tenantId: TENANT_B, action: "rollback-approve", id, contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint })
+    const before = targetWrites(context).length
+    const rollback = await withoutRestoreCapability("ConfigurationPolicies", () => context.post({ tenantId: TENANT_B, action: "rollback-apply", id, contentHash: review.body.contentHash, confirm: true }))
+    expect(rollback).toMatchObject({ status: 409, body: { error: NOT_WRITTEN } })
+    expect(targetWrites(context)).toHaveLength(before)
+    expect(context.targets[TENANT_B]!.policies.size).toBe(1)
+  })
+})
 
 describe("/api/sync plans", () => {
   it("A1: refuses plan and status on Community and keeps stored runs readable", async () => {
@@ -176,7 +222,7 @@ describe("/api/sync plans", () => {
     expect(changeSets(context, TENANT_B)[0]!.review).toMatchObject({ reviewer: "Admin", note: null })
   })
 
-  it("A3: needs MSP for two targets or a target outside the Pro license, in the guard and the handler", async () => {
+  it("A3: needs MSP for two targets in the guard and handler, and rechecks single-target entitlement", async () => {
     const two = setup({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro", [TENANT_C]: "pro" } })
     const refused = await plan(two, [TENANT_B, TENANT_C])
     expect(refused.status).toBe(402)
@@ -191,19 +237,19 @@ describe("/api/sync plans", () => {
     expect(await planGuard(async () => "pro")(guardRequest({ ...body, targetTenants: named([TENANT_B]) }))).toBeNull()
     expect((await status(two, [TENANT_B, TENANT_C])).status).toBe(402)
 
-    const outside = setup({ sameLicense: false })
-    const response = await plan(outside)
+    const unentitled = setup({ proPair: false })
+    const response = await plan(unentitled)
     expect(response.status).toBe(402)
-    expect(response.body.upgrade).toBe("bulkActions")
-    expect(outside.deps.records.list(DOMAINS.syncRuns, TENANT_A)).toHaveLength(0)
-    // A target planned inside the license is refused once the pair no longer shares it.
+    expect(response.body.upgrade).toBe("sync")
+    expect(unentitled.deps.records.list(DOMAINS.syncRuns, TENANT_A)).toHaveLength(0)
+    // Losing entitlement blocks actions on a previously planned target.
     const later = setup()
     const { targets } = await planned(later)
-    later.setSameLicense(false)
+    later.setProPair(false)
     const preview = await later.post({ tenantId: TENANT_B, action: "preview", id: targets[0]!.promotion!.id })
     expect(preview.status).toBe(402)
-    expect(preview.body.upgrade).toBe("bulkActions")
-    expect(two.targets[TENANT_B]!.writeCount() + outside.targets[TENANT_B]!.writeCount() + later.targets[TENANT_B]!.writeCount()).toBe(0)
+    expect(preview.body.upgrade).toBe("sync")
+    expect(two.targets[TENANT_B]!.writeCount() + unentitled.targets[TENANT_B]!.writeCount() + later.targets[TENANT_B]!.writeCount()).toBe(0)
   })
 
   it("keeps acting on one target of a multi-target run an MSP action", async () => {
@@ -1097,14 +1143,14 @@ describe("Sync and Dev to Prod stay apart", () => {
     expect(changeSets(context, TENANT_B).find((changeSet) => changeSet.id === targets[0]!.promotion!.changeSetId)!.status).toBe("in-review")
   })
 
-  it("rejects a Sync target with no reviewer or note, inside the license rule", async () => {
+  it("rejects a Sync target with no reviewer or note while both tenants are entitled", async () => {
     const context = setup()
     const { targets } = await planned(context)
-    context.setSameLicense(false)
+    context.setProPair(false)
     const refused = await context.post({ tenantId: TENANT_B, action: "reject", id: targets[0]!.promotion!.id })
     expect(refused.status).toBe(402)
-    expect(refused.body.upgrade).toBe("bulkActions")
-    context.setSameLicense(true)
+    expect(refused.body.upgrade).toBe("sync")
+    context.setProPair(true)
     const rejected = await context.post({ tenantId: TENANT_B, action: "reject", id: targets[0]!.promotion!.id })
     expect(rejected.status).toBe(200)
     expect(rejected.body.promotion.status).toBe("rejected")
@@ -1119,7 +1165,7 @@ describe("Sync and Dev to Prod stay apart", () => {
     context.targets[TENANT_B]!.filters = [{ id: "f1", displayName: "Corporate devices" }]
     const objects = await context.post({ tenantId: TENANT_A, action: "target-objects", targetTenantId: TENANT_B, kind: "filter" })
     expect(objects.body).toEqual({ objects: [{ id: "f1", name: "Corporate devices" }], readable: true })
-    context.setSameLicense(false)
+    context.setProPair(false)
     expect((await context.post({ tenantId: TENANT_A, action: "target-objects", targetTenantId: TENANT_B, kind: "filter" })).status).toBe(402)
   })
 })
@@ -1129,8 +1175,7 @@ describe("Sync targets", () => {
 
   it("lists every other connected tenant with whether it can be a target, by the rule plan and status apply", async () => {
     const context = setup({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro", [TENANT_C]: "pro", [TENANT_D]: "community" } })
-    // Only A and B share the Pro license; E is connected but its plan cannot be read.
-    context.deps.sameLicense = (a, b) => [a, b].sort().join() === [TENANT_A, TENANT_B].join()
+    // E is connected but its plan cannot be read.
     context.deps.tenants = () => [TENANT_A, TENANT_B, TENANT_C, TENANT_D, TENANT_E]
     const response = await context.post({ tenantId: TENANT_A, action: "targets" })
     expect(response.status).toBe(200)
@@ -1138,14 +1183,14 @@ describe("Sync targets", () => {
       multiple: false,
       targets: [
         { tenantId: TENANT_B, eligible: true, multiple: false, reason: null },
-        { tenantId: TENANT_C, eligible: false, multiple: false, reason: "msp" },
+        { tenantId: TENANT_C, eligible: true, multiple: false, reason: null },
         { tenantId: TENANT_D, eligible: false, multiple: false, reason: "plan" },
         { tenantId: TENANT_E, eligible: false, multiple: false, reason: "unavailable" },
       ],
     })
     // The same tenants pass or fail requireSyncTenants on a gated action.
     expect((await status(context, [TENANT_B])).status).toBe(200)
-    expect((await status(context, [TENANT_C])).status).toBe(402)
+    expect((await status(context, [TENANT_C])).status).toBe(200)
     expect((await status(context, [TENANT_D])).status).toBe(402)
     expect(context.source.writeCount()).toBe(0)
   })
@@ -1375,4 +1420,111 @@ describe("Codex round 1", () => {
     const listed = (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs.find((entry: { id: string }) => entry.id === run.id)
     expect(listed.outcome).toBe("failed")
   })
+})
+
+it("binds the source recovered from a saved Sync when preview rereads it", async () => {
+  const context = setup()
+  const result = await planned(context)
+  const target = result.targets[0]!.promotion!
+  const clientFor = (tenant: string) => tenant === TENANT_A ? TENANT_C : TENANT_D
+  const cap = new ConnectionCapabilities(tenant => ({
+    version: 1, origin: "legacy", method: "ownApp", clientId: clientFor(tenant), createdAt: "", updatedAt: "",
+  }))
+  const originalGraph = context.deps.graph
+  const network = vi.fn<typeof fetch>(async (input, init) => {
+    const { pathname, search } = new URL(String(input))
+    const tenant = new Headers(init?.headers).get("authorization")?.slice("Bearer opaque-".length)
+    if (tenant !== TENANT_A && tenant !== TENANT_B) throw new Error("Unexpected tenant token.")
+    const graph = await originalGraph(tenant)
+    expect(init?.method).toBe("GET")
+    const response = await graph("GET", pathname.replace(/^\/beta\//, "") + search)
+    return Response.json(response.body, { status: response.status })
+  })
+  const fetch = createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+    authorizeRequest: (url, input, init, tenant) => cap.authorizeRequest(url, input, init, tenant),
+  })
+  context.deps.graph = async tenant => {
+    expect(executionMetadata.getStore()?.connections?.get(tenant)).toBe(clientFor(tenant))
+    const accessToken = `opaque-${tenant}`
+    cap.requireIssuedToken(tenant, clientFor(tenant), RESOURCE_SCOPES.graph, accessToken)
+    return async (method, path) => {
+      const response = await fetch("https://graph.microsoft.com/beta/" + path, {
+        method, headers: { authorization: `Bearer ${accessToken}` },
+      })
+      return { status: response.status, body: await response.json() }
+    }
+  }
+  const host = new ApiHost({ routes: syncRoutes(context.deps), bindConnections: ids => cap.bindConnections(ids), guard: planGuard(context.deps.plan) })
+  const response = await host.dispatch(guardRequest({ tenantId: TENANT_B, action: "preview", id: target.id }))
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ sourceChanges: [] })
+  expect(network.mock.calls.map(([, init]) => new Headers(init?.headers).get("authorization"))).toContain(`Bearer opaque-${TENANT_A}`)
+})
+
+it.each(["Promotion", "Sync"] as const)("stops %s writes in the bridge when the source switches or loses availability", async feature => {
+  for (const reason of ["switch", "availability"] as const) {
+    const context = setup()
+    const isSync = feature === "Sync"
+    const post = isSync ? context.post : context.promote
+    const sourceFields = isSync ? {} : { sourceTenantId: TENANT_A, targetTenants: named([TENANT_A]) }
+    const plan = isSync ? (await planned(context)).targets[0]!.promotion! :
+      (await context.promote({ action: "plan", tenantId: TENANT_B, ...sourceFields, title: "Promote", items: [{ sourceId: context.policy.id }] })).body.promotion
+    const preview = await post({ action: "preview", tenantId: TENANT_B, id: plan.id, ...sourceFields })
+    expect(preview.status).toBe(200)
+    const { contentHash, targetFingerprint } = preview.body.changeSet
+    const approval = await post({ action: "approve", tenantId: TENANT_B, id: plan.id, contentHash, targetFingerprint, ...sourceFields, ...(isSync ? { backup: "new" } : {}) })
+    expect(approval.status).toBe(200)
+
+    const own: TenantConnection = { version: 1, origin: "wizard", method: "ownApp", clientId: TENANT_D, createdAt: "", updatedAt: "" }
+    let source: TenantConnection = { ...own, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID }
+    let enabled = true
+    let attempted = false
+    const caps = new ConnectionCapabilities(id => id === TENANT_A ? source : own, undefined, async () => true, () => enabled)
+    const originalGraph = context.deps.graph
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(),
+      fetch: async (input, init) => {
+        const url = new URL(String(input))
+        const tenant = new Headers(init?.headers).get("authorization")?.slice("Bearer opaque-".length)
+        if (tenant !== TENANT_A && tenant !== TENANT_B) throw new Error("Unexpected tenant token.")
+        const graph = await originalGraph(tenant)
+        const response = await graph((init?.method ?? "GET") as Parameters<GraphCall>[0], url.pathname.slice("/beta/".length) + url.search,
+          init?.body ? JSON.parse(String(init.body)) : undefined)
+        return response.status === 204 ? new Response(null, { status: 204 }) : Response.json(response.body, { status: response.status })
+      },
+      authorizeRequest: (url, input, init, tenant) => {
+        const authorization = caps.authorizeRequest(url, input, init, tenant)
+        if (!attempted && init?.method !== "GET") {
+          attempted = true
+          queueMicrotask(() => {
+            if (reason === "switch") source = { ...own, method: null, clientId: "", needsSignInMethod: true }
+            else enabled = false
+          })
+        }
+        return authorization
+      },
+    })
+    context.deps.graph = async tenant => {
+      const accessToken = `opaque-${tenant}`
+      caps.requireIssuedToken(tenant, tenant === TENANT_A ? source.clientId : own.clientId, RESOURCE_SCOPES.graph, accessToken)
+      return async (method, path, body) => {
+        const response = await fetch("https://graph.microsoft.com/beta/" + path, {
+          method, headers: { authorization: `Bearer ${accessToken}` }, ...(body ? { body: JSON.stringify(body) } : {}),
+        })
+        return { status: response.status, body: response.status === 204 ? {} : await response.json() }
+      }
+    }
+    const route = isSync ? PATH : "/api/promotion"
+    const host = new ApiHost({
+      routes: (isSync ? syncRoutes : promotionRoutes)(context.deps), guard: request => caps.guard(request),
+      bindConnections: ids => caps.bindConnections(ids),
+    })
+    const response = await host.dispatch(new Request("http://tenuvault.internal" + route, {
+      method: "POST", body: JSON.stringify({ action: "apply", tenantId: TENANT_B, id: plan.id, ...sourceFields, contentHash, confirm: true }),
+    }))
+    expect(attempted).toBe(true)
+    expect(context.targets[TENANT_B]!.writeCount(), `${feature}: ${reason}`).toBe(0)
+    expect(await response.text()).toContain(reason === "switch" ? START_NOW_REMOVED_REASON : "temporarily unavailable")
+  }
 })

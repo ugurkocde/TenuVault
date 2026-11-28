@@ -3,9 +3,11 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { BellPlus, ChevronDown, ChevronRight, Loader2, Minus, PencilLine, Plus } from "lucide-react"
+import { NoticeCard } from "@desktop/components/NoticeCard"
 import { alertForPolicyHref } from "@desktop/lib/alert-links"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { cn } from "~/lib/utils"
+import { NO_CHANGES_IN_COMPARED_TYPES, UnknownComparisonTypes } from "./unknown-comparison-types"
 import { formatDate, type BackupSummary, type BackupTenant } from "./types"
 
 interface ChangedItem {
@@ -39,12 +41,16 @@ const show = (value: unknown) => {
 /** Items added, changed and deleted in the tenant between the previous backup and this one. */
 export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previous }: BackupChangesDialogProps) {
   const [items, setItems] = useState<ChangedItem[] | null>(null)
+  const [unknownTypes, setUnknownTypes] = useState<string[]>()
+  const [legacyReadFailure, setLegacyReadFailure] = useState(false)
   const [error, setError] = useState("")
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!open) return
     setItems(null)
+    setUnknownTypes(undefined)
+    setLegacyReadFailure(false)
     setError("")
     const controller = new AbortController()
     void fetch("/api/backup-changes", {
@@ -56,7 +62,10 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
       .then(async (response) => {
         const data = await response.json()
         if (!response.ok) throw new Error(data.error ?? "Changes could not be listed.")
+        if (controller.signal.aborted) return
         setItems(data.changes)
+        setUnknownTypes(data.unknownTypes)
+        setLegacyReadFailure(data.legacyReadFailure === true)
       })
       .catch((failure: unknown) => {
         if (failure instanceof DOMException && failure.name === "AbortError") return
@@ -79,17 +88,18 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
         <DialogHeader>
           <DialogTitle>Changes in this backup</DialogTitle>
           <DialogDescription>
-            {formatDate(backup.timestamp)} compared with {previous ? formatDate(previous.timestamp) : "the previous backup"}. Only types both backups include are compared.
+            {formatDate(backup.timestamp)} compared with {previous ? formatDate(previous.timestamp) : "the previous backup"}.
           </DialogDescription>
         </DialogHeader>
 
-        {error && <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{error}</p>}
+        {error && <NoticeCard summary="Backup changes could not be loaded." tone="error" details={error} />}
         {!items && !error && (
           <div className="flex items-center gap-2 py-8 text-sm text-gray-500">
             <Loader2 className="h-4 w-4 animate-spin" /> Comparing backups...
           </div>
         )}
-        {items && items.length === 0 && <p className="py-6 text-sm text-gray-600">Nothing changed between these backups.</p>}
+        <UnknownComparisonTypes folders={unknownTypes} legacyReadFailure={legacyReadFailure} />
+        {items && items.length === 0 && <p className="py-6 text-sm text-gray-600">{(unknownTypes?.length || legacyReadFailure) ? NO_CHANGES_IN_COMPARED_TYPES : "Nothing changed between these backups."}</p>}
         {items && items.length > 0 && (
           <ul className="divide-y divide-gray-100">
             {items.map((item) => {

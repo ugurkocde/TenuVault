@@ -44,7 +44,7 @@ export function fakeDeps(options: { plans?: Record<string, Plan>; graph?: (tenan
       if (!plan) throw new Error("This tenant is not licensed.")
       return plan
     },
-    sameLicense: () => true,
+    proPair: () => true,
     tenant: profile,
     tenants: () => Object.keys(plans),
     actor: () => ({ id: "admin@contoso.test", name: "Admin" }),

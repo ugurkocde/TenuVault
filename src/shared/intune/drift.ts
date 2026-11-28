@@ -1,3 +1,4 @@
+import { isLargeBackup } from "../backup-storage"
 /**
  * Drift detection: the result of comparing two backups of one tenant, shared by the
  * /api/detect-drifts route, the background scan in the main process and the drift page.
@@ -111,6 +112,10 @@ export interface SettingNames {
 
 /** What /api/detect-drifts answers, and what the background scan saves per tenant. */
 export interface DriftResult {
+  /** Inventory folders requiring bounded index comparison, including in generated reports. */
+  largeFolders?: string[]
+  /** Verified companion pair when a report compares a mixed run. */
+  inventoryBackups?: { baseline: string; comparison: string }
   drifts: Drift[]
   summary: DriftSummary
   /** When the comparison ran. */
@@ -119,6 +124,8 @@ export interface DriftResult {
   baseline: DriftBackupRef
   comparison: DriftBackupRef
   warnings: DriftWarning[]
+  unknownTypes?: string[]
+  legacyReadFailure?: boolean
   /** Items read and compared, and items skipped because their stored fingerprints match. */
   stats: { compared: number; unchanged: number }
   /** Missing in results saved before names were read, or when Graph could not be reached. */
@@ -250,17 +257,17 @@ export async function selectBackupPair(options: {
     for (const folder of candidates.length < 2 ? [] : candidates) {
       signal?.throwIfAborted()
       const metadata = await candidate(folder.name)
-      if (metadata && backupCompleteness(statusOf(metadata)) === "complete" && belongsTo(metadata, tenantId)) complete.push({ ...folder, metadata })
-      if (complete.length === 2) break
+      if (metadata && backupCompleteness(statusOf(metadata)) === "complete" && belongsTo(metadata, tenantId)) {
+        const newer = complete.find(entry => isLargeBackup(entry.name) === isLargeBackup(folder.name))
+        if (newer) return { comparison: newer, baseline: { ...folder, metadata } }
+        complete.push({ ...folder, metadata })
+      }
     }
-    if (complete.length < 2) {
-      throw new DriftPairError(
-        `Drift comparison needs two complete backups, and the latest ${candidates.length} include fewer than two. Incomplete backups are skipped. Create a successful backup and try again.`,
-        "INSUFFICIENT_BACKUPS",
-        409,
-      )
-    }
-    return { comparison: complete[0]!, baseline: complete[1]! }
+    throw new DriftPairError(
+      `Drift comparison needs two complete backups of the same storage class, and the latest ${candidates.length} include fewer than two. Incomplete backups are skipped. Create a successful backup and try again.`,
+      "INSUFFICIENT_BACKUPS",
+      409,
+    )
   }
 
   // Only the comparison: that backup, complete, and the newest complete backup of the tenant before
@@ -276,6 +283,7 @@ export async function selectBackupPair(options: {
     }
     const comparisonTime = Date.parse(comparisonFolder.timestamp)
     for (const folder of folders.slice(index + 1)) {
+      if (isLargeBackup(folder.name) !== isLargeBackup(comparisonFolder.name)) continue
       signal?.throwIfAborted()
       if (Date.parse(folder.timestamp) >= comparisonTime) continue
       const previous = await candidate(folder.name)
@@ -289,6 +297,7 @@ export async function selectBackupPair(options: {
   if (typeof options.baseline !== "string" || typeof options.comparison !== "string") {
     throw new DriftPairError("Choose both a baseline and a comparison backup.", "INVALID_PAIR", 400)
   }
+  if (isLargeBackup(options.baseline) !== isLargeBackup(options.comparison)) throw new DriftPairError("Choose two ordinary backups or two large backups to compare.", "INVALID_PAIR", 400)
   if (options.baseline === options.comparison) throw new DriftPairError("Choose two different backups to compare.", "INVALID_PAIR", 400)
 
   const find = (name: string) => {

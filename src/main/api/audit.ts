@@ -1,9 +1,11 @@
+import type { ExecutionMetadata } from "./execution-metadata"
+import { mainAuditSink } from "./audit-sink"
 import { requiredFeatures } from "./plan-gates"
 import type { Feature } from "../../shared/plans"
 import { randomUUID } from "node:crypto"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "~/lib/audit/types"
 import type { SignedInAccount } from "../../shared/ipc"
-import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName } from "../../shared/constants"
+import { DELEGATED_CLIENT_SECRET, DOWNLOAD_CANCELLED_HEADER, INTERNAL_API_ORIGIN, localStorageAccountName } from "../../shared/constants"
 
 /** Which API calls are audited, and how they are described. */
 export const API_AUDIT_MAP: Record<string, { eventType: AuditEventType; action: string; resourceType: string }> = {
@@ -16,6 +18,7 @@ interface AuditBody {
   clientSecret?: string
   storageAccountName?: string
   id?: string
+  backupId?: string
   scheduleId?: string
   policyId?: string
   name?: string
@@ -37,14 +40,25 @@ export interface RestoreNotice {
   message: string | null
 }
 
+/**
+ * Binds the audit of an archive download to the admin and storage of when it was authorized, before a
+ * save that can outlast a sign-in.
+ */
+export function captureDownloadAudit(request: Request, requestBody: string, metadata: ExecutionMetadata): void {
+  if (request.method !== "POST" || new URL(request.url).pathname.replace(/(.)\/$/, "$1") !== "/api/download-backup") return
+  const tenantId = (JSON.parse(requestBody) as { tenantId?: unknown }).tenantId
+  if (typeof tenantId === "string" && tenantId) metadata.downloadAudit = mainAuditSink()?.bind(tenantId)
+}
+
 export function createAuditRecorder(
   dispatch: (request: Request) => Promise<Response>,
   accountFor: (tenantId: string) => SignedInAccount | null,
   onRestore?: (notice: RestoreNotice) => void,
   onTrialUsage?: (tenant: string, feature: Feature) => void,
 ) {
-  return (request: Request, requestBody: string, response: Response): void => {
-    const path = new URL(request.url).pathname
+  return (request: Request, requestBody: string, response: Response, metadata?: ExecutionMetadata): void => {
+    // The host serves a route with or without a trailing slash, so both are recorded the same way.
+    const path = new URL(request.url).pathname.replace(/(.)\/$/, "$1")
     if (path.startsWith("/api/audit")) return
     if (path === "/api/frameworks") {
       void recordFrameworkCreation(requestBody, response.clone(), dispatch, accountFor)
@@ -57,9 +71,15 @@ export function createAuditRecorder(
       return
     }
 
-    if (["/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
-      void observeRestoreResponse(requestBody, response.clone(), path === "/api/revert-policy", onRestore, onTrialUsage)
-        .catch(() => console.error("[audit] Failed to process restore notification"))
+    // A cancelled save dialog wrote no archive, so there is no download to record.
+    if (path === "/api/download-backup" && response.headers.get(DOWNLOAD_CANCELLED_HEADER)) return
+    if (path === "/api/restore-configuration" && JSON.parse(requestBody).action !== "restore") return
+    if (path === "/api/restore-directory" && !["restore", "reconcile"].includes(JSON.parse(requestBody).action)) return
+    if (["/api/restore-directory", "/api/restore-configuration", "/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
+      // The policy restore routes record their own audit. This keeps their notifications and trial usage.
+      const routeOwnsAudit = ["/api/restore-backup", "/api/revert-policy"].includes(path)
+      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage, path === "/api/restore-directory", metadata?.directoryActor, routeOwnsAudit)
+        .catch(() => console.error(routeOwnsAudit ? "[audit] Failed to process restore notification" : "[audit] Failed to record restore"))
       return
     }
 
@@ -79,12 +99,14 @@ export function createAuditRecorder(
 
     const account = accountFor(body.tenantId)
     const ok = response.status >= 200 && response.status < 300
+    // An archive download is recorded for the admin who started it, as bound before its save.
+    const captured = path === "/api/download-backup" ? metadata?.downloadAudit : undefined
     const logEntry: CreateAuditLogInput = {
       eventType: config.eventType,
       action: config.action,
       resource: {
         type: config.resourceType as CreateAuditLogInput["resource"]["type"],
-        id: body.id ?? body.scheduleId ?? body.policyId ?? body.tenantId,
+        id: body.id ?? body.backupId ?? body.scheduleId ?? body.policyId ?? body.tenantId,
         name: config.action,
       },
       result: ok ? AuditResult.SUCCESS : AuditResult.FAILURE,
@@ -92,6 +114,13 @@ export function createAuditRecorder(
       details: { method: request.method, path, statusCode: response.status, source: "desktop" },
     }
 
+    // The admin whose token authorized the download is the actor, whenever that token was issued.
+    const actor = path === "/api/download-backup" ? metadata?.tokenActor : undefined
+    const actorUser = actor ? { id: actor.username, email: actor.username, name: actor.name ?? actor.username } : undefined
+    if (captured) {
+      void mainAuditSink()?.record(actorUser ? { ...captured, user: actorUser } : captured, logEntry).catch(() => console.error("[audit] Failed to write audit entry"))
+      return
+    }
     void dispatch(
       new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
         method: "POST",
@@ -101,7 +130,7 @@ export function createAuditRecorder(
           appId: body.appId,
           clientSecret: body.clientSecret,
           storageAccountName: body.storageAccountName,
-          user: {
+          user: actorUser ?? {
             id: account?.username ?? "unknown",
             email: account?.username ?? "unknown",
             name: account?.name ?? account?.username ?? "Unknown user",
@@ -117,15 +146,24 @@ export function createAuditRecorder(
   }
 }
 
-/** Preserve restore notifications and trial usage while the route owns audit recording. */
-async function observeRestoreResponse(bodyText: string, response: Response, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void) {
+/** Restore runs synchronously and can partially fail despite returning HTTP 200. Routes that own their audit record only get notifications and trial usage. */
+async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void, directory = false, executionActor?: ExecutionMetadata["directoryActor"], routeOwnsAudit = false) {
   const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string; approvalAction?: string; approvalId?: string; restoreType?: string; selectedPolicies?: unknown[]; assignments?: boolean }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
   const data = await response.json().catch(() => ({})) as {
     outcome?: { success: boolean; partial?: boolean; approval?: unknown; approvalState?: string; policyId?: string; path: string; error?: string }
-    success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
+    success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean; replayed?: boolean
     details?: { restoredCount: number; partialCount?: number; failedCount: number; approvalCount?: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
+  }
+  if (directory) {
+    // Directory history stays in its encrypted journal. Audit and notices retain only totals.
+    const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0
+    data.details = { restoredCount: count(data.details?.restoredCount), failedCount: count(data.details?.failedCount), partialCount: count(data.details?.partialCount), duration: 0, results: [] }
+    data.status = data.success === true ? "Completed" : data.partial === true ? "PartiallyCompleted" : "Failed"
+    data.error = data.error ? "Directory restore did not complete. Review the saved directory page." : undefined
+    delete data.policyId; delete data.jobId; delete data.outcome
+    delete body.policyId; delete body.originalName; delete body.approvalId; delete body.approvalAction
   }
   const approvalAction = body.approvalAction
   if (approvalAction && data.outcome) {
@@ -152,12 +190,40 @@ async function observeRestoreResponse(bodyText: string, response: Response, poli
       })
     } catch { /* Notifications are best effort and never block the audit record. */ }
   }
-  if (onTrialUsage && ok && !partial && !data.partial && data.status !== "PartiallyCompleted" && !(data.details?.failedCount) && !(data.details?.partialCount) && !("approvalAction" in body) && !("targetTenants" in body)) {
+  if (onTrialUsage && ok && !partial && !data.partial && !data.replayed && data.status !== "PartiallyCompleted" && !(data.details?.failedCount) && !(data.details?.partialCount) && !("approvalAction" in body) && !("targetTenants" in body)) {
     try {
-      const feature = requiredFeatures(policyCopy ? "/api/revert-policy" : "/api/restore-backup", { ...body }).find(feature => ["fullRestore", "replaceRestore", "restoreAssignments", "driftRevert"].includes(feature))
+      const feature = requiredFeatures(policyCopy ? "/api/revert-policy" : directory ? "/api/restore-directory" : "/api/restore-backup", { ...body }).find(feature => ["fullRestore", "replaceRestore", "restoreAssignments", "directoryRestore", "driftRevert"].includes(feature))
       if (feature) onTrialUsage(body.tenantId, feature)
     } catch { /* A tally never changes the action's outcome. */ }
   }
+  if (routeOwnsAudit) return
+  const account = directory ? executionActor : accountFor(body.tenantId)
+  const logEntry: CreateAuditLogInput = {
+    eventType: approvalAction === "submit" || approvalAction === "withdraw" ? AuditEventType.CONFIG_UPDATED : policyCopy ? (body.action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED) : ok || partial ? AuditEventType.RESTORE_COMPLETED : AuditEventType.RESTORE_FAILED,
+    action: approvalAction === "submit" ? "Restore submitted for approval" : approvalAction === "withdraw" ? "Approval request withdrawn" : approvalAction === "complete" ? "Complete approved restore item" : policyCopy
+      ? body.action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy"
+      : directory && body.action === "reconcile" ? "Confirm saved directory restore results" : body.mode === "replace" ? "Restore backup in place" : "Restore backup as policy copies",
+    resource: { type: policyCopy ? "policy" : "backup", id: data.policyId ?? body.approvalId ?? data.jobId ?? body.policyId ?? body.backupId ?? body.tenantId, name: body.originalName ?? body.backupId ?? "Restore backup" },
+    result: ok ? AuditResult.SUCCESS : partial ? AuditResult.PARTIAL : AuditResult.FAILURE,
+    severity: ok ? AuditSeverity.INFO : partial ? AuditSeverity.WARNING : AuditSeverity.ERROR,
+    details: { source: "desktop", statusCode: response.status, status: data.status, backupId: body.backupId, ...data.details,
+      error: data.error ? { code: "RESTORE_FAILED", message: data.error } : undefined },
+  }
+  // The sink credits the account signed in now. A directory restore keeps the identity verified when it ran.
+  const sink = directory ? mainAuditSink() : undefined
+  if (sink) {
+    const binding = sink.bind(body.tenantId)
+    if (!binding) throw new Error("Audit storage is unavailable")
+    await sink.record({ ...binding, user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Unknown user", tenantId: binding.tenantId.toLowerCase() } }, logEntry)
+    return
+  }
+  const logged = await dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      tenantId: body.tenantId, appId: body.appId, clientSecret: body.clientSecret, storageAccountName: body.storageAccountName,
+      user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Unknown user" }, logEntry,
+    }),
+  }))
+  if (!logged.ok) throw new Error(`Audit write failed (${logged.status})`)
 }
 
 async function recordFrameworkCreation(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null) {

@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
   store: new Map<string, string>(),
   signIn: vi.fn<(tenant: string, clientId: string) => Promise<unknown>>(),
   createRegistration: vi.fn<() => Promise<unknown>>(),
+  checkPermissions: vi.fn(async (): Promise<{ missing: string[]; error?: string }> => ({ missing: [] })),
+  enrollOwnApp: vi.fn(async () => ({ result: true })),
   accounts: vi.fn(async (): Promise<unknown[]> => []),
   checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
   cancelBackup: vi.fn(async (_jobId: string): Promise<void> => undefined),
@@ -35,7 +37,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       removeItem: async (key: string) => void state.store.delete(key),
     },
     auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, copySignInLink: async () => true, accounts: state.accounts, onSignInPhase: () => () => undefined },
-    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelSetup, cancelSignIn: async () => false, onProgress: () => () => undefined, clipboardIds: async () => null, saveScript: async () => ({ saved: false }) },
+    setup: { checkPermissions: state.checkPermissions, enrollOwnApp: state.enrollOwnApp, createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelSetup, cancelSignIn: async () => false, onProgress: () => () => undefined, clipboardIds: async () => null, saveScript: async () => ({ saved: false }) },
     license: { open: async () => undefined, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant, releaseTenant: async () => undefined, tenantTrialAction: async () => undefined, trialUsage: async () => null, trialWorkflowsConfigured: async () => false },
     diagnostics: { record: state.record, status: async () => ({ state: state.diagnostics, policy: false, reminder: { setup: false, signin: false } }), reminderShown: async () => undefined, consent: async () => undefined, decline: async () => undefined },
     preferences: { get: async () => ({ firstBackupNoteSeen: true }), set: async () => ({}) },
@@ -112,7 +114,9 @@ beforeEach(() => {
   state.diagnostics = "unasked"
   state.storageChoice = { kind: "local" }
   state.store.clear()
-  for (const mock of [state.signIn, state.createRegistration, state.accounts, state.checkNewTenant, state.cancelBackup, state.cancelSetup, state.cancelSignIn, state.record]) mock.mockReset()
+  for (const mock of [state.signIn, state.createRegistration, state.accounts, state.checkNewTenant, state.cancelBackup, state.cancelSetup, state.cancelSignIn, state.record, state.checkPermissions, state.enrollOwnApp]) mock.mockReset()
+  state.checkPermissions.mockResolvedValue({ missing: [] })
+  state.enrollOwnApp.mockResolvedValue({ result: true })
   state.cancelBackup.mockResolvedValue(undefined)
   state.cancelSetup.mockResolvedValue(undefined)
   state.cancelSignIn.mockResolvedValue(false)
@@ -191,16 +195,16 @@ async function waitingSignIn() {
 }
 
 /** A setup sign-in that waits for the browser. */
-async function waitingSetup(trials = false) {
+async function waitingSetup() {
   state.createRegistration.mockImplementationOnce(() => new Promise(() => undefined))
-  const container = await render(createElement(ConnectTenantSetup, { trials, onManual: vi.fn(), onRegistered: vi.fn() }))
+  const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
   await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
   return container
 }
 
-async function failedSetup(message: string, trials = false) {
+async function failedSetup(message: string) {
   state.createRegistration.mockRejectedValueOnce(new Error(message))
-  const container = await render(createElement(ConnectTenantSetup, { trials, onManual: vi.fn(), onRegistered: vi.fn() }))
+  const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
   await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
   await advance()
   return container
@@ -219,9 +223,9 @@ async function firstBackupStep() {
   state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: ACCOUNT, signedInAt: Date.now() }))
   state.accounts.mockResolvedValue([ACCOUNT])
   const container = await render(createElement(OnboardingPage))
-  await act(async () => { button(container, "Continue")!.click() })
+  await act(async () => { button(container, "Start first backup")!.click() })
   await advance()
-  expect(container.textContent).toContain("Take a first backup")
+  expect(container.textContent).toContain("Your first backup")
   return container
 }
 
@@ -231,10 +235,18 @@ async function refusedAfterContinue() {
   state.accounts.mockResolvedValue([ACCOUNT])
   state.checkNewTenant.mockRejectedValueOnce(new Error("This license does not cover another tenant."))
   const container = await render(createElement(OnboardingPage))
-  await act(async () => { button(container, "Continue")!.click() })
+  await act(async () => { button(container, "Start first backup")!.click() })
   await advance()
   expect(container.textContent).toContain("Sign in to your tenant")
   return container
+}
+
+/** The advisory result before storage, including missing permissions and an unavailable check. */
+async function permissionProblem(result: { missing: string[]; error?: string }) {
+  state.checkPermissions.mockResolvedValue(result)
+  state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, account: ACCOUNT, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValue([ACCOUNT])
+  return render(createElement(OnboardingPage))
 }
 
 /** Runs the first backup with the answer of the start request and, when it started, the job the store reports. */
@@ -242,7 +254,6 @@ async function runFirstBackup(start: () => Response, job?: { isComplete: boolean
   vi.stubGlobal("fetch", vi.fn(async (url: string) => (url === "/api/backup/start" ? start() : Response.json({}))))
   if (job) state.activeJobs = [{ jobId: "first", progress: 100, ...job }]
   const container = await firstBackupStep()
-  await act(async () => { button(container, "Run first backup")!.click() })
   await advance()
   return container
 }
@@ -288,57 +299,44 @@ describe("the shared setup call component", () => {
 })
 
 describe("welcome screen", () => {
-  it("offers the call between the helper text of Connect your tenant and the setup diagnostics question", async () => {
-    state.license = licenseStatus(null, [])
-    const container = await render(createElement(ActivationScreen, { onSignIn: vi.fn() }))
-    const helper = [...container.querySelectorAll("p")].find((item) => item.textContent?.startsWith("New tenants start with a Pro trial"))!
-    const diagnostics = container.querySelector('section[aria-labelledby="setup-diagnostics-title"]')!
-    const row = link("welcome", container)!
-    expect(helper.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(row.compareDocumentPosition(diagnostics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(container.textContent).toContain("Rather do it together? Book a free setup call")
-    expect(container.textContent).toContain("30 minutes, free on every plan. You share your screen and we set it up in your tenant.")
-    await expectOpens("welcome", container)
-  })
-
-  it("keeps Connect your tenant as the first action and leaves it working", async () => {
+  it("lets the admin start setup before asking about diagnostics", async () => {
     const onSignIn = vi.fn()
     const container = await render(createElement(ActivationScreen, { onSignIn }))
-    const buttons = [...container.querySelectorAll("button")]
-    expect(buttons[0]!.textContent).toContain("Connect your tenant")
-    expect(buttons.indexOf(link("welcome", container)!)).toBe(1)
-    await act(async () => { buttons[0]!.click() })
-    expect(onSignIn).toHaveBeenCalledTimes(1)
-    expect(state.openExternal).not.toHaveBeenCalled()
-  })
-
-  it("shows the row when the diagnostics question is not asked", async () => {
-    state.diagnostics = "declined"
-    const container = await render(createElement(ActivationScreen, { onSignIn: vi.fn() }))
     expect(container.querySelector('section[aria-labelledby="setup-diagnostics-title"]')).toBeNull()
-    await expectOpens("welcome", container)
+    expect(button(container, "What TenuVault sends")).toBeDefined()
+    expect(links()).toEqual([])
+    await act(async () => { button(container, "Connect your tenant")!.click() })
+    expect(onSignIn).toHaveBeenCalledTimes(1)
   })
 })
 
-describe("first-run header", () => {
-  it("lists Free setup call next to License, Share feedback and Support while no tenant is connected", async () => {
+async function openSetupHelp(container: ParentNode) {
+  const trigger = container.querySelector('nav[aria-label="Help"] button')!
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })))
+}
+
+describe("setup header", () => {
+  it("groups setup help and license in one menu", async () => {
     const container = await render(createElement(DesktopLayout), "/portal/onboarding")
-    expect([...container.querySelectorAll('nav[aria-label="Help"] > *')].map((item) => item.textContent)).toEqual(["Free setup call", "License", "Share feedback", "Support"])
-    await expectOpens("setup-header", container)
+    expect(container.querySelector('nav[aria-label="Help"]')?.textContent?.trim()).toBe("Help")
+    await openSetupHelp(container)
+    expect([...document.querySelectorAll('[role="menuitem"]')].map(item => item.textContent)).toEqual(["Free setup call", "License", "Share feedback", "Support"])
+    await expectOpens("setup-header")
   })
 
-  it("belongs to the first-run header only: the sidebar of a connected tenant has no such entry", async () => {
+  it("keeps the wizard header when adding another tenant", async () => {
     state.tenants = [{ id: 1, name: "Contoso", credentials: { tenantId: TENANT } }]
     state.license = COMMUNITY
     const container = await render(createElement(DesktopLayout), "/portal/onboarding")
-    expect(container.querySelector('nav[aria-label="Help"]')).toBeNull()
-    expect(container.querySelector('nav[aria-label="Main navigation"]')).not.toBeNull()
+    expect(container.querySelector('nav[aria-label="Help"]')).not.toBeNull()
+    expect(container.querySelector('nav[aria-label="Main navigation"]')).toBeNull()
     expect(links()).toEqual([])
   })
 
   it("opens the Support dialog with the call as its third button", async () => {
     const container = await render(createElement(DesktopLayout), "/portal/onboarding")
-    await act(async () => { button(container, "Support")!.click() })
+    await openSetupHelp(container)
+    await act(async () => { [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === "Support")!.click() })
     await advance()
     const dialog = document.querySelector('[role="dialog"]')!
     expect([...dialog.querySelectorAll("button")].map((item) => item.textContent?.trim()).filter((label) => label !== "Close")).toEqual(["Documentation", "Open GitHub issue", LABEL])
@@ -378,7 +376,7 @@ describe("setup sign-in and provisioning errors", () => {
   })
 
   it("shows nothing before an error and nothing after a cancelled setup", async () => {
-    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
     expect(links()).toEqual([])
     state.createRegistration.mockRejectedValueOnce(new Error("Sign-in cancelled."))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
@@ -401,7 +399,7 @@ describe("setup sign-in and provisioning errors", () => {
     expect(links()).toEqual(["setup-error"])
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("The clipboard is blocked.") } } })
     try {
-      await act(async () => { button(container, "Someone else is the admin? Copy instructions")!.click() })
+      await act(async () => { button(container, "Copy instructions for my admin")!.click() })
       await advance()
     } finally {
       Reflect.deleteProperty(navigator, "clipboard")
@@ -414,8 +412,8 @@ describe("setup sign-in and provisioning errors", () => {
     let fail!: (error: Error) => void
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => new Promise<void>((_resolve, reject) => { fail = reject }) } })
     try {
-      const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
-      await act(async () => { button(container, "Someone else is the admin? Copy instructions")!.click() })
+      const container = await render(createElement(ConnectTenantSetup, { onManual: vi.fn(), onRegistered: vi.fn() }))
+      await act(async () => { button(container, "Copy instructions for my admin")!.click() })
       state.createRegistration.mockRejectedValueOnce(new Error("Microsoft Graph refused to create the app registration."))
       await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
       await advance()
@@ -493,7 +491,7 @@ describe("first backup", () => {
     ["after a successful backup", { isComplete: true, isSuccessful: true, status: "Completed", progressMessage: "Backup completed" }],
   ] as const)("offers nothing %s", async (_name, job) => {
     if (job) await runFirstBackup(started, job)
-    else await firstBackupStep()
+    else await runFirstBackup(() => Response.json({ jobId: "first" }))
     expect(links()).toEqual([])
   })
 })
@@ -619,23 +617,14 @@ describe("errors the Sign in step shows after a later step sent the admin back",
     expect(link("signin-error", refusal)).not.toBeNull()
   })
 
-  it("offers nothing for a tenant that is already connected, and the sign-in form keeps its own offer", async () => {
+  it("discards a wizard draft for a tenant that is already connected without a support prompt", async () => {
     state.tenants = [{ id: 1, name: "Contoso", credentials: { tenantId: TENANT } }]
     state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: ACCOUNT, signedInAt: Date.now() }))
-    state.accounts.mockResolvedValue([ACCOUNT])
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Continue")!.click() })
-    await advance()
-    const connected = container.querySelector<HTMLElement>('[role="alert"]')!
-    expect(connected.textContent).toContain("This tenant is already connected to TenuVault.")
-    expect(connected.textContent).toContain("Go to dashboard")
+    expect(container.textContent).toContain("How do you want to connect?")
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(state.enrollOwnApp).not.toHaveBeenCalled()
     expect(links()).toEqual([])
-
-    state.signIn.mockRejectedValueOnce(new Error("Microsoft could not find this application in the tenant. (AADSTS700016)"))
-    await act(async () => { button(container, "Sign in with Microsoft")!.click() })
-    await advance()
-    expect(links()).toEqual(["signin-error"])
-    expect(link("signin-error", connected)).toBeNull()
   })
 
   it("leaves the plain error line of the Storage step as it is, also when Previous shows it on the Sign in step", async () => {
@@ -645,17 +634,49 @@ describe("errors the Sign in step shows after a later step sent the admin back",
     state.storageChoice = { kind: "azure", storageAccountName: "contosobackups", subscriptionId: "sub", resourceGroupName: "rg", location: "westeurope" }
     state.checkNewTenant.mockResolvedValueOnce(COMMUNITY)
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Continue")!.click() })
+    await act(async () => { button(container, "Start first backup")!.click() })
     await advance()
-    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.textContent).toContain("Where should backups go?")
     expect(container.querySelector('[role="alert"]')!.textContent).toBe("This tenant is on Community now, which keeps backups on this device. Choose This device to continue.")
     expect(links()).toEqual([])
 
-    await act(async () => { button(container, "Previous")!.click() })
+    await act(async () => { button(container, "Back")!.click() })
+    await act(async () => { button(container, "Back")!.click() })
     await advance()
     expect(container.textContent).toContain("Sign in to your tenant")
     expect(container.textContent).toContain("This tenant is on Community now, which keeps backups on this device.")
     expect(links()).toEqual([])
+  })
+})
+
+describe("0.6 setup steps", () => {
+  it("offers nothing when choosing a connection method or after a successful permission check", async () => {
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("How do you want to connect?")
+    expect(links()).toEqual([])
+    await unmount()
+    await runFirstBackup(started)
+    expect(links()).toEqual([])
+  })
+
+  it("offers nothing while the permission check is running", async () => {
+    state.checkPermissions.mockImplementation(() => new Promise(() => undefined))
+    state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account: ACCOUNT, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([ACCOUNT])
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Checking permissions")
+    expect(links()).toEqual([])
+  })
+
+  it("keeps missing permissions advisory and removes the offer after a successful retry", async () => {
+    const container = await permissionProblem({ missing: ["Policy.Read.All"] })
+    expect(links()).toEqual([])
+    state.checkPermissions.mockResolvedValue({ missing: [] })
+    await act(async () => { button(container, "Check again")!.click() })
+    await advance()
+    expect(links()).toEqual([])
+    await act(async () => { button(container, "Continue")!.click() })
+    expect(container.textContent).toContain("Storage chooser")
   })
 })
 
@@ -679,13 +700,10 @@ describe("Support dialog", () => {
 
 describe("every placement on every plan", () => {
   const PLACEMENTS: readonly (readonly [string, SetupCallSource, () => Promise<unknown>])[] = [
-    ["welcome screen", "welcome", () => render(createElement(ActivationScreen, { onSignIn: vi.fn() }))],
-    ["first-run header", "setup-header", () => render(createElement(DesktopLayout), "/portal/onboarding")],
+    ["setup header", "setup-header", async () => openSetupHelp(await render(createElement(DesktopLayout), "/portal/onboarding"))],
     ["waiting panel of the first sign-in", "signin-waiting", async () => { await waitingSignIn(); await advance(RECOVERY_DELAY_MS) }],
     ["waiting panel of the setup sign-in", "signin-waiting", async () => { await waitingSetup(); await advance(RECOVERY_DELAY_MS) }],
-    ["waiting panel of the setup sign-in with tenant trials", "signin-waiting", async () => { await waitingSetup(true); await advance(RECOVERY_DELAY_MS) }],
     ["setup error", "setup-error", () => failedSetup("Microsoft Graph refused to create the app registration.")],
-    ["setup error with tenant trials", "setup-error", () => failedSetup("Microsoft Graph refused to create the app registration.", true)],
     ["first sign-in error", "signin-error", () => failedSignIn("Microsoft could not find this application in the tenant. (AADSTS700016)")],
     ["license refusal on the Sign in step", "signin-error", refusedAfterContinue],
     ["first backup failure", "first-backup-error", () => runFirstBackup(startFails)],
@@ -711,6 +729,7 @@ describe("every placement on every plan", () => {
       state.tenants = []
       state.activeJobs = []
       state.store.clear()
+      state.checkPermissions.mockResolvedValue({ missing: [] })
     }
   })
 })

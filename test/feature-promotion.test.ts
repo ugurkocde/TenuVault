@@ -20,8 +20,8 @@ const PROD_REUSABLE = "bbbbbbbb-0000-0000-0000-00000000000b"
 const DEV_GROUP = "aaaaaaaa-0000-0000-0000-00000000000c"
 
 /** TENANT_A is development (source), TENANT_B production (destination). */
-function setup(options: { plans?: Record<string, Plan>; sameLicense?: boolean; backup?: "ok" | "fail" } = {}) {
-  const deps = fakeDeps({ plans: options.plans ?? { [TENANT_A]: "pro", [TENANT_B]: "pro" }, sameLicense: () => options.sameLicense ?? true })
+function setup(options: { plans?: Record<string, Plan>; proPair?: boolean; backup?: "ok" | "fail" } = {}) {
+  const deps = fakeDeps({ plans: options.plans ?? { [TENANT_A]: "pro", [TENANT_B]: "pro" }, proPair: () => options.proPair ?? true })
   const dev = new FakeTenant(TENANT_A)
   const prod = new FakeTenant(TENANT_B)
   const wired = wire(deps, [dev, prod], { backup: options.backup })
@@ -92,8 +92,8 @@ describe("/api/promotion", () => {
     expect(context.prod.writeCount()).toBe(2)
   })
 
-  it("allows Pro only between the two tenants of the same license", async () => {
-    const context = setup({ sameLicense: false })
+  it("requires two entitled tenants and checks that the distinct source was named", async () => {
+    const context = setup({ proPair: false })
     const response = await context.post({ action: "plan", title: "x", items: [{ sourceId: context.simple.id }], mappings: MAPPINGS })
     expect(response.status).toBe(403)
     // The source must be named in targetTenants so its license is checked.

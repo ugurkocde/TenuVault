@@ -61,7 +61,7 @@
 
 .PARAMETER BackupReaderAppId
     Application (client) ID of the TenuVault Backup Reader. When set, the script also:
-      * creates the backup container "intune-backups" (the reader cannot create it)
+      * creates the backup containers "intune-backups" and "intune-backups-large" (the reader cannot create them)
       * creates the custom role "TenuVault Backup Writer" (read and write blobs, no delete)
         and assigns it to the Backup Reader on that container only
       * turns on blob versioning, so a blob the reader overwrites keeps its previous version,
@@ -311,14 +311,14 @@ $readerText = $null
 if ($BackupReaderAppId) {
     $reader = Get-AzADServicePrincipal -ApplicationId $BackupReaderAppId
     if (-not $reader) { throw "No service principal for application $BackupReaderAppId exists in this tenant. Run New-TenuVaultBackupReader.ps1 first." }
-    $container = "intune-backups"
-    if (-not (Get-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $container -ErrorAction SilentlyContinue)) {
-        Write-Host "Creating the backup container '$container'..."
-        if ($PSCmdlet.ShouldProcess($StorageAccountName, "Create container $container")) {
-            New-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $container | Out-Null
+    foreach ($container in @("intune-backups", "intune-backups-large")) {
+        if (-not (Get-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $container -ErrorAction SilentlyContinue)) {
+            Write-Host "Creating the backup container '$container'..."
+            if ($PSCmdlet.ShouldProcess($StorageAccountName, "Create container $container")) {
+                New-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $container | Out-Null
+            }
         }
     }
-
     # Write without delete: a stolen Backup Reader certificate cannot remove backups, and versioning
     # keeps what it overwrites. Custom roles are assignable at resource group scope at the narrowest.
     $roleName = "TenuVault Backup Writer"
@@ -374,12 +374,14 @@ if ($BackupReaderAppId) {
         }
     }
 
-    $containerScope = "$($account.Id)/blobServices/default/containers/$container"
-    if ($role) {
-        $existing = Get-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionName $roleName -Scope $containerScope -ErrorAction SilentlyContinue | Where-Object { $_.Scope -eq $containerScope }
-        if (-not $existing -and $PSCmdlet.ShouldProcess($containerScope, "Assign '$roleName' to the Backup Reader")) {
-            Write-Host "Assigning '$roleName' to the Backup Reader on the container..."
-            New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionId $role.Id -Scope $containerScope | Out-Null
+    foreach ($container in @("intune-backups", "intune-backups-large")) {
+        $containerScope = "$($account.Id)/blobServices/default/containers/$container"
+        if ($role) {
+            $existing = Get-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionName $roleName -Scope $containerScope -ErrorAction SilentlyContinue | Where-Object { $_.Scope -eq $containerScope }
+            if (-not $existing -and $PSCmdlet.ShouldProcess($containerScope, "Assign '$roleName' to the Backup Reader")) {
+                Write-Host "Assigning '$roleName' to the Backup Reader on the container..."
+                New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionId $role.Id -Scope $containerScope | Out-Null
+            }
         }
     }
     # Broader roles would let a stolen certificate delete backups; they are reported, not removed.
@@ -398,14 +400,15 @@ if ($BackupReaderAppId) {
     $policy = Get-AzStorageAccountManagementPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -ErrorAction SilentlyContinue
     $rules = @($policy.Rules | Where-Object { $_.Name -ne $ruleName })
     $current = $policy.Rules | Where-Object { $_.Name -eq $ruleName }
-    if ((-not $current -or $current.Definition.Actions.Version.Delete.DaysAfterCreationGreaterThan -ne $VersionRetentionDays) -and
+    if ((-not $current -or $current.Definition.Actions.Version.Delete.DaysAfterCreationGreaterThan -ne $VersionRetentionDays -or
+        $current.Definition.Filters.PrefixMatch -notcontains "intune-backups-large/") -and
         $PSCmdlet.ShouldProcess($StorageAccountName, "Remove previous blob versions after $VersionRetentionDays days")) {
         $action = Add-AzStorageAccountManagementPolicyAction -BlobVersionAction Delete -DaysAfterCreationGreaterThan $VersionRetentionDays
-        $filter = New-AzStorageAccountManagementPolicyFilter -PrefixMatch "$container/" -BlobType blockBlob
+        $filter = New-AzStorageAccountManagementPolicyFilter -PrefixMatch @("intune-backups/", "intune-backups-large/") -BlobType blockBlob
         $rules += New-AzStorageAccountManagementPolicyRule -Name $ruleName -Action $action -Filter $filter
         Set-AzStorageAccountManagementPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Rule $rules | Out-Null
     }
-    $readerText = "can write to '$container' but not delete; versioning on, previous versions kept $VersionRetentionDays days"
+    $readerText = "can write to both backup containers but not delete; versioning on, previous versions kept $VersionRetentionDays days"
 }
 
 # Read the final firewall state so a rerun without -AllowIpAddresses still reports a

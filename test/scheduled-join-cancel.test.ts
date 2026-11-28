@@ -1,3 +1,4 @@
+import { emptyIntuneRead } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -19,7 +20,7 @@ function setup() {
     const request = new Request(input, init)
     const url = new URL(request.url)
     if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
-    if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+    if (url.hostname === "graph.microsoft.com") return emptyIntuneRead(url.pathname)
     throw new Error(`unexpected ${url}`)
   }) as unknown as typeof fetch
   let release = () => {}

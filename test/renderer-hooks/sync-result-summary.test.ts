@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { SyncTarget } from "../../src/renderer/features/sync/api"
 import { SyncResult, type ResultTarget } from "../../src/renderer/features/sync/SyncResult"
 
+vi.mock("@desktop/lib/bridge", () => ({ bridge: {} }))
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"

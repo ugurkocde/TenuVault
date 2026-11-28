@@ -56,12 +56,14 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
         { id:'app:appearance', label:'Appearance', current:'Use system setting', next:'Dark', status:'change', selected:true },
       ] },
       { id:tenantId, title:'Contoso Ltd', detail:'contoso.onmicrosoft.com', connected:true, items:[
-        { id:tenantId + ':service:conditionalAccess', label:'Entra Conditional Access', current:'Off', next:'On', status:'change', selected:true },
+        { id:tenantId + ':service:conditionalAccess', label:'Entra ID: Conditional Access', current:'Off', next:'On', status:'change', selected:true },
         { id:tenantId + ':backupScope', label:'What is backed up', current:'Everything except apps', next:'Everything', status:'change', selected:true },
         { id:tenantId + ':schedule', label:'Backup schedule', current:'Off', next:'Daily at 02:00', status:'change', warning:'If another computer also runs this schedule, the tenant is backed up twice. Usually one computer, or cloud backups, runs the schedule.', selected:false },
       ] },
       { id:other.tenantId, title:'Litware Dev', connected:false, notice:'This tenant is not connected on this computer, so its settings are skipped.', items:[], setup:other },
     ] }
+    handle('setup:checkPermissions', () => ({missing:[]}))
+    handle('setup:clipboardIds', () => null)
     handle('settings:import', () => transferPreview)
     handle('settings:preview', () => transferPreview)
     globalThis.__marketingMock.noMaa = true
@@ -113,6 +115,8 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
   await screenshot('restore-review')
   await capture('drift-results', '#/portal/drift', 'WIN - Defender Antivirus - Baseline')
   await capture('audit-log', '#/portal/audit', 'Audit Log')
+  await go('#/portal/onboarding', 'Which services do you want to connect?')
+  await click('Continue with Intune')
   await capture('setup-connect', '#/portal/onboarding', 'Connect your tenant')
   await capture('license', '#/license', 'License')
   for (const [section, text] of [['signin','Sign-in'], ['storage','Encryption key'], ['background','Background runner'], ['appearance','Appearance'], ['branding','PDF branding'], ['transfer','Import settings']]) {
@@ -136,15 +140,17 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
   await capture('changes', '#/portal/changes', 'Dev to Prod')
   await capture('baseline-upgrades', '#/portal/changes/baseline-upgrades', 'Installed baselines')
   await capture('operations', '#/portal/operations', 'Review now')
+  await capture('frameworks-light', '#/portal/frameworks', 'Frameworks')
   await capture('custom-baselines', '#/portal/baselines', 'My baselines')
   await capture('sync', '#/portal/sync', 'Copy to Tenants')
   await captureCloud()
+  await evaluate(`window.tenuvault.storage.setItem('tenuvault.onboarding.draft', JSON.stringify({step:0,tenant:'',clientId:'',displayName:'',account:null,services:{intune:{access:'restore'}}}))`)
   await go('#/portal/onboarding', 'Connect your tenant')
   await click('I already have an app registration')
   await assertText('Sign in to your tenant')
   await screenshot('setup-signin')
   await go('#/portal/dashboard', 'Policies protected')
-  await evaluate(`window.tenuvault.storage.setItem('tenuvault.onboarding.draft', JSON.stringify({step:2,tenant:'contoso.onmicrosoft.com',clientId:'5c3b8e21-7a4f-4d19-9c6e-2f81d0a4b7e3',displayName:'Contoso Ltd',account:{tenantId:'8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14',clientId:'5c3b8e21-7a4f-4d19-9c6e-2f81d0a4b7e3',username:'admin@contoso.onmicrosoft.com',name:'Megan Bowen'},signedInAt:Date.now()}))`)
+  await evaluate(`window.tenuvault.storage.setItem('tenuvault.onboarding.draft', JSON.stringify({step:2,services:{intune:{access:'restore'}},tenant:'contoso.onmicrosoft.com',clientId:'5c3b8e21-7a4f-4d19-9c6e-2f81d0a4b7e3',displayName:'Contoso Ltd',account:{tenantId:'8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14',clientId:'5c3b8e21-7a4f-4d19-9c6e-2f81d0a4b7e3',username:'admin@contoso.onmicrosoft.com',name:'Megan Bowen'},signedInAt:Date.now()}))`)
   await capture('setup-storage', '#/portal/onboarding', 'Choose where backups are stored')
   await capture('app-backup-apps', '#/portal/app-backup', 'PowerShell')
   await capture('app-backup-installers', '#/portal/app-backup/versions', 'PowerShell')
@@ -154,7 +160,7 @@ export async function captureDocs({ main, send, evaluate, go, click, assertText,
   await send('Input.dispatchKeyEvent', {type:'keyDown', key:'Escape', code:'Escape', windowsVirtualKeyCode:27})
   await send('Input.dispatchKeyEvent', {type:'keyUp', key:'Escape', code:'Escape', windowsVirtualKeyCode:27})
   // A new admin sets up from a file another admin exported with its connection details.
-  await evaluate(`window.tenuvault.storage.setItem('tenuvault.onboarding.draft', JSON.stringify({step:0,tenant:'',clientId:'',displayName:'',account:null}))`)
+  await evaluate(`window.tenuvault.storage.setItem('tenuvault.onboarding.draft', JSON.stringify({step:0,tenant:'',clientId:'',displayName:'',account:null,services:{intune:{access:'restore'}}}))`)
   await go('#/portal/onboarding', 'Connect your tenant')
   await click('Set up from a file')
   await assertText('From a setup file')

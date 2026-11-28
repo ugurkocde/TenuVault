@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto"
-import type { FeatureDeps } from "../../deps"
+import { withTenantConnection, type FeatureDeps } from "../../deps"
 import { DOMAINS } from "../../domains"
 import type { Stored } from "../../records"
 import { armErrorMessage } from "../../../azure/arm"
+import { FetchPreconditionError } from "../../../api/network-error"
 import { allows } from "../../../../shared/plans"
 import { isDefaultLayout } from "../../../../shared/notifications/layout"
 import { canonicalJson, sha256Hex } from "../../../../shared/notifications/envelope"
@@ -142,7 +143,7 @@ export function kickWatcherDeploy(deps: FeatureDeps, tenantId: string, actor: st
   const map = runnerMap(deps)
   if (map.has(key)) return
   const controller = new AbortController()
-  const promise = (async () => {
+  const promise = withTenantConnection(deps, tenantId, async () => {
     const started = Date.now()
     let lastState: WatcherDeployView["state"] | null = null
     try {
@@ -183,7 +184,7 @@ export function kickWatcherDeploy(deps: FeatureDeps, tenantId: string, actor: st
         kickWatcherDeploy(deps, tenantId, actor)
       }
     }
-  })()
+  })
   map.set(key, { controller, promise })
   void promise.catch(() => undefined)
 }
@@ -520,7 +521,11 @@ async function advanceDeploy(deps: FeatureDeps, tenant: string, record: Stored<W
   let created: Awaited<ReturnType<typeof arm>>
   try {
     created = await arm(tenant, { method: "PUT", path: deploymentPath(record, name), body })
-  } catch {
+  } catch (error) {
+    if (error instanceof FetchPreconditionError) {
+      const saved = saveDeploy(deps, tenant, submitted, { deploymentState: "Prepared", deploymentSubmittedAt: null }, actor, "Watcher deployment was not sent")
+      return fail(deps, tenant, saved, actor, error.message)
+    }
     // Submitting is already saved: a lost answer is reconciled by name, never submitted twice.
     return progress(deps, tenant, submitted, actor, { deploymentState: "Submitting" }, "Watcher deployment answer lost; polling it")
   }
@@ -644,7 +649,11 @@ async function advanceTestRun(deps: FeatureDeps, tenant: string, record: Stored<
   let response: Awaited<ReturnType<typeof arm>>
   try {
     response = await arm(tenant, { method: "PUT", path: `${accountBase(record)}/jobs/${enc(jobId)}?api-version=2023-11-01`, body: { properties: { runbook: { name: RUNBOOK }, parameters: {} } } })
-  } catch {
+  } catch (error) {
+    if (error instanceof FetchPreconditionError) {
+      const saved = saveDeploy(deps, tenant, submitted, { automationJobId: null, jobSubmittedAt: null, jobStatus: null }, actor, "Watcher test run was not sent")
+      return fail(deps, tenant, saved, actor, error.message)
+    }
     return progress(deps, tenant, submitted, actor, { jobStatus: "Submitting" }, "Watcher test run answer lost; polling it")
   }
   const stopped = cancelRequested(deps, tenant, submitted)
@@ -805,7 +814,7 @@ async function advanceHandOver(deps: FeatureDeps, tenant: string, record: Stored
 /** One bounded step of the deployment. Safe to call again: every step reads state first. */
 export async function advanceWatcherDeploy(deps: FeatureDeps, tenantId: string, actor: string | null, jobId?: string | null, expectedRevision?: number): Promise<WatcherDeployView | null> {
   const tenant = tenantId.toLowerCase()
-  return withDeployLock(deps, tenant, async () => {
+  return withTenantConnection(deps, tenant, () => withDeployLock(deps, tenant, async () => {
     const record = watcherDeployOf(deps, tenant, jobId)
     if (!record) return null
     if (expectedRevision !== undefined && (record.revision ?? 0) !== expectedRevision) return null
@@ -826,7 +835,7 @@ export async function advanceWatcherDeploy(deps: FeatureDeps, tenantId: string, 
       if (current.state !== "running" || current.cancelRequestedAt) return publicWatcherDeploy(current, tenant)
       return fail(deps, tenant, current, actor, brief(error instanceof Error ? error.message : String(error)))
     }
-  })
+  }))
 }
 
 export async function resumeWatcherDeploy(deps: FeatureDeps, tenantId: string, actor: string | null, jobId?: string | null): Promise<WatcherDeployView> {

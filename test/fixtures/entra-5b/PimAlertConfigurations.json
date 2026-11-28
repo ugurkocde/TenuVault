@@ -1,0 +1,165 @@
+{
+  "folder": "PimAlertConfigurations",
+  "path": "identityGovernance/roleManagementAlerts/alertConfigurations",
+  "apiVersion": "beta",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 7,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/beta/identityGovernance/roleManagementAlerts/alertConfigurations?$filter=scopeId%20eq%20%27%2F%27%20and%20scopeType%20eq%20%27DirectoryRole%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.invalidLicenseAlertConfiguration",
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_InvalidLicenseAlert",
+            "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_InvalidLicenseAlert",
+            "scopeType": "DirectoryRole",
+            "scopeId": "/",
+            "isEnabled": true
+          },
+          {
+            "@odata.type": "#microsoft.graph.noMfaOnRoleActivationAlertConfiguration",
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_NoMfaOnRoleActivationAlert",
+            "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_NoMfaOnRoleActivationAlert",
+            "scopeType": "DirectoryRole",
+            "scopeId": "/",
+            "isEnabled": true
+          },
+          {
+            "@odata.type": "#microsoft.graph.redundantAssignmentAlertConfiguration",
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RedundantAssignmentAlert",
+            "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RedundantAssignmentAlert",
+            "scopeType": "DirectoryRole",
+            "scopeId": "/",
+            "isEnabled": true,
+            "duration": "P30D"
+          },
+          {
+            "@odata.type": "#microsoft.graph.rolesAssignedOutsidePrivilegedIdentityManagementAlertConfiguration",
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RolesAssignedOutsidePimAlert",
+            "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RolesAssignedOutsidePimAlert",
+            "scopeType": "DirectoryRole",
+            "scopeId": "/",
+            "isEnabled": true
+          },
+          {
+            "@odata.type": "#microsoft.graph.sequentialActivationRenewalsAlertConfiguration",
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_SequentialActivationRenewalsAlert",
+            "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_SequentialActivationRenewalsAlert",
+            "scopeType": "DirectoryRole",
+            "scopeId": "/",
+            "isEnabled": true,
+            "timeIntervalBetweenActivations": "PT10S",
+            "sequentialActivationCounterThreshold": 3
+          },
+          {
+            "@odata.type": "#microsoft.graph.tooManyGlobalAdminsAssignedToTenantAlertConfiguration",
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_TooManyGlobalAdminsAssignedToTenantAlert",
+            "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_TooManyGlobalAdminsAssignedToTenantAlert",
+            "scopeType": "DirectoryRole",
+            "scopeId": "/",
+            "isEnabled": true,
+            "globalAdminCountThreshold": 3,
+            "percentageOfGlobalAdminsOutOfRolesThreshold": 10
+          },
+          {
+            "@odata.type": "#microsoft.graph.staleSignInAlertConfiguration",
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_StaleSignInAlert",
+            "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_StaleSignInAlert",
+            "scopeType": "DirectoryRole",
+            "scopeId": "/",
+            "isEnabled": true,
+            "duration": "P30D"
+          }
+        ]
+      }
+    },
+    "/beta/identityGovernance/roleManagementAlerts/alertConfigurations/DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RolesAssignedOutsidePimAlert": {
+      "status": 200,
+      "body": {
+        "@odata.type": "#microsoft.graph.rolesAssignedOutsidePrivilegedIdentityManagementAlertConfiguration",
+        "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RolesAssignedOutsidePimAlert",
+        "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RolesAssignedOutsidePimAlert",
+        "scopeType": "DirectoryRole",
+        "scopeId": "/",
+        "isEnabled": true
+      }
+    },
+    "/beta/identityGovernance/roleManagementAlerts/alertConfigurations/DirectoryRole_00000000-0000-4000-8000-836b20d0164d_StaleSignInAlert": {
+      "status": 200,
+      "body": {
+        "@odata.type": "#microsoft.graph.staleSignInAlertConfiguration",
+        "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_StaleSignInAlert",
+        "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_StaleSignInAlert",
+        "scopeType": "DirectoryRole",
+        "scopeId": "/",
+        "isEnabled": true,
+        "duration": "P30D"
+      }
+    },
+    "/beta/identityGovernance/roleManagementAlerts/alertConfigurations/DirectoryRole_00000000-0000-4000-8000-836b20d0164d_TooManyGlobalAdminsAssignedToTenantAlert": {
+      "status": 200,
+      "body": {
+        "@odata.type": "#microsoft.graph.tooManyGlobalAdminsAssignedToTenantAlertConfiguration",
+        "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_TooManyGlobalAdminsAssignedToTenantAlert",
+        "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_TooManyGlobalAdminsAssignedToTenantAlert",
+        "scopeType": "DirectoryRole",
+        "scopeId": "/",
+        "isEnabled": true,
+        "globalAdminCountThreshold": 3,
+        "percentageOfGlobalAdminsOutOfRolesThreshold": 10
+      }
+    },
+    "/beta/identityGovernance/roleManagementAlerts/alertConfigurations/DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RedundantAssignmentAlert": {
+      "status": 200,
+      "body": {
+        "@odata.type": "#microsoft.graph.redundantAssignmentAlertConfiguration",
+        "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RedundantAssignmentAlert",
+        "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_RedundantAssignmentAlert",
+        "scopeType": "DirectoryRole",
+        "scopeId": "/",
+        "isEnabled": true,
+        "duration": "P30D"
+      }
+    },
+    "/beta/identityGovernance/roleManagementAlerts/alertConfigurations/DirectoryRole_00000000-0000-4000-8000-836b20d0164d_InvalidLicenseAlert": {
+      "status": 200,
+      "body": {
+        "@odata.type": "#microsoft.graph.invalidLicenseAlertConfiguration",
+        "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_InvalidLicenseAlert",
+        "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_InvalidLicenseAlert",
+        "scopeType": "DirectoryRole",
+        "scopeId": "/",
+        "isEnabled": true
+      }
+    },
+    "/beta/identityGovernance/roleManagementAlerts/alertConfigurations/DirectoryRole_00000000-0000-4000-8000-836b20d0164d_SequentialActivationRenewalsAlert": {
+      "status": 200,
+      "body": {
+        "@odata.type": "#microsoft.graph.sequentialActivationRenewalsAlertConfiguration",
+        "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_SequentialActivationRenewalsAlert",
+        "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_SequentialActivationRenewalsAlert",
+        "scopeType": "DirectoryRole",
+        "scopeId": "/",
+        "isEnabled": true,
+        "timeIntervalBetweenActivations": "PT10S",
+        "sequentialActivationCounterThreshold": 3
+      }
+    },
+    "/beta/identityGovernance/roleManagementAlerts/alertConfigurations/DirectoryRole_00000000-0000-4000-8000-836b20d0164d_NoMfaOnRoleActivationAlert": {
+      "status": 200,
+      "body": {
+        "@odata.type": "#microsoft.graph.noMfaOnRoleActivationAlertConfiguration",
+        "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_NoMfaOnRoleActivationAlert",
+        "alertDefinitionId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_NoMfaOnRoleActivationAlert",
+        "scopeType": "DirectoryRole",
+        "scopeId": "/",
+        "isEnabled": true
+      }
+    }
+  }
+}

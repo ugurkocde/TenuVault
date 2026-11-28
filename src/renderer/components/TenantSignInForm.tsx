@@ -1,3 +1,6 @@
+import { onboardingLink, onboardingPrimary } from "./OnboardingCard"
+import { BrowserSignInWait } from "./OnboardingConnection"
+import { DEFAULT_SETUP_CHOICE, requestedPermissions, setupScriptArguments, type PermissionChoice } from "../../shared/services/manifest"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { TrialKeyRefusalActions } from "./TenantTrial"
@@ -12,7 +15,6 @@ import type { SignedInAccount } from "../../shared/ipc"
 import {
   APP_REGISTRATION_GUIDE_URL,
   CONSENT_ROLES_TEXT,
-  DESKTOP_APP_PERMISSIONS,
   MANUAL_APP_REGISTRATION_URL,
   parseSetupOutput,
   SETUP_SCRIPT_FILE_NAME,
@@ -79,7 +81,7 @@ function CommandLine({ command, label, copied, onCopy }: { command: string; labe
 }
 
 /** The permissions the setup script grants, so the admin who consents sees them first. */
-export function PermissionList() {
+export function PermissionList({ choice = DEFAULT_SETUP_CHOICE }: { choice?: PermissionChoice }) {
   return (
     <details className="group rounded-2xl bg-card px-4 py-3">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-medium text-gray-900">
@@ -89,13 +91,13 @@ export function PermissionList() {
       <div className="mt-3 space-y-3 text-sm text-gray-700">
         <p>
           The setup grants tenant-wide admin consent for these delegated permissions. Every call still runs as the admin
-          who signs in, so it is limited by their own Intune role, MFA and Conditional Access.
+          who signs in, so it is limited by their own roles, MFA and Conditional Access.
         </p>
         <ul className="space-y-2">
-          {DESKTOP_APP_PERMISSIONS.map((entry) => (
+          {requestedPermissions(choice, "delegated").map((entry) => (
             <li key={entry.api}>
               <span className="font-medium text-gray-900">{entry.api}:</span> <span className="font-mono text-xs">{entry.permissions.join(", ")}</span>
-              <span className="block text-xs text-gray-600">{entry.purpose}</span>
+              <span className="block text-xs text-gray-600">{entry.api === "Microsoft Graph" ? "Access for your chosen services, used as the signed-in admin." : "Used only for backups in your Azure storage."}</span>
             </li>
           ))}
         </ul>
@@ -112,7 +114,7 @@ export function PermissionList() {
  * Creating the app registration, step by step: save the script, run it, sign in, bring back the
  * two values it prints. Offers the handoff to another administrator and the manual route.
  */
-export function SetupScriptCard() {
+export function SetupScriptCard({ choice = DEFAULT_SETUP_CHOICE }: { choice?: PermissionChoice }) {
   const [saved, setSaved] = useState<{ folder?: string; fileName?: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState("")
@@ -131,7 +133,7 @@ export function SetupScriptCard() {
     }
   }
 
-  const runCommand = setupCommand(saved?.folder, saved?.fileName)
+  const runCommand = setupCommand(saved?.folder, saved?.fileName) + setupScriptArguments(choice)
 
   return (
     <div className="space-y-4 rounded-3xl bg-blue-50/60 p-5 text-sm text-gray-700">
@@ -193,10 +195,10 @@ export function SetupScriptCard() {
         </Step>
       </ol>
 
-      <PermissionList />
+      <PermissionList choice={choice} />
 
       <div className="flex flex-wrap gap-2 border-t border-blue-100 pt-4">
-        <Button type="button" variant="outline" size="sm" onClick={() => void copy("handoff", setupHandoffText())}>
+        <Button type="button" variant="outline" size="sm" onClick={() => void copy("handoff", setupHandoffText(choice))}>
           {copied === "handoff" ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
           {copied === "handoff" ? "Copied" : "Someone else is the admin? Copy instructions"}
         </Button>
@@ -227,6 +229,9 @@ export interface SignInFields {
 }
 
 interface TenantSignInFormProps {
+  expectedTenant?: string
+  wizard?: boolean
+  choice?: PermissionChoice
   onSignedIn: (account: SignedInAccount, displayName: string) => void
   /** Called with every change to the fields, so a caller can keep them. */
   onFieldsChange?: (fields: SignInFields) => void
@@ -242,7 +247,7 @@ interface TenantSignInFormProps {
 }
 
 /** Tenant, client id and optional display name, then interactive Microsoft sign-in. */
-export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial, autoSignIn, hidePaste = false }: TenantSignInFormProps) {
+export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial, autoSignIn, hidePaste = false, choice, wizard, expectedTenant }: TenantSignInFormProps) {
   const [tenant, setTenant] = useState(initial?.tenant ?? "")
   const [clientId, setClientId] = useState(initial?.clientId ?? "")
   const [displayName, setDisplayName] = useState(initial?.displayName ?? "")
@@ -355,7 +360,8 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     setAttempt((value) => value + 1)
     let again = false
     try {
-      const account = await (loginHint ? bridge.auth.signIn(tenant.trim(), clientId.trim(), { loginHint }) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
+      const options = { ...(loginHint ? { loginHint } : {}), ...(wizard ? { wizard, expectedTenant } : {}) }
+      const account = await (loginHint || wizard ? bridge.auth.signIn(tenant.trim(), clientId.trim(), options) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
       if (active.current) onSignedIn(account, displayName.trim())
     } catch (error) {
       if (!active.current) return
@@ -432,26 +438,31 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         autoComplete="off"
         disabled={busy}
         aria-invalid={Boolean(error)}
-        aria-describedby={error ? `${id}-error` : undefined}
+        aria-describedby={[wizard && id === "tenant" ? "tenant-id-help" : "", error ? `${id}-error` : ""].filter(Boolean).join(" ") || undefined}
         className={error ? "border-red-400 focus-visible:ring-red-400" : undefined}
         onKeyDown={(e) => e.key === "Enter" && void submit()}
       />
+      {wizard && id === "tenant" && <p id="tenant-id-help" className="text-xs text-gray-600">Find Tenant ID on the Overview page in the Microsoft Entra admin center.</p>}
       {error && <p id={`${id}-error`} role="alert" className="text-xs text-red-700">{error}</p>}
     </div>
   )
 
   // What to do while the browser is open. The automatic sign-in after the in-app setup shows it
   // first, because there the admin did not press a button on this step.
-  const status = busy && (
+  const waiting = wizard && !afterBrowser
+  const status = busy && (waiting ? <div className="space-y-2">
+    <BrowserSignInWait kind="signin" cancel={() => void cancel()} cancelling={cancelling} />
+    {waitedLong && <SignInRecoveryPanel choice={choice} kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
+  </div> : (
     <div role="status" className="space-y-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
       {afterBrowser === "completing"
         ? <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Completing sign-in...</p>
         : automatic
         ? <>
-            <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time. TenuVault then checks the license for this tenant.</p>
+            <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time.{!wizard && " TenuVault then checks the license for this tenant."}</p>
             <p className="text-xs text-gray-600">If Microsoft says it cannot find the application, it has not finished publishing the new app registration. Wait a minute, select Cancel sign-in and sign in again.</p>
           </>
-        : <p>Complete the sign-in in your browser. TenuVault then checks the license for this tenant.</p>}
+        : <p>Complete the sign-in in your browser.{!wizard && " TenuVault then checks the license for this tenant."}</p>}
       <p className="text-xs text-gray-600">
         If Microsoft reports a device or compliance problem, Conditional Access needs a browser that passes the device
         identity, such as Microsoft Edge signed in to your work profile. Make it your default browser, cancel and sign in
@@ -461,52 +472,73 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         <X className="mr-2 h-4 w-4" aria-hidden="true" />
         {cancelling ? "Cancelling..." : "Cancel sign-in"}
       </Button>
-      {waitedLong && <SignInRecoveryPanel kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
+      {waitedLong && <SignInRecoveryPanel choice={choice} kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
+    </div>
+  ))
+
+  const fields = <>
+      {field("tenant", "Tenant id or domain", tenant, setTenant, "contoso.onmicrosoft.com", errors.tenant, true)}
+      {field("clientId", "Application (client) id", clientId, setClientId, "00000000-0000-0000-0000-000000000000", errors.clientId, true)}
+      {field("displayName", "Display name (optional)", displayName, setDisplayName, "Contoso Production")}
+  </>
+
+  if (wizard && busy) return status
+
+  const pasteMessage = <p id="setup-output-note" role="status" className={pasteNote && !pasteNote.ok ? "text-xs text-red-700" : "text-xs text-muted-foreground"}>
+    {pasteNote?.text ?? "Or type the values below."}
+  </p>
+  const pasteOutput = !hidePaste && (
+    <div className="space-y-1.5 text-left">
+      <Label htmlFor="setup-output" className={wizard ? "sr-only" : "flex items-center gap-2"}>
+        <ClipboardPaste className="h-4 w-4" aria-hidden="true" /> Paste the script output
+      </Label>
+      <textarea
+        id="setup-output"
+        rows={4}
+        value={pasted}
+        onChange={(e) => onPasteOutput(e.target.value)}
+        disabled={busy}
+        spellCheck={false}
+        placeholder={"Tenant id:                00000000-0000-0000-0000-000000000000\nApplication (client) id:  00000000-0000-0000-0000-000000000000"}
+        aria-describedby={!wizard || pasteNote ? "setup-output-note" : undefined}
+        className="flex w-full rounded-2xl border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+      />
+      {!wizard && pasteMessage}
     </div>
   )
 
   return (
     <div className="space-y-4">
       {automatic && status}
-      {!hidePaste && (
-        <div className="space-y-1.5">
-          <Label htmlFor="setup-output" className="flex items-center gap-2">
-            <ClipboardPaste className="h-4 w-4" aria-hidden="true" /> Paste the script output
-          </Label>
-          <textarea
-            id="setup-output"
-            rows={4}
-            value={pasted}
-            onChange={(e) => onPasteOutput(e.target.value)}
-            disabled={busy}
-            spellCheck={false}
-            placeholder={"Tenant id:                00000000-0000-0000-0000-000000000000\nApplication (client) id:  00000000-0000-0000-0000-000000000000"}
-            aria-describedby="setup-output-note"
-            className="flex w-full rounded-2xl border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          />
-          <p id="setup-output-note" role="status" className={pasteNote && !pasteNote.ok ? "text-xs text-red-700" : "text-xs text-gray-600"}>
-            {pasteNote?.text ?? "Or type the values below."}
-          </p>
-        </div>
-      )}
-      {field("tenant", "Tenant id or domain", tenant, setTenant, "contoso.onmicrosoft.com", errors.tenant, true)}
-      {field("clientId", "Application (client) id", clientId, setClientId, "00000000-0000-0000-0000-000000000000", errors.clientId, true)}
-      {field("displayName", "Display name (optional)", displayName, setDisplayName, "Contoso Production")}
+      {!wizard && pasteOutput}
+      {wizard && initial?.tenant && initial.clientId
+        ? <details open={Boolean(errors.tenant || errors.clientId) || undefined} className="space-y-3 text-sm">
+            <summary className="cursor-pointer underline underline-offset-2">Connection details</summary>
+            {fields}
+          </details>
+        : fields}
       {errors.form && (
         <Alert variant="destructive" role="alert">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{trialKeyRefusalText(errors.form)}
             <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
-            <SignInErrorActions message={errors.form} onTryAgain={() => void submit()} />
+            <SignInErrorActions choice={choice} message={errors.form} onTryAgain={() => void submit()} />
             {errors.attempt && <SetupCallLink source="signin-error" variant="hint" className="mt-3" />}
           </AlertDescription>
         </Alert>
       )}
-      {errors.form && <SetupDiagnosticsReminder step="signin" />}
-      <Button onClick={() => void submit()} disabled={busy || !tenant || !clientId} className="w-full bg-blue-600 hover:bg-blue-700">
+      {!wizard && errors.form && <SetupDiagnosticsReminder step="signin" />}
+      <Button onClick={() => void submit()} disabled={busy || !tenant || !clientId} className={wizard ? `mx-auto flex ${onboardingPrimary}` : "w-full bg-blue-600 hover:bg-blue-700"}>
         {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
         {busy ? "Waiting for sign-in..." : submitLabel}
       </Button>
+      {wizard && pasteOutput && <div className="space-y-2 text-center">
+        <details className="space-y-3">
+          <summary className={`cursor-pointer ${onboardingLink}`}>Paste the script output</summary>
+          {pasteOutput}
+        </details>
+        {pasteNote && pasteMessage}
+      </div>}
       {!automatic && status}
     </div>
   )

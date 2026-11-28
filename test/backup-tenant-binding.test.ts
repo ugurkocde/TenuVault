@@ -1,4 +1,4 @@
-import { withBackupServerTime } from "./helpers"
+import { emptyIntuneRead, withServerDate } from "./helpers"
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -259,7 +259,7 @@ describe("local blob emulator tenant binding", () => {
 })
 
 function fakeGraph(url: URL): Response {
-  if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+  if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
   return Response.json({ id: url.pathname.split("/").pop() })
 }
 
@@ -278,7 +278,7 @@ describe("retention is scoped to the backup's tenant", () => {
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
         const url = new URL(request.url)
-        return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(fakeGraph(url), new Date("2026-09-24T12:00:00Z"))
+        return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(fakeGraph(url), new Date("2026-09-24T12:00:00Z"))
       }) as typeof fetch,
       getToken: async () => "token",
       retentionDays: () => 30,
@@ -292,7 +292,7 @@ describe("retention is scoped to the backup's tenant", () => {
     return { root, master, store, put, run }
   }
 
-  it("records the tenant and keeps every candidate when metadata cannot be read", async () => {
+  it("records the tenant and keeps all backups in a shared container when a manifest is unreadable", async () => {
     const { root, master, store, put, run } = await retentionSetup()
     await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", TenantId: TENANT.toUpperCase() })
     await put("backup-2026-07-02-020000/metadata.json", { Status: "Success", TenantId: OTHER })
@@ -316,10 +316,10 @@ describe("retention is scoped to the backup's tenant", () => {
     ])
     expect(log).not.toContain("Removed")
     // Metadata that is not a JSON object is unreadable, never a missing manifest: kept and reported.
-    expect(log).toContain("metadata.json could not be verified for retention")
+    expect(log).toContain("Could not read the metadata of 1 older backup: metadata.json is not a JSON object. Older backups were left in place.")
   })
 
-  it("keeps backups from earlier versions without item lists in a single-tenant container", async () => {
+  it("prunes backups from earlier versions when no other tenant uses the container", async () => {
     const { root, master, put, run } = await retentionSetup()
     await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", TenantId: TENANT })
     await put("backup-2026-07-03-020000/metadata.json", { Status: "Success" })
@@ -329,24 +329,25 @@ describe("retention is scoped to the backup's tenant", () => {
     await put("backup-2026-09-20-020000/metadata.json", { Status: "Success" })
 
     const { folders, log } = await run()
-    expect(folders).toEqual(["backup-2026-07-01-020000", "backup-2026-07-03-020000", "backup-2026-07-04-020000", "backup-2026-07-06-020000", "backup-2026-09-20-020000", "backup-2026-09-24-120000"])
-    expect(log).toContain("no manifest item list")
+    expect(folders).toEqual(["backup-2026-07-04-020000", "backup-2026-09-20-020000", "backup-2026-09-24-120000"])
+    expect(log).toContain("Removed 3 backups older than 30 days.")
+    expect(log).toContain("Kept 1 older backup not recorded as this tenant's")
   })
 
   it("counts a backup from an earlier version as the newest copy of a type only when no other tenant uses the container", async () => {
     // Single tenant: the untagged August backup holds the newest copy of apps, so it stays and the tagged July one goes.
     const single = await retentionSetup()
-    await single.put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Included: ["Apps"] }, Items: {} })
-    await single.put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Included: ["Apps"] }, Items: {}, TenantId: TENANT })
+    await single.put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 } })
+    await single.put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 }, TenantId: TENANT })
     const one = await single.run({ excluded: ["Apps"] })
     expect(one.folders).toEqual(["backup-2026-08-01-020000", "backup-2026-09-24-120000"])
     expect(one.log).toContain("Kept 1 older backup because it holds the newest copy of types this backup leaves out.")
 
     // Shared: the untagged backup may be the other tenant's, so the tagged July backup keeps the newest copy of apps.
     const shared = await retentionSetup()
-    await shared.put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Included: ["Apps"] }, Items: {} })
-    await shared.put("backup-2026-07-15-020000/metadata.json", { Status: "Success", Scope: { Included: ["Apps"] }, Items: {}, TenantId: OTHER })
-    await shared.put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Included: ["Apps"] }, Items: {}, TenantId: TENANT })
+    await shared.put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 } })
+    await shared.put("backup-2026-07-15-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 }, TenantId: OTHER })
+    await shared.put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] }, ItemCounts: { Apps: 0 }, TenantId: TENANT })
     const two = await shared.run({ excluded: ["Apps"] })
     expect(two.folders).toEqual(["backup-2026-07-01-020000", "backup-2026-07-15-020000", "backup-2026-08-01-020000", "backup-2026-09-24-120000"])
     expect(two.log).toContain("Kept 1 older backup because it holds the newest copy of types this backup leaves out.")
@@ -364,6 +365,7 @@ describe("backup listing is scoped to the tenant", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+      if (url.pathname.endsWith(".tenuvault-owner.json")) return new Response(null, { status: 404 })
       if (url.pathname.endsWith("metadata.json")) return Response.json(owners[url.pathname.split("/")[2]!])
       if (url.searchParams.get("delimiter")) return new Response(Object.keys(owners).map((name) => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(""))
       return new Response(`<Blobs><Blob><Name>${url.searchParams.get("prefix")}metadata.json</Name><Properties><Content-Length>7</Content-Length></Properties></Blob></Blobs>`)

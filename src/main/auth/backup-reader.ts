@@ -3,8 +3,11 @@ import type { BackupRequest, RunTokens } from "../backup/engine"
 import type { BackupReaderStatus, BackupReaderTestResult } from "../../shared/ipc"
 import type { SecureStore } from "../storage/secure-store"
 import { RESOURCE_SCOPES } from "../../shared/constants"
-import { isGuid } from "../../shared/security"
-import { MODULE_BY_ID } from "../../shared/services/modules"
+import { accessTokenClaims } from "./token-identity"
+import { isGuid, normalizeGuid } from "../../shared/security"
+import { DEFAULT_SELECTION, MODULES, type ServiceSelection } from "../../shared/services/modules"
+import { READER_ALLOWED_ROLES, readerExcludedFolders, readerRequiredRoles, SCRIPT_SERVICE } from "../../shared/services/manifest"
+import { namedSignInCode, signInLogCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { certificateIdentity, createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
 import { fetchNetworkClient } from "./network-client"
 
@@ -16,31 +19,13 @@ import { fetchNetworkClient } from "./network-client"
  * manual backup, restore and other change uses the admin's own sign-in.
  */
 
-/** The Microsoft Graph application permissions a Backup Reader must have. */
-export const READER_REQUIRED_ROLES = [
-  "DeviceManagementApps.Read.All",
-  "DeviceManagementConfiguration.Read.All",
-  "DeviceManagementRBAC.Read.All",
-  "DeviceManagementScripts.Read.All",
-  "DeviceManagementServiceConfig.Read.All",
-] as const
-
-/** Optional: also exposes the managed device inventory, so it is opt-in for the two types that need it. */
-export const DEVICE_INVENTORY_ROLE = "DeviceManagementManagedDevices.Read.All"
-
-/** Types Microsoft Graph only returns with DEVICE_INVENTORY_ROLE. */
-export const DEVICE_INVENTORY_TYPES = ["DeviceCategories", "DeviceCleanupRules"]
-
-/**
- * Optional: reads Entra policies for the Conditional Access module (CA policies, named locations,
- * authentication strengths). Read only, but it covers every policy of the organization, so it is opt-in.
+/*
+ * The Microsoft Graph application permissions of a Backup Reader come from the permission manifest
+ * (shared/services/manifest) and follow the services the tenant backs up. It may hold the read
+ * permission of any area of any service, and nothing else. It must hold every permission of a
+ * service that is on and reads without a token pre-check, which is Intune. A permission it lacks
+ * for any other service that is on only leaves that service's types out.
  */
-export const CONDITIONAL_ACCESS_ROLE = MODULE_BY_ID.get("conditionalAccess")!.readerRole!
-
-/** Types Microsoft Graph only returns with CONDITIONAL_ACCESS_ROLE. */
-export const CONDITIONAL_ACCESS_TYPES = MODULE_BY_ID.get("conditionalAccess")!.areas.flatMap((area) => [...area.folders])
-
-const ALLOWED_ROLES = new Set<string>([...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE, CONDITIONAL_ACCESS_ROLE])
 
 const CERTIFICATE_DAYS = 365
 
@@ -70,9 +55,11 @@ export interface BackupReaderCredential {
   active: Certificate | null
   /** A new certificate waiting to be uploaded and verified, for setup or renewal. */
   pending: Certificate | null
-  /** The exact Graph roles seen at the last verification. Any change stops the reader until verified again. */
+  /** The exact Graph roles seen at the last verification. Scheduled backups use no role beyond them. */
   verifiedRoles: string[] | null
   verifiedAt?: string
+  /** How the roles of the last token differed from the verified ones, until they match or are verified again. */
+  roleChange?: { added: string[]; removed: string[]; at: string }
   /** The certificate file last saved from the card, tied to its certificate so a new one hides it. */
   exportedCertificate?: { fileName: string; at: string; thumbprintSha256: string }
   lastTest?: BackupReaderTestResult
@@ -82,6 +69,7 @@ export interface BackupReaderCredential {
 
 export interface AcquiredToken {
   accessToken: string
+  expiresOn?: Date | null
 }
 
 /**
@@ -93,17 +81,31 @@ export type AcquireToken = (credential: { tenantId: string; clientId: string; ce
 const KEY = "backupReader."
 
 export class BackupReaderService {
+  private readonly bindToken?: (tenantId: string, clientId: string, scope: string, token: string, expiresOn?: Date | null) => void
+  private readonly connectionChanged?: (tenantId: string) => void
   private readonly now: () => Date
   private readonly acquire: AcquireToken
+  private readonly services: (tenantId: string) => ServiceSelection
 
   constructor(
     private readonly store: SecureStore,
     // fetch: the bridged Chromium fetch MSAL token traffic must use, like AuthManager. Token
     // requests through the bridge are also license-checked there, so this must stay the bridge.
-    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch } = {},
+    // services: what the tenant backs up, which decides the roles its reader needs. When left out,
+    // the services that are on by default.
+    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch; services?: (tenantId: string) => ServiceSelection; connectionChanged?: (tenantId: string) => void; bindToken?: BackupReaderService["bindToken"] } = {},
   ) {
+    this.bindToken = options.bindToken
+    this.connectionChanged = options.connectionChanged
     this.now = options.now ?? (() => new Date())
     this.acquire = options.acquire ?? msalAcquire(options.fetch)
+    this.services = options.services ?? (() => DEFAULT_SELECTION)
+  }
+
+  /** The credential used for requests, never the public certificate waiting beside an active one. */
+  connectionIdentity(tenantId: string): string | null {
+    const credential = this.read(tenantId)
+    return (credential?.active ?? credential?.pending)?.thumbprintSha256 ?? null
   }
 
   status(tenantId: string): BackupReaderStatus | null {
@@ -126,7 +128,9 @@ export class BackupReaderService {
       exportedCertificate: exported && exported.thumbprintSha256 === shown.thumbprintSha256 ? { fileName: exported.fileName, at: exported.at } : null,
       lastTest: credential.lastTest ?? null,
       lastRun: credential.lastRun ?? null,
-      excludedTypes: excludedTypes(credential.verifiedRoles),
+      // A verified role the last token no longer carried reads nothing, so its types are named as left out.
+      excludedTypes: readerExcludedFolders(credential.verifiedRoles && credential.verifiedRoles.filter((role) => !credential.roleChange?.removed.includes(role)), this.services(credential.tenantId)),
+      roleChange: credential.roleChange ?? null,
       renewalPending: !!credential.active && !!credential.pending,
     }
   }
@@ -137,7 +141,7 @@ export class BackupReaderService {
    * the script with the exported file and then verifying always matches.
    */
   prepare(tenantId: string, deviceName: string): BackupReaderStatus {
-    const tenant = tenantId.toLowerCase()
+    const tenant = normalizeGuid(tenantId)
     const credential = this.read(tenant) ?? { tenantId: tenant, clientId: "", active: null, pending: null, verifiedRoles: null }
     if (!credential.pending) {
       const subject = `TenuVault Backup Reader (${deviceName.replace(/[^\w .-]/g, "").slice(0, 48) || "device"})`
@@ -149,8 +153,8 @@ export class BackupReaderService {
   }
 
   /**
-   * Checks the Backup Reader with Microsoft and records the exact roles it has, so later runs refuse it
-   * when they change. Checks the active certificate, or the waiting one at the first setup or when
+   * Checks the Backup Reader with Microsoft and records the exact roles it has, so later runs use
+   * nothing beyond them. Checks the active certificate, or the waiting one at the first setup or when
    * `renewal` asks for it; a verified renewal replaces the active certificate. Always asks Microsoft for
    * a new token. Throws BackupReaderError with the reason when Microsoft or the checks refuse it.
    */
@@ -158,16 +162,18 @@ export class BackupReaderService {
     const credential = this.read(tenantId)
     if (!credential) throw new BackupReaderError("Create the Backup Reader certificate first.")
     if (!isGuid(clientId)) throw new BackupReaderError("Enter the Backup Reader's application (client) ID that the setup script printed.")
-    if (credential.active && credential.clientId && credential.clientId.toLowerCase() !== clientId.toLowerCase()) {
+    if (credential.active && credential.clientId && normalizeGuid(credential.clientId) !== normalizeGuid(clientId)) {
       throw new BackupReaderError("This tenant already has a Backup Reader with a different application ID. Remove it first to switch.")
     }
     if (options.renewal && !credential.pending) throw new BackupReaderError("No renewal certificate is waiting. Create one with Renew certificate.")
     const certificate = options.renewal || !credential.active ? credential.pending! : credential.active
-    const app = { tenantId: credential.tenantId, clientId: clientId.toLowerCase(), certificate }
+    const app = { tenantId: credential.tenantId, clientId: normalizeGuid(clientId), certificate }
     const token = await this.acquire(app, RESOURCE_SCOPES.graph, { fresh: true }).catch((error: unknown) => {
       throw refused(error) ?? error
     })
-    const roles = checkReaderToken(token.accessToken, app, "graph")
+    const selection = this.services(credential.tenantId)
+    const roles = checkReaderToken(token.accessToken, app, "graph", selection)
+    requireSomethingToRead(roles, selection)
     credential.clientId = app.clientId
     if (certificate === credential.pending) {
       credential.active = certificate
@@ -175,6 +181,7 @@ export class BackupReaderService {
     }
     credential.verifiedRoles = roles
     credential.verifiedAt = this.now().toISOString()
+    delete credential.roleChange
     // A new certificate or new roles make an earlier confidence test meaningless.
     delete credential.lastTest
     this.write(credential)
@@ -209,24 +216,32 @@ export class BackupReaderService {
   }
 
   /** Records that a scheduled backup actually ran with the reader, for the card and Schedule tab. */
-  recordRun(tenantId: string, status: string, trigger: BackupRequest["trigger"]): void {
+  recordRun(tenantId: string, status: string, trigger: BackupRequest["trigger"], reader: { registrationId?: string; certificate?: string } | undefined): void {
     if (trigger !== "scheduled") return
     try {
       const credential = this.read(tenantId)
-      if (!credential) return
+      // Only the reader the run captured gets the result; one replaced or renewed while it waited keeps its own card.
+      if (!credential || !reader?.registrationId || !reader.certificate || !this.sameReader(credential, reader)) return
       credential.lastRun = { at: this.now().toISOString(), status }
       this.write(credential)
     } catch { console.warn("[backup-reader] Scheduled run status could not be saved") }
   }
 
   remove(tenantId: string): void {
-    this.store.delete(KEY + tenantId.toLowerCase())
+    this.store.delete(KEY + normalizeGuid(tenantId))
+    this.connectionChanged?.(tenantId)
   }
 
   /**
    * Tokens for a scheduled backup of the tenant, or null when it has no verified Backup Reader or its
    * certificate has expired, so the backup uses the admin's sign-in as before. Every token is checked
-   * before use: right tenant, app and audience, app-only, and exactly the verified roles.
+   * before use: right tenant, app and audience, app-only, and no role outside read-only backup.
+   *
+   * Roles that changed since the verification do not stop the backup. It reads only what the
+   * verified roles its token still carries cover: a role added since then is not used, a role
+   * removed leaves its types out, and the change is kept for the Backup Reader card to ask for a
+   * new verification. A reader that can read nothing the tenant backs up is refused; the backup
+   * never moves to the admin's sign-in on its own.
    */
   tokens(request: BackupRequest): RunTokens | null {
     const credential = this.read(request.tenantId)
@@ -234,24 +249,75 @@ export class BackupReaderService {
     if (Date.parse(credential.active.notAfter) <= this.now().getTime()) return null
     const app = { tenantId: credential.tenantId, clientId: credential.clientId, certificate: credential.active }
     const verified = credential.verifiedRoles
-    const token = async (resource: "graph" | "storage") => {
-      const acquired = await this.acquire(app, RESOURCE_SCOPES[resource]).catch((error: unknown) => {
+    const selection = this.services(credential.tenantId)
+    // What the run may read with: the verified roles the reader's token still carries. Microsoft
+    // Graph refuses a read whose role was removed from the app, whatever was verified.
+    let usable = verified
+    // A run asks for a token before every request, so the roles are compared once per set of roles.
+    let seen: string | undefined
+    const token = async (resource: "graph" | "storage", fresh = false) => {
+      const acquired = await (fresh ? this.acquire(app, RESOURCE_SCOPES[resource], { fresh: true }) : this.acquire(app, RESOURCE_SCOPES[resource])).catch((error: unknown) => {
         // A network failure or a transient refusal stays as it is, so the backup is retried.
         throw refused(error, { permanentOnly: true }) ?? error
       })
-      const roles = checkReaderToken(acquired.accessToken, app, resource)
-      if (resource === "graph" && !sameRoles(roles, verified)) {
-        throw new BackupReaderError(
-          `The Backup Reader's Microsoft Graph permissions changed since they were verified (now: ${roles.join(", ") || "none"}). Verify the Backup Reader again in Settings.`,
-        )
+      if (!acquired.accessToken) throw new BackupReaderError("Microsoft returned no token for the Backup Reader.")
+      // The certificate acquisition binds an opaque Storage bearer to this tenant, app and resource.
+      // For Graph, verify the current roles on every acquisition, including after an app changes.
+      const claims = accessTokenClaims(acquired.accessToken)
+      const roles = resource === "storage" && !claims ? [] : checkReaderClaims(claims, app, resource, selection)
+      if (resource === "graph" && roles.join(" ") !== seen) {
+        this.noteRoleChange(credential.tenantId, roles, { registrationId: credential.clientId, certificate: credential.active?.thumbprintSha256 })
+        usable = verified.filter((role) => roles.includes(role))
+        requireSomethingToRead(usable, selection)
+        // Remembered only once the checks passed, so a refused reader is refused on every request of the run.
+        seen = roles.join(" ")
       }
+      this.bindToken?.(app.tenantId, app.clientId, RESOURCE_SCOPES[resource], acquired.accessToken, acquired.expiresOn)
       return acquired.accessToken
     }
-    return { mode: "app-only", registrationId: credential.clientId, graph: () => token("graph"), storage: () => token("storage"), excludedTypes: excludedTypes(verified) }
+    return {
+      mode: "app-only",
+      registrationId: credential.clientId,
+      readerCertificate: credential.active.thumbprintSha256,
+      graph: (options) => token("graph", options?.fresh),
+      storage: () => token("storage"),
+      // Answered from the roles in the reader's token, so a run leaves out the types of a role that was removed before it asks for them.
+      excludedTypes: async () => {
+        await token("graph")
+        return readerExcludedFolders(usable, selection)
+      },
+    }
+  }
+
+  /**
+   * Keeps how a token's roles differ from the verified ones, and forgets it once they match again.
+   * It compares with the roles verified by now, so a backup that started before the admin verified
+   * again does not bring the notice back.
+   */
+  /** The stored reader is still the registration and certificate a run captured. */
+  private sameReader(credential: BackupReaderCredential, reader: { registrationId?: string; certificate?: string }): boolean {
+    return !!reader.registrationId && normalizeGuid(credential.clientId) === normalizeGuid(reader.registrationId) && credential.active?.thumbprintSha256 === reader.certificate
+  }
+
+  private noteRoleChange(tenantId: string, roles: string[], reader: { registrationId?: string; certificate?: string }): void {
+    const credential = this.read(tenantId)
+    if (!credential?.verifiedRoles || !this.sameReader(credential, reader)) return
+    const verified = credential.verifiedRoles
+    const added = roles.filter((role) => !verified.includes(role))
+    const removed = verified.filter((role) => !roles.includes(role))
+    const previous = credential.roleChange
+    if (!added.length && !removed.length) {
+      if (!previous) return
+      delete credential.roleChange
+    } else {
+      if (previous && previous.added.join(" ") === added.join(" ") && previous.removed.join(" ") === removed.join(" ")) return
+      credential.roleChange = { added, removed, at: this.now().toISOString() }
+    }
+    this.write(credential)
   }
 
   private read(tenantId: string): BackupReaderCredential | null {
-    const tenant = tenantId.toLowerCase()
+    const tenant = normalizeGuid(tenantId)
     const raw = this.store.get(KEY + tenant)
     if (!raw) return null
     let parsed: unknown
@@ -268,7 +334,8 @@ export class BackupReaderService {
   }
 
   private write(credential: BackupReaderCredential): void {
-    this.store.set(KEY + credential.tenantId.toLowerCase(), JSON.stringify(credential))
+    this.store.set(KEY + normalizeGuid(credential.tenantId), JSON.stringify(credential))
+    this.connectionChanged?.(credential.tenantId)
   }
 }
 
@@ -282,7 +349,7 @@ function isCertificate(value: unknown): value is Certificate {
 function isCredential(value: unknown, tenant: string): value is BackupReaderCredential {
   if (!value || typeof value !== "object") return false
   const credential = value as Partial<BackupReaderCredential>
-  if (typeof credential.tenantId !== "string" || credential.tenantId.toLowerCase() !== tenant) return false
+  if (typeof credential.tenantId !== "string" || normalizeGuid(credential.tenantId) !== tenant) return false
   if (typeof credential.clientId !== "string") return false
   if (credential.active !== null && !isCertificate(credential.active)) return false
   if (credential.pending !== null && !isCertificate(credential.pending)) return false
@@ -291,59 +358,66 @@ function isCredential(value: unknown, tenant: string): value is BackupReaderCred
   return true
 }
 
-function excludedTypes(roles: string[] | null): string[] {
-  return [...(roles?.includes(DEVICE_INVENTORY_ROLE) ? [] : DEVICE_INVENTORY_TYPES), ...(roles?.includes(CONDITIONAL_ACCESS_ROLE) ? [] : CONDITIONAL_ACCESS_TYPES)]
+/**
+ * Refuses a reader that can read nothing of what the tenant backs up. Its scheduled backups would
+ * save nothing and still look fine, so the admin is told which services it lacks instead.
+ */
+function requireSomethingToRead(roles: readonly string[], selection: ServiceSelection): void {
+  const backedUp = readerExcludedFolders([], selection)
+  if (!backedUp.length || readerExcludedFolders(roles, selection).length < backedUp.length) return
+  const services = MODULES.filter((module) => selection.services.includes(module.id) && module.areas.some((area) => area.folders.length))
+  throw new BackupReaderError(
+    `The Backup Reader has no permission to read ${services.map((module) => module.label).join(" or ")}, which is all this tenant backs up. Have your Entra administrator run the setup script with -Services ${services.map((module) => SCRIPT_SERVICE[module.id]).join(",")}, then verify again.`,
+  )
 }
 
-function sameRoles(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((role) => b.includes(role))
+/**
+ * The first small read that shows a reader's token works for something the tenant backs up: the
+ * test read of a service that is on and whose permission the reader holds. Undefined when it holds
+ * the permission of none of them.
+ */
+export function readerConfidenceRead(selection: ServiceSelection, roles: readonly string[]): { label: string; path: string } | undefined {
+  const module = MODULES.find((candidate) => selection.services.includes(candidate.id) && candidate.readerProbe && roles.includes(candidate.readerProbe.role))
+  return module?.readerProbe && { label: module.label, path: module.readerProbe.path }
 }
 
 /**
  * Checks an app-only token before any request uses it, and returns its Graph roles. The signature is
  * not verified: MSAL received the token over TLS from Microsoft's token endpoint, so this guards
  * against a misconfigured app registration, not a forged token.
+ *
+ * `selection` is what the tenant backs up: it decides which roles the reader must hold. Without it,
+ * the services that are on by default.
  */
-export function checkReaderToken(token: string, app: { tenantId: string; clientId: string }, resource: "graph" | "storage"): string[] {
-  let claims: Record<string, unknown>
-  try {
-    claims = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as Record<string, unknown>
-  } catch {
-    throw new BackupReaderError("Microsoft returned a Backup Reader token the app cannot read.")
+export function checkReaderToken(token: string, app: { tenantId: string; clientId: string }, resource: "graph" | "storage", selection: ServiceSelection = DEFAULT_SELECTION): string[] {
+  return checkReaderClaims(accessTokenClaims(token), app, resource, selection)
+}
+
+function checkReaderClaims(claims: Record<string, unknown> | undefined, app: { tenantId: string; clientId: string }, resource: "graph" | "storage", selection: ServiceSelection): string[] {
+  if (!claims) {
+    throw new BackupReaderError(resource === "graph"
+      ? "TenuVault cannot verify the Backup Reader's Microsoft Graph roles in this token. Scheduled backups require a token with verifiable read-only roles. Check the Backup Reader in Settings."
+      : "Microsoft returned a Backup Reader token the app cannot read.")
   }
   const appId = typeof claims.appid === "string" ? claims.appid : claims.azp
-  if (typeof claims.tid !== "string" || claims.tid.toLowerCase() !== app.tenantId.toLowerCase()) throw new BackupReaderError("The Backup Reader token was issued for a different tenant.")
-  if (typeof appId !== "string" || appId.toLowerCase() !== app.clientId.toLowerCase()) throw new BackupReaderError("The Backup Reader token was issued to a different app registration.")
+  if (typeof claims.tid !== "string" || normalizeGuid(claims.tid) !== normalizeGuid(app.tenantId)) throw new BackupReaderError("The Backup Reader token was issued for a different tenant.")
+  if (typeof appId !== "string" || normalizeGuid(appId) !== normalizeGuid(app.clientId)) throw new BackupReaderError("The Backup Reader token was issued to a different app registration.")
   if (typeof claims.aud !== "string" || !AUDIENCES[resource].has(claims.aud)) throw new BackupReaderError("The Backup Reader token is for a different resource.")
   // Delegated tokens carry scp; the Backup Reader is only ever an application.
   if (claims.scp !== undefined || (claims.idtyp !== undefined && claims.idtyp !== "app")) throw new BackupReaderError("The Backup Reader token is not an app-only token.")
   const roles = Array.isArray(claims.roles) ? claims.roles.filter((role): role is string => typeof role === "string").sort() : []
   if (resource === "storage") return roles
-  const extra = roles.filter((role) => !ALLOWED_ROLES.has(role))
+  const extra = roles.filter((role) => !READER_ALLOWED_ROLES.has(role))
   if (extra.length) {
     throw new BackupReaderError(
       `The Backup Reader has permissions beyond read-only backup: ${extra.join(", ")}. Remove them from the app registration; TenuVault only uses a reader that cannot change Intune or Entra.`,
     )
   }
-  const missing = READER_REQUIRED_ROLES.filter((role) => !roles.includes(role))
+  const missing = readerRequiredRoles(selection).filter((role) => !roles.includes(role))
   if (missing.length) {
     throw new BackupReaderError(`The Backup Reader is missing permissions or their admin consent: ${missing.join(", ")}. Run the setup script again or grant admin consent.`)
   }
   return roles
-}
-
-/**
- * Refusals that retrying cannot fix, with what to do. Other codes, such as AADSTS90033 (a transient
- * service error) or AADSTS700024 (an assertion outside its time window, for example after a clock
- * correction), may succeed on a retry.
- */
-const PERMANENT_REFUSALS: Record<string, string> = {
-  AADSTS700027: "Microsoft does not know this certificate. Upload the exported certificate with the setup script, then verify again.",
-  AADSTS7000222: "The certificate has expired. Create a renewal certificate in Settings and upload it.",
-  AADSTS700016: "No app registration with this application ID exists in the tenant.",
-  AADSTS7000112: "The Backup Reader app registration is disabled.",
-  AADSTS7000229: "The Backup Reader app registration has no service principal in the tenant. Run the setup script again.",
-  AADSTS53003: "Conditional Access for workload identities blocked the Backup Reader from this location.",
 }
 
 /**
@@ -353,9 +427,12 @@ const PERMANENT_REFUSALS: Record<string, string> = {
  */
 function refused(error: unknown, options: { permanentOnly?: boolean } = {}): BackupReaderError | null {
   const message = error instanceof Error ? error.message : String(error)
-  const code = /AADSTS\d+/.exec(message)?.[0]
+  const code = namedSignInCode(message)
   if (!code) return null
-  const hint = PERMANENT_REFUSALS[code]
+  // The error table says which refusals no retry can fix, with what to do. Any other code, such as
+  // AADSTS90033 (a transient service error) or AADSTS700024 (an assertion outside its time window,
+  // for example after a clock correction), may succeed on a retry.
+  const hint = signInErrorRow(code)?.reader
   if (!hint && options.permanentOnly) return null
   return new BackupReaderError(`Microsoft refused the Backup Reader (${code}). ${hint ?? "Try again in a few minutes, then check the app registration and its certificate."}`, { cause: error })
 }
@@ -375,13 +452,13 @@ function msalAcquire(fetchImpl?: typeof fetch): AcquireToken {
         },
         system: {
           ...(fetchImpl ? { networkClient: fetchNetworkClient(fetchImpl) } : {}),
-          loggerOptions: { logLevel: LogLevel.Warning, piiLoggingEnabled: false, loggerCallback: (_level, message) => console.log(`[msal reader] ${message}`) },
+          loggerOptions: { logLevel: LogLevel.Warning, piiLoggingEnabled: false, loggerCallback: (_level, message) => console.log("[msal reader]", signInLogCode(message) ?? "sign_in_warning") },
         },
       })
       apps.set(key, app)
     }
     const result = await app.acquireTokenByClientCredential({ scopes: [scope], skipCache: options?.fresh === true })
     if (!result?.accessToken) throw new Error("Microsoft returned no token for the Backup Reader.")
-    return { accessToken: result.accessToken }
+    return { accessToken: result.accessToken, expiresOn: result.expiresOn }
   }
 }

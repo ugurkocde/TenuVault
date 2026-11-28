@@ -1,0 +1,20 @@
+{
+  "folder": "ApplicationProxyConnectorGroups",
+  "source": "Diagnostic GET with broad app token; no requestable read permission established; excluded from backups",
+  "responses": {
+    "/beta/onPremisesPublishingProfiles/applicationProxy/connectorGroups": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-66a7b95ede4c",
+            "name": "Example name",
+            "region": "eur",
+            "connectorGroupType": "applicationProxy",
+            "isDefault": true
+          }
+        ]
+      }
+    }
+  }
+}

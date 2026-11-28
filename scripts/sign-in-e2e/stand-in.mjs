@@ -6,8 +6,8 @@
  * code, the state and client_info to the redirect URI as a form (response_mode form_post), and the
  * token endpoint checks the code, the client, the redirect URI and the PKCE verifier before it
  * issues an RS256 ID token signed with a key published in its own JWKS, with Microsoft's issuer,
- * audience, tenant and nonce claims. Nothing in the app is told about it: the runner's hosts file
- * and trust store send the app's traffic here (see runner.mjs).
+ * audience, tenant and nonce claims. The harness proxy routes the app and Playwright here.
+ * The runner's hosts file routes the system browser here (see runner.mjs).
  *
  * It also answers the two licensing requests that follow a first sign-in (LICENSE_HOST), so the
  * test sends nothing to the production licensing service.
@@ -37,6 +37,7 @@ const LICENSE_HEALTH = {
   desktopFeedback: { ok: true, missing: [] },
 }
 export const HARNESS_COOKIE = "tenuvault_sign_in_e2e"
+export const AUTHORIZE_FORM_HEADER = "x-tenuvault-sign-in-e2e-form"
 
 const b64url = (value) => Buffer.from(value).toString("base64url")
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -138,6 +139,7 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
     record(`authorize answered (${mode}) to ${redirectUri}`)
     const inputs = Object.entries(fields).map(([name, value]) => `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`).join("")
     // As Microsoft's form_post answer does: a form the page submits as soon as it loads.
+    response.setHeader(AUTHORIZE_FORM_HEADER, "1")
     html(response, 200, `<body onload="document.forms[0].submit()"><form method="POST" action="${escapeHtml(redirectUri)}">${inputs}<noscript><button>Continue</button></noscript></form></body>`)
   }
 

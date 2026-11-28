@@ -1,3 +1,4 @@
+import { comparisonReadNotices, comparisonTypeName, LEGACY_COMPARISON_NOTICE } from "./backup-read-coverage"
 import type { Drift, DriftResult } from "./drift"
 import { formatValue, settingLabel } from "./drift-format"
 
@@ -43,8 +44,12 @@ function csvCell(value: string): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
-export function driftCsv(result: Pick<DriftResult, "drifts" | "settingNames">): string {
+export function driftCsv(result: Pick<DriftResult, "drifts" | "settingNames" | "unknownTypes" | "largeFolders" | "legacyReadFailure">): string {
   const rows: string[][] = []
+  if (result.legacyReadFailure) rows.push([LEGACY_COMPARISON_NOTICE, "", "Coverage warning", "", "", "", "", "", "", ""])
+  for (const folder of new Set([...result.unknownTypes ?? [], ...result.largeFolders ?? []])) {
+    rows.push(["", comparisonTypeName(folder), "Not compared", "", "", "", "", "", "", ""])
+  }
   for (const drift of result.drifts) {
     const item = [drift.configName, drift.type, drift.changeType, drift.severity, drift.previousName ?? ""]
     const settings = settingRows(drift, result.settingNames)
@@ -56,6 +61,8 @@ export function driftCsv(result: Pick<DriftResult, "drifts" | "settingNames">): 
 
 /** `filter` describes the Drift Detection page filter when the report holds only the changes it showed. */
 export function driftJson(result: DriftResult, tenantName: string | undefined, exportedAt = new Date().toISOString(), filter?: string): string {
+  const unknownTypes = [...new Set([...result.unknownTypes ?? [], ...result.largeFolders ?? []])]
+  const coverageNotices = comparisonReadNotices({ unknownTypes, legacyReadFailure: result.legacyReadFailure })
   return JSON.stringify({
     exportedAt,
     tenant: tenantName ?? null,
@@ -69,6 +76,9 @@ export function driftJson(result: DriftResult, tenantName: string | undefined, e
       deleted: result.drifts.filter((drift) => drift.changeType === "deleted").length,
     },
     warnings: result.warnings,
+    ...(unknownTypes.length ? { unknownTypes } : {}),
+    ...(result.legacyReadFailure ? { legacyReadFailure: true } : {}),
+    ...(coverageNotices.length ? { coverageNotices } : {}),
     items: result.drifts.map((drift) => ({
       name: drift.configName,
       ...(drift.previousName ? { previousName: drift.previousName } : {}),

@@ -1,15 +1,35 @@
+import { completeHalf, largeRunProblems, matchingCompanions, ordinaryOnlyManifest, withRunRecord } from "../../../../shared/backup-companion"
+import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
+import { maskBackupAccountIdentifiers } from "../../../../shared/backup-log"
+import { manifestStatus } from "../../../../shared/intune/backup-status"
+import { exportLargeArchive, exportMixedArchive } from "../../../../main/backup/large-archive"
+import { Readable } from "node:stream"
+import { readJsonCapped } from "../../../../shared/capped-body"
 import { decodeXml } from "~/lib/storage/list"
-import { blobPath, isSafeArchivePath } from "../../../../shared/security"
+import { isSafeArchivePath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
-import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
+import { BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
 import { readBytesCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
-import { readOwnedBackup } from "~/lib/policies/backup-owner"
+import { readOwnedBackup, type BackupOwnerRead } from "~/lib/policies/backup-owner"
 
 interface ListedFile {
   path: string
   /** Content length from the listing, or null when storage did not report one. */
   size: number | null
+}
+
+function metadataForZip(content: Uint8Array, ordinaryExport: Record<string, unknown> | null): string | Uint8Array {
+  let metadata: Record<string, unknown> | null = ordinaryExport
+  if (!metadata) {
+    try { metadata = JSON.parse(new TextDecoder().decode(content)) }
+    catch { return content }
+  }
+  if (metadata && typeof metadata.Error === "string" && String(manifestStatus(metadata)).trim().toLowerCase() === "failed") {
+    const error = maskBackupAccountIdentifiers(metadata.Error)
+    if (error !== metadata.Error) return JSON.stringify({ ...metadata, Error: error })
+  }
+  return ordinaryExport ? JSON.stringify(ordinaryExport) : content
 }
 
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string) {
@@ -21,8 +41,8 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
-        client_id: appId,
-        client_secret: clientSecret,
+        client_id: appId ?? "",
+        client_secret: clientSecret ?? "",
         scope: "https://storage.azure.com/.default",
         grant_type: "client_credentials",
       }),
@@ -37,6 +57,11 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
   return tokenData.access_token
 }
 
+/** How long a split run's record may take before the early manifest stands. */
+const RUN_RECORD_TIMEOUT_MS = 10_000
+const COMPANION_UNAVAILABLE = "The other half of this run could not be read in time, so the full download did not start. Try again in a moment, or download the ordinary items only."
+const RECORD_UNAVAILABLE = "The run's final result could not be read in time, so the full download did not start. Try again in a moment, or download the ordinary items only."
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -48,7 +73,8 @@ export async function POST(request: NextRequest) {
       backupId
     } = body
 
-    if (!tenantId || !appId || !clientSecret || !storageAccountName || !backupId) {
+    const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+    if (!tenantId || (!local && (!appId || !clientSecret)) || !storageAccountName || !backupId) {
       return NextResponse.json(
         { error: "Missing required parameters" },
         { status: 400 }
@@ -62,6 +88,102 @@ export async function POST(request: NextRequest) {
 
     // Get access token for Azure Storage
     const accessToken = await getAccessToken(tenantId, appId, clientSecret)
+
+    const readFile = (name: string, signal?: AbortSignal) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
+      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
+      ...(signal ? { signal } : {}),
+    })
+    const readJsonNow = async (name: string, signal?: AbortSignal) => {
+      const response = await readFile(name, signal)
+      if (!response.ok) throw new Error(`A backup file could not be read (${response.status})`)
+      const content = await readJsonCapped(response, 8 * 1024 * 1024)
+      if (content.kind !== "json") throw new Error("A backup file is invalid or oversized")
+      return content.value as Record<string, any>
+    }
+    // A deadline covers the whole read, including storage that does not observe the signal, such as
+    // this device's store.
+    const readJson = (name: string, signal?: AbortSignal): Promise<Record<string, any>> => !signal ? readJsonNow(name) : Promise.race([
+      readJsonNow(name, signal),
+      new Promise<never>((_resolve, reject) => {
+        const fail = () => reject(new Error("A backup file could not be read in time"))
+        if (signal.aborted) fail()
+        else signal.addEventListener("abort", fail, { once: true })
+      }),
+    ])
+
+    const readLarge = (name: string) => readJson(`${backupId}/${name}`)
+    // Ownership is checked before either archive path reads snapshots.
+    let ordinaryExport: Record<string, any> | null = null
+    const archiveResponse = async (largeOwner: BackupOwnerRead): Promise<NextResponse | null> => {
+      if (!largeOwner.ok) return NextResponse.json({ error: largeOwner.error }, { status: largeOwner.status })
+      let metadata = largeOwner.metadata
+      // A record that exists but could not be read in time says nothing about the run, so the full
+      // download is offered again instead of being refused as incomplete.
+      let recordUnavailable = false, companionUnavailable = false
+      // A record that is absent or not valid JSON names no run, the same way history reads it.
+      const missing = (error: unknown) => error instanceof Error && (error.message.includes("(404)") || error.message.includes("invalid or oversized"))
+      // An ordinary-only copy needs neither the run record nor the companion, so large storage never delays it.
+      const ordinaryOnlyRequest = body.ordinaryOnly === true && !isLargeBackup(backupId)
+      // A split run whose early manifest could not be replaced keeps its final result in its own record.
+      if (metadata && !ordinaryOnlyRequest && !isLargeBackup(backupId) && metadata.CompanionBackup !== undefined && typeof metadata.RunStatus !== "string") {
+        let record: Record<string, any> | null = null
+        try { record = await readJson(`${backupId}/${BACKUP_RUN_RECORD_FILE}`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch (error) { recordUnavailable = !missing(error) }
+        // Without the record the full download cannot be judged, so the admin hears it now, not after a
+        // companion lookup that could stall as well.
+        if (recordUnavailable) return NextResponse.json({ error: RECORD_UNAVAILABLE, ordinaryOnlyAvailable: true }, { status: 503 })
+        metadata = withRunRecord(backupId, metadata, record) ?? metadata
+      }
+      if (metadata && (metadata.CompanionBackup !== undefined || metadata.LargeBackupOutcomes !== undefined)) {
+        const otherId = metadata.CompanionBackup
+        let other: Record<string, any> | null = null
+        if (!ordinaryOnlyRequest && typeof otherId === "string" && isBackupName(otherId)) {
+          // A companion that does not answer in time is not a broken run: the admin can retry, or take the
+          // ordinary items.
+          try { other = await readJson(`${otherId}/metadata.json`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch (error) { if (!missing(error) && !(error instanceof Error && /could not be read \(4\d\d\)/.test(error.message))) companionUnavailable = true }
+          // An ordinary half that already does not match needs no record to be refused.
+          if (other && isLargeBackup(backupId) && typeof other.RunStatus !== "string" && matchingCompanions(backupId, metadata, otherId, other)) {
+            let record: Record<string, any> | null = null
+            try { record = await readJson(`${otherId}/${BACKUP_RUN_RECORD_FILE}`, AbortSignal.timeout(RUN_RECORD_TIMEOUT_MS)) } catch (error) { recordUnavailable = !missing(error) }
+            other = withRunRecord(otherId, other, record) ?? other
+          }
+        }
+        const matches = matchingCompanions(backupId, metadata, otherId, other) && metadata.TenantId?.toLowerCase() === String(tenantId).toLowerCase()
+        if (matches && completeHalf(metadata) && completeHalf(other) && !largeRunProblems(isLargeBackup(backupId) ? other! : metadata).length && body.ordinaryOnly !== true) {
+          const ordinaryId = isLargeBackup(backupId) ? otherId : backupId, largeId = isLargeBackup(backupId) ? backupId : otherId
+          const ordinary = isLargeBackup(backupId) ? other! : metadata, large = isLargeBackup(backupId) ? metadata : other!
+          const stream = Readable.from(exportMixedArchive(tenantId, ordinaryId, ordinary, largeId, large, readJson))
+          return new NextResponse(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+            headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${ordinaryId}.tar"` },
+          })
+        }
+        if ((recordUnavailable || companionUnavailable) && body.ordinaryOnly !== true) return NextResponse.json({ error: recordUnavailable ? RECORD_UNAVAILABLE : COMPANION_UNAVAILABLE, ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 503 })
+        if (isLargeBackup(backupId) || body.ordinaryOnly !== true) return NextResponse.json({ error: "The mixed run is incomplete or its companion does not match. Choose Download ordinary only to export the ordinary snapshots.", ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 409 })
+        ordinaryExport = ordinaryOnlyManifest(metadata, ordinaryOnlyRequest ? "An ordinary-only copy was requested." : matches ? "Large companion is incomplete, or an ordinary-only copy was requested." : "Large companion is missing, unreadable or does not match.")
+        // Without the run's record an early manifest's placeholders say nothing about the large types, so
+        // the copy names them as left out without claiming why.
+        if (ordinaryOnlyRequest && typeof metadata.RunStatus !== "string") {
+          const export_ = ordinaryExport.Export as { omittedLargeTypes: Array<Record<string, unknown>> }
+          ordinaryExport = { ...ordinaryExport, Export: { ...export_, omittedLargeTypes: export_.omittedLargeTypes.map(problem => ({ ...problem, reason: "Not included in this ordinary-only copy." })) } }
+        }
+      }
+      if (largeOwner?.ok && largeOwner.metadata?.LargeItems) {
+        const stream = Readable.from(exportLargeArchive(tenantId, backupId, largeOwner.metadata, readLarge))
+        return new NextResponse(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+          headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${backupId}.tar"` },
+        })
+      }
+
+      if (isLargeBackup(backupId)) return NextResponse.json({ error: "Only complete large backups can be downloaded" }, { status: 409 })
+      return null
+    }
+    // Preserve legacy listing, path and size refusals before any file GET. Large declarations
+    // or a history hint select streaming before those ordinary ZIP limits are applied.
+    const earlyOwner = isLargeBackup(backupId) || body.largeInventory === true
+      ? await readOwnedBackup(readFile, backupId, tenantId, storageAccountName) : null
+    if (earlyOwner) {
+      const response = await archiveResponse(earlyOwner)
+      if (response) return response
+    }
 
     // Function to fetch all files with pagination support
     const fetchAllFiles = async (): Promise<ListedFile[]> => {
@@ -98,7 +220,7 @@ export async function POST(request: NextRequest) {
           if (nameMatch && nameMatch[1]) {
             const blobName = decodeXml(nameMatch[1])
             // Include all files (skip directories which don't have content)
-            if (blobName && !blobName.endsWith('/') && blobName !== `${backupId}/${BACKUP_OWNER_FILE}`) {
+            if (blobName && !blobName.endsWith('/') && blobName !== `${backupId}/${BACKUP_OWNER_FILE}` && blobName !== `${backupId}/${BACKUP_RUN_RECORD_FILE}`) {
               const sizeMatch = blobXml.match(/<Content-Length>(\d+)<\/Content-Length>/)
               const size = sizeMatch ? Number(sizeMatch[1]) : null
               allFiles.push({ path: blobName, size: size !== null && Number.isSafeInteger(size) ? size : null })
@@ -177,6 +299,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Download failed: the backup contains a file name that is not a safe archive path." }, { status: 502 })
     }
 
+    if (!earlyOwner) {
+      const response = await archiveResponse(await readOwnedBackup(readFile, backupId, tenantId, storageAccountName))
+      if (response) return response
+    }
+
     // Import JSZip dynamically
     const JSZip = (await import('jszip')).default
     const zip = new JSZip()
@@ -189,10 +316,6 @@ export async function POST(request: NextRequest) {
     // Ownership is settled by the shared resolver before any file is read: a shared container can
     // hold other tenants' backups, and those are refused, as are backups whose metadata or
     // ownership marker cannot be read.
-    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
-      headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
-    }), backupId, tenantId, storageAccountName)
-    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const batches: string[][] = []
     for (let i = 0; i < filePaths.length; i += batchSize) batches.push(filePaths.slice(i, i + batchSize))
     // Actual fetched bytes, rechecked against the cap: listed lengths can be
@@ -203,7 +326,7 @@ export async function POST(request: NextRequest) {
     for (const batch of batches) {
       const batchPromises = batch.map(async (filePath) => {
         try {
-          const fileUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(filePath)}`
+          const fileUrl = `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(filePath)}`
 
           const fileResponse = await fetch(fileUrl, {
             headers: {
@@ -224,7 +347,7 @@ export async function POST(request: NextRequest) {
             const zipPath = filePath.replace(`${backupId}/`, '')
 
             // Add file to zip with folder structure
-            zip.file(zipPath, content)
+            zip.file(zipPath, zipPath === "metadata.json" ? metadataForZip(content, ordinaryExport) : content)
 
             processedFiles++
             if (processedFiles % 10 === 0 || processedFiles === filePaths.length) {
@@ -283,7 +406,7 @@ export async function POST(request: NextRequest) {
     return new NextResponse(new Uint8Array(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="${backupId}.zip"`,
+        'Content-Disposition': `attachment; filename="${backupId}${ordinaryExport ? "-ordinary-only" : ""}.zip"`,
         'Content-Length': zipBuffer.length.toString(),
       },
     })

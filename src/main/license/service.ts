@@ -1,3 +1,5 @@
+import { ORGANIZATION_RENEWAL_NOTICE, TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { organizationClientIds } from "./client-ids"
 import { readTenantTrials, TENANT_TRIAL_STATE_KEY, type StoredTenantTrial, type TrialTally } from "./tenant-trial-state"
 import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
@@ -57,6 +59,8 @@ interface StoredActivation {
   shareNeedsSignIn?: true
   // Tenant activations: the masked key, for display.
   displayKey?: string
+  // Tenant activations: the last client whose sign-in was accepted by the service.
+  organizationClientId?: string
   // Tenant activations: the Polar id of that key (never the key itself), so the
   // activation can be released after the tenant stops sharing it.
   licenseKeyId?: string
@@ -109,6 +113,7 @@ export interface LicenseServiceOptions {
   platform?: string
   idToken?: IdTokenProvider
   clientId?: ClientIdProvider
+  ownClientId?: ClientIdProvider
   /** Whether the tenant is still saved or has a new sign-in being added. */
   tenantPresent?: (tenantId: string) => boolean
   connectedTenantIds?: () => string[]
@@ -209,6 +214,9 @@ export const FAILURE_COOLDOWN_MS = 60_000
 // keeps its end-to-end activation work inside this budget, and a retry with the same
 // installation reuses an activation the server already created.
 export const LICENSE_REQUEST_TIMEOUT_MS = 45_000
+const LICENSE_HEALTH_TIMEOUT_MS = 10_000
+// A tenant proof can use the legacy payload when capability discovery is slow.
+const TENANT_HASH_HEALTH_WAIT_MS = 250
 
 // The licensing service limits requests per IP address. Several admins behind one corporate
 // NAT, or an MSP activating many tenants, can reach that limit, and the service then answers
@@ -231,6 +239,10 @@ const TRIAL_INSTALL_LIMIT_KEY = "license.tenantTrialInstallLimit"
 const LEGACY_KEYS = ["license.key", "license.trialStartedAt", "license.lastSeenAt", "license.tenants"]
 
 const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+function isPublicClient(clientId: string | null | undefined): boolean {
+  return clientId?.toLowerCase() === TENUVAULT_CLIENT_ID
+}
 
 // Time and status checks for a token whose signature already verified.
 export function entitlementCurrent(
@@ -324,6 +336,13 @@ function retryAfterMs(value: string | null): number | null {
 
 export const TRIAL_END_NOTICE_DAYS = 60
 
+type ConnectMethod = "tenuvaultApp"
+interface LicenseHealthResponse {
+  connectMethods?: Partial<Record<ConnectMethod, unknown>>
+  organizationLicenses?: { clientIdSets?: unknown; tenantIdHashes?: unknown }
+  tenantTrials?: Partial<Record<"ok" | "enabled" | "days" | "extensionDays" | "extensionWindowDays" | "extensionGraceDays", unknown>>
+}
+
 export class LicenseService {
   private state: StoredLicense | null = null
   private trialPolicy: NonNullable<LicenseStatus["tenantTrialPolicy"]> = {}
@@ -334,6 +353,9 @@ export class LicenseService {
   private healthCheck: Promise<void> | null = null
   private healthRetryAt = 0
   private healthFailures = 0
+  private connectMethodsHealth?: { expiresAt: number; enabled: Record<ConnectMethod, boolean> }
+  private healthFetch?: Promise<LicenseHealthResponse | null>
+  private organizationHealth?: { expiresAt: number; clientIdSets: boolean; tenantIdHashes: boolean }
   private trialRecords: Record<string, StoredTenantTrial> = {}
   private keyMutation: Promise<void> | null = null
   private readonly tenantMutations = new Map<string, Promise<void>>()
@@ -381,13 +403,12 @@ export class LicenseService {
     if (Date.now() < this.healthRetryAt || (this.healthCheckedAt && Date.now() - this.healthCheckedAt < COMMUNITY_RECHECK_MS)) return
     this.healthCheck = (async () => {
       try {
-        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
-        const data = await response.json()
-        if (!response.ok || data?.tenantTrials?.ok !== true || typeof data.tenantTrials.enabled !== "boolean") throw new Error("Trial health is unavailable.")
+        const data = await this.fetchHealth()
+        if (data?.tenantTrials?.ok !== true || typeof data.tenantTrials.enabled !== "boolean") throw new Error("Trial health is unavailable.")
         this.trialPolicy = {}
         for (const field of ["days", "extensionDays", "extensionWindowDays", "extensionGraceDays"] as const) {
           const value = data.tenantTrials[field]
-          if (Number.isInteger(value) && value > 0 && value <= 365) this.trialPolicy[field] = value
+          if (typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 365) this.trialPolicy[field] = value
         }
         this.trialsEnabled = data.tenantTrials.enabled === true
         this.healthCheckedAt = Date.now()
@@ -505,7 +526,7 @@ export class LicenseService {
       if (!this.trialsEnabled || this.state?.key || FEATURE_PLAN[feature] !== "pro" || this.state?.activations[tenant]?.source !== "trial" || !this.valid(tenant) || !this.tenantPresent(tenant)) return
       const record = this.trialRecords[tenant]
       if (!record) return
-      const fields: Partial<Record<Feature, keyof TrialTally>> = { dailySchedule: "dailyBackups", azureStorage: "azureBackups", fullRestore: "fullRestores", replaceRestore: "fullRestores", restoreAssignments: "fullRestores", driftRevert: "driftReverts" }
+      const fields: Partial<Record<Feature, keyof TrialTally>> = { dailySchedule: "dailyBackups", azureStorage: "azureBackups", fullRestore: "fullRestores", replaceRestore: "fullRestores", restoreAssignments: "fullRestores", directoryRestore: "fullRestores", driftRevert: "driftReverts" }
       const field = fields[feature]
       if (!field) return
       record.tally ??= {}
@@ -575,6 +596,19 @@ export class LicenseService {
     return this.trialRecords[tenant]?.refusalReason ?? this.autoTrialSkips.get(tenant)
   }
 
+  /** Allows the Storage step to show the trial without claiming an organization license slot. */
+  async startOnboardingTrial(tenantId: string): Promise<void> {
+    this.load()
+    const tenant = tenantId.toLowerCase()
+    await this.checkTrialHealth()
+    if (!this.trialsEnabled) return
+    await this.mutate([tenant], true, async () => {
+      if (this.trialRecords[tenant]?.stopped || this.options.store.get(COMMUNITY_KEY) === tenant) return
+      // The trial action rejects organization-licensed tenants and reuses an active tenant trial.
+      await this.startTenantTrialCurrent(tenant, "auto")
+    })
+  }
+
   async startTenantTrial(tenantId: string): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()
@@ -620,7 +654,7 @@ export class LicenseService {
     }
   }
 
-  async tenantTrialAction(tenantId: string, action: "extend_trial" | "end_trial" | "resume_trial" | "trial_contact" | "acknowledge", email?: string): Promise<void> {
+  async tenantTrialAction(tenantId: string, action: "extend_trial" | "end_trial" | "resume_trial" | "trial_contact" | "acknowledge", email?: string, contactProof?: string): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()
     return this.mutate([tenant], true, async () => {
@@ -632,7 +666,7 @@ export class LicenseService {
       if (action === "resume_trial" && this.trialResumeUntil(tenant) === null) throw new Error(TRIAL_RESUME_OVER)
       const current = this.requestGuard(tenant)
       try {
-        const data = await this.tenantCall(tenant, action, current, { activationId: record.activationId }, undefined, email === undefined ? {} : { email })
+        const data = await this.tenantCall(tenant, action, current, { activationId: record.activationId }, action === "trial_contact" ? contactProof : undefined, email === undefined ? {} : { email })
         if (action === "extend_trial") {
           this.accept(tenant, data, "trial")
           this.rememberTrial(tenant, data)
@@ -685,14 +719,124 @@ export class LicenseService {
     return this.options.platform ?? process.platform
   }
 
-  // The proof of the tenant the service needs to share the license with it: the app
-  // registration and a fresh sign-in to it. Not needed to stop sharing. Without it the
-  // service still licenses this machine but leaves the sharing unchanged.
-  private async sharingFields(tenantId: string, share?: boolean): Promise<{ clientId?: string; idToken?: string }> {
+  /** Older cached activations need their original audience recorded before the account is replaced. */
+  rememberOrganizationClient(tenant: string, clientId: string): void {
+    this.load()
+    const entry = this.state?.activations[tenant]
+    if (entry?.source !== "tenant" || entry.organizationClientId) return
+    entry.organizationClientId = clientId.toLowerCase()
+    try { this.save() } catch (error) {
+      delete entry.organizationClientId
+      throw error
+    }
+  }
+
+  private organizationRenewalPending(tenant: string): boolean {
+    const entry = this.state?.activations[tenant]
+    return Boolean(entry && this.organizationClientChanged(entry, this.clientId(tenant)))
+  }
+
+  private organizationClientChanged(entry: StoredActivation, clientId: string | null): boolean {
+    return entry.source === "tenant" && Boolean(clientId && entry.organizationClientId && clientId.toLowerCase() !== entry.organizationClientId)
+  }
+
+  tenuvaultAppEnabled(fresh = false): Promise<boolean> {
+    return this.connectMethodEnabled("tenuvaultApp", fresh)
+  }
+
+  async connectMethodEnabled(method: ConnectMethod, fresh = false): Promise<boolean> {
+    if (!fresh && this.connectMethodsHealth && Date.now() < this.connectMethodsHealth.expiresAt) {
+      return this.connectMethodsHealth.enabled[method]
+    }
+    const data = await this.fetchHealth()
+    return data?.connectMethods?.[method] === true
+  }
+
+  /** Use the latest known availability immediately before dispatching a shared-client request. */
+  connectMethodEnabledNow(method: ConnectMethod): boolean {
+    return this.connectMethodsHealth?.enabled[method] === true
+  }
+
+  private fetchHealth(): Promise<LicenseHealthResponse | null> {
+    return this.healthFetch ??= (async () => {
+      let data: LicenseHealthResponse | null = null
+      try {
+        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, {
+          signal: AbortSignal.timeout(LICENSE_HEALTH_TIMEOUT_MS), redirect: "error", cache: "no-store",
+        })
+        if (response.ok) data = await response.json()
+      } catch { /* Shared sign-in requires positive health discovery. */ }
+      this.connectMethodsHealth = {
+        expiresAt: Date.now() + 2 * 60_000,
+        enabled: { tenuvaultApp: data?.connectMethods?.tenuvaultApp === true },
+      }
+      this.organizationHealth = {
+        expiresAt: this.connectMethodsHealth.expiresAt,
+        clientIdSets: data?.organizationLicenses?.clientIdSets === true,
+        tenantIdHashes: data?.organizationLicenses?.tenantIdHashes === true,
+      }
+      return data
+    })().finally(() => { this.healthFetch = undefined })
+  }
+
+  private async refreshOrganizationHealth(waitMs = LICENSE_HEALTH_TIMEOUT_MS): Promise<void> {
+    if (this.organizationHealth && Date.now() < this.organizationHealth.expiresAt) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<void>(resolve => { timer = setTimeout(resolve, waitMs) })
+    try {
+      await Promise.race([this.fetchHealth(), deadline])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  private async supportsClientIdSets(): Promise<boolean> {
+    await this.refreshOrganizationHealth()
+    return this.organizationHealth?.clientIdSets === true && Date.now() < this.organizationHealth.expiresAt
+  }
+
+  private supportsTenantHashes(): boolean {
+    return this.organizationHealth?.tenantIdHashes === true && Date.now() < this.organizationHealth.expiresAt
+  }
+
+  private tenantHashFields(tenantId: string, proof: unknown): { tenantIdHash?: string } {
+    const normalized = tenantId.toLowerCase()
+    if (!proof || !guidPattern.test(normalized) || !this.supportsTenantHashes()) return {}
+    return { tenantIdHash: createHash("sha256").update(normalized, "utf8").digest("hex") }
+  }
+
+  private async keyTenantFields(tenantId: string, share?: boolean): Promise<Record<string, unknown>> {
+    const fields = await this.sharingFields(tenantId, share)
+    const hash = this.tenantHashFields(tenantId, fields.publicClientProof ?? fields.idToken)
+    return { ...fields, ...(hash.tenantIdHash ? hash : { tenantId }) }
+  }
+
+  private async sharingFields(tenantId: string, share?: boolean): Promise<Record<string, unknown>> {
     const clientId = this.clientId(tenantId)?.toLowerCase()
-    if (share === false || !clientId || !guidPattern.test(clientId)) return {}
+    const publicClient = isPublicClient(clientId)
+    const supported = (publicClient || this.options.ownClientId) && await this.supportsClientIdSets()
+    if (share === false) {
+      const choice = { shareWithTenant: false }
+      if (!this.supportsTenantHashes() || !clientId || !guidPattern.test(clientId)) return choice
+      const proof = await this.idToken(tenantId)
+      if (!proof || this.clientId(tenantId)?.toLowerCase() !== clientId) return choice
+      return publicClient ? { ...choice, publicClientProof: proof } : { ...choice, idToken: proof }
+    }
+    // The legacy server preserves the mapping when sharing is requested without proof.
+    // Explicit true also avoids the MSP default of removing an existing mapping.
+    const choice = publicClient ? { shareWithTenant: true } : share === undefined ? {} : { shareWithTenant: share }
+    if (!clientId || !guidPattern.test(clientId) || (publicClient && !supported)) return choice
     const idToken = await this.idToken(tenantId)
-    return idToken ? { clientId, idToken } : { clientId }
+    if (!idToken || this.clientId(tenantId)?.toLowerCase() !== clientId) return { ...choice, clientId }
+    if (!supported) return { ...choice, clientId, idToken }
+    const ownClientId = this.options.ownClientId ? this.options.ownClientId(tenantId) : clientId
+    return {
+      ...choice,
+      clientId,
+      // A legacy handler strips this field even if a capable server rolls back between requests.
+      ...(publicClient ? { publicClientProof: idToken } : { idToken }),
+      allowedClientIds: organizationClientIds(ownClientId),
+    }
   }
 
   private load(): void {
@@ -1000,7 +1144,7 @@ export class LicenseService {
 
   // Stores the activation the service returned, after verifying its token. persist false leaves
   // writing the state to the caller, which saves several activations at once.
-  private accept(tenantId: string, data: Record<string, unknown>, source: "key" | "tenant" | "trial", persist = true): void {
+  private accept(tenantId: string, data: Record<string, unknown>, source: "key" | "tenant" | "trial", persist = true, clientId?: string | null): void {
     if (typeof data.token !== "string" || typeof data.activationId !== "string") {
       throw new Error("The licensing service returned an invalid response.")
     }
@@ -1035,6 +1179,7 @@ export class LicenseService {
       ...(source === "trial" ? { source, canEnd: data.canEnd === true } : source === "tenant"
         ? {
             source,
+            ...(clientId ? { organizationClientId: clientId.toLowerCase() } : {}),
             ...(typeof data.displayKey === "string" ? { displayKey: data.displayKey.slice(0, 20) } : {}),
             ...(typeof data.licenseKeyId === "string" && guidPattern.test(data.licenseKeyId)
               ? { licenseKeyId: data.licenseKeyId }
@@ -1099,10 +1244,9 @@ export class LicenseService {
     const data = await this.call("activate", {
       key,
       installId: this.installId,
-      tenantId,
       os: this.platform,
       appVersion: this.options.appVersion,
-      ...(await this.sharingFields(tenantId)),
+      ...(await this.keyTenantFields(tenantId)),
     }, current).catch((error: unknown) => {
       if (error instanceof LicenseDenied && error.reason === "trial_used" && current()) this.failures.set(tenantId, { error, until: Date.now() + FAILURE_COOLDOWN_MS, key })
       throw error
@@ -1120,12 +1264,16 @@ export class LicenseService {
     entry?: Pick<StoredActivation, "activationId" | "licenseKeyId">,
     token?: string,
     extra: Record<string, unknown> = {},
+    publicProof = false,
   ): Promise<Record<string, unknown>> {
     const idToken = token ?? (await this.idToken(tenantId))
     this.assertCurrent(current)
     if (!idToken) throw new NoIdToken()
+    await this.refreshOrganizationHealth(TENANT_HASH_HEALTH_WAIT_MS)
+    this.assertCurrent(current)
     return this.call("tenant", {
-      idToken,
+      ...(publicProof ? { publicClientProof: idToken } : { idToken }),
+      ...this.tenantHashFields(tenantId, idToken),
       installId: this.installId,
       os: this.platform,
       appVersion: this.options.appVersion,
@@ -1138,9 +1286,13 @@ export class LicenseService {
 
   private async activateTenant(tenantId: string): Promise<void> {
     const current = this.requestGuard(tenantId)
-    const data = await this.tenantCall(tenantId, "activate", current)
+    const clientId = this.clientId(tenantId)
+    const idToken = await this.idToken(tenantId)
+    this.assertCurrent(() => current() && this.clientId(tenantId) === clientId)
+    if (!idToken) throw new NoIdToken()
+    const data = await this.tenantCall(tenantId, "activate", current, undefined, idToken, {}, false)
     this.assertCurrent(current)
-    this.accept(tenantId, data, "tenant")
+    this.accept(tenantId, data, "tenant", true, clientId)
   }
 
   // Activates with this machine's key, and falls back to the tenant's organization license
@@ -1194,20 +1346,34 @@ export class LicenseService {
     if (!this.state || !entry) return
     const current = this.requestGuard(tenantId)
     const key = this.state.key
+    const clientId = this.clientId(tenantId)
+    const organizationClientChanged = this.organizationClientChanged(entry, clientId)
+    if (organizationClientChanged && !isPublicClient(clientId)) {
+      // Legacy refresh releases the activation if the audience no longer matches the sharing
+      // registration. Activate checks the new sign-in without sending the old activation ID.
+      // Once the key holder shares this registration, the server reuses the existing slot.
+      await this.activateTenant(tenantId).catch((error: unknown) => {
+        if (!(error instanceof LicenseDenied) && !(error instanceof NoIdToken)) throw error
+      })
+      return
+    }
     try {
       if (entry.source === "trial" && await this.replaceTrialWithKey(tenantId)) return
       if (entry.source === "tenant" || entry.source === "trial") {
+        const publicProof = entry.source === "tenant" && isPublicClient(clientId)
+        if (publicProof && !await this.supportsClientIdSets()) return
         const idToken = await this.idToken(tenantId)
         this.assertCurrent(current)
-        if (!idToken) return
+        if (!idToken || (entry.source === "tenant" && this.clientId(tenantId) !== clientId)) return
         if (entry.source === "trial") {
           try { await this.activateTenant(tenantId); return } catch (error) {
             if (error instanceof StaleLicenseRequest) throw error
           }
         }
-        const data = await this.tenantCall(tenantId, "refresh", current, entry, idToken)
+        // An old handler rejects publicClientProof before looking up or releasing the activation.
+        const data = await this.tenantCall(tenantId, "refresh", current, entry, idToken, {}, publicProof)
         this.assertCurrent(current)
-        this.accept(tenantId, data, entry.source)
+        this.accept(tenantId, data, entry.source, true, clientId)
         if (entry.source === "trial") this.rememberTrial(tenantId, data)
         return
       }
@@ -1217,11 +1383,9 @@ export class LicenseService {
         key,
         activationId: entry.activationId,
         installId: this.installId,
-        tenantId,
         // Lets the service send version 2 tokens to apps that read them.
         appVersion: this.options.appVersion,
-        ...(await this.sharingFields(tenantId, shareWithTenant)),
-        ...(shareWithTenant === undefined ? {} : { shareWithTenant }),
+        ...(await this.keyTenantFields(tenantId, shareWithTenant)),
       }, current)
       this.assertCurrent(current)
       this.accept(tenantId, data, "key")
@@ -1281,6 +1445,9 @@ export class LicenseService {
       }
       await this.refreshCurrent(tenant, share)
       if (share && this.state?.activations[tenant]?.shareNeedsSignIn) {
+        if (isPublicClient(this.clientId(tenant))) {
+          throw new Error("To start sharing, sign in with your own app registration in Settings > Sign-in. If this key already shares with the tenant, sign in again and retry.")
+        }
         throw new Error("Sign in to this tenant again to share the license with it.")
       }
       if (this.state?.activations[tenant]?.shared !== share) {
@@ -1802,9 +1969,10 @@ export class LicenseService {
       this.assertCurrent(current)
       if (!this.valid(tenant)) {
         throw new Error(
-          this.state?.activations[tenant]?.source === "tenant"
-            ? "Sign in to this tenant again to check your organization's license."
-            : "The license is not valid for this tenant.",
+          this.organizationRenewalPending(tenant) ? ORGANIZATION_RENEWAL_NOTICE :
+            this.state?.activations[tenant]?.source === "tenant"
+              ? "Sign in to this tenant again to check your organization's license."
+              : "The license is not valid for this tenant.",
         )
       }
     } catch (caught) {
@@ -2048,6 +2216,7 @@ export class LicenseService {
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,
+        ...(this.organizationRenewalPending(tenantId) ? { organizationRenewalPending: true } : {}),
         message: payload ? null : (this.messages.get(tenantId) ?? null),
       }
     })

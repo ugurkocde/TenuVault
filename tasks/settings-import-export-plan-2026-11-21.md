@@ -47,7 +47,7 @@ The "Default in preview" column means:
 
 | Item | Source today | File | Shared | Default in preview | Notes |
 |---|---|---|---|---|---|
-| Services (module on/off) | `services.modules` | yes | yes | on | Applied through `ModuleSettings.set`. Module IDs this build does not know (for example 0.6 Entra ID or Defender) are listed as skipped. |
+| Services (module on/off) | `services.modules` | yes | yes | on | Applied through `ModuleSettings.set`. Module IDs this build does not know (for example a preview service) are listed as skipped. |
 | Permissions | read live from the token, not stored | info | info | n/a | The permissions live in the app registration. After applying, `services:status` runs and shows what this admin's sign-in lacks, with the existing fix callout, and flags a different client ID. |
 | Backup scope | `backup.scopes` | yes | yes | on | Applied through `BackupScopes.set` / `normalizeScope`. |
 | Keep backups for | `app.preferences.retentionDays` (machine-wide) | yes | yes | on | Shared value is the tenant's retention, and the retention rule below reads it. Applying it sets this computer's value, and the preview says so: "applies to all tenants on this computer". Community still applies at most 30 days. |

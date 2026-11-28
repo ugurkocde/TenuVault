@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
-import { ApiHost, MAX_IPC_BODY_BYTES, routesFromGlob, type RouteModule } from "../src/main/api/host"
+import { ApiHost, DOWNLOAD_CANCELLED_HEADER, MAX_IPC_BODY_BYTES, routesFromGlob, type RouteModule } from "../src/main/api/host"
 import { NextResponse, type NextRequest } from "../src/main/api/next-server-shim"
+import { saveArchiveResponse } from "../src/main/backup/large-archive"
+import { localRoutesRunning, routeUsesLocalStorage } from "../src/main/storage/blob-emulator"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 describe("routesFromGlob", () => {
   it("maps route files to API paths", () => {
@@ -36,6 +41,52 @@ describe("ApiHost", () => {
     const response = await host.handleIpc({ method: "GET", path: "/api/echo", headers: {} })
     expect(Array.from(response.body)).toEqual([0x50, 0x4b, 0x03, 0x04])
     expect(response.headers["content-type"]).toBe("application/zip")
+  })
+
+  it.each(["saved", "cancelled", "failed"])("holds the local folder guard through a %s archive save", async outcome => {
+    const tenant = "11111111-1111-1111-1111-111111111111"
+    const folder = await mkdtemp(join(tmpdir(), "tv-archive-save-"))
+    const destination = join(folder, "backup.tar")
+    let finish!: (choice: { canceled: boolean; filePath?: string }) => void
+    const choice = new Promise<{ canceled: boolean; filePath?: string }>(resolve => { finish = resolve })
+    let stream!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({ start: controller => { stream = controller } })
+    const guards: boolean[] = []
+    const host = new ApiHost({
+      routes: { "/api/download-backup": { POST: () => {
+        guards.push(localRoutesRunning() && routeUsesLocalStorage(tenant))
+        return new Response(body, { headers: { "content-type": "application/x-tar" } })
+      } } },
+      saveDownload: response => saveArchiveResponse(response, () => {
+        guards.push(localRoutesRunning() && routeUsesLocalStorage(tenant))
+        return choice
+      }),
+    })
+    const pending = host.dispatch(new Request("http://x/api/download-backup", {
+      method: "POST",
+      body: JSON.stringify({ tenantId: tenant, storageAccountName: `tvlocal-${tenant}` }),
+    }))
+    try {
+      await vi.waitFor(() => expect(guards).toHaveLength(2))
+      const busyWhileChoosing = localRoutesRunning()
+      if (outcome === "cancelled") {
+        stream.error(new Error("Stream failed before the save was cancelled"))
+        finish({ canceled: true })
+      } else {
+        finish({ canceled: false, filePath: destination })
+        await new Promise(resolve => setImmediate(resolve))
+        guards.push(localRoutesRunning())
+        if (outcome === "failed") stream.error(new Error("Archive read failed"))
+        else { stream.enqueue(new Uint8Array([1, 2, 3])); stream.close() }
+      }
+      const response = await pending
+      expect(localRoutesRunning()).toBe(false)
+      expect(response.status).toBe(outcome === "failed" ? 500 : 200)
+      expect(response.headers.get(DOWNLOAD_CANCELLED_HEADER)).toBe(outcome === "cancelled" ? "1" : null)
+      if (outcome === "saved") expect(await readFile(destination)).toEqual(Buffer.from([1, 2, 3]))
+      expect(busyWhileChoosing).toBe(true)
+      expect(guards).toEqual(outcome === "cancelled" ? [true, true] : [true, true, true])
+    } finally { await rm(folder, { recursive: true, force: true }) }
   })
 
   it("returns 404 and 405 for unknown routes and methods", async () => {

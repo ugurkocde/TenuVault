@@ -1,4 +1,3 @@
-import { withBackupServerTime } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -13,7 +12,7 @@ import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { coveredFolders, DEFAULT_SCOPE, describeScope, EVERYTHING, includedTypes, LEGACY_FOLDERS, normalizeScope, presetOf } from "../src/shared/intune/scope"
 import { compareBackups, summarize } from "../src/shared/intune/backup-changes"
 import { comparableSnapshot, sameSnapshot } from "../src/shared/intune/compare"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -104,7 +103,7 @@ function engineSetup(graph: (url: URL) => Response, options: { retentionDays?: n
     const url = new URL(request.url)
     if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
     requested.push(decodeURIComponent(url.pathname + url.search))
-    return withBackupServerTime(graph(url), options.now ? new Date(options.now) : undefined)
+    return withServerDate(graph(url), options.now ? new Date(options.now) : new Date())
   }) as typeof fetch
   const engine = new BackupEngine({
     fetch: fetchImpl,
@@ -125,9 +124,9 @@ function graphWith(...lists: Array<{ path: string; items: Array<Record<string, u
   return (url: URL) => {
     const list = lists.find((entry) => entry.path === url.pathname)
     if (list && !url.search) return Response.json({ value: list.items })
-    if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+    if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
     const id = url.pathname.split("/").pop()
-    return Response.json({ id, detail: true, lastModifiedDateTime: String(Math.random()) })
+    return Response.json({ id, detail: true, ...(url.searchParams.get("$expand") === "assignments" && { assignments: [] }), lastModifiedDateTime: String(Math.random()) })
   }
 }
 
@@ -168,10 +167,10 @@ describe("BackupEngine with a scope", () => {
     await store.createContainer(account, "intune-backups")
     const put = (name: string, body: unknown) => store.put(account, "intune-backups", name, Buffer.from(JSON.stringify(body)), "application/json")
     // Oldest: a full backup. Middle: also expired, but without apps. Both are past retention.
-    await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Items: { "Apps/reader": { file: "Reader.json" } }, Scope: { Included: ["Apps"] } })
-    await put("backup-2026-07-01-020000/Apps/Reader.json", { id: "reader" })
-    await put("backup-2026-06-01-020000/metadata.json", { Status: "Success", Items: {}, Scope: { Included: ["Apps"] } })
-    await put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Items: {}, Scope: { Included: ["DeviceConfigurations"] } })
+    await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", ItemCounts: { Apps: 1 }, Scope: { Excluded: [] } })
+    await put("backup-2026-07-01-020000/Apps/Reader.json", {})
+    await put("backup-2026-06-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: [] } })
+    await put("backup-2026-08-01-020000/metadata.json", { Status: "Success", Scope: { Excluded: ["Apps"] } })
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: { excluded: ["Apps"] } }).id)
     expect(job.status).toBe("Completed")
     const folders = new Set((await store.list(account, "intune-backups")).map((blob) => blob.name.split("/")[0]))
@@ -186,7 +185,7 @@ describe("BackupEngine with a scope", () => {
     const items = Array.from({ length: 12 }, (_, index) => ({ id: `dc${index}`, displayName: `P${index}` }))
     const { engine, account } = engineSetup((url) => {
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations" && !url.search) return Response.json({ value: items })
-      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
       if (url.pathname.endsWith("/dc3") && !throttledAt) {
         throttledAt = Date.now()
         return new Response("", { status: 429, headers: { "retry-after": "0.3" } })
@@ -204,7 +203,7 @@ describe("BackupEngine with a scope", () => {
     const items = Array.from({ length: 20 }, (_, index) => ({ id: `dc${index}`, displayName: `P${index}` }))
     const { engine, account } = engineSetup((url) => {
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations" && !url.search) return Response.json({ value: items })
-      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
       return Response.json({ error: { message: "Lifetime validation failed, the token is expired." } }, { status: 401 })
     })
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: EVERYTHING }).id)

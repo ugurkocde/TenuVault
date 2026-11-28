@@ -23,7 +23,7 @@ $ids = [string[]](Get-TvDefinitionIds $rows)
 $definitions = @{}
 foreach ($id in $ids) { if ($fixture.definitions.Contains($id)) { $definitions[$id] = $fixture.definitions[$id] } }
 $names = ConvertTo-TvSettingNames $ids $definitions
-$drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; settingNames = $names; baseline = (Get-TvBackupRef $older.Name $older.Metadata); comparison = (Get-TvBackupRef $newer.Name $newer.Metadata) }
+$drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; unknownTypes = $compared.UnknownTypes; legacyReadFailure = $compared.LegacyReadFailure; settingNames = $names; baseline = (Get-TvBackupRef $older.Name $older.Metadata); comparison = (Get-TvBackupRef $newer.Name $newer.Metadata) }
 $changes = @($fixture.audit | ForEach-Object { ConvertFrom-TvAuditEvent $_ } | Where-Object { $_ })
 $options = @{ TenantId = $fixture.tenantId; TenantName = $fixture.tenantName; GeneratedAt = $fixture.generatedAt; Trigger = $reportTrigger; IncludeValues = $Level -eq "full"; IncludeActors = $Actors -eq "true" }
 $audit = if ($AuditError) { @{ Error = $AuditError } } else { @{ Changes = $changes; Note = $null } }

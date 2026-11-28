@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from "../src/main/oib/service"
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
+import { ApiHost } from "../src/main/api/host"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { planGuard } from "../src/main/api/plan-gates"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { POST as oib } from "../src/portal/app/api/oib/route"
 import { memoryStore } from "./helpers"
+import { withoutRestoreCapability } from "./helpers/restore-capability"
 import type { Item, Json } from "../src/shared/intune/registry"
 import { assignmentsFor, mergeAssignments, parseSpec } from "../src/shared/oib/assignments"
 
@@ -145,6 +151,43 @@ async function source() {
   return resolved
 }
 const base = { tenantId, appId, storageAccountName: `tvlocal-${tenantId}`, platform: "windows" }
+
+describe("OIB and a type without a restore capability", () => {
+  const NOT_WRITTEN = "TenuVault backs this type up and compares it, and never writes it to a tenant."
+
+  it("creates and updates nothing of the type, and reports why for each policy", async () => {
+    const writes: string[] = []
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }
+    vi.stubGlobal("fetch", world(state, writes))
+    await source()
+    const deploy = (items: Array<{ source: string; mode: string; targetId?: string }>) => handleOib({ ...base, storageAccountName: null, action: "oib-deploy", commit, backup: { mode: "none" }, items }) as Promise<OibRun>
+    const [created, updated] = await withoutRestoreCapability("ConfigurationPolicies", async () => [
+      await deploy([{ source: SC, mode: "create" }]),
+      await deploy([{ source: SC, mode: "update", targetId: EXISTING }]),
+    ])
+    expect(created).toMatchObject({ created: [], updated: [], failed: [{ name: "Win - OIB - SC - Test - v3.8", error: expect.stringContaining(NOT_WRITTEN) }] })
+    expect(updated).toMatchObject({ created: [], updated: [], failed: [{ name: "Win - OIB - SC - Test - v3.8", error: expect.stringContaining(NOT_WRITTEN) }] })
+    expect(writes.filter(write => !write.startsWith("GET "))).toEqual([])
+    expect(state.policies[0]).toMatchObject({ name: "Win - OIB - SC - Test - v3.1", value: 7 })
+  })
+
+  it("undo deletes and puts back nothing of the type, and keeps the run so it can be undone later", async () => {
+    const before = { id: EXISTING, name: "Win - OIB - SC - Test - v3.1", platforms: "windows10", technologies: "mdm", settings: [] }
+    const run: OibRun = { runId: "run-1", tenantId, createdAt: "2026-09-26T00:00:00Z", kind: "deploy", platform: "windows", reference: "r", failed: [],
+      created: [{ folder: "ConfigurationPolicies", id: "77777777-7777-7777-7777-777777777777", name: "A" }],
+      updated: [{ folder: "ConfigurationPolicies", id: EXISTING, name: "Win - OIB - SC - Test - v3.8", previousName: "Win - OIB - SC - Test - v3.1", before }] }
+    store.set(`oib:runs:${tenantId}`, JSON.stringify([run]))
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8", value: 1 }] }, writes))
+    const result = await withoutRestoreCapability("ConfigurationPolicies", () => handleOib({ action: "oib-undo", tenantId, appId, runId: "run-1" })) as UndoResult
+    expect(result.results).toMatchObject([
+      { name: "A", action: "removed", done: false, error: NOT_WRITTEN },
+      { name: "Win - OIB - SC - Test - v3.1", action: "restored", done: false, error: NOT_WRITTEN },
+    ])
+    expect(writes.filter(write => !write.startsWith("GET "))).toEqual([])
+    expect(result.run).toMatchObject({ created: [{ name: "A" }], updated: [{ id: EXISTING }] })
+  })
+})
 
 describe("OIB pack files", () => {
   it("maps each OIB folder to the registry folder that creates it and ignores other files", () => {
@@ -769,6 +812,16 @@ describe("backup choice", () => {
     expect(state.started).toEqual([])
   })
 
+  it("does not call a recent backup complete when it was taken with the written type's service off", async () => {
+    const state: Tenant = { policies: [], backups: [
+      { id: "backup-2026-10-01-095000", timestamp: minutesAgo(20), metadata: { ...COMPLETE, Scope: { Excluded: [], Included: ["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"] } } },
+    ] }
+    vi.stubGlobal("fetch", world(state, []))
+    const { recent } = await handleOib({ ...base, action: "oib-backup-options", folders: ["ConfigurationPolicies"] }) as OibBackupOptions
+    expect(recent).toMatchObject({ folder: "backup-2026-10-01-095000", complete: false, missing: ["settings catalog and endpoint security policies"] })
+    expect(recent?.reason).toContain("not part of the backup (the service is turned off for this tenant")
+  })
+
   it("never offers a backup the user cancelled, so it does not hide an older finished one", async () => {
     const state: Tenant = { policies: [], backups: [
       { id: "backup-2026-10-01-095000", timestamp: minutesAgo(20), status: "Cancelled", metadata: { ...COMPLETE, Status: "Cancelled" } },
@@ -900,4 +953,48 @@ describe("legacy data", () => {
     migrateLegacyOibRuns({ keys: () => [...legacy.values.keys()], get: legacy.get, set: legacy.set, delete: legacy.delete })
     expect(legacy.get(`quickstart:runs:${tenantId}`)).toBe("{not json")
   })
+})
+
+it("deploys to two own-registration tenants through separate OIB route requests", async () => {
+  const target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+  const targetApp = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+  const writes: string[] = []
+  const sent: string[] = []
+  const fixture = world({ policies: [] }, writes)
+  const caps = new ConnectionCapabilities(id => ({
+    version: 1, method: "ownApp", origin: "legacy", clientId: id === tenantId ? appId : targetApp,
+    createdAt: "", updatedAt: "",
+  }))
+  const host = new ApiHost({
+    routes: { "/api/oib": { POST: oib } }, bindConnections: ids => caps.bindConnections(ids),
+    guard: planGuard(async () => "msp"),
+  })
+  const fetch = createBridgedFetch({
+    dispatch: request => host.dispatch(request),
+    getDelegatedToken: async (tenant, client, scope) => {
+      expect(client).toBe(tenant === tenantId ? appId : targetApp)
+      const accessToken = `opaque-${tenant}`
+      caps.requireIssuedToken(tenant, client, scope, accessToken)
+      return { accessToken, expiresOn: null }
+    },
+    authorizeRequest: (url, input, init, tenant) => caps.authorizeRequest(url, input, init, tenant),
+    fetch: (input, init) => {
+      if (String(input).startsWith("https://graph.microsoft.com") && init?.method === "POST") {
+        sent.push(new Headers(init.headers).get("authorization")!)
+      }
+      return fixture(input, init)
+    },
+  })
+  vi.stubGlobal("fetch", fetch)
+  await source()
+  for (const [tenant, client, bulk] of [[tenantId, appId, false], [target, targetApp, true]] as const) {
+    const response = await fetch("http://tenuvault.internal/api/oib", {
+      method: "POST", body: JSON.stringify({ ...base, tenantId: tenant, appId: client, bulk, storageAccountName: undefined,
+        action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "create" }] }),
+    })
+    const result = await response.json()
+    expect(response.status, JSON.stringify(result)).toBe(200)
+    expect(result).toMatchObject({ tenantId: tenant, failed: [], created: [{ id: CREATED }] })
+  }
+  expect(sent).toEqual([`Bearer opaque-${tenantId}`, `Bearer opaque-${target}`])
 })

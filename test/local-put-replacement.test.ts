@@ -5,17 +5,16 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { BackupEngine } from '../src/main/backup/engine'
-import { readRetentionProgress, type RetentionProgressStore } from '../src/main/backup/retention-progress'
+import { readRetentionProgress } from '../src/main/backup/retention-progress'
 import { handleLocalBlobRequest, localAccountFromUrl } from '../src/main/storage/blob-emulator'
 import { LocalBlobStore, localBackupsExist } from '../src/main/storage/local-blob-store'
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from '../src/shared/constants'
 import { INTUNE_TYPES } from '../src/shared/intune/registry'
-import { snapshotHash } from '../src/portal/lib/policies/backup-manifest'
-import { withBackupServerTime } from './helpers'
+import { memoryStore, withServerDate } from './helpers'
 
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, rename: vi.fn(actual.rename), lstat: vi.fn(actual.lstat), rm: vi.fn(actual.rm) }
+  return { ...actual, lstat: vi.fn(actual.lstat), rename: vi.fn(actual.rename), rm: vi.fn(actual.rm) }
 })
 
 const roots: string[] = []
@@ -106,6 +105,7 @@ it.each(['external', 'concurrent'] as const)('keeps the legacy physical filename
   expect(latest.created).toEqual(original.created)
   expect(await store.get(account, container, name)).toEqual({ blob: latest, data: finalBody })
 })
+
 it.each([
   { occupied: false, despiteDamage: false },
   { occupied: true, despiteDamage: false },
@@ -226,7 +226,6 @@ it.each(["rm", "lstat"] as const)("keeps the local deletion journal when the fir
     Items: {
       "DeviceConfigurations/old": {
         file: "Old.json",
-        hash: snapshotHash(policy),
         sha256: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
       },
     },
@@ -258,29 +257,24 @@ it.each(["rm", "lstat"] as const)("keeps the local deletion journal when the fir
     }) as typeof actual.lstat)
   }
 
-  const progressKey = `${tenant}/${account}`
-  const progressData = new Map<string, string>()
-  const retentionProgress: RetentionProgressStore = {
-    get: k => progressData.get(k) ?? null,
-    set: (k, value) => { progressData.set(k, value) },
-    delete: k => { progressData.delete(k) },
-  }
+  const progressKey = `${tenant}/${account}/false`
+  const progress = memoryStore()
   let clock = new Date("2026-09-24T12:00:00Z")
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
     const url = new URL(request.url)
     if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
-    return withBackupServerTime(Response.json({ value: [] }), clock)
+    return withServerDate(Response.json({ value: [] }), clock)
   }) as typeof fetch
   const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
-  const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress, now: () => clock })
+  const createEngine = () => new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress: progress, now: () => clock })
 
-  const first = await engine.waitForJob(engine.get(engine.start({ tenantId: tenant, clientId: "client", storageAccountName: account, scope }).id)!)
+  const firstEng = createEngine()
+  const first = await firstEng.waitForJob(firstEng.start({ tenantId: tenant, clientId: "client", storageAccountName: account, scope }))
   expect(first.status).toBe("Completed")
   expect(injected).toBe(true)
-  // metadata.json moved into quarantine while deleted remained 0; the journal must be preserved!
   expect(readdirSync(dir).some(name => name.startsWith(".retired-"))).toBe(true)
-  expect(readRetentionProgress(progressData.get(progressKey)).deletes?.[oldPrefix]).toBeTruthy()
+  expect(readRetentionProgress(progress.get(progressKey)).deletions?.[oldPrefix]).toBeTruthy()
 
   // Simulate manual recovery removing the quarantined folder (leaving payloads + owner without manifest).
   for (const name of readdirSync(dir)) {
@@ -290,8 +284,9 @@ it.each(["rm", "lstat"] as const)("keeps the local deletion journal when the fir
   vi.mocked(fileSystem.lstat).mockImplementation(actual.lstat)
 
   clock = new Date("2026-09-24T12:00:05Z")
-  const second = await engine.waitForJob(engine.get(engine.start({ tenantId: tenant, clientId: "client", storageAccountName: account, scope }).id)!)
+  const secondEng = createEngine()
+  const second = await secondEng.waitForJob(secondEng.start({ tenantId: tenant, clientId: "client", storageAccountName: account, scope }))
   expect(second.status).toBe("Completed")
   expect(await store.list(account, BACKUP_CONTAINER, oldPrefix)).toEqual([])
-  expect(readRetentionProgress(progressData.get(progressKey)).deletes).toBeUndefined()
+  expect(readRetentionProgress(progress.get(progressKey)).deletions).toBeUndefined()
 })

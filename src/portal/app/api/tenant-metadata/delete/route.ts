@@ -1,3 +1,5 @@
+import { isBearerToken } from "../../../../../shared/security"
+import { signInLogCode } from "../../../../../shared/sign-in-errors"
 import { isGuid } from "../../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 
@@ -42,15 +44,19 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text()
-      console.error("Azure auth error:", errorData)
+      console.error("Azure auth error:", signInLogCode(errorData) ?? "token_request_failed")
       return NextResponse.json(
         { error: "Failed to authenticate with Azure" },
         { status: 401 }
       )
     }
 
-    const tokenData = await tokenResponse.json()
-    const accessToken = tokenData.access_token
+    const tokenData = await tokenResponse.json().catch(() => null)
+    const accessToken = tokenData?.access_token
+    if (!isBearerToken(accessToken)) {
+      console.error("Azure auth error:", "token_invalid_response")
+      return NextResponse.json({ error: "Microsoft returned an invalid sign-in response. Try again." }, { status: 502 })
+    }
 
     // Delete metadata blob
     const blobUrl = `https://${storageAccountName}.blob.core.windows.net/${METADATA_CONTAINER}/${encodeURIComponent(tenantId)}/metadata.json`
@@ -74,8 +80,8 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      const errorText = await deleteResponse.text()
-      console.error("Failed to delete metadata:", errorText)
+      console.error("blob_request_failed", "metadata delete", deleteResponse.status)
+      const errorText = await deleteResponse.text().catch(() => "")
       
       // If authorization error, provide helpful message
       if (errorText.includes("AuthorizationPermissionMismatch")) {
@@ -86,7 +92,7 @@ export async function POST(request: NextRequest) {
       }
       
       return NextResponse.json(
-        { error: "Failed to delete metadata", details: errorText },
+        { error: "Failed to delete metadata" },
         { status: 500 }
       )
     }

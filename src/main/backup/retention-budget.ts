@@ -11,16 +11,6 @@ export class RetentionBudgetError extends FetchApplicationError {
 }
 
 const active = new AsyncLocalStorage<{ budget: RetentionBudget; metered: boolean }>()
-const headerOnlyReads = new AsyncLocalStorage<boolean>()
-
-/** Marks a backup GET as header-only so compatibility readers and byte metering skip reading the body. */
-export function withHeaderOnlyBackupRead<T>(run: () => Promise<T>): Promise<T> {
-  return headerOnlyReads.run(true, run)
-}
-
-export function isHeaderOnlyBackupRead(): boolean {
-  return headerOnlyReads.getStore() === true
-}
 
 /** Charge sealed wire bytes before the compatibility reader buffers or decrypts them. */
 export function meterLegacyBackupResponse(response: Response): Response {
@@ -34,23 +24,8 @@ export class RetentionBudget {
   private requests = 0
   private reserved = 0
   private bytes = 0
-  private inCleanup = false
 
   constructor(readonly limits: RetentionLimits) {}
-
-  get exhausted(): boolean {
-    return this.bytes >= this.limits.bytes || this.requests + this.reserved >= this.limits.requests
-  }
-
-  async withCleanup<T>(run: () => Promise<T>): Promise<T> {
-    const previous = this.inCleanup
-    this.inCleanup = true
-    try {
-      return await run()
-    } finally {
-      this.inCleanup = previous
-    }
-  }
 
   reserveDeletes(count: number): void {
     const reserve = count * REQUEST_ATTEMPTS
@@ -59,17 +34,14 @@ export class RetentionBudget {
   }
 
   dispatch(deleting: boolean): void {
-    const reserved = deleting || this.inCleanup
-    if (this.requests + (reserved ? 0 : this.reserved) >= this.limits.requests) throw new RetentionBudgetError()
+    if (this.requests + (deleting ? 0 : this.reserved) >= this.limits.requests) throw new RetentionBudgetError()
     this.requests++
-    if (reserved) this.reserved = Math.max(0, this.reserved - 1)
+    if (deleting) this.reserved = Math.max(0, this.reserved - 1)
   }
 
   async fetch(send: () => Promise<Response>): Promise<Response> {
-    const headersOnly = isHeaderOnlyBackupRead()
     const context = { budget: this, metered: false }
     const response = await active.run(context, send)
-    if (headersOnly && (response.ok || response.status === 404)) return response
     return context.metered ? response : this.meter(response)
   }
 

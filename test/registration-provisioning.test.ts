@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
 import { provisionRegistration } from "../src/main/auth/registration-provisioning"
 import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS } from "../src/shared/app-registration"
+import { graphPermissions, knownPermissions, requestedPermissions, type PermissionChoice } from "../src/shared/services/manifest"
+import { onboardingPermissions } from "../src/shared/services/onboarding"
+import type { ModuleId } from "../src/shared/services/modules"
 
 const own = { displayName: "TenuVault Desktop", id: "app", appId: "client", notes: "Used by the TenuVault desktop app", signInAudience: "AzureADMyOrg", publicClient: { redirectUris: ["http://localhost"] }, createdDateTime: "2026-01-01" }
-function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL, init: RequestInit, count: number) => Response | undefined; unknown?: number; missingResource?: boolean; appPrincipal?: object; probe?: () => Response } = {}) {
+function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL, init: RequestInit, count: number) => Response | undefined; unknown?: number; missingResource?: boolean; appPrincipal?: object; probe?: () => Response; choice?: PermissionChoice } = {}) {
   // What the sign-in service was asked. Checked after the run: the probe swallows its own errors.
   const probes: { clientId: string | null; authorization: unknown }[] = []
   const calls: { url: URL; method: string; body?: Record<string, unknown> }[] = []
@@ -22,24 +25,26 @@ function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL
       return probes.length <= (options.unknown ?? 0) ? Response.json({ error: "unauthorized_client", error_codes: [700016] }, { status: 400 }) : Response.json({ device_code: "unused" })
     }
     expect(url.origin).toBe("https://graph.microsoft.com")
-    // The stable endpoint only: the beta one names fields differently and was never run for real.
-    expect(url.pathname).toMatch(/^\/v1\.0\//)
-    if (url.pathname === "/v1.0/applications") return method === "GET" ? Response.json({ value: options.apps ?? [] }) : Response.json(own)
-    if (url.pathname === "/v1.0/servicePrincipals") {
+    expect(url.pathname).toMatch(/^\/beta\//)
+    if (url.pathname === "/beta/applications") return method === "GET" ? Response.json({ value: options.apps ?? [] }) : Response.json(own)
+    if (url.pathname === "/beta/servicePrincipals") {
       const filter = url.searchParams.get("$filter") ?? ""
       const resource = DESKTOP_APP_PERMISSIONS.find(r => filter.includes(r.appId) || body?.appId === r.appId)
       if (resource) {
-        const principal = { id: resource.api, oauth2PermissionScopes: resource.permissions.map((value, i) => ({ id: `${resource.api}-${i}`, value })) }
+        // Each API offers the default permissions under their position, and whatever else the manifest can name under its name.
+        const others = knownPermissions("delegated").find(api => api.appId === resource.appId)!.permissions.filter(value => !resource.permissions.includes(value))
+        if (method === "GET") expect(url.searchParams.get("$select")).toContain("publishedPermissionScopes")
+        const principal = { id: resource.api, publishedPermissionScopes: [...resource.permissions.map((value, i) => ({ id: `${resource.api}-${i}`, value })), ...others.map(value => ({ id: `${resource.api}:${value}`, value }))] }
         return Response.json(method === "GET" ? { value: options.missingResource ? [] : [principal] } : principal)
       }
       return Response.json(method === "GET" ? { value: options.appPrincipal ? [options.appPrincipal] : [] } : { id: "app-sp" })
     }
-    if (url.pathname === "/v1.0/oauth2PermissionGrants" && method === "GET") return Response.json({ value: options.grants ?? [] })
+    if (url.pathname === "/beta/oauth2PermissionGrants" && method === "GET") return Response.json({ value: options.grants ?? [] })
     if (method === "DELETE" || method === "PATCH") return new Response(null, { status: 204 })
     if (method === "POST") return Response.json({ id: "grant" })
     throw new Error(`Unhandled ${url}`)
   }) as unknown as typeof fetch
-  const run = (signal?: AbortSignal) => provisionRegistration({ fetch: request, token: "ephemeral", tenantId: "tenant", username: "admin", progress, sleep, signal })
+  const run = (signal?: AbortSignal) => provisionRegistration({ fetch: request, token: "ephemeral", tenantId: "tenant", username: "admin", progress, sleep, signal, ...(options.choice ? { choice: options.choice } : {}) })
   return { run, calls, sleep, progress, probes }
 }
 // Tenant-wide admin consent on Microsoft Graph that covers Intune: what marks a registration as one
@@ -52,10 +57,25 @@ describe("registration provisioning", () => {
   it("creates the default registration, service principal and all consent bodies", async () => {
     const f = fixture({ missingResource: true })
     expect(await f.run()).toMatchObject({ clientId: "client", reused: false, ready: true })
-    const app = f.calls.find(c => c.url.pathname === "/v1.0/applications" && c.method === "POST")!
+    const app = f.calls.find(c => c.url.pathname === "/beta/applications" && c.method === "POST")!
     expect(app.body).toEqual({ displayName: "TenuVault Desktop", signInAudience: "AzureADMyOrg", notes: "Used by the TenuVault desktop app. Delegated permissions only, no credentials.", publicClient: { redirectUris: ["http://localhost"] }, requiredResourceAccess: DESKTOP_APP_PERMISSIONS.map(r => ({ resourceAppId: r.appId, resourceAccess: r.permissions.map((_, i) => ({ id: `${r.api}-${i}`, type: "Scope" })) })) })
     expect(f.calls.find(c => c.body?.appId === "client")?.body?.tags).toEqual(["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"])
-    expect(f.calls.filter(c => c.url.pathname === "/v1.0/oauth2PermissionGrants" && c.method === "POST").map(c => c.body)).toEqual(DESKTOP_APP_PERMISSIONS.map(r => ({ clientId: "app-sp", consentType: "AllPrincipals", resourceId: r.api, scope: r.permissions.join(" ") })))
+    expect(f.calls.filter(c => c.url.pathname === "/beta/oauth2PermissionGrants" && c.method === "POST").map(c => c.body)).toEqual(DESKTOP_APP_PERMISSIONS.map(r => ({ clientId: "app-sp", consentType: "AllPrincipals", resourceId: r.api, scope: r.permissions.join(" "), startTime: "0001-01-01T00:00:00Z", expiryTime: "9999-12-31T23:59:59Z" })))
+  })
+  it("creates the compiled lab fixture even when a trusted registration exists", async () => {
+    vi.stubGlobal("__TV_LAB_BUILD__", true)
+    vi.stubGlobal("__TV_LAB_REGISTRATION__", "TV06-TEST-run-12f51c29-1e42-4e15-8079-68fb1f05535e")
+    try {
+      const f = fixture({ ...trusted, apps: [own] })
+      expect(await f.run()).toMatchObject({ reused: false })
+      const calls = f.calls.filter(call => call.url.pathname === "/beta/applications")
+      expect(calls.map(call => call.method)).toEqual(["POST"])
+      const name = calls[0]?.body?.displayName
+      expect(name).toMatch(/^TV06-TEST-run-12f51c29-1e42-4e15-8079-68fb1f05535e-[0-9a-f-]{36}$/)
+      const second = fixture({ ...trusted, apps: [own] })
+      await second.run()
+      expect(second.calls.find(call => call.url.pathname === "/beta/applications")?.body?.displayName).not.toBe(name)
+    } finally { vi.unstubAllGlobals() }
   })
   it("uses the oldest approved registration as it is, writes nothing, and reports what its consent lacks", async () => {
     const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [{ ...own, createdDateTime: "2025-01-01", appId: "older" }, own], grants: [consent(`Extra.Scope User.Read ${INTUNE}`), { id: "personal", resourceId: "Azure Storage", consentType: "Principal", scope: "user_impersonation" }] })
@@ -113,7 +133,7 @@ describe("registration provisioning", () => {
   ])("creates its own registration and gives no consent to one that %s", async (_name, state) => {
     const f = planted(state)
     expect(await f.run()).toMatchObject({ clientId: "client", reused: false, candidateCount: 0 })
-    expect(f.calls.some(c => c.method === "POST" && c.url.pathname === "/v1.0/applications")).toBe(true)
+    expect(f.calls.some(c => c.method === "POST" && c.url.pathname === "/beta/applications")).toBe(true)
     // Nothing is written to it: no enterprise application, no consent, no change.
     for (const call of f.calls.filter(c => c.method !== "GET")) expect(`${call.url.href} ${JSON.stringify(call.body ?? {})}`).not.toContain("planted")
     expect(f.calls.filter(c => c.method === "POST" && c.url.pathname.endsWith("oauth2PermissionGrants")).map(c => c.body?.clientId)).toEqual(DESKTOP_APP_PERMISSIONS.map(() => "app-sp"))
@@ -168,7 +188,7 @@ describe("registration provisioning", () => {
   })
   it.each([404, 400])("retries replication errors (%i)", async status => {
     let attempts = 0
-    const f = fixture({ fail: (url, init) => url.pathname === "/v1.0/servicePrincipals" && init.method === "POST" && ++attempts < 3 ? failure(status, "does not reference a valid application object") : undefined })
+    const f = fixture({ fail: (url, init) => url.pathname === "/beta/servicePrincipals" && init.method === "POST" && ++attempts < 3 ? failure(status, "does not reference a valid application object") : undefined })
     await f.run()
     expect(f.sleep).toHaveBeenCalledWith(3000)
     expect(attempts).toBe(3)
@@ -180,12 +200,12 @@ describe("registration provisioning", () => {
     expect(f.sleep).toHaveBeenCalledWith(8000)
   })
   it("does not retry ambiguous create failures", async () => {
-    const f = fixture({ fail: (url, init) => url.pathname === "/v1.0/applications" && init.method === "POST" ? failure(503) : undefined })
+    const f = fixture({ fail: (url, init) => url.pathname === "/beta/applications" && init.method === "POST" ? failure(503) : undefined })
     await expect(f.run()).rejects.toThrow("failed")
     expect(f.calls.filter(c => c.method === "POST")).toHaveLength(1)
   })
   it("reports 403 and removes the application it created", async () => {
-    const f = fixture({ fail: (url, init) => url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
+    const f = fixture({ fail: (url, init) => url.pathname === "/beta/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
     const error = await f.run().then(() => { throw new Error("Expected failure") }, error => error as Error)
     expect(error.message).toContain("signed-in account admin")
     // Microsoft's own reason stays in the message, for refusals that are not about the role.
@@ -200,7 +220,7 @@ describe("registration provisioning", () => {
     expect(f.calls.some(c => c.url.origin === "https://graph.microsoft.com" && c.method !== "GET")).toBe(false)
   })
   it("reports failed cleanup with the client ID", async () => {
-    const f = fixture({ fail: (url, init) => init.method === "DELETE" || url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
+    const f = fixture({ fail: (url, init) => init.method === "DELETE" || url.pathname === "/beta/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
     await expect(f.run()).rejects.toThrow("Cleanup failed. Delete app registration TenuVault Desktop (client id client)")
   })
   it("waits for an unknown registration to become known", async () => {
@@ -239,21 +259,21 @@ describe("registration provisioning", () => {
     const f = fixture()
     await f.run()
     const select = (path: string) => f.calls.find(c => c.method === "GET" && c.url.pathname === path)!.url.searchParams.get("$select")
-    expect(select("/v1.0/applications")).toBe("id,appId,displayName,notes,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,createdDateTime")
-    expect(select("/v1.0/servicePrincipals")).toBe("id,appId,accountEnabled,oauth2PermissionScopes")
+    expect(select("/beta/applications")).toBe("id,appId,displayName,notes,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,createdDateTime")
+    expect(select("/beta/servicePrincipals")).toBe("id,appId,accountEnabled,publishedPermissionScopes")
   })
   it("repeats a read that got no answer", async () => {
     let first = true
     const f = fixture({ fail: () => { if (first) { first = false; throw new TypeError("fetch failed") } return undefined } })
     expect(await f.run()).toMatchObject({ ready: true })
-    expect(f.calls.filter(c => c.url.pathname === "/v1.0/servicePrincipals" && c.method === "GET").length).toBeGreaterThan(3)
+    expect(f.calls.filter(c => c.url.pathname === "/beta/servicePrincipals" && c.method === "GET").length).toBeGreaterThan(3)
   })
   it("does not repeat a write that got no answer, and removes the registration it created", async () => {
-    const f = fixture({ fail: (url, init) => { if (url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST") throw new TypeError("fetch failed"); return undefined } })
+    const f = fixture({ fail: (url, init) => { if (url.pathname === "/beta/oauth2PermissionGrants" && init.method === "POST") throw new TypeError("fetch failed"); return undefined } })
     const error = await f.run().then(() => { throw new Error("Expected failure") }, caught => caught as Error)
     expect(error.message).toContain("The half-created app registration was removed again.")
     expect(error.message).toContain("Microsoft Graph did not answer")
-    expect(f.calls.filter(c => c.url.pathname === "/v1.0/oauth2PermissionGrants" && c.method === "POST")).toHaveLength(1)
+    expect(f.calls.filter(c => c.url.pathname === "/beta/oauth2PermissionGrants" && c.method === "POST")).toHaveLength(1)
     expect(f.calls.filter(c => c.method === "DELETE")).toHaveLength(1)
   })
   it("sets a deadline on every Graph request", async () => {
@@ -267,7 +287,7 @@ describe("registration provisioning", () => {
     await f.run()
     // The first report follows the sign-in at once.
     expect(f.progress.mock.calls.map(([value]) => value.phase)).toEqual(["registration", "registration", "consent", "publishing"])
-    expect(f.calls[0]!.url.pathname).toBe("/v1.0/servicePrincipals")
+    expect(f.calls[0]!.url.pathname).toBe("/beta/servicePrincipals")
   })
   it("caps a long Retry-After at one minute", async () => {
     let first = true
@@ -283,7 +303,7 @@ describe("registration provisioning", () => {
     expect(f.calls).toHaveLength(0)
   })
   it("rejects a paging link outside Graph without sending a token", async () => {
-    const f = fixture({ fail: () => Response.json({ value: [], "@odata.nextLink": "https://example.invalid/v1.0/applications" }) })
+    const f = fixture({ fail: () => Response.json({ value: [], "@odata.nextLink": "https://example.invalid/beta/applications" }) })
     await expect(f.run()).rejects.toThrow("Unexpected Graph paging address")
     expect(f.calls).toHaveLength(1)
   })
@@ -342,13 +362,13 @@ it("lets a create request in flight finish when cancelled, then removes what it 
   const controller = new AbortController()
   let createSignal: AbortSignal | null | undefined
   const f = fixture({ fail: (url, init) => {
-    if (url.pathname === "/v1.0/applications" && init.method === "POST") { createSignal = init.signal; controller.abort() }
+    if (url.pathname === "/beta/applications" && init.method === "POST") { createSignal = init.signal; controller.abort() }
     return undefined
   } })
   await expect(f.run(controller.signal)).rejects.toThrow("The half-created app registration was removed again. Sign-in cancelled.")
   // The admin's cancel never cut the POST off, so its answer carried the ID the cleanup deletes.
   expect(createSignal?.aborted).toBe(false)
-  expect(f.calls.filter(call => call.method === "DELETE").map(call => call.url.pathname)).toEqual(["/v1.0/applications/app"])
+  expect(f.calls.filter(call => call.method === "DELETE").map(call => call.url.pathname)).toEqual(["/beta/applications/app"])
   expect(f.probes).toHaveLength(0)
 })
 
@@ -366,11 +386,139 @@ it("sends a cancel during the last consent request through the cleanup", async (
   const controller = new AbortController()
   let grants = 0
   const f = fixture({ fail: (url, init) => {
-    if (url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" && ++grants === DESKTOP_APP_PERMISSIONS.length) controller.abort()
+    if (url.pathname === "/beta/oauth2PermissionGrants" && init.method === "POST" && ++grants === DESKTOP_APP_PERMISSIONS.length) controller.abort()
     return undefined
   } })
   await expect(f.run(controller.signal)).rejects.toThrow("The half-created app registration was removed again. Sign-in cancelled.")
   expect(grants).toBe(DESKTOP_APP_PERMISSIONS.length)
   expect(f.calls.filter(call => call.method === "DELETE")).toHaveLength(1)
   expect(f.probes).toHaveLength(0)
+})
+
+describe("a choice of services, areas and access levels", () => {
+  // The ID the stand-in for Microsoft Graph gives a permission: its position for a default one, its name for any other.
+  const scopeId = (value: string) => {
+    const position = DESKTOP_APP_PERMISSIONS[0]!.permissions.indexOf(value)
+    return position < 0 ? `Microsoft Graph:${value}` : `Microsoft Graph-${position}`
+  }
+  const created = (f: ReturnType<typeof fixture>) => {
+    const app = f.calls.find(c => c.url.pathname === "/beta/applications" && c.method === "POST")!
+    const graph = (app.body!.requiredResourceAccess as { resourceAppId: string; resourceAccess: { id: string; type: string }[] }[])[0]!
+    const grant = f.calls.find(c => c.url.pathname === "/beta/oauth2PermissionGrants" && c.method === "POST" && c.body?.resourceId === "Microsoft Graph")!
+    return { declared: graph.resourceAccess.map(entry => entry.id), types: new Set(graph.resourceAccess.map(entry => entry.type)), consented: String(grant.body!.scope).split(" "), apis: (app.body!.requiredResourceAccess as object[]).length }
+  }
+
+  it.each<[string, PermissionChoice]>([
+    ["the onboarding default", onboardingPermissions({ intune: { access: "restore" } })],
+    ["the onboarding choice of Intune and Entra ID with groups", onboardingPermissions({ intune: { access: "restore" }, entra: { access: "backup", areas: ["groups"] } })],
+    ["Entra ID to back up", { entra: { access: "backup" } }],
+    ["Intune to back up only", { intune: { access: "backup" } }],
+    ["every service and area to restore", { intune: { access: "restore" }, conditionalAccess: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices"] } }],
+  ])("creates the registration with exactly the permissions of the manifest for %s, and consents to exactly those", async (_name, choice) => {
+    const f = fixture({ choice })
+    expect(await f.run()).toMatchObject({ reused: false, ready: true, missingConsent: [] })
+    const expected = graphPermissions(choice, "delegated")
+    expect(created(f)).toEqual({ declared: expected.map(scopeId), types: new Set(["Scope"]), consented: [...expected], apis: 3 })
+    // The two Azure APIs get their consent as in every setup.
+    expect(f.calls.filter(c => c.url.pathname === "/beta/oauth2PermissionGrants" && c.method === "POST").map(c => [c.body!.resourceId, c.body!.scope]).slice(1)).toEqual([["Azure Service Management", "user_impersonation"], ["Azure Storage", "user_impersonation"]])
+  })
+
+  it("asks for today's exact list when no choice is made", async () => {
+    const f = fixture()
+    await f.run()
+    expect(created(f).consented).toEqual(["User.Read", "Organization.Read.All", "GroupMember.Read.All", "Policy.Read.All", "DeviceManagementConfiguration.ReadWrite.All", "DeviceManagementApps.ReadWrite.All", "DeviceManagementServiceConfig.ReadWrite.All", "DeviceManagementScripts.ReadWrite.All", "DeviceManagementRBAC.ReadWrite.All", "DeviceManagementManagedDevices.Read.All"])
+    expect(created(f).declared).toEqual(DESKTOP_APP_PERMISSIONS[0]!.permissions.map((_, i) => `Microsoft Graph-${i}`))
+  })
+
+  const entraOnly = graphPermissions({ entra: { access: "backup" } }, "delegated").filter(permission => !permission.startsWith("DeviceManagement"))
+  it.each([
+    ["the Entra ID permissions only", entraOnly.join(" ")],
+    ["most of the Entra ID permissions, as an earlier version may have requested them", entraOnly.slice(2, 20).join(" ")],
+    // Every setup that includes Intune asks to read the managed devices, also one that only backs up.
+    ["the one Intune read permission a default setup asks for", "DeviceManagementManagedDevices.Read.All"],
+    ["everything a setup for Conditional Access alone asks for", "User.Read Organization.Read.All Policy.Read.All"],
+    ["a Conditional Access setup with its restore permission", "User.Read Organization.Read.All Policy.Read.All Policy.ReadWrite.ConditionalAccess"],
+  ])("uses a registration an administrator gave tenant-wide consent for %s, and writes nothing to it", async (_name, scope) => {
+    const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [own], grants: [consent(scope)], choice: { entra: { access: "backup" } } })
+    const result = await f.run()
+    expect(result).toMatchObject({ reused: true, clientId: "client", candidateCount: 1 })
+    // What it lacks for the choice is reported, not granted.
+    const granted = scope.split(" ")
+    expect(result.missingConsent).toEqual([...graphPermissions({ entra: { access: "backup" } }, "delegated").filter(permission => !granted.includes(permission)), "user_impersonation (Azure Service Management)", "user_impersonation (Azure Storage)"])
+    expect(f.calls.filter(c => c.url.origin === "https://graph.microsoft.com" && c.method !== "GET")).toEqual([])
+  })
+
+  it.each([
+    ["the permissions every sign-in has", "User.Read Organization.Read.All"],
+    ["an optional permission of one feature", "User.Read Mail.Send AuditLog.Read.All"],
+    ["a permission TenuVault does not use", "Mail.Read Sites.Read.All"],
+    // Permissions administrators grant to many apps prove nothing about this one.
+    ["the Conditional Access permission without the rest of its setup", "User.Read Policy.Read.All Policy.ReadWrite.ConditionalAccess"],
+    ["the broad directory reads", "User.Read.All Group.Read.All Directory.Read.All Application.Read.All Device.Read.All Policy.Read.All"],
+    ["a few Entra ID permissions", "Policy.Read.All Domain.Read.All RoleManagement.Read.Directory"],
+    // Intune permissions a default setup never asks for did not count before services could be chosen either.
+    ["an Intune read permission a default setup does not ask for", "User.Read Organization.Read.All DeviceManagementScripts.Read.All DeviceManagementApps.Read.All"],
+    ["the write permission for managed devices", "DeviceManagementManagedDevices.ReadWrite.All"],
+  ])("does not take tenant-wide consent for %s as approval, and creates its own registration", async (_name, scope) => {
+    const f = fixture({
+      apps: [{ ...own, id: "planted-app", appId: "planted" }], choice: { entra: { access: "backup" } },
+      fail: (url) => {
+        const filter = url.searchParams.get("$filter")
+        if (url.pathname.endsWith("servicePrincipals") && filter === "appId eq 'planted'") return Response.json({ value: [{ id: "planted-sp" }] })
+        if (url.pathname.endsWith("oauth2PermissionGrants") && filter === "clientId eq 'planted-sp'") return Response.json({ value: [consent(scope)] })
+        return undefined
+      },
+    })
+    expect(await f.run()).toMatchObject({ reused: false, clientId: "client", candidateCount: 0 })
+    expect(f.calls.some(c => c.method === "POST" && c.url.pathname === "/beta/applications")).toBe(true)
+    for (const call of f.calls.filter(c => c.method !== "GET")) expect(`${call.url.href} ${JSON.stringify(call.body ?? {})}`).not.toContain("planted")
+  })
+
+  // A registration as quick setup makes it for one service to back up, and every choice a later setup may ask for.
+  const madeFor = (id: ModuleId) => consent(graphPermissions({ [id]: { access: "backup" } }, "delegated").join(" "))
+  const CHOICES: [string, PermissionChoice | undefined][] = [
+    ["no choice", undefined], ["Conditional Access only", { conditionalAccess: { access: "backup" } }], ["Entra ID only", { entra: { access: "backup" } }],
+  ]
+  describe.each<[string, ModuleId]>([["Conditional Access", "conditionalAccess"], ["Entra ID", "entra"]])("a registration made for %s only", (_label, id) => {
+    it.each(CHOICES)("is recognised and used as it is when setup asks for %s, on every run", async (_name, choice) => {
+      for (let runs = 0; runs < 2; runs++) {
+        const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [own], grants: [madeFor(id)], ...(choice ? { choice } : {}) })
+        expect(await f.run()).toMatchObject({ reused: true, clientId: "client", candidateCount: 1 })
+        // No second registration, and nothing written to the one that is there.
+        expect(f.calls.filter(c => c.url.origin === "https://graph.microsoft.com" && c.method !== "GET")).toEqual([])
+      }
+    })
+
+    it.each(CHOICES)("stops setup when sign-in to its enterprise application is turned off and setup asks for %s", async (_name, choice) => {
+      const f = fixture({ appPrincipal: { id: "app-sp", accountEnabled: false }, apps: [own], grants: [madeFor(id)], ...(choice ? { choice } : {}) })
+      await expect(f.run()).rejects.toThrow('This tenant already has a TenuVault app registration, "TenuVault Desktop" (client id client), but sign-in to its enterprise application is turned off.')
+      // The administrator's decision stands: no replacement is created next to it, and nothing is changed.
+      expect(f.calls.some(c => c.method !== "GET")).toBe(false)
+    })
+  })
+
+  it("never writes to a registration it did not create, whatever the choice asks for and whatever Microsoft Graph would allow", async () => {
+    // An approved Intune registration, and a choice that needs far more than it has.
+    const choice: PermissionChoice = { intune: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices"] } }
+    const f = fixture({ ...trusted, apps: [own], choice })
+    const result = await f.run()
+    expect(result).toMatchObject({ reused: true, clientId: "client" })
+    expect(result.missingConsent).toEqual([...requestedPermissions(choice, "delegated")[0]!.permissions.filter(permission => permission !== INTUNE), "user_impersonation (Azure Service Management)", "user_impersonation (Azure Storage)"])
+    // No permission is declared, no consent is given or widened, nothing is deleted: only reads reach Microsoft Graph.
+    expect(f.calls.filter(c => c.url.origin === "https://graph.microsoft.com").every(c => c.method === "GET")).toBe(true)
+  })
+
+  it("prefers the registration whose consent covers more of what the manifest knows, whichever service that is", async () => {
+    // The newer one also has an Entra ID permission; before, only Intune and the switches counted.
+    const f = fixture({
+      appPrincipal: { id: "app-sp" }, apps: [own, { ...own, id: "other-app", appId: "other", displayName: "TenuVault Desktop (Lab)", createdDateTime: "2025-01-01" }], grants: [consent(`${INTUNE} Agreement.Read.All`)],
+      fail: (url) => {
+        const filter = url.searchParams.get("$filter")
+        if (url.pathname.endsWith("servicePrincipals") && filter === "appId eq 'other'") return Response.json({ value: [{ id: "other-sp" }] })
+        if (url.pathname.endsWith("oauth2PermissionGrants") && filter === "clientId eq 'other-sp'") return Response.json({ value: [consent(`${INTUNE} Mail.Read`)] })
+        return undefined
+      },
+    })
+    expect(await f.run()).toMatchObject({ clientId: "client", candidateCount: 2, reused: true })
+  })
 })

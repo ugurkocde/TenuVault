@@ -1,0 +1,82 @@
+{
+  "folder": "AccessPackages",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/entitlementManagement/accessPackages": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example package"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/accessPackages/example?$expand=catalog($select=id),resourceRoleScopes($expand=role,scope)": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example package",
+        "isHidden": false,
+        "catalog": {
+          "id": "catalog"
+        },
+        "resourceRoleScopes": [
+          {
+            "id": "scope-b",
+            "role": {
+              "id": "role-b"
+            },
+            "scope": {
+              "id": "scope-b"
+            }
+          },
+          {
+            "id": "scope-a",
+            "role": {
+              "id": "role-a"
+            },
+            "scope": {
+              "id": "scope-a"
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/accessPackages/example/incompatibleGroups?$select=id": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "b"
+          },
+          {
+            "id": "a"
+          },
+          {
+            "id": "b"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/accessPackages/example/incompatibleAccessPackages?$select=id": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "b"
+          },
+          {
+            "id": "a"
+          },
+          {
+            "id": "b"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import { moduleForFolder } from "../src/shared/services/modules"
 import { describe, expect, it } from "vitest"
 import { cleanAssignment, INTUNE_TYPES, restoreOrder, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError } from "../src/shared/intune/restore-plan"
@@ -9,7 +10,7 @@ describe("Intune type registry", () => {
   it("has unique folders and Graph paths", () => {
     expect(new Set(INTUNE_TYPES.map((t) => t.folder.toLowerCase())).size).toBe(INTUNE_TYPES.length)
     expect(new Set(INTUNE_TYPES.map((t) => t.path)).size).toBe(INTUNE_TYPES.length)
-    for (const t of INTUNE_TYPES) expect(t.path).toMatch(/^(device(Management|AppManagement)\/[A-Za-z]+|identity\/conditionalAccess\/(namedLocations|policies|authenticationStrength\/policies))$/)
+    for (const t of INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id))) expect(t.path).toMatch(/^(device(Management|AppManagement)\/[A-Za-z]+|identity\/conditionalAccess\/(namedLocations|policies|authenticationStrength\/policies))$/)
   })
 
   it("skips objects Intune provides itself", () => {

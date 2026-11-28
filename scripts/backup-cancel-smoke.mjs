@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
-// The development debugger creates a job in the real engine without adding a fixture API
-// to the app. Its first token never resolves, so no tenant or storage request can be sent.
-async function startFixture({ inspectorPort, desktopDir, evaluate, assert }) {
+// The development debugger runs fixtures in the main process without adding a fixture API.
+async function evaluateInBackupHandler({ inspectorPort, desktopDir, evaluate, assert }, expression) {
   const targets = await (await fetch(`http://127.0.0.1:${inspectorPort}/json/list`)).json()
   const socket = new WebSocket(targets[0].webSocketDebuggerUrl)
   await new Promise((resolve, reject) => {
@@ -49,15 +48,9 @@ async function startFixture({ inspectorPort, desktopDir, evaluate, assert }) {
     const result = await send("Debugger.evaluateOnCallFrame", {
       callFrameId: callFrames[0].callFrameId,
       returnByValue: true,
-      expression: `(() => {
-        const getToken = engine.deps.getToken;
-        engine.deps.getToken = () => new Promise(() => {});
-        try {
-          return engine.start({ tenantId: '99999999-9999-9999-9999-999999999999', clientId: 'smoke', storageAccountName: 'smokefixture', scope: { excluded: [] } }).id;
-        } finally { engine.deps.getToken = getToken; }
-      })()`,
+      expression,
     })
-    assert(!result.exceptionDetails, result.exceptionDetails?.exception?.description ?? "fixture job could not start")
+    assert(!result.exceptionDetails, result.exceptionDetails?.exception?.description ?? "backup fixture could not run")
     await send("Debugger.removeBreakpoint", { breakpointId })
     breakpointId = undefined
     await send("Debugger.resume")
@@ -69,6 +62,48 @@ async function startFixture({ inspectorPort, desktopDir, evaluate, assert }) {
     socket.close()
     await invocation
   }
+}
+
+// The job's first token never resolves, so no tenant or storage request can be sent.
+function startFixture(options) {
+  return evaluateInBackupHandler(options, `(() => {
+    const getToken = engine.deps.getToken;
+    engine.deps.getToken = () => new Promise(() => {});
+    try {
+      return engine.start({ tenantId: '99999999-9999-9999-9999-999999999999', clientId: 'smoke', storageAccountName: 'smokefixture', scope: { excluded: [] } }).id;
+    } finally { engine.deps.getToken = getToken; }
+  })()`)
+}
+
+export async function checkSignInRequired(options) {
+  if (!options.inspectorPort) return
+  const { check, evaluate, waitForCondition, assert, desktopDir } = options
+  await check("the real sign-in IPC delivers the personalized prompt to the renderer", async () => {
+    const source = readFileSync(join(desktopDir, "out/main/index.js"), "utf8")
+    const tokenFor = source.match(/^  const (tokenFor\w*) = async \(tenantId, clientId,/m)?.[1]
+    assert(tokenFor, "built background token handler was not found")
+    const tenantId = "88888888-8888-8888-8888-888888888888"
+    const clientId = "22222222-2222-2222-2222-222222222222"
+    const scope = "https://storage.azure.com/.default"
+    const prompt = "Sign in again as smoke@example.test."
+    try {
+      await evaluate(`window.__signInOff = window.tenuvault.auth.onSignInRequired(event => {
+        if (event.tenantId === ${JSON.stringify(tenantId)}) window.__signInEvent = event
+      })`)
+      await evaluateInBackupHandler(options, `setImmediate(() => {
+        const acquire = auth.getAccessToken;
+        auth.getAccessToken = async () => { throw new SignInRequiredError(${JSON.stringify(tenantId)}, ${JSON.stringify(clientId)}, ${JSON.stringify(prompt)}, ${JSON.stringify(scope)}) };
+        try { void ${tokenFor}(${JSON.stringify(tenantId)}, ${JSON.stringify(clientId)}, ${JSON.stringify(scope)}).catch(() => {}) }
+        finally { auth.getAccessToken = acquire }
+      }); void 0`)
+      assert(await waitForCondition("Boolean(window.__signInEvent)", 5000), "sign-in event did not cross the preload bridge")
+      const event = await evaluate("window.__signInEvent")
+      assert(event.message === prompt, "sign-in IPC omitted the personalized prompt")
+      assert(event.clientId === clientId && event.scope === scope, "sign-in IPC lost the app or resource scope")
+    } finally {
+      await evaluate("window.__signInOff?.(); delete window.__signInOff; delete window.__signInEvent")
+    }
+  })
 }
 
 /** Built progress views cancel real fixture jobs and wait for the real terminal status. */
@@ -111,6 +146,7 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
           frame.contentWindow.tenuvault = {
             ...window.tenuvault,
             storage: { ...window.tenuvault.storage, setItem: async () => {}, removeItem: async () => {} },
+            setup: { ...window.tenuvault.setup, checkPermissions: async () => ({ missing: [] }), enrollOwnApp: async () => ({ result: true }) },
             auth: { ...window.tenuvault.auth, signIn: async () => ({ tenantId: '99999999-9999-9999-9999-999999999999', clientId: '22222222-2222-2222-2222-222222222222', username: 'smoke@example.test', name: 'Smoke' }) },
             license: { ...window.tenuvault.license, checkNewTenant: async () => window.tenuvault.license.status() },
             backups: { ...window.tenuvault.backups, cancel: async id => {
@@ -159,10 +195,11 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
           })()`)
           assert(await waitForCondition(`${button("Sign in with Microsoft")}?.disabled === false`), "fixture sign-in was not ready")
           await evaluate(`${button("Sign in with Microsoft")}.click()`)
-          assert(await waitForCondition(`${button("Continue")}?.disabled === false`), "local storage choice did not load")
+          assert(await waitForCondition(`${button("Continue")}?.disabled === false`), "sign-in results did not load")
           await evaluate(`${button("Continue")}.click()`)
-          assert(await waitForCondition(`Boolean(${button("Run first backup")})`), "first backup did not load")
-          await evaluate(`${button("Run first backup")}.click()`)
+          assert(await waitForCondition(`${button("Start first backup")}?.disabled === false`), "local storage choice did not load")
+          await evaluate(`${button("Start first backup")}.click()`)
+          assert(await waitForCondition(`Boolean(${button("Cancel backup")})`), "first backup did not start automatically")
         } else {
           assert(await waitForCondition(`Boolean(${button("Run Backup")})`), "backup page did not load")
           await evaluate(`${button("Run Backup")}.click()`)

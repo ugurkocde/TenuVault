@@ -1,0 +1,678 @@
+{
+  "folder": "RoleAssignmentSchedules",
+  "path": "roleManagement/directory/roleAssignmentSchedules",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 14,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-29de6a722bad",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": "00000000-0000-4000-8000-29de6a722bad",
+            "createdDateTime": "2026-11-12T13:23:33.273Z",
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-12T13:23:33.273Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-aacef6d05b84",
+            "principalId": "00000000-0000-4000-8000-0fc48f533c5a",
+            "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": "00000000-0000-4000-8000-aacef6d05b84",
+            "createdDateTime": "2025-08-22T07:13:35.04Z",
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2025-08-22T07:13:35.04Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-f068139a8eba",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": "00000000-0000-4000-8000-f068139a8eba",
+            "createdDateTime": "2024-07-18T10:32:41.477Z",
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2024-07-18T10:32:41.477Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "lAPpYvVpN0KRkAEhdxReEMFtiYF4ax5OssOr0hSRjww-1",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "4-PYiFWPHkqVOpuYmLiHa_UrVG09ihpDoGirlQz6zlo-1",
+            "principalId": "00000000-0000-4000-8000-beb86f65cc26",
+            "roleDefinitionId": "00000000-0000-4000-8000-2116e5c9607e",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "kl2Jm9Msx0SdAqasLV6lw9WRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "roleDefinitionId": "00000000-0000-4000-8000-f6aa865a8464",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "5wuT_mJe20eRr5jDpJo4sftrij1jqOdKvvEaBohtITE-1",
+            "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+            "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "5wuT_mJe20eRr5jDpJo4sdWRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "3ywjKSOT_UKt4h0JevPk3vtrij1jqOdKvvEaBohtITE-1",
+            "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+            "roleDefinitionId": "00000000-0000-4000-8000-f3d65b5eb86e",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "RhIJaeggVkqqTQZgdbKnqPtrij1jqOdKvvEaBohtITE-1",
+            "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+            "roleDefinitionId": "00000000-0000-4000-8000-6710cf4e30fe",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "cqeYdnt4yEqQH2DWsIr_0vtrij1jqOdKvvEaBohtITE-1",
+            "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+            "roleDefinitionId": "00000000-0000-4000-8000-312798df47f2",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "sSIiX8NXukiK1dR1nx_eb9WRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "roleDefinitionId": "00000000-0000-4000-8000-48474d14cf9d",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "y-RKGSaxskC9W2CRs4CXfdWRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "roleDefinitionId": "00000000-0000-4000-8000-552ef8c923d4",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "l4VkEWyS80ycNrzrsLqNzNWRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "roleDefinitionId": "00000000-0000-4000-8000-4fa6e52ac4d4",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": null,
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "status": "Provisioned",
+            "assignmentType": "Assigned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:46.871945Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/kl2Jm9Msx0SdAqasLV6lw9WRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "kl2Jm9Msx0SdAqasLV6lw9WRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "roleDefinitionId": "00000000-0000-4000-8000-f6aa865a8464",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:47.6815491Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/00000000-0000-4000-8000-29de6a722bad": {
+      "status": 200,
+      "body": {
+        "id": "00000000-0000-4000-8000-29de6a722bad",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": "00000000-0000-4000-8000-29de6a722bad",
+        "createdDateTime": "2026-11-12T13:23:33.273Z",
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-12T13:23:33.273Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/4-PYiFWPHkqVOpuYmLiHa_UrVG09ihpDoGirlQz6zlo-1": {
+      "status": 200,
+      "body": {
+        "id": "4-PYiFWPHkqVOpuYmLiHa_UrVG09ihpDoGirlQz6zlo-1",
+        "principalId": "00000000-0000-4000-8000-beb86f65cc26",
+        "roleDefinitionId": "00000000-0000-4000-8000-2116e5c9607e",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:47.7040422Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/00000000-0000-4000-8000-f068139a8eba": {
+      "status": 200,
+      "body": {
+        "id": "00000000-0000-4000-8000-f068139a8eba",
+        "principalId": "00000000-0000-4000-8000-41b30a434401",
+        "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": "00000000-0000-4000-8000-f068139a8eba",
+        "createdDateTime": "2024-07-18T10:32:41.477Z",
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2024-07-18T10:32:41.477Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/5wuT_mJe20eRr5jDpJo4sftrij1jqOdKvvEaBohtITE-1": {
+      "status": 200,
+      "body": {
+        "id": "5wuT_mJe20eRr5jDpJo4sftrij1jqOdKvvEaBohtITE-1",
+        "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+        "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:47.7428936Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/lAPpYvVpN0KRkAEhdxReEMFtiYF4ax5OssOr0hSRjww-1": {
+      "status": 200,
+      "body": {
+        "id": "lAPpYvVpN0KRkAEhdxReEMFtiYF4ax5OssOr0hSRjww-1",
+        "principalId": "00000000-0000-4000-8000-41b30a434401",
+        "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:47.7564982Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/00000000-0000-4000-8000-aacef6d05b84": {
+      "status": 200,
+      "body": {
+        "id": "00000000-0000-4000-8000-aacef6d05b84",
+        "principalId": "00000000-0000-4000-8000-0fc48f533c5a",
+        "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": "00000000-0000-4000-8000-aacef6d05b84",
+        "createdDateTime": "2025-08-22T07:13:35.04Z",
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2025-08-22T07:13:35.04Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/5wuT_mJe20eRr5jDpJo4sdWRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "5wuT_mJe20eRr5jDpJo4sdWRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:53.0872822Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/y-RKGSaxskC9W2CRs4CXfdWRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "y-RKGSaxskC9W2CRs4CXfdWRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "roleDefinitionId": "00000000-0000-4000-8000-552ef8c923d4",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:53.9278576Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/3ywjKSOT_UKt4h0JevPk3vtrij1jqOdKvvEaBohtITE-1": {
+      "status": 200,
+      "body": {
+        "id": "3ywjKSOT_UKt4h0JevPk3vtrij1jqOdKvvEaBohtITE-1",
+        "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+        "roleDefinitionId": "00000000-0000-4000-8000-f3d65b5eb86e",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:53.9093096Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/cqeYdnt4yEqQH2DWsIr_0vtrij1jqOdKvvEaBohtITE-1": {
+      "status": 200,
+      "body": {
+        "id": "cqeYdnt4yEqQH2DWsIr_0vtrij1jqOdKvvEaBohtITE-1",
+        "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+        "roleDefinitionId": "00000000-0000-4000-8000-312798df47f2",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:53.9195058Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/RhIJaeggVkqqTQZgdbKnqPtrij1jqOdKvvEaBohtITE-1": {
+      "status": 200,
+      "body": {
+        "id": "RhIJaeggVkqqTQZgdbKnqPtrij1jqOdKvvEaBohtITE-1",
+        "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+        "roleDefinitionId": "00000000-0000-4000-8000-6710cf4e30fe",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:53.9752504Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/l4VkEWyS80ycNrzrsLqNzNWRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "l4VkEWyS80ycNrzrsLqNzNWRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "roleDefinitionId": "00000000-0000-4000-8000-4fa6e52ac4d4",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:54.3489931Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignmentSchedules/sSIiX8NXukiK1dR1nx_eb9WRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "sSIiX8NXukiK1dR1nx_eb9WRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "roleDefinitionId": "00000000-0000-4000-8000-48474d14cf9d",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": null,
+        "createdDateTime": null,
+        "modifiedDateTime": null,
+        "status": "Provisioned",
+        "assignmentType": "Assigned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2026-11-16T14:03:59.2081059Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    }
+  }
+}

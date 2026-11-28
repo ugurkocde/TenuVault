@@ -1,410 +1,349 @@
-import { servicesStatusKey, servicesStatusOptions } from "../features/notifications/optional-permissions"
-import { useEffect, useId, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertCircle, Check, CheckCircle2, Copy, ExternalLink, Loader2, MinusCircle, RefreshCw } from "lucide-react"
+import { expandedEntraScope } from "../../shared/intune/entra-scope"
+import { privilegedRestoreEnabled } from "../../shared/intune/directory-review-folders"
+import { NoticeCard, noticeActionClass } from "./NoticeCard"
+import { backupAreaCoverage, needsBackupAccess } from "../../shared/services/backup-coverage"
+import { needsAccessText } from "./BackupAccessHelp"
+import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { servicesStatusKey } from "../features/notifications/optional-permissions"
+import { ApplicationRestoreDisclosure } from "./ApplicationRestoreDisclosure"
+import { AddPermissions } from "./AddPermissions"
+import { useEffect, useId, useRef, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
+import { AlertCircle, CheckCircle2, ExternalLink, Loader2, MinusCircle, RefreshCw } from "lucide-react"
+import { Link, useLocation, useSearchParams } from "react-router-dom"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
-import { useTenants } from "~/contexts/TenantContext"
-import { cn } from "~/lib/utils"
-import { DOCS_HOME_URL } from "../../shared/constants"
-import type { ServiceModuleStatus, ServicesStatus } from "../../shared/ipc"
-import type { OptionalPermissionStatus } from "../../shared/services/optional-permissions"
-import { entraApiPermissionsUrl, missingPermissions, restoreAccessCommands, type AreaCheck, type Readiness, type Requirement } from "../../shared/services/modules"
+import { useConfirm } from "~/components/ConfirmDialog"
+import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
+import type { ServicesStatus } from "../../shared/ipc"
+import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
+import { PERSONAL_DATA } from "../../shared/services/onboarding"
+import { BACKUP_SERVICES } from "../../shared/services/presentation"
+import { MODULE_BY_ID, entraApiPermissionsUrl } from "../../shared/services/modules"
+import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
+import { HEALTH_CAUSE_TEXT, READER_HEALTH_TEXT, SIGN_IN_HEALTH_TEXT, STORAGE_HEALTH_TEXT, changeText, healthDate, permissionRemediation, verificationText } from "../lib/connection-health-view"
 import { bridge } from "../lib/bridge"
+import { settingsHref } from "../lib/settings-section"
 import { toast } from "../lib/toast"
 
-const READINESS_TEXT: Record<Readiness, string> = { ready: "Ready", partial: "Partly covered", missing: "Not permitted" }
-const PERMISSIONS_DOCS = `${DOCS_HOME_URL}security/permissions/#check-what-the-app-registration-allows`
-/** Tenants whose permissions are read at the same time for the overview. */
-const OVERVIEW_CONCURRENCY = 4
-
-type TenantStatus = ServicesStatus | "loading"
-
 async function copy(text: string, what: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    toast(`Copied ${what}.`, "success")
-  } catch {
-    toast(`Could not copy ${what}.`, "error")
-  }
+  try { await navigator.clipboard.writeText(text); toast(`Copied ${what}.`, "success") }
+  catch { toast(`Could not copy ${what}.`, "error") }
 }
 
-/** A permission name as admins type it into Entra, with a copy button. */
-function PermissionChip({ name }: { name: string }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-gray-100 py-0.5 pl-1.5 pr-0.5 align-middle font-mono text-xs text-gray-800">
-      {name}
-      <button
-        type="button"
-        className="flex size-5 items-center justify-center rounded text-gray-500 hover:bg-gray-200 hover:text-gray-800"
-        aria-label={`Copy ${name}`}
-        onClick={() => {
-          void copy(name, name)
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        }}
-      >
-        {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-      </button>
+export function Switch({ checked, disabled, label, onChange, showLabel = false }: { checked: boolean; disabled: boolean; label: string; onChange: (enabled: boolean) => void; showLabel?: boolean }) {
+  return <label data-no-select className="inline-flex shrink-0 items-center gap-2 text-sm text-gray-700">
+    <input type="checkbox" role="switch" aria-label={label} checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} className="peer sr-only" />
+    <span aria-hidden="true" className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-disabled:opacity-50 ${checked ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"}`}>
+      <span className={`absolute left-0.5 size-4 rounded-full bg-white shadow ${checked ? "translate-x-4" : ""}`} />
     </span>
+    {showLabel ? label : checked ? "On" : "Off"}
+  </label>
+}
+
+function PermissionState({ state }: { state: ServiceHealth["permissions"] }) {
+  return <span className="text-xs text-gray-600">{state === "present" ? "Permissions present" : state === "missing" ? "Permissions missing" : "Permissions not known"}</span>
+}
+
+/** These routes change only the exact gaps reported for the selected service or area. */
+export function PermissionRoutes({ report, missing, inApp = false, restoring = false, compact = false }: { compact?: boolean; inApp?: boolean; restoring?: boolean; report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
+  const fix = permissionRemediation(report, missing)
+  if (!fix.names.length) return null
+  if (report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID) return (
+    <Link className="block text-sm text-blue-800 underline" to={settingsHref("signin")}>Review TenuVault app permission packs</Link>
   )
+  return <div data-permission-routes>
+    <NoticeCard summary={compact ? "Review missing permissions." : `Needs ${fix.names.length} more ${fix.names.length === 1 ? "permission" : "permissions"}.`}
+      details={<div className="space-y-3">
+      <p className="break-words">{fix.names.join(", ")}</p>
+      <p>Add these as delegated Microsoft Graph permissions. The CLI grants tenant-wide consent for only these scopes, preserves existing tenant-wide scopes and stops if individual consent needs separate review. Other pending permissions are not consented.</p>
+      <details><summary className="cursor-pointer font-medium">Azure CLI commands</summary>
+        <p className="mt-2 text-xs">Run in Bash or zsh with Azure CLI installed. Sign in as an Application Administrator. Azure CLI needs delegated DelegatedPermissionGrant.ReadWrite.All access or a documented higher permission. These commands add permissions to this registration, update existing tenant-wide consent in place, or create consent only if none exists. They never delete grants. An earlier permission declaration can remain saved if a later step fails.</p>
+        <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-card p-3 text-xs">{fix.commands}</pre>
+        <Button variant="outline" size="sm" onClick={() => void copy(fix.commands, "the Azure CLI commands")}>Copy Azure CLI commands</Button>
+      </details>
+      <details><summary className="cursor-pointer font-medium">Registration in Entra</summary>
+        <p className="my-2 text-xs">API permissions, Add a permission, Microsoft Graph, Delegated permissions. Add exactly the names above. Use the CLI route to consent only these scopes. The portal’s Grant admin consent action also consents other pending permissions; review those with your administrator first.</p>
+        <a className="inline-flex items-center gap-1 underline" href={entraApiPermissionsUrl(report.clientId, report.tenantId)} target="_blank" rel="noreferrer">Open API permissions in Entra<ExternalLink aria-hidden="true" className="size-3" /></a>
+      </details>
+      <details><summary className="cursor-pointer font-medium">Text for your administrator</summary>
+        <p className="my-2 break-words text-xs">{fix.request}</p>
+        <Button variant="outline" size="sm" onClick={() => void copy(fix.request, "the request for your administrator")}>Copy text for administrator</Button>
+      </details>
+      {inApp && <AddPermissions tenantId={report.tenantId} clientId={report.clientId} missing={fix.names} />}
+      <p className="text-xs">{restoring ? "Then select Check again to verify restore access." : "Then select Check again and run a backup to verify access."}</p>
+      </div>} />
+  </div>
 }
 
-/** "A or B", and every group needed: each permission as a chip. */
-function Permissions({ requirement }: { requirement: Requirement }) {
-  return (
-    <>
-      {requirement.map((group, groupIndex) => (
-        <span key={group.join("|")}>
-          {groupIndex > 0 ? " and " : null}
-          {/* Alternatives next to other groups are bracketed, so "A or B and C" cannot be misread. */}
-          {requirement.length > 1 && group.length > 1 ? "(" : null}
-          {group.map((name, index) => (
-            <span key={name}>
-              {index > 0 ? " or " : null}
-              <PermissionChip name={name} />
-            </span>
-          ))}
-          {requirement.length > 1 && group.length > 1 ? ")" : null}
-        </span>
-      ))}
-    </>
-  )
+function Verification({ value }: { value: AreaHealth["verified"] }) {
+  return <div className="space-y-1 text-xs text-gray-600">
+    <p>{verificationText(value)}</p>
+    {value.cause && <p>{HEALTH_CAUSE_TEXT[value.cause]}</p>}
+  </div>
 }
 
-/** On and off for an opt-in service, in the app's coral. */
-function Switch({ checked, disabled, label, onChange }: { checked: boolean; disabled: boolean; label: string; onChange: (checked: boolean) => void }) {
-  const id = useId()
-  return (
-    <span className="ml-auto flex items-center gap-2 text-sm text-gray-700">
-      <label htmlFor={id}>{label}</label>
-      <button
-        id={id}
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className={cn(
-          "relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral-500 focus-visible:ring-offset-2 disabled:opacity-50",
-          checked ? "bg-coral-600" : "bg-gray-300",
-        )}
-      >
-        <span className={cn("inline-block size-4 rounded-full bg-white shadow transition-transform", checked ? "translate-x-[18px]" : "translate-x-0.5")} />
-      </button>
-    </span>
-  )
+
+function deferredEntraArea(service: ServiceHealth, area: AreaHealth) {
+  return !privilegedRestoreEnabled && service.id === "entra" && ["applications", "roles"].includes(area.id)
 }
 
-function ReadinessBadge({ label, readiness }: { label: string; readiness: Readiness | null }) {
-  const tone = readiness === "ready" ? "bg-green-50 text-green-800" : readiness === "partial" ? "bg-amber-50 text-amber-800" : readiness === "missing" ? "bg-red-50 text-red-800" : "bg-gray-100 text-gray-600"
-  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>{label}: {readiness ? READINESS_TEXT[readiness] : "Unknown"}</span>
-}
-
-/** One area with a gap, and the permissions that close it. */
-function GapLine({ area }: { area: AreaCheck }) {
-  const icon = area.backup
-    ? <MinusCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" aria-hidden="true" />
-    : <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" aria-hidden="true" />
-  return (
-    <li className="flex items-start gap-2">
-      {icon}
-      <span className="leading-6">
-        <span className="text-gray-900">{area.label}</span>
-        {!area.backup && area.missingBackup ? <span className="block text-gray-500">Backup needs <Permissions requirement={area.missingBackup} /></span> : null}
-        {area.backup && area.missingRestore ? <span className="block text-gray-500">Backup only. Restore needs <Permissions requirement={area.missingRestore} /></span> : null}
-      </span>
-    </li>
-  )
-}
-
-/** How to add the missing permissions to the tenant's existing app registration. */
-function FixCallout({ module, tenantId, clientId }: { module: ServiceModuleStatus; tenantId: string; clientId: string }) {
-  // The restore permission and its commands are the whole fix only when backup already works; otherwise
-  // the read permission is missing too (writing Conditional Access policies also needs Policy.Read.All).
-  const access = module.check?.backup === "ready" ? module.restoreAccess : undefined
-  const commands = access ? restoreAccessCommands(module, tenantId, clientId) : undefined
-  const missing = missingPermissions(module)
-  return (
-    <div className="space-y-2 rounded-2xl bg-gray-50 px-4 py-3 text-sm">
-      <p className="font-medium text-gray-900">{access ? "Allow restores" : "Add the missing permissions"}</p>
-      <p className="text-gray-600">
-        Add {access ? <Permissions requirement={[access.permissions.map((permission) => permission.name)]} /> : missing.length ? <Permissions requirement={missing} /> : "the permissions above"} to this tenant's TenuVault app registration as delegated Microsoft Graph permissions, and grant admin consent. That needs a Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        {commands ? (
-          <Button variant="outline" size="sm" onClick={() => void copy(commands, "the Azure CLI commands")}>
-            <Copy className="h-4 w-4" /> Copy Azure CLI commands
-          </Button>
-        ) : null}
-        <a
-          href={entraApiPermissionsUrl(clientId)}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-2 rounded-full border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-100"
-        >
-          Open API permissions in Entra <ExternalLink className="h-4 w-4" aria-hidden="true" />
-        </a>
-      </div>
-      <p className="text-xs text-gray-500">
-        In Entra: API permissions, Add a permission, Microsoft Graph, Delegated permissions, then Grant admin consent. Then select Check again.
-        {access ? <> Setting up a new app registration? Run New-TenuVaultDesktopApp.ps1 with <span className="font-mono">{access.newSetupSwitch}</span>; running it again creates a new app registration instead of changing this one.</> : null}
-      </p>
+function Area({ area, service, report, busy, run }: { area: AreaHealth; service: ServiceHealth; report: ConnectionHealthReport; busy: boolean; run: (action: () => Promise<ConnectionHealthReport>) => void }) {
+  const deferred = deferredEntraArea(service, area)
+  return <div className="space-y-2 border-t border-border py-3" data-area={area.id}>
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h4 className="text-sm font-medium text-gray-900">{area.label} <span className="text-xs font-normal text-gray-500">{area.enabled ? "On" : "Off"}</span></h4>
+      {area.optIn && area.hasTypes && <Switch checked={area.enabled} disabled={busy || !service.enabled} label={`Include ${area.label} in backups`} onChange={enabled => run(() => bridge.services.setArea(report.tenantId, service.id, area.id, enabled))} />}
     </div>
-  )
+    {service.id === "entra" && area.id === "externalIdentities" && area.hasTypes && <p className="text-xs text-gray-600">API connectors require the Backup Reader. Their delegated read permission has not been verified.</p>}
+    {service.id === "entra" && area.id === "governance" && area.hasTypes && <p className="text-xs text-gray-600">{expandedEntraScope ? "Access packages, review definitions, lifecycle workflows and terms of use. PDFs, review decisions and workflow history are excluded." : "Agreement settings and file metadata. PDFs and individual acceptances are excluded."}</p>}
+    {privilegedRestoreEnabled && service.id === "entra" && area.id === "applications" && <ApplicationRestoreDisclosure />}
+    {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
+    <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: {deferred ? "Available in a later version" : <PermissionState state={area.restore} />}.</p>
+    {!deferred && area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
+    {!area.hasTypes ? <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : area.enabled ? <Verification value={area.verified} /> : <p className="text-xs text-gray-500">Not included in backups.</p>}
+    {area.losses.length > 0 && <NoticeCard summary={`Backup access was lost for ${new Set(area.losses.map(loss => loss.folder)).size} types.`}
+      details={<ul className="space-y-1">{area.losses.map(loss => <li key={`${loss.mode}/${loss.folder}`}>
+        {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {HEALTH_CAUSE_TEXT[loss.cause]}
+      </li>)}</ul>} />}
+    {area.enabled && area.missing.length > 0 && <PermissionRoutes inApp report={report} missing={area.missing} />}
+  </div>
 }
 
-function ModuleDetail({ module, tenantId, clientId, busy, onToggle }: { module: ServiceModuleStatus; tenantId: string; clientId: string; busy: boolean; onToggle: (enabled: boolean) => void }) {
-  const check = module.check
-  const gaps = check?.areas.filter((area) => !area.backup || !area.restore) ?? []
-  const covered = (check?.areas.length ?? 0) - gaps.length
-  return (
-    <div className="space-y-3 py-5 first:pt-1 last:pb-1">
+function Service({ service, conditionalAccess, report, busy, toggle, run }: { service: ServiceHealth; conditionalAccess?: ServiceHealth; report: ConnectionHealthReport; busy: boolean; toggle: (service: ServiceHealth, enabled: boolean) => void; run: (action: () => Promise<ConnectionHealthReport>) => void }) {
+  const label = service.id === "conditionalAccess" ? "Conditional Access" : service.label
+  const losses = service.areas.flatMap(area => area.losses)
+  const included = service.areas.filter(area => area.enabled && !deferredEntraArea(service, area))
+  const restore = !included.length ? "unknown" : included.every(area => area.restore === "present") ? "present" : included.some(area => area.restore === "missing") ? "missing" : "unknown"
+  const coverage = report.coverage?.find(row => row.service === service.id)
+  const signInNeedsAccess = needsBackupAccess(coverage) && (service.enabled || conditionalAccess?.enabled)
+  const readerOnly = signInNeedsAccess && coverage && report.readerReadableServices?.includes(coverage.service)
+  const needsAccess = signInNeedsAccess && !readerOnly
+  const signInSettings = settingsHref("signin", `sign-in-${report.tenantId}`)
+  return <section id={`service-${service.id}`} className="scroll-mt-4 rounded-2xl border border-border p-4" data-service={service.id}>
+    <div className="flex items-center justify-between gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="font-medium text-gray-900">{module.label}</p>
-        {module.enabled ? (
-          <>
-            <ReadinessBadge label="Backup" readiness={check?.backup ?? null} />
-            <ReadinessBadge label="Restore" readiness={check?.restore ?? null} />
-          </>
-        ) : (
-          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">Off</span>
-        )}
-        {module.optIn ? <Switch checked={module.enabled} disabled={busy} label="Include in backups" onChange={onToggle} /> : null}
+        <h3 className="font-medium text-gray-900">{label}</h3>
+        {needsAccess && <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-gray-700">Needs access</span>}
       </div>
-      <p className="text-sm text-gray-500">{module.description}</p>
-      {check ? (
-        // While a service is off, what would work is shown dimmed, so the admin knows before turning it on.
-        <div className={cn("space-y-3", !module.enabled && "opacity-60")}>
-          {!module.enabled ? <p className="text-sm text-gray-600">If you turn it on, this is what the app registration allows today:</p> : null}
-          <ul className="space-y-1.5 text-sm">
-            {covered > 0 ? (
-              <li className="flex items-start gap-2">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" aria-hidden="true" />
-                <span className="text-gray-700">
-                  {gaps.length ? `${covered} other area${covered === 1 ? "" : "s"}` : `All ${covered} area${covered === 1 ? "" : "s"}`}: backup and restore
-                </span>
-              </li>
-            ) : null}
-            {gaps.map((area) => <GapLine key={area.label} area={area} />)}
-          </ul>
-          {gaps.length ? <FixCallout module={module} tenantId={tenantId} clientId={clientId} /> : null}
-          <p className="text-xs text-gray-500">Admin roles: {module.roles}</p>
-        </div>
-      ) : null}
+      {MODULE_BY_ID.get(service.id)?.switchable && <Switch checked={service.enabled} disabled={busy} label={`Include ${label} in backups`} onChange={enabled => toggle(service, enabled)} />}
     </div>
-  )
-}
-
-const DOT: Record<Readiness, string> = { ready: "bg-green-600", partial: "bg-amber-500", missing: "bg-red-600" }
-
-/** Backup and restore readiness of one service in one tenant, as two labelled dots. */
-function Cell({ status, moduleId }: { status: TenantStatus | undefined; moduleId: string }) {
-  if (!status || status === "loading") return <Loader2 className="h-4 w-4 animate-spin text-gray-400" aria-label="Checking" />
-  const module = status.modules.find((candidate) => candidate.id === moduleId)
-  if (!module?.check) return <span className="text-xs text-gray-500" title={status.error}>Not checked</span>
-  if (!module.enabled) return <span className="text-xs text-gray-500">Off</span>
-  const label = `Backup ${READINESS_TEXT[module.check.backup].toLowerCase()}, restore ${READINESS_TEXT[module.check.restore].toLowerCase()}`
-  return (
-    <span className="flex items-center gap-3 text-xs text-gray-600" aria-label={label} title={label}>
-      <span className="flex items-center gap-1"><span className={cn("size-2.5 rounded-full", DOT[module.check.backup])} />Backup</span>
-      <span className="flex items-center gap-1"><span className={cn("size-2.5 rounded-full", DOT[module.check.restore])} />Restore</span>
-    </span>
-  )
-}
-
-/** Every tenant's services at a glance, for MSPs; a row opens that tenant's detail below. */
-function Overview({ tenants, statuses, selected, onSelect }: { tenants: Array<{ id: number | string; name: string; tenantId: string }>; statuses: Map<string, TenantStatus>; selected: string; onSelect: (tenantId: string) => void }) {
-  const modules = [...statuses.values()].find((status): status is ServicesStatus => status !== "loading" && status.modules.length > 0)?.modules ?? []
-  return (
-    <div className="overflow-x-auto rounded-2xl border border-gray-200">
-      <table className="w-full text-left text-sm">
-        <thead className="bg-gray-50 text-xs text-gray-500">
-          <tr>
-            <th className="px-4 py-2 font-medium">Tenant</th>
-            {modules.map((module) => <th key={module.id} className="px-4 py-2 font-medium">{module.label}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {tenants.map((tenant) => (
-            <tr key={tenant.id} className={cn("border-t border-gray-100", tenant.tenantId === selected && "bg-coral-50 dark:bg-coral-500/15")}>
-              <td className="px-4 py-2">
-                <button type="button" className="text-left font-medium text-gray-900 hover:underline" aria-current={tenant.tenantId === selected} onClick={() => onSelect(tenant.tenantId)}>
-                  {tenant.name}
-                </button>
-              </td>
-              {modules.map((module) => <td key={module.id} className="px-4 py-2"><Cell status={statuses.get(tenant.tenantId)} moduleId={module.id} /></td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    {readerOnly && <NoticeCard className="mt-3" summary="Only the Backup Reader can back up this service."
+      details="Scheduled backups can read this service with the Backup Reader. Your sign-in can't read it." />}
+    {needsAccess && coverage && <NoticeCard className="mt-3" summary={needsAccessText([label])}
+      action={report.clientId.toLowerCase() === TENUVAULT_CLIENT_ID &&
+        <Link className={noticeActionClass} to={signInSettings}>Review sign-in options</Link>}
+      details={<>
+        <p>Your choice is saved. Backups skip this service until it can be read.</p>
+        <p>Ask a Microsoft administrator to approve backup access.</p>
+        <p className="font-medium">Areas needing access</p>
+        <ul className="list-disc pl-4">{backupAreaCoverage(coverage).missing.map(area => <li key={area}>{area}</li>)}</ul>
+      </>} />}
+    <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
+    <div className="mt-3 space-y-1">
+      <p className="text-xs text-gray-600">Backup: <PermissionState state={service.permissions} />. Restore: <PermissionState state={restore} />.</p>
+      {service.enabled && service.permissions === "present" && service.access === "restore" && service.missing.length > 0 && <p className="text-sm text-gray-600">Backup permissions are present. Restore needs: {service.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
+      {!service.enabled && <p className="text-sm text-gray-600">Off. New manual and scheduled backups leave out this service.</p>}
+      {!service.hasTypes ? <p className="text-sm text-gray-600">This version has no backup types for {service.label} yet. Turning it on saves your choice; it does not back up these areas yet.</p> : service.enabled ? <Verification value={service.verified} /> : null}
+      {losses.length > 0 && <p className="text-sm text-amber-800">{losses.some(loss => loss.mode === "app-only") ? "The Backup Reader lost access, even if your sign-in verified a backup." : "Your sign-in lost access."} See the affected areas below.</p>}
+      {conditionalAccess && <p className="text-xs text-gray-600">Conditional Access: {conditionalAccess.enabled ? "On" : "Off"}, managed under Areas and access.</p>}
     </div>
-  )
+    {service.enabled && service.missing.length > 0 && <div className="mt-3"><PermissionRoutes inApp report={report} missing={service.missing} /></div>}
+    <details className="mt-3" data-service-details>
+      <summary className="cursor-pointer text-sm font-medium text-gray-700">Areas and access ({service.areas.length}{conditionalAccess ? " + Conditional Access" : ""})</summary>
+      <div data-no-select className="my-3 space-y-1 text-xs text-gray-600">
+        <label className="flex flex-wrap items-center gap-2">Access to request
+          <select aria-label={`${label} access to request`} className="rounded-lg border border-border bg-card p-2 text-foreground" disabled={busy} value={service.access} onChange={event => run(() => bridge.services.setAccess(report.tenantId, service.id, event.target.value as "backup" | "restore"))}>
+            <option value="backup">Backup</option><option value="restore">Backup and restore</option>
+          </select>
+        </label>
+        <p>This choice names the permissions to request. It grants nothing and does not block a restore your sign-in allows.</p>
+        {!privilegedRestoreEnabled && service.id === "entra" && <p>Restore for app registrations, enterprise apps, directory roles, PIM and administrative units comes in a later version.</p>}
+      </div>
+      {conditionalAccess && <Service service={conditionalAccess} report={report} busy={busy} toggle={toggle} run={run} />}
+      {service.areas.map(area => <Area key={area.id} area={area} service={service} report={report} busy={busy} run={run} />)}
+    </details>
+  </section>
 }
 
-/**
- * The services each tenant backs up and what its app registration may do with each: read for backups
- * and drift, write for restores. Opt-in services are turned on here per tenant. With several tenants,
- * an overview lists them all. Backup and restore messages link to this section when a permission is missing.
- */
-export function ServicesSettings() {
-  const tenants = useTenants().filter((tenant) => tenant.credentials?.tenantId)
-  const rows = tenants.map((tenant) => ({ id: tenant.id, name: tenant.name, tenantId: tenant.credentials!.tenantId, clientId: tenant.credentials!.appId }))
-  const key = rows.map((row) => `${row.tenantId}:${row.clientId}`).join(",")
-  const [selected, setSelected] = useState(rows[0]?.tenantId ?? "")
-  const [statuses, setStatuses] = useState<Map<string, TenantStatus>>(new Map())
+function SignInState({ label, state, storage = false }: { label: string; state: SignInHealth; storage?: boolean }) {
+  return <div className="min-w-0 rounded-xl bg-muted p-3">
+    <h3 className="text-sm font-medium text-gray-900">{label}</h3>
+    <p className="mt-1 text-xs text-gray-600">{(storage ? STORAGE_HEALTH_TEXT : SIGN_IN_HEALTH_TEXT)[state.state]}</p>
+    {state.checkedAt && <p className="mt-1 text-xs text-gray-500">Checked {healthDate(state.checkedAt)}</p>}
+    {state.code && <p className="mt-1 break-words text-xs text-gray-600">{state.code}{state.link && <>: <a href={state.link} target="_blank" rel="noreferrer" className="underline">Microsoft's description</a></>}</p>}
+    {state.state !== "healthy" && state.state !== "local" && <Link className="mt-2 inline-block text-xs font-medium text-blue-700 underline" to={settingsHref(storage ? "storage" : "signin")}>{storage ? "Open storage settings" : "Open sign-in settings"}</Link>}
+  </div>
+}
+
+/** Each mounted tenant owns every request, error and receipt, so late answers cannot cross tenants. */
+function TenantServices({ tenantId, clientId, name, active }: { tenantId: string; clientId: string; name: string; active: boolean }) {
+  const { hash } = useLocation()
+  const [report, setReport] = useState<ConnectionHealthReport | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Only Check again re-reads permissions; turning a module on or off does not. Scoped to the
-  // tenant being checked, since another tenant can be selected while it runs.
-  const [checkingTenant, setCheckingTenant] = useState<string | null>(null)
-  const current = rows.find((row) => row.tenantId === selected) ?? rows[0]
+  const generation = useRef(0)
+  const alive = useRef(true)
+  const acknowledged = useRef(new Set<string>())
   const queryClient = useQueryClient()
-  const currentStatus = useQuery(servicesStatusOptions(current && { tenantId: current.tenantId, appId: current.clientId }))
+  const statusKey = servicesStatusKey(tenantId, clientId)
+  const { confirm, confirmDialog } = useConfirm()
+  const run = async (action: () => Promise<ConnectionHealthReport>, refresh = false) => {
+    const sent = ++generation.current
+    setBusy(true)
+    setError(null)
+    try {
+      if (refresh) await queryClient.cancelQueries({ queryKey: statusKey, exact: true })
+      const next = await action()
+      if (!alive.current || sent !== generation.current || next.tenantId.toLowerCase() !== tenantId.toLowerCase() || next.clientId.toLowerCase() !== clientId.toLowerCase()) return
+      setReport(next)
+      const optional = optionalPermissionStatus(next.granted ? { kind: "delegated", permissions: new Set(next.granted) } : undefined)
+      const cached = queryClient.setQueryData<ServicesStatus>(statusKey, previous => previous ? { ...previous, optional } : previous)
+      if (!cached && next.granted) void queryClient.invalidateQueries({ queryKey: statusKey, exact: true })
+    } catch (failure) {
+      if (alive.current && sent === generation.current) {
+        if (refresh) {
+          setReport(previous => previous ? { ...previous, granted: null } : previous)
+          queryClient.setQueryData<ServicesStatus>(statusKey, cached => cached ? { ...cached, optional: optionalPermissionStatus(undefined) } : cached)
+        }
+        setError(failure instanceof Error ? failure.message : String(failure))
+      }
+    } finally {
+      if (alive.current && sent === generation.current) setBusy(false)
+    }
+  }
+  useEffect(() => {
+    alive.current = true
+    // Hidden Settings panels stay mounted. Discard old account evidence before each activation.
+    setReport(null)
+    if (active) void run(() => bridge.health.check(tenantId))
+    const unsubscribe = bridge.auth?.onAccountsChanged?.(changed => {
+      if (active && changed.toLowerCase() === tenantId.toLowerCase()) {
+        setReport(null)
+        void run(() => bridge.health.check(tenantId))
+      }
+    })
+    return () => { alive.current = false; generation.current++; unsubscribe?.() }
+  }, [tenantId, clientId, active])
 
   useEffect(() => {
-    // Statuses come from tokens TenuVault already holds; a slow answer for an old tenant list is dropped.
-    let active = true
-    setStatuses(new Map(rows.map((row) => [row.tenantId, "loading" as const])))
-    const queue = [...rows]
-    const worker = async () => {
-      for (let row = queue.shift(); row; row = queue.shift()) {
-        const tenant = row
-        const status = await queryClient.fetchQuery(servicesStatusOptions({ tenantId: tenant.tenantId, appId: tenant.clientId })).catch((error: unknown): ServicesStatus => ({
-          tenantId: tenant.tenantId, modules: [], checkedAt: null, error: error instanceof Error ? error.message : String(error),
-        }))
-        if (active) setStatuses((previous) => new Map(previous).set(tenant.tenantId, status))
-      }
-    }
-    void Promise.all(Array.from({ length: Math.min(OVERVIEW_CONCURRENCY, rows.length) }, worker))
-    return () => { active = false }
-    // The tenant list is compared by its IDs, not by array identity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
-
-  if (!current) {
-    return (
-      <Card>
-        <CardContent className="pt-6">Connect and sign in to a tenant to see which services TenuVault can back up and restore.</CardContent>
-      </Card>
-    )
-  }
-
-  const status = currentStatus.data ?? statuses.get(current.tenantId)
-  const run = async (action: () => Promise<ServicesStatus>) => {
-    setBusy(true)
-    try {
-      const next = await action()
-      setStatuses((previous) => new Map(previous).set(next.tenantId, next))
-      queryClient.setQueryData(servicesStatusKey(next.tenantId, current.clientId), next)
-    } catch (error) {
-      toast(error instanceof Error ? error.message : String(error), "error")
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  // A failed re-check leaves the module list as it was but marks the optional permissions
-  // unknown, so an old Granted or Not granted is never shown or announced as current.
-  const recheck = async (tenantId: string, clientId: string) => {
-    setCheckingTenant(tenantId)
-    try {
-      await run(async () => {
-        try {
-          await queryClient.cancelQueries({ queryKey: servicesStatusKey(tenantId, clientId), exact: true })
-          return await bridge.services.status(tenantId, clientId, true)
-        } catch (error) {
-          setStatuses((previous) => {
-            const before = previous.get(tenantId)
-            if (!before || before === "loading" || !before.optional) return previous
-            return new Map(previous).set(tenantId, { ...before, optional: before.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) })
-          })
-          // The Notifications section reads its own cached copy; mark that unknown too.
-          queryClient.setQueryData<ServicesStatus>(servicesStatusKey(tenantId, clientId), (cached) => {
-            if (!cached?.optional) return cached
-            return { ...cached, optional: cached.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) }
-          })
-          throw error
-        }
+    if (!active || !report?.changes.length || !report.acknowledgement || acknowledged.current.has(report.acknowledgement)) return
+    const receipt = report.acknowledgement
+    const sent = generation.current
+    // The change list is expanded in the committed DOM. Wait for a paint before acknowledging it.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        if (!alive.current || sent !== generation.current) return
+        acknowledged.current.add(receipt)
+        // Keep the displayed changes on screen; the answer may already include newer observations.
+        void bridge.health.acknowledge(tenantId, receipt).catch(() => { acknowledged.current.delete(receipt) })
       })
-    } finally {
-      setCheckingTenant((value) => (value === tenantId ? null : value))
-    }
-  }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [report, tenantId, active])
 
-  return (
-    <Card id="services">
-      <CardHeader>
-        <CardTitle>Services and permissions</CardTitle>
-        <CardDescription>
-          What TenuVault backs up for each tenant, and what the tenant's app registration allows: read permissions for backups and drift, write permissions for restores.
-          Read from the sign-in TenuVault already has; nothing is changed.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {rows.length > 1 ? <Overview tenants={rows} statuses={statuses} selected={current.tenantId} onSelect={setSelected} /> : null}
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="text-sm font-medium text-gray-900">{current.name}</p>
-          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => { void recheck(current.tenantId, current.clientId) }}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Check again
-          </Button>
-          {status && status !== "loading" && status.checkedAt ? <span className="text-xs text-gray-500">As of {new Date(status.checkedAt).toLocaleString()}</span> : null}
+  const hasReport = Boolean(report)
+  useEffect(() => {
+    if (!active || !hasReport || !BACKUP_SERVICES.some(service => hash === `#service-${service.id}`)) return
+    const frame = requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView?.({ block: "nearest" }))
+    return () => cancelAnimationFrame(frame)
+  }, [active, hasReport, hash])
+
+  const toggle = async (service: ServiceHealth, enabled: boolean) => {
+    const sent = generation.current
+    let confirmed = false
+    if (!enabled && MODULE_BY_ID.get(service.id)?.defaultOn) {
+      const ok = await confirm({ title: `Turn off ${service.label}?`, description: `${MODULE_BY_ID.get(service.id)?.description} New manual backups and scheduled backups will stop backing up ${service.label}. Existing backups stay available.`, confirmLabel: `Turn off ${service.label}`, destructive: true })
+      if (!ok || !alive.current || sent !== generation.current) return
+      confirmed = true
+    }
+    await run(async () => { await bridge.services.setEnabled(tenantId, clientId, service.id, enabled, confirmed ? { confirmed: true } : undefined); return bridge.health.report(tenantId) })
+  }
+  return <div className="space-y-4">
+    {confirmDialog}
+    <div data-no-select className="flex flex-wrap items-center gap-3">
+      <h3 className="text-sm font-medium text-gray-900">{name}</h3>
+      <Button variant="outline" size="sm" disabled={busy} onClick={() => void run(() => bridge.health.check(tenantId, true), true)}><RefreshCw className="size-4" aria-hidden="true" />Check again</Button>
+      {report && <span className="text-xs text-gray-500">As of {new Date(report.evaluatedAt).toLocaleString()}</span>}
+    </div>
+    {busy && <p role="status" className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />Checking connection health...</p>}
+    {error && <p role="alert" className="text-sm text-red-700">Connection health could not be checked: {error} Select Check again.</p>}
+    {report && active && <>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <SignInState label="Microsoft Graph sign-in" state={report.graph} />
+        <div className="min-w-0 rounded-xl bg-muted p-3"><h3 className="text-sm font-medium text-gray-900">Backup Reader</h3>
+          <p className="mt-1 text-xs text-gray-600">{READER_HEALTH_TEXT[report.reader.state]}</p>
+          {report.reader.notAfter && <p className="mt-1 text-xs text-gray-500">Certificate expires {healthDate(report.reader.notAfter)}{report.reader.daysLeft !== undefined ? ` (${report.reader.daysLeft} days left)` : ""}.</p>}
+          {report.reader.code && <p className="mt-1 text-xs text-gray-600">{report.reader.code}{report.reader.link && <>: <a className="underline" href={report.reader.link} target="_blank" rel="noreferrer">Microsoft's description</a></>}</p>}
+          {report.reader.roleChange && <p className="mt-1 break-words text-xs text-gray-600">Added: {report.reader.roleChange.added.join(", ") || "none"}. Removed: {report.reader.roleChange.removed.join(", ") || "none"}.</p>}
+          <Link className="mt-2 inline-block text-xs font-medium text-blue-700 underline" to={settingsHref("background")}>Open Backup Reader settings</Link>
         </div>
-        {status && status !== "loading" && status.error ? <p className="text-sm text-red-700">The permissions could not be checked: {status.error}</p> : null}
-        {!status || status === "loading" ? <p className="flex items-center gap-2 text-sm text-gray-500"><Loader2 className="h-4 w-4 animate-spin" /> Checking permissions...</p> : null}
-        {status && status !== "loading" ? (
-          <div className="divide-y divide-gray-100">
-            {status.modules.map((module) => (
-              <ModuleDetail
-                key={module.id}
-                module={module}
-                tenantId={current.tenantId}
-                clientId={current.clientId}
-                busy={busy}
-                onToggle={(enabled) => void run(() => bridge.services.setEnabled(current.tenantId, current.clientId, module.id, enabled))}
-              />
-            ))}
-          </div>
-        ) : null}
-        {status && status !== "loading" && status.optional?.length ? <OptionalPermissions entries={status.optional} clientId={current.clientId} checking={checkingTenant === current.tenantId} /> : null}
-        <p className="text-xs text-gray-500">
-          Roles are checked by Microsoft when you restore.{" "}
-          <a href={PERMISSIONS_DOCS} target="_blank" rel="noreferrer" className="underline underline-offset-2">How permissions work</a>
-        </p>
-      </CardContent>
-    </Card>
-  )
+        <SignInState label="Backup storage" state={report.storage} storage />
+      </div>
+      {report.changes.length > 0 && <NoticeCard
+        summary={`Connection health found ${report.changes.length} ${report.changes.length === 1 ? "change" : "changes"}.`}
+        details={<ul className="list-disc space-y-2 pl-4">{report.changes.map((change, index) => <li key={index}>{changeText(change, report.since)}</li>)}</ul>} />}
+      {BACKUP_SERVICES.map(({ id }) => {
+        const service = report.services.find(entry => entry.id === id)
+        return service && <Service key={service.id} service={service} conditionalAccess={service.id === "entra" ? report.services.find(entry => entry.id === "conditionalAccess") : undefined} report={report} busy={busy} toggle={(service, enabled) => void toggle(service, enabled)} run={action => void run(action)} />
+      })}
+      <OptionalPermissions tenantId={tenantId} entries={optionalPermissionStatus(report.granted ? { kind: "delegated", permissions: new Set(report.granted) } : undefined)} clientId={clientId} checking={busy} />
+    </>}
+  </div>
 }
 
+export function ServicesSettings({ active = true }: { active?: boolean }) {
+  const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
+  const { selectedTenant } = useSelectedTenant()
+  const activeTenantId = selectedTenant?.credentials?.tenantId ?? ""
+  const { key: locationKey } = useLocation()
+  const [params] = useSearchParams()
+  const requestedTenant = params.get("tenant")
+  const [selected, setSelected] = useState(requestedTenant ?? (activeTenantId || tenants[0]?.credentials?.tenantId || ""))
+  useEffect(() => { if (requestedTenant) setSelected(requestedTenant) }, [requestedTenant, locationKey])
+  useEffect(() => { if (!requestedTenant && activeTenantId) setSelected(activeTenantId) }, [activeTenantId, requestedTenant, locationKey])
+  const id = useId()
+  const current = tenants.find(tenant => tenant.credentials?.tenantId?.toLowerCase() === selected.toLowerCase()) ?? tenants[0]
+  return <Card id="services">
+    <CardHeader><CardTitle>Services and permissions</CardTitle><CardDescription>Choose what each tenant backs up. Permissions come from a token check; a backup verifies what can actually be read. Health checks never open a sign-in window or block a backup.</CardDescription></CardHeader>
+    <CardContent className="space-y-4">
+      {tenants.length > 1 && <label data-no-select htmlFor={id} className="flex items-center gap-3 text-sm text-gray-700">Tenant<select id={id} value={current?.credentials?.tenantId} onChange={event => setSelected(event.target.value)} className="rounded-lg border border-border bg-card p-2 text-foreground">{tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}</select></label>}
+      {current ? <TenantServices key={`${current.credentials!.tenantId}/${current.credentials!.appId}`} tenantId={current.credentials!.tenantId} clientId={current.credentials!.appId} name={current.name} active={active} /> : <p className="text-sm text-gray-600">Connect and sign in to a tenant to see its services and permissions.</p>}
+    </CardContent>
+  </Card>
+}
 /**
  * Delegated permissions used by specific features.
  */
-function OptionalPermissions({ entries, clientId, checking }: { entries: OptionalPermissionStatus[]; clientId: string; checking: boolean }) {
+function OptionalPermissions({ entries, clientId, tenantId, checking }: { entries: OptionalPermissionStatus[]; clientId: string; tenantId: string; checking: boolean }) {
+  const shared = clientId.toLowerCase() === TENUVAULT_CLIENT_ID
+  const displayed = shared ? entries.filter(entry => entry.id === "conditionalAccessWatching" || entry.id === "groupRead") : entries
   return (
     <section aria-labelledby="optional-permissions-heading" className="space-y-2 border-t border-gray-100 pt-4 dark:border-gray-800">
       <h3 id="optional-permissions-heading" className="text-sm font-medium text-gray-900">Feature permissions</h3>
       {/* The text switches to "Checking" while Check again runs, so every finished check is announced, also when the result is unchanged. */}
       <p role="status" aria-live="polite" className="sr-only">
-        {checking ? "Checking feature permissions." : entries.some((entry) => entry.granted === null) ? "Feature permissions could not be checked." : `${entries.filter((entry) => entry.granted).length} of ${entries.length} feature permissions granted.`}
+        {checking ? "Checking feature permissions." : displayed.some((entry) => entry.granted === null) ? "Feature permissions could not be checked." : `${displayed.filter((entry) => entry.granted).length} of ${displayed.length} feature permissions granted.`}
       </p>
-      <p className="text-xs text-gray-500">
+      {shared ? (
+        <p className="text-xs text-gray-500">The Intune packs include group read. Turn on Conditional Access change watching to include the audit log pack. <Link className="font-medium text-blue-800 underline" to={settingsHref("signin")}>Review TenuVault app permission packs</Link></p>
+      ) : <p className="text-xs text-gray-500">
         For feature permissions with a setup switch, use that switch when creating a new app registration. You can also add the delegated permission in Entra, grant admin consent, then check again.
         {" "}<span className="font-mono">-IncludeNotifications</span> adds <span className="font-mono">Mail.Send</span> and <span className="font-mono">User.Read.All</span>.
-      </p>
+      </p>}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
-        {entries.map((entry) => (
+        {displayed.map((entry) => (
           <li key={entry.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-sm">
             {entry.granted === true ? <CheckCircle2 className="h-4 w-4 text-green-600" aria-hidden="true" /> : entry.granted === false ? <MinusCircle className="h-4 w-4 text-gray-400" aria-hidden="true" /> : <AlertCircle className="h-4 w-4 text-gray-400" aria-hidden="true" />}
             <span className="font-medium text-gray-900">{entry.label}</span>
             <span className="font-mono text-xs text-gray-600">{entry.permissions.join(", ")}</span>
             <span className="text-xs text-gray-500">{entry.granted === true ? "Granted" : entry.granted === false ? `Not granted: ${entry.missing.join(", ")}` : "Could not be checked"}</span>
             {entry.id === "groupRecipients" && <span className="text-xs text-gray-500">Also needs Group read.</span>}
-            {entry.id === "groupRead" && <span className="basis-full text-xs text-gray-500">Included in new app registrations. For an older registration, add the delegated GroupMember.Read.All permission in Entra and grant admin consent, then select Check again.</span>}
-            {entry.granted === false && (
+            {!shared && entry.id === "groupRead" && <span className="basis-full text-xs text-gray-500">Included in new app registrations. For an older registration, add the delegated GroupMember.Read.All permission in Entra and grant admin consent, then select Check again.</span>}
+            {!shared && entry.granted === false && (
               <span className="ml-auto flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 {entry.setupSwitch && <span>New app registration: <span className="font-mono">{entry.setupSwitch}</span></span>}
-                <a href={entraApiPermissionsUrl(clientId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">Open in Entra<ExternalLink className="h-3 w-3" aria-hidden="true" /></a>
+                <a href={entraApiPermissionsUrl(clientId, tenantId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">Open in Entra<ExternalLink className="h-3 w-3" aria-hidden="true" /></a>
               </span>
             )}
           </li>

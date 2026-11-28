@@ -1,0 +1,71 @@
+{
+  "folder": "LifecycleWorkflows",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/lifecycleWorkflows/workflows": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example workflow"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/lifecycleWorkflows/workflows/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example workflow",
+        "isEnabled": true,
+        "isSchedulingEnabled": true,
+        "version": 1,
+        "category": "joiner",
+        "executionConditions": {
+          "@odata.type": "#microsoft.graph.identityGovernance.triggerAndScopeBasedConditions",
+          "scope": {
+            "@odata.type": "#microsoft.graph.identityGovernance.ruleBasedSubjectSet",
+            "rule": "department eq 'IT'"
+          },
+          "trigger": {
+            "@odata.type": "#microsoft.graph.identityGovernance.timeBasedAttributeTrigger",
+            "timeBasedAttribute": "employeeHireDate",
+            "offsetInDays": 0
+          }
+        }
+      }
+    },
+    "/v1.0/identityGovernance/lifecycleWorkflows/workflows/example/tasks": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "task-b",
+            "displayName": "Example task",
+            "executionSequence": 2,
+            "taskDefinitionId": "definition",
+            "isEnabled": true,
+            "arguments": [
+              {
+                "name": "z",
+                "value": "b"
+              },
+              {
+                "name": "a",
+                "value": "a"
+              }
+            ]
+          },
+          {
+            "id": "task-a",
+            "executionSequence": 1,
+            "arguments": []
+          }
+        ]
+      }
+    }
+  }
+}

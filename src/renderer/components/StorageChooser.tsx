@@ -5,6 +5,9 @@ import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
 import { cn } from "~/lib/utils"
 import storageSetupScript from "../../../resources/New-TenuVaultStorage.ps1?raw"
+import { TENUVAULT_CLIENT_ID } from "../../shared/tenant-connection"
+import { AZURE_STORAGE_PACKS } from "../../shared/services/permission-packs"
+import { TenuVaultConsent } from "./TenuVaultConsent"
 import { bridge } from "../lib/bridge"
 import { useTenantPlan } from "../lib/license"
 import { useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
@@ -24,6 +27,8 @@ export interface StorageChooserDraft {
 interface StorageChooserProps {
   tenantId: string
   clientId: string
+  wizardId?: string
+  onboarding?: boolean
   initial?: StorageChoice
   savedAzure?: Extract<StorageChoice, { kind: "azure" }>
   /** A draft captured from an earlier mount of this chooser; wins over initial. */
@@ -43,12 +48,13 @@ export function azureStorageBlocker(state: {
   accountCount: number
   selected: boolean
   verified: boolean
+  autoVerify?: boolean
 }): string | null {
   if (state.community) return "Azure storage needs Pro or MSP. Choose This device to continue on Community."
   if (!state.accountsLoaded) return "Loading your storage accounts..."
   if (state.accountCount === 0) return "To continue, ask an Azure administrator for a storage account, or choose This device."
   if (!state.selected) return "To continue, choose a storage account."
-  if (!state.verified) return "To continue, select Check access."
+  if (!state.verified) return state.autoVerify ? "Azure access must be confirmed before continuing." : "To continue, select Check access."
   return null
 }
 
@@ -57,7 +63,7 @@ export function azureStorageBlocker(state: {
  * Azure choice is complete once access is confirmed: Azure encrypts the backups at rest and the
  * account's role assignments decide who reads them, so no recovery key is involved.
  */
-export function StorageChooser({ tenantId, clientId, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
+export function StorageChooser({ tenantId, clientId, wizardId, onboarding = false, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
   const [kind, setKind] = useState<StorageChoice["kind"]>(initialDraft?.kind ?? initial?.kind ?? "local")
   const [settings, setSettings] = useBackupSettings()
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
@@ -72,7 +78,11 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
   const savedSelected = Boolean(savedAzure && selected === savedAzure.storageAccountName)
   const verified = savedSelected || (verifiedFor !== "" && verifiedFor === selected)
   const [verifyError, setVerifyError] = useState("")
+  const [verifyAttempt, setVerifyAttempt] = useState(0)
   const [loadAttempt, setLoadAttempt] = useState(0)
+  const sharedApp = clientId.toLowerCase() === TENUVAULT_CLIENT_ID
+  const [azureConsentVerified, setAzureConsentVerified] = useState(false)
+  const needsAzureConsent = sharedApp && !azureConsentVerified
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState("")
   // Community keeps backups on this device; Azure storage is a paid feature.
@@ -83,9 +93,10 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
   const affected = inventory.affected.length > 0
 
   useEffect(() => {
-    if (kind !== "azure" || accounts || community || savedSelected) return
+    if (kind !== "azure" || accounts || community || savedSelected || needsAzureConsent) return
     let active = true
-    listStorageAccounts(tenantId, clientId)
+    const discovery = sharedApp ? bridge.backups.discoverAzureStorage(tenantId, wizardId) : listStorageAccounts(tenantId, clientId)
+    discovery
       .then((list) => {
         if (!active) return
         setAccounts(list)
@@ -99,7 +110,7 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
         if (active) setLoadError(error instanceof Error ? error.message : String(error))
       })
     return () => { active = false }
-  }, [kind, accounts, tenantId, clientId, community, savedSelected, loadAttempt])
+  }, [kind, accounts, tenantId, clientId, wizardId, community, savedSelected, loadAttempt, needsAzureConsent, sharedApp])
 
   useEffect(() => {
     onDraftChange?.({ kind, selectedAccount: selected, verifiedAccount: verifiedFor })
@@ -121,12 +132,13 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, selected, verified, accounts, community, savedSelected, savedAzure?.storageAccountName, savedAzure?.subscriptionId, savedAzure?.resourceGroupName, savedAzure?.location])
 
-  const blocker = kind === "local" || savedSelected ? null : azureStorageBlocker({
+  const blocker = kind === "local" || savedSelected ? null : !community && needsAzureConsent ? "Review the Azure permission packs to continue." : azureStorageBlocker({
     community,
     accountsLoaded: Boolean(accounts),
     accountCount: accounts?.length ?? 0,
     selected: Boolean(selected),
     verified,
+    autoVerify: onboarding,
   })
   const blockerListener = useRef(onBlockerChange)
   blockerListener.current = onBlockerChange
@@ -158,7 +170,9 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
     setVerifying(true)
     setVerifyError("")
     try {
-      await bridge.backups.verifyAzureStorage(tenantId, clientId, accountName)
+      await (sharedApp
+        ? bridge.backups.verifyAzureStorage(tenantId, clientId, accountName, wizardId)
+        : bridge.backups.verifyAzureStorage(tenantId, clientId, accountName))
       setVerifiedFor(accountName)
     } catch (error) {
       if (selectedRef.current === accountName) {
@@ -169,147 +183,185 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
     }
   }
 
+  useEffect(() => {
+    if (!onboarding || kind !== "azure" || community || savedSelected || !accounts?.some(account => account.name === selected)) return
+    let current = true
+    setVerifying(true)
+    setVerifyError("")
+    setVerifiedFor("")
+    const check = sharedApp
+      ? bridge.backups.verifyAzureStorage(tenantId, clientId, selected, wizardId)
+      : bridge.backups.verifyAzureStorage(tenantId, clientId, selected)
+    void check.then(() => {
+      if (current) setVerifiedFor(selected)
+    }).catch((error: unknown) => {
+      if (current) setVerifyError(error instanceof Error ? error.message : String(error))
+    }).finally(() => { if (current) setVerifying(false) })
+    return () => { current = false }
+  }, [onboarding, kind, community, savedSelected, accounts, selected, tenantId, clientId, wizardId, sharedApp, verifyAttempt])
+
   const option = (value: StorageChoice["kind"], icon: React.ReactNode, title: string, description: string, locked = false) => (
     <button
       type="button"
       onClick={() => { setKind(value); if (value === "azure" && savedAzure) setSelected(savedAzure.storageAccountName) }}
       disabled={locked}
       className={cn(
-        "flex w-full items-start gap-4 rounded-3xl border-2 p-5 text-left transition-colors",
-        kind === value ? "border-blue-500 bg-blue-50/60" : "border-transparent bg-gray-50 hover:bg-gray-100",
+        "flex w-full items-start gap-4 text-left transition-colors",
+        onboarding ? "rounded-2xl px-4 py-3" : "rounded-3xl border-2 p-5",
+        kind === value && !onboarding && "border-blue-500 bg-blue-50/60",
+        kind !== value && (onboarding ? "hover:bg-secondary/60" : "border-transparent bg-gray-50 hover:bg-gray-100"),
         locked && "cursor-not-allowed opacity-60 hover:bg-gray-50",
       )}
       aria-pressed={kind === value}
     >
-      <span className={cn("flex size-10 flex-shrink-0 items-center justify-center rounded-full", kind === value ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground")}>{icon}</span>
+      <span className={cn("flex size-10 flex-shrink-0 items-center justify-center rounded-full", kind === value && !onboarding ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground")}>{icon}</span>
       <span>
         <span className="flex items-center gap-2 font-medium text-gray-900">{title}{locked && <PlanBadge feature="azureStorage" />}</span>
         <span className="mt-0.5 block text-sm text-gray-600">{description}</span>
       </span>
+      {onboarding && kind === value && <Check className="ml-auto size-4 shrink-0 text-foreground" aria-hidden="true" />}
     </button>
   )
 
   return (
     <div className="space-y-3">
-      {option(
-        "local",
-        <HardDrive className="h-5 w-5" />,
-        "This device, encrypted",
-        "Backups are encrypted with AES-256-GCM and the key is protected by your Windows or macOS account. Nothing leaves this computer.",
-      )}
-      {kind === "local" && settings && (
-        <div className="ml-14 space-y-1 rounded-2xl bg-gray-50 px-4 py-3 text-xs text-gray-600">
-          <div className="flex items-center gap-2">
-            <Lock className="h-3.5 w-3.5" />
-            Folder: <span className="font-mono text-gray-800">{settings.localFolder}</span>
+      <div className={cn(onboarding ? "rounded-2xl border" : "space-y-3", onboarding && (kind === "local" ? "border-muted-foreground bg-secondary/60" : "border-border"))}>
+        {option(
+          "local",
+          <HardDrive className="h-5 w-5" />,
+          "This device, encrypted",
+          onboarding ? "Keep backups on this computer." : "Backups are encrypted with AES-256-GCM and the key is protected by your Windows or macOS account. Nothing leaves this computer.",
+        )}
+        {kind === "local" && settings && (
+          <div className={cn("space-y-1 text-xs text-gray-600", onboarding ? (affected ? "px-4 pb-3" : "px-4 pb-4") : "ml-14 rounded-2xl bg-gray-50 px-4 py-3")}>
+            <div className="flex items-start gap-2">
+              <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 break-all">
+                Folder: <span className="font-mono text-gray-800">{settings.localFolder}</span>
+              </span>
+            </div>
+            {!onboarding && <p>Change the folder or save the recovery key in Settings. Without the recovery key, backups can only be read on this device.</p>}
+            {inventory.checking && !affected && (
+              <p className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking this tenant's backups in the folder...</p>
+            )}
           </div>
-          <p>Change the folder or save the recovery key in Settings. Without the recovery key, backups can only be read on this device.</p>
-          {inventory.checking && !affected && (
-            <p className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking this tenant's backups in the folder...</p>
-          )}
-        </div>
-      )}
-      {kind === "local" && affected && (
-        <div className="ml-14">
-          <UnreadableBackupsNotice settings={settings} affected={affected} checking={inventory.checking} onChange={setSettings} />
-        </div>
-      )}
-
-      {option(
-        "azure",
-        <Cloud className="h-5 w-5" />,
-        "Your Azure storage account",
-        "Backups go to your own subscription. Azure encrypts the data at rest, and access follows your Azure role assignments: every admin with access to the account sees the same backups. You need the Storage Blob Data Contributor role on it.",
-        community && !savedAzure,
-      )}
-      {kind === "azure" && savedSelected && <p className="ml-14 text-sm text-gray-600">Using saved Azure storage: {savedAzure?.storageAccountName}. Existing backups can be listed and restored. {community && "New backups are paused until Pro is active."}</p>}
-      {kind === "azure" && !savedSelected && savedAzure && <Button variant="outline" onClick={() => setSelected(savedAzure.storageAccountName)}>Use saved Azure storage</Button>}
-      {kind === "azure" && savedSelected && !community && <Button variant="outline" onClick={() => setSelected("")}>Choose another Azure account</Button>}
-      {community && <UpgradeNote feature="azureStorage" />}
-      {kind === "azure" && !community && !savedSelected && (
-        <div className="ml-14 space-y-3">
-          {!accounts && !loadError && (
-            <p className="flex items-center gap-2 text-sm text-gray-600">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading your storage accounts...
-            </p>
-          )}
-          {loadError && (
-            <>
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{loadError}</AlertDescription>
-              </Alert>
-              <Button type="button" variant="outline" size="sm" onClick={refreshAccounts}>
-                <RefreshCw className="mr-2 h-4 w-4" /> Refresh
-              </Button>
-            </>
-          )}
-          {accounts && accounts.length === 0 && (
-            <div className="space-y-3">
-              <p className="text-sm text-gray-600">No storage accounts found that your account can see. Ask an Azure administrator to create one and grant you access.</p>
-              <div className="space-y-2 rounded-2xl bg-blue-50/60 px-4 py-3 text-sm text-gray-700">
-                <p className="font-medium text-gray-900">No storage account yet?</p>
-                <p>
-                  Send your Azure administrator the storage setup script. It creates the account with the recommended
-                  settings and grants your admin group access. Afterwards, select Refresh here.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" size="sm" onClick={() => void copyStorageInstructions()}>
-                    {copied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-                    {copied ? "Copied" : "Copy setup instructions for your Azure administrator"}
-                  </Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => void bridge.app.openExternal(STORAGE_GUIDE_URL)}>
-                    <ExternalLink className="mr-2 h-4 w-4" /> Storage setup guide
-                  </Button>
+        )}
+        {kind === "local" && affected && (
+          <div className={onboarding ? "px-4 pb-4" : "ml-14"}>
+            <UnreadableBackupsNotice settings={settings} affected={affected} checking={inventory.checking} onChange={setSettings} />
+          </div>
+        )}
+      </div>
+      <div className={cn(onboarding ? "rounded-2xl border" : "space-y-3", onboarding && (kind === "azure" ? "border-muted-foreground bg-secondary/60" : "border-border"))}>
+        {option(
+          "azure",
+          <Cloud className="h-5 w-5" />,
+          "Your Azure storage account",
+          onboarding ? "Keep backups in your own Azure subscription." : "Backups go to your own subscription. Azure encrypts the data at rest, and access follows your Azure role assignments: every admin with access to the account sees the same backups. You need the Storage Blob Data Contributor role on it.",
+          community && !savedAzure,
+        )}
+        {kind === "azure" && savedAzure && (
+          <div className={cn("space-y-2", onboarding ? "px-4 pb-4" : "ml-14")}>
+            {savedSelected && <p className="text-sm text-gray-600">Using saved Azure storage: {savedAzure.storageAccountName}. Existing backups can be listed and restored. {community && "New backups are paused until Pro is active."}</p>}
+            {!savedSelected && <Button variant="outline" onClick={() => setSelected(savedAzure.storageAccountName)}>Use saved Azure storage</Button>}
+            {savedSelected && !community && <Button variant="outline" onClick={() => setSelected("")}>Choose another Azure account</Button>}
+          </div>
+        )}
+        {!onboarding && community && <UpgradeNote feature="azureStorage" />}
+        {kind === "azure" && !community && !savedSelected && (
+          <div className={cn("space-y-3", onboarding ? "px-4 pb-4" : "ml-14")}>
+            {sharedApp && (needsAzureConsent || loadError || verifyError) && (
+              <TenuVaultConsent tenantId={tenantId} plan={{ packs: AZURE_STORAGE_PACKS }} active storage={{ wizardId, onVerified: () => {
+                setAzureConsentVerified(true)
+                refreshAccounts()
+              } }} />
+            )}
+            {!needsAzureConsent && !accounts && !loadError && (
+              <p className="flex items-center gap-2 text-sm text-gray-600">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading your storage accounts...
+              </p>
+            )}
+            {loadError && (
+              <>
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{loadError}</AlertDescription>
+                </Alert>
+                <Button type="button" variant="outline" size="sm" onClick={refreshAccounts}>
+                  <RefreshCw className="mr-2 h-4 w-4" /> Refresh
+                </Button>
+              </>
+            )}
+            {accounts && accounts.length === 0 && (
+              <div className="space-y-3">
+                <p className="text-sm text-gray-600">No storage accounts found that your account can see. Ask an Azure administrator to create one and grant you access.</p>
+                <div className={cn("space-y-2 rounded-2xl px-4 py-3 text-sm text-gray-700", onboarding ? "bg-secondary/60" : "bg-blue-50/60")}>
+                  <p className="font-medium text-gray-900">No storage account yet?</p>
+                  <p>
+                    Send your Azure administrator the storage setup script. It creates the account with the recommended
+                    settings and grants your admin group access. Afterwards, select Refresh here.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => void copyStorageInstructions()}>
+                      {copied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                      {copied ? "Copied" : "Copy setup instructions for your Azure administrator"}
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => void bridge.app.openExternal(STORAGE_GUIDE_URL)}>
+                      <ExternalLink className="mr-2 h-4 w-4" /> Storage setup guide
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" onClick={refreshAccounts}>
+                      <RefreshCw className="mr-2 h-4 w-4" /> Refresh
+                    </Button>
+                  </div>
+                  {copyError && <p role="alert" className="text-sm text-red-700">{copyError}</p>}
+                </div>
+              </div>
+            )}
+            {accounts && accounts.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="storage-account">Storage account</Label>
                   <Button type="button" variant="ghost" size="sm" onClick={refreshAccounts}>
                     <RefreshCw className="mr-2 h-4 w-4" /> Refresh
                   </Button>
                 </div>
-                {copyError && <p role="alert" className="text-sm text-red-700">{copyError}</p>}
+                <div className="flex gap-2">
+                  <select
+                    id="storage-account"
+                    className={cn("h-10 min-w-0 flex-1 rounded-full border px-4 text-sm", onboarding ? "border-border bg-background" : "border-gray-300 bg-white")}
+                    value={selected}
+                    onChange={(e) => {
+                      setSelected(e.target.value)
+                      if (onboarding) { setVerifiedFor(""); setVerifying(false) }
+                      setVerifyError("")
+                    }}
+                  >
+                    <option value="">Choose a storage account</option>
+                    {accounts.map((a) => (
+                      <option key={`${a.subscriptionId}/${a.name}`} value={a.name}>
+                        {a.name} ({a.resourceGroup}, {a.location})
+                      </option>
+                    ))}
+                  </select>
+                  {!onboarding && <Button type="button" variant="outline" className="shrink-0" onClick={() => void verify()} disabled={!selected || verifying || verified}>
+                    {verifying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : verified ? <CheckCircle2 className="mr-2 h-4 w-4 text-green-600" /> : null}
+                    {verified ? "Access confirmed" : "Check access"}
+                  </Button>}
+                </div>
+                {onboarding && selected && (verifying || verified) && <p role="status" className={cn("text-sm", verified ? "text-green-700 dark:text-green-400" : "text-muted-foreground")}>{verifying ? "Checking access…" : "Access confirmed"}</p>}
+                <p className="text-xs text-gray-500">{onboarding ? "TenuVault writes and removes a test file to check access." : "TenuVault writes a test file to the intune-backups container to confirm you can store backups there."}</p>
               </div>
-            </div>
-          )}
-          {accounts && accounts.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="storage-account">Storage account</Label>
-                <Button type="button" variant="ghost" size="sm" onClick={refreshAccounts}>
-                  <RefreshCw className="mr-2 h-4 w-4" /> Refresh
-                </Button>
-              </div>
-              <div className="flex gap-2">
-                <select
-                  id="storage-account"
-                  className="h-10 min-w-0 flex-1 rounded-full border border-gray-300 bg-white px-4 text-sm"
-                  value={selected}
-                  onChange={(e) => {
-                    setSelected(e.target.value)
-                    setVerifyError("")
-                  }}
-                >
-                  <option value="">Choose a storage account</option>
-                  {accounts.map((a) => (
-                    <option key={`${a.subscriptionId}/${a.name}`} value={a.name}>
-                      {a.name} ({a.resourceGroup}, {a.location})
-                    </option>
-                  ))}
-                </select>
-                <Button type="button" variant="outline" className="shrink-0" onClick={() => void verify()} disabled={!selected || verifying || verified}>
-                  {verifying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : verified ? <CheckCircle2 className="mr-2 h-4 w-4 text-green-600" /> : null}
-                  {verified ? "Access confirmed" : "Check access"}
-                </Button>
-              </div>
-              <p className="text-xs text-gray-500">TenuVault writes a test file to the intune-backups container to confirm you can store backups there.</p>
-            </div>
-          )}
-          {verifyError && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{verifyError}</AlertDescription>
-            </Alert>
-          )}
-        </div>
-      )}
+            )}
+            {verifyError && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{verifyError}</AlertDescription>
+                {onboarding && <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setVerifyAttempt(attempt => attempt + 1)}>Try again</Button>}
+              </Alert>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

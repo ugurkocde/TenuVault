@@ -38,7 +38,18 @@ export function announceCommunityChoice(store: KeyValueStore, pending: boolean, 
   }
 }
 
-export function scheduledCoverage(license: Pick<LicenseService, "plan" | "coverageEndedAt" | "communityPendingTenants">, tenantId: string, profile: { storageAccountName: string } | null) {
+export function scheduledCoverage(
+  license: Pick<LicenseService, "plan" | "coverageEndedAt" | "communityPendingTenants">,
+  tenantId: string,
+  profile: { storageAccountName: string } | null,
+  needsSignInMethod = false,
+) {
   if (!profile) return undefined
-  return { plan: license.plan(tenantId), azure: !isLocalAccount(profile.storageAccountName), endedAt: license.coverageEndedAt(tenantId), pendingChoice: license.communityPendingTenants().includes(tenantId.toLowerCase()) }
+  return {
+    plan: license.plan(tenantId),
+    azure: !isLocalAccount(profile.storageAccountName),
+    endedAt: license.coverageEndedAt(tenantId),
+    pendingChoice: license.communityPendingTenants().includes(tenantId.toLowerCase()),
+    needsSignInMethod,
+  }
 }

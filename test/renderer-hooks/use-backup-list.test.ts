@@ -98,4 +98,40 @@ describe("useBackupList", () => {
     expect(result.current.loading).toBe(false)
     unmount()
   })
+
+  it("refreshes the visible account when a backup finishes in the background", async () => {
+    let finished!: (run: { tenantId: string; storageAccountName: string }) => void
+    const unsubscribe = vi.fn()
+    vi.stubGlobal("tenuvault", { backups: { onFinished: (listener: typeof finished) => {
+      finished = listener
+      return unsubscribe
+    } } })
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ backups: [{ status: "running" }] }))
+      .mockResolvedValueOnce(Response.json({ backups: [{ status: "incomplete" }] }))
+    vi.stubGlobal("fetch", fetcher)
+    const { result, unmount } = renderHook(() => useBackupList(tenantWith("tenant-a")))
+    await flush()
+    expect(result.current.backups?.[0]?.status).toBe("running")
+    finished({ tenantId: "tenant-a", storageAccountName: "otheracct" })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    await act(async () => { finished({ tenantId: "TENANT-A", storageAccountName: "storageacct" }) })
+    expect(result.current.backups?.[0]?.status).toBe("incomplete")
+    unmount()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+  it("preserves ordinary history beside a large-storage warning and clears the warning after provisioning", async () => {
+    const warning = "Storage not provisioned for large backups. Rerun New-TenuVaultStorage.ps1 -BackupReaderAppId <application ID>."
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ backups: [{ name: "ordinary" }], warnings: [warning] })).mockResolvedValueOnce(Response.json({ backups: [{ name: "ordinary" }] }))
+    vi.stubGlobal("fetch", fetcher)
+    const { result, unmount } = renderHook(() => useBackupList(tenantWith("11111111-1111-1111-1111-111111111111")))
+    await flush()
+    expect(result.current.warnings).toEqual([warning])
+    expect(result.current.backups).toHaveLength(1)
+    expect(result.current.error).toBe("")
+    await act(async () => { await result.current.refresh({ force: true }) })
+    expect(result.current.warnings).toBeUndefined()
+    expect(result.current.backups).toHaveLength(1)
+    unmount()
+  })
+
 })

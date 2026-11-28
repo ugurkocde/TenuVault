@@ -1,10 +1,13 @@
 import { useState } from "react"
+import { INTUNE_TYPES } from "../../../shared/intune/registry"
+import { compareBackupServices } from "../../../shared/services/presentation"
 import { Chip } from "~/components/dashboard/tiles"
-import { activityLine, changeLabel, publicAuditNote, summaryLine, type ChangeReport, type ReportItem } from "../../../shared/reports/change-report"
+import { activityLine, changeLabel, publicAuditNote, summaryLine, inventoryLines, type ChangeReport, type ReportItem } from "../../../shared/reports/change-report"
 import { formatWhen } from "./api"
 
 const CHANGE_TONE = { added: "success", modified: "warning", deleted: "danger" } as const
 const SETTINGS_PREVIEW = 10
+const FOLDER_BY_LABEL = new Map(INTUNE_TYPES.map(type => [type.label.toLowerCase(), type.folder]))
 
 /** A stored change report as the app shows it: the same sections and wording as the PDF, with local times like the rest of the app. */
 export function ReportView({ report }: { report: ChangeReport }) {
@@ -25,9 +28,10 @@ export function ReportView({ report }: { report: ChangeReport }) {
         </p>
       )}
       {!report.values && <p className="rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">Setting values are left out of this report.</p>}
-      {report.items.length === 0 && <p className="text-sm text-gray-600">No items were added, changed or deleted between the two backups.</p>}
+      <section className="space-y-2"><h3 className="font-medium">Comparison coverage</h3>{inventoryLines(report).map(line => <p key={line} className="text-sm text-gray-600">{line}</p>)}</section>
       {(["deleted", "modified", "added"] as const).map((change) => {
         const items = report.items.filter((item) => item.change === change)
+          .sort((a, b) => compareBackupServices(FOLDER_BY_LABEL.get(a.type.toLowerCase()) ?? "", FOLDER_BY_LABEL.get(b.type.toLowerCase()) ?? ""))
         if (!items.length) return null
         return (
           <section key={change} aria-label={`${changeLabel(change)} items`} className="space-y-3">

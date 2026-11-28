@@ -1,0 +1,19 @@
+{
+  "folder": "AccessPackageAssignmentPolicies",
+  "path": "identityGovernance/entitlementManagement/assignmentPolicies",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/identityGovernance/entitlementManagement/assignmentPolicies": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

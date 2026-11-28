@@ -1,3 +1,5 @@
+import type { BackupCoverageIssue } from "../../../shared/tenant-connection"
+
 /** A backup as /api/list-backups describes it. */
 export interface BackupSummary {
   id: string
@@ -8,18 +10,35 @@ export interface BackupSummary {
   totalPolicies: number
   /** Items per registry folder. */
   counts?: Record<string, number>
+  largeInventory?: boolean
+  companionId?: string
+  ordinaryOnlyExport?: boolean
+  ordinaryOnlyAvailable?: boolean
+  untrustedDate?: boolean
+  warning?: string
+  largeProblems?: Array<{ folder: string; reason: string }>
   /** Stored bytes per registry folder, from the same listing as `counts`. */
   sizes?: Record<string, number>
-  scope: { excluded: string[]; description: string } | null
+  scope: { excluded: string[]; included?: string[]; description: string } | null
   failures?: number
   skippedTypes?: string[]
   failedTypes?: string[]
+  /** Whether every type the backup was asked to cover was read; null for backups made before this was recorded. */
+  coverage?: "complete" | "incomplete" | null
+  /** Folders of the selected types that were not read in full. */
+  notRead?: string[]
+  notReadReasons?: Record<string, string>
+  notReadCauses?: Record<string, BackupCoverageIssue>
+  readableTypes?: string[]
+  emptyTypes?: string[]
   size: number
   /** Seconds, or a preformatted string from older backups; null when unknown. */
   duration: number | string | null
   /** Compared with the newest older comparable backup; null when there is none. */
   changes: { added: number; modified: number; removed: number } | null
   comparedWith: string | null
+  unknownTypes?: string[]
+  legacyReadFailure?: boolean
   /** Why the metadata could not be read, when it could not. */
   error?: string
 }
@@ -85,12 +104,15 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
 }
 
 /** The status as shown: the kind's label, named more precisely for stopped and unreadable backups. */
-export function statusLabel(status: string): string {
+export function statusLabel(status: string, coverage?: BackupSummary["coverage"]): string {
   const value = status.toLowerCase()
   if (value === "incomplete") return "Incomplete"
   if (value === "unavailable") return "Unavailable"
   if (value === "unknown") return "Status unknown"
-  return STATUS_LABEL[statusKind(status)]
+  const kind = statusKind(status)
+  if (kind === "success" && coverage == null) return "Finished"
+  if (kind === "success" && coverage === "incomplete") return "Completed"
+  return STATUS_LABEL[kind]
 }
 
 /** Shown when backup folders were left out of the list because their ownership could not be read. */

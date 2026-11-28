@@ -1,9 +1,16 @@
+import { GuardedRunJournal } from '../restore/guarded-run'
 import { createHash } from 'node:crypto'
 import type { KeyValueStore } from './secure-store'
 export interface WriteRecord { key: string; tenant: string; method: string; path: string; at: string; state: 'uncertain' | 'complete' | 'reconciled'; objectId?: string; label?: string; /** Snapshot object ID this creation restores, when known. Binds a recreation to its source. */ sourceId?: string }
 const memory = new Map<string, string>()
 let store: KeyValueStore = { get: key => memory.get(key) ?? null, set: (key, value) => { memory.set(key, value) }, delete: key => { memory.delete(key) } }
-export function setRestoreJournalStore(value: KeyValueStore): void { store = value }
+let guardedJournal: GuardedRunJournal | undefined
+export function setRestoreJournalStore(value: KeyValueStore): void { store = value; guardedJournal = new GuardedRunJournal(value) }
+/** New-service restores never fall back to process memory if encrypted app state is unavailable. */
+export function guardedRestoreJournal(): GuardedRunJournal {
+  if (!guardedJournal) throw new Error('Encrypted restore history is unavailable. Nothing was written.')
+  return guardedJournal
+}
 export function writeKey(tenant: string, method: string, path: string, body: unknown): string {
   return createHash('sha256').update(JSON.stringify([tenant.toLowerCase(), method, path, body])).digest('hex')
 }
@@ -36,6 +43,6 @@ export function removeWrite(key: string): void { store.set(JOURNAL_KEY, JSON.str
 let authorize: ((tenantId: string) => Promise<void>) | undefined
 export function setRestoreJournalAuthorization(value: (tenantId: string) => Promise<void>): void { authorize = value }
 export async function authorizeRestoreJournal(tenantId: string): Promise<void> {
-  if (!authorize) throw new Error('Sign in with Intune access before opening restore history.')
+  if (!authorize) throw new Error('Sign in to this tenant before opening restore history.')
   await authorize(tenantId)
 }

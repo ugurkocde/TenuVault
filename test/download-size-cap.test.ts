@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
+import JSZip from 'jszip'
 import { NextRequest } from '../src/main/api/next-server-shim'
 import { POST as download } from '../src/portal/app/api/download-backup/route'
 import { createBridgedFetch } from '../src/main/api/fetch-bridge'
@@ -29,6 +30,27 @@ function stubListing(listing: string) {
 }
 
 afterEach(() => vi.unstubAllGlobals())
+
+it('masks the error in ZIP metadata for an older failed backup without writing to storage', async () => {
+  const metadata = { TenantId: args.tenantId, Status: 'Failed', Error: "Session for 'admin@example.test' expired. Sign in again.", ItemCounts: { TotalPolicies: 0 } }
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.searchParams.get('comp') === 'list') return new Response(`<Blobs>${blob(`${args.backupId}/metadata.json`)}</Blobs>`)
+    if (url.pathname.endsWith('/metadata.json') && (init?.method ?? 'GET') === 'GET') return Response.json(metadata)
+    return new Response(null, { status: 404 })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const response = await download(request())
+  expect(response.status).toBe(200)
+  const zip = await JSZip.loadAsync(await response.arrayBuffer())
+  expect(JSON.parse(await zip.file('metadata.json')!.async('string'))).toEqual({
+    ...metadata, Error: "Session for '[redacted]' expired. Sign in again.",
+  })
+  const stored = await fetch(`https://store.blob.core.windows.net/intune-backups/${args.backupId}/metadata.json`)
+  expect((await stored.json()).Error).toContain('admin@example.test')
+  expect(fetcher.mock.calls.every(([input, init]) => new URL(String(input)).hostname.endsWith('.microsoftonline.com') || (init?.method ?? 'GET') === 'GET')).toBe(true)
+})
 
 it('refuses an over-limit listing before fetching any file body', async () => {
   const bodyFetches = stubListing(blob(`${args.backupId}/DeviceConfigurations/A.json`, MAX + 1))

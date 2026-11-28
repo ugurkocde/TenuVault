@@ -1,3 +1,5 @@
+import { DEFAULT_ONBOARDING_CHOICE, ONBOARDING_ENTRA_CHOICE } from "../../shared/services/onboarding"
+import type { PermissionChoice } from "../../shared/services/manifest"
 import type { SignedInAccount } from "../../shared/ipc"
 import { bridge } from "./bridge"
 
@@ -7,8 +9,9 @@ import { bridge } from "./bridge"
  * another administrator. Only identifiers are kept, never a token.
  */
 export interface OnboardingDraft {
-  /** 0 Connect, 1 Sign in, 2 Storage. The first backup step is never resumed. */
-  step: 0 | 1 | 2
+  /** The first backup and staged public sign-ins are never resumed. */
+  step: -2 | 0 | 1 | 2 | 4
+  services?: PermissionChoice
   tenant: string
   clientId: string
   displayName: string
@@ -18,7 +21,7 @@ export interface OnboardingDraft {
 
 const KEY = "tenuvault.onboarding.draft"
 
-export const EMPTY_DRAFT: OnboardingDraft = { step: 0, tenant: "", clientId: "", displayName: "", account: null }
+export const EMPTY_DRAFT: OnboardingDraft = { step: -2, tenant: "", clientId: "", displayName: "", account: null }
 
 const text = (value: unknown, max = 256) => (typeof value === "string" ? value.slice(0, max) : "")
 
@@ -53,16 +56,21 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
     const raw = bridge.storage.getItemSync(KEY)
     if (!raw) return null
     const value = JSON.parse(raw) as Record<string, unknown>
-    const step = value.step === 1 || value.step === 2 ? value.step : 0
-    const account = recentAccount(value)
+    const legacyServicesStep = value.step === -1 || value.reconfirm === true
+    const step = legacyServicesStep ? -2 : value.step === 0 || value.step === 1 || value.step === 2 || value.step === 4 ? value.step : -2
+    const saved = value.services as PermissionChoice | undefined
+    const services = !legacyServicesStep && (saved?.entra?.access === "backup" || saved?.conditionalAccess?.access === "backup")
+      ? ONBOARDING_ENTRA_CHOICE : DEFAULT_ONBOARDING_CHOICE
+    const account = legacyServicesStep ? null : recentAccount(value)
     const draft: OnboardingDraft = {
-      step: step === 2 && !account ? 1 : step,
+      step: (step === 2 || step === 4) && !account ? 1 : step,
       tenant: text(value.tenant),
       clientId: text(value.clientId),
       displayName: text(value.displayName),
       account,
+      services,
     }
-    return isEmptyDraft(draft) ? null : draft
+    return !legacyServicesStep && isEmptyDraft(draft) ? null : draft
   } catch {
     return null
   }
@@ -84,7 +92,7 @@ export function pendingSignInTenant(now = Date.now()): string | null {
 
 /** Whether a draft holds nothing worth resuming: the Connect step with no input. */
 export function isEmptyDraft(draft: OnboardingDraft): boolean {
-  return draft.step === 0 && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
+  return draft.step === -2 && !draft.services?.entra && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
 }
 
 let pending: Promise<void> = Promise.resolve()

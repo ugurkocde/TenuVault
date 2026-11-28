@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { assertStorageAccountName } from '../../shared/storage-account'
 import { isGuid } from '../../shared/security'
 import type { KeyValueStore } from '../storage/secure-store'
+import type { BackupRunIdentity } from '../backup/run-history'
 import { AuditEventType, AuditResult, AuditSeverity, type AuditJob, type AuditJobItem, type AuditLogEntry, type AuditUser, type CreateAuditLogInput } from '~/lib/audit/types'
 import { projectEntry, projectItem } from '~/lib/audit/projection'
 import { pendingEvents, queueEvent, queuedAccounts } from '~/lib/audit/outbox'
@@ -284,6 +285,14 @@ export class AuditSink {
   checkpointBackup(binding: AuditBinding, input: CreateAuditLogInput, stamp: { id: string; timestamp: string }): void {
     const entry = this.entry(binding, input, stamp)
     this.save({ ...this.checkpoints, [entry.id]: { binding: { ...binding, user: entry.user }, entry } })
+  }
+
+  /** Older builds left their backup checkpoints here before they recorded run ownership. */
+  backupCheckpoints(): BackupRunIdentity[] {
+    return Object.values(this.checkpoints).flatMap(({ binding, entry }) =>
+      isBackupCheckpoint(entry) && entry.job?.runId === entry.id
+        ? [{ id: entry.id, tenantId: binding.tenantId, storageAccountName: binding.storageAccountName, startTime: entry.timestamp }]
+        : [])
   }
 
   private finishCheckpoint(checkpoint: Checkpoint): void {

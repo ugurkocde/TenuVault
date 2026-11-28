@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView, scheduledIdentity, suggestsBackupReader } from "../src/renderer/lib/backup-reader-view"
+import { excludedSummary, readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView, roleChangeNotice, scheduledIdentity, suggestsBackupReader } from "../src/renderer/lib/backup-reader-view"
 import type { BackupReaderState, BackupReaderStatus } from "../src/shared/ipc"
+import { readerRoles } from "../src/shared/services/manifest"
+
+/** The five permissions every Backup Reader for Intune holds. */
+const INTUNE = ["DeviceManagementApps.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceManagementRBAC.Read.All", "DeviceManagementScripts.Read.All", "DeviceManagementServiceConfig.Read.All"]
 
 const NOW = Date.parse("2026-10-26T12:00:00Z")
 const status = (overrides: Partial<BackupReaderStatus> = {}): BackupReaderStatus => ({
@@ -16,21 +20,22 @@ const status = (overrides: Partial<BackupReaderStatus> = {}): BackupReaderStatus
   lastTest: null,
   lastRun: null,
   notAfter: "2027-10-26T12:00:00Z",
-  verifiedRoles: ["DeviceManagementConfiguration.Read.All"],
+  verifiedRoles: INTUNE,
   excludedTypes: ["DeviceCategories", "DeviceCleanupRules"],
+  roleChange: null,
   renewalPending: false,
   ...overrides,
 })
-const state = (reader: BackupReaderStatus | null, overrides: Partial<BackupReaderState> = {}): BackupReaderState => ({ supported: true, available: true, reader, ...overrides })
+const state = (reader: BackupReaderStatus | null, overrides: Partial<BackupReaderState> = {}): BackupReaderState => ({ supported: true, available: true, reader, services: ["intune"], setupArguments: "", ...overrides })
 
 describe("Backup Reader card", () => {
   it("keeps the device inventory permission in the renewal command when the reader has it", () => {
-    const view = readerView(state(status({ verifiedRoles: ["DeviceManagementConfiguration.Read.All", "DeviceManagementManagedDevices.Read.All"], excludedTypes: [] })), NOW)
+    const view = readerView(state(status({ verifiedRoles: [...INTUNE, "DeviceManagementManagedDevices.Read.All"], excludedTypes: [] })), NOW)
     expect(view.command).toBe("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId 44444444-4444-4444-4444-444444444444 -IncludeDeviceCategories")
   })
 
   it("keeps the Conditional Access permission in the renewal command, so a renewal never strips it", () => {
-    const view = readerView(state(status({ verifiedRoles: ["DeviceManagementConfiguration.Read.All", "DeviceManagementManagedDevices.Read.All", "Policy.Read.All"], excludedTypes: [] })), NOW)
+    const view = readerView(state(status({ verifiedRoles: [...INTUNE, "DeviceManagementManagedDevices.Read.All", "Policy.Read.All"], excludedTypes: [] })), NOW)
     expect(view.command).toBe("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId 44444444-4444-4444-4444-444444444444 -IncludeDeviceCategories -IncludeConditionalAccess")
   })
 
@@ -48,6 +53,43 @@ describe("Backup Reader card", () => {
 
   it("names the left-out types by their labels", () => {
     expect(readerView(state(status()), NOW).excluded).toEqual(["device categories", "device clean-up rules"])
+    expect(excludedSummary(["device categories", "device clean-up rules"])).toBe("device categories and device clean-up rules")
+    // A long list, as a reader that lacks a whole service has, stays one readable sentence.
+    expect(excludedSummary(["Domains", "Organization", "Groups", "Users", "Applications"])).toBe("Domains, Organization, Groups and 2 more types")
+  })
+
+  it("keeps the services and areas of the reader in the renewal command, so a renewal never changes its permissions", () => {
+    const command = (roles: readonly string[]) => readerView(state(status({ verifiedRoles: [...roles] })), NOW).command.split("-AppId 44444444-4444-4444-4444-444444444444")[1]
+    expect(command(readerRoles({ entra: { access: "backup" } }))).toBe(" -Services Entra")
+    expect(command(readerRoles({ intune: { access: "backup" }, entra: { access: "backup", areas: ["groups", "applications"] } }))).toBe(" -Services Intune,Entra -Areas Groups")
+    expect(command(readerRoles({ intune: { access: "backup", areas: ["devices"] } }))).toBe(" -IncludeDeviceCategories")
+    expect(command(readerRoles({ conditionalAccess: { access: "backup" } }))).toBe(" -Services ConditionalAccess")
+  })
+
+  it("names the reader's permissions one by one in the renewal command when they are not whole services, so a renewal never changes them", () => {
+    const command = (roles: readonly string[]) => readerView(state(status({ verifiedRoles: [...roles] })), NOW).command.split("-AppId 44444444-4444-4444-4444-444444444444")[1]
+    // Without its own parameter the script would replace this role with the five Intune ones.
+    expect(command(["Domain.Read.All"])).toBe(" -Permissions Domain.Read.All")
+    // Naming no service would remove the directory permission, and so would naming Intune.
+    expect(command([...INTUNE, "Directory.Read.All"])).toBe(` -Permissions ${INTUNE.join(",")},Directory.Read.All`)
+    // Entra ID short of one permission is not Entra ID: -IncludeConditionalAccess alone would remove the rest.
+    const entra = readerRoles({ entra: { access: "backup" } }).filter((role) => role !== "Agreement.Read.All")
+    expect(command([...INTUNE, ...entra])).toBe(` -Permissions ${[...INTUNE, ...entra].sort().join(",")}`)
+    expect(command([])).toBe(" -Permissions None")
+  })
+
+  it("starts a first setup with the services the tenant backs up", () => {
+    const pending = status({ state: "pending", clientId: "", verifiedRoles: null })
+    expect(readerView(state(pending, { setupArguments: " -Services Entra" }), NOW).command).toBe("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -Services Entra")
+  })
+
+  it("says what changed when the reader's permissions differ from the verified ones, and that backups keep running", () => {
+    expect(readerView(state(status()), NOW).roleChange).toBeNull()
+    const notice = roleChangeNotice(status({ roleChange: { added: ["Policy.Read.All", "Domain.Read.All"], removed: ["DeviceManagementManagedDevices.Read.All"], at: "2026-10-26T12:00:00Z" } }))!
+    expect(notice).toBe("The Backup Reader's Microsoft Graph permissions changed since they were verified: added Policy.Read.All, Domain.Read.All; removed DeviceManagementManagedDevices.Read.All. Scheduled backups keep running and read only what the verified permissions still cover. Verify the Backup Reader again to use the change.")
+    // The notice gets the same advice as before: ask before verifying a change nobody recognizes.
+    expect(readerErrorGuidance(notice).hint).toContain("Do not verify a change nobody recognizes")
+    expect(roleChangeNotice(status({ roleChange: { added: ["Policy.Read.All"], removed: [], at: "2026-10-26T12:00:00Z" } }))).toContain("verified: added Policy.Read.All. Scheduled")
   })
 
   it("asks for a renewal within 30 days of expiry and after it, also while an unverified renewal waits", () => {
@@ -97,6 +139,7 @@ describe("Backup Reader handoffs and guidance", () => {
     expect(readerErrorGuidance("Microsoft refused the Backup Reader (AADSTS7000222).").url).toContain("#renew-the-certificate")
     expect(readerErrorGuidance("The Backup Reader's Microsoft Graph permissions changed since they were verified.").hint).toContain("Do not verify a change nobody recognizes")
     expect(readerErrorGuidance("The Backup Reader works for Microsoft Graph, but cannot write backups to x.").hint).toContain("Azure administrator")
+    expect(readerErrorGuidance("The Backup Reader has no permission to read Entra ID, which is all this tenant backs up. Have your Entra administrator run the setup script with -Services Entra, then verify again.").url).toContain("#permissions")
     expect(readerErrorGuidance("Something else.").url).toContain("#troubleshooting")
   })
 
@@ -105,4 +148,9 @@ describe("Backup Reader handoffs and guidance", () => {
     expect(suggestsBackupReader("You are not signed in to this tenant.")).toBe(false)
     expect(suggestsBackupReader("Grant consent to continue.")).toBe(false)
   })
+})
+
+it("keeps the existing guidance priority when an error names several sign-in codes", () => {
+  expect(readerErrorGuidance("AADSTS7000222 followed by AADSTS700027")).toEqual(readerErrorGuidance("AADSTS700027"))
+  expect(suggestsBackupReader("AADSTS999999 followed by AADSTS50076")).toBe(true)
 })

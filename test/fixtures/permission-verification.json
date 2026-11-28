@@ -1,0 +1,2062 @@
+{
+  "about": "The record of how each Microsoft Graph permission in the permission manifest (src/shared/services) was checked. test/permission-verification.test.ts fails when the manifest names a permission that is not recorded here.",
+  "checked": "2026-11-14",
+  "sources": {
+    "reference": "Microsoft Graph permissions reference on Microsoft Learn (learn.microsoft.com/graph/permissions-reference, dated 2026-09-14): the identifier of each permission as a delegated and as an application permission. A permission with an identifier there is published on Microsoft Graph for that sign-in mode.",
+    "model": "Microsoft's permission model for Microsoft Graph (github.com/microsoftgraph/microsoft-graph-devx-content, permissions/new/permissions.json, commit 9f88bf8f23a5), from which the permission tables on Microsoft Learn are generated: whether it lists the permission for the endpoint, method and sign-in mode (listed, not listed, or no entry when it does not know the endpoint).",
+    "index": "The local Microsoft Graph documentation index (msgraph api-docs-search): whether it lists the permission for the endpoint, method and sign-in mode, in the same three words.",
+    "live": "Read-only requests against the lab tenant with an app-only token on 2026-11-14 (tasks/0.6-research/entra-inventory.md). No write was made, so no restore permission is confirmed live.",
+    "live8c": "2026-11-18 approved app-only lab writes: cross-tenant parent displayName and access-review ownership flag changed, read back and restored; catalog create/read/change/restore/delete passed. Custom attribute POST refused 400 AADB2C99039; detection action read-back differed; workflow settings GET refused 403. See external layer-8c report."
+  },
+  "statuses": {
+    "confirmed": "The permission model or the index lists the permission for one of the part's endpoints and the sign-in mode.",
+    "confirmed live": "Microsoft's pages do not list it, but the lab tenant accepted it or named it in a refusal for app-only access.",
+    "implied": "The ReadWrite permission of a Read permission in the same group. Microsoft Graph accepts it wherever it accepts the Read one; it is never the permission TenuVault asks for.",
+    "unconfirmed": "Neither listed nor shown live for this sign-in mode."
+  },
+  "permissions": {
+    "APIConnectors.Read.All": {
+      "delegated": "1b6ff35f-31df-4332-8571-d31ea5a4893f",
+      "application": "b86848a7-d5b1-41eb-a9b4-54a4e6306e97"
+    },
+    "APIConnectors.ReadWrite.All": {
+      "delegated": "c67b52c5-7c69-48b6-9d48-7b3af3ded914",
+      "application": null
+    },
+    "AccessReview.Read.All": {
+      "delegated": "ebfcd32b-babb-40f4-a14b-42706e83bd28",
+      "application": "d07a8cc0-3d51-4b77-b3b0-32704d1f69fa"
+    },
+    "AccessReview.ReadWrite.All": {
+      "delegated": "e4aa47b9-9a69-4109-82ed-36ec70d85ff1",
+      "application": null
+    },
+    "AdministrativeUnit.Read.All": {
+      "delegated": "3361d15d-be43-4de6-b441-3c746d05163d",
+      "application": "134fd756-38ce-4afd-ba33-e9623dbe66c2"
+    },
+    "AdministrativeUnit.ReadWrite.All": {
+      "delegated": "7b8a2d34-6b3f-4542-a343-54651608ad81",
+      "application": null
+    },
+    "Agreement.Read.All": {
+      "delegated": "af2819c9-df71-4dd3-ade7-4d7c9dc653b7",
+      "application": "2f3e6f8c-093b-4c57-a58b-ba5ce494a169"
+    },
+    "Agreement.ReadWrite.All": {
+      "delegated": "ef4b5d93-3104-4664-9053-a5c49ab44218",
+      "application": null
+    },
+    "Application.Read.All": {
+      "delegated": "c79f8feb-a9db-4090-85f9-90d820caa0eb",
+      "application": "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"
+    },
+    "Application.ReadWrite.All": {
+      "delegated": "bdfbf15f-ee85-4955-8675-146e8e5296b5",
+      "application": null
+    },
+    "AuditLog.Read.All": {
+      "delegated": "e4c9e354-4dc5-45b8-9e7c-e1393b0b1a20",
+      "application": null
+    },
+    "AuthenticationContext.Read.All": {
+      "delegated": "57b030f1-8c35-469c-b0d9-e4a077debe70",
+      "application": "381f742f-e1f8-4309-b4ab-e3d91ae4c5c1"
+    },
+    "AuthenticationContext.ReadWrite.All": {
+      "delegated": "ba6d575a-1344-4516-b777-1404f5593057",
+      "application": null
+    },
+    "CustomAuthenticationExtension.Read.All": {
+      "delegated": "b2052569-c98c-4f36-a5fb-43e5c111e6d0",
+      "application": "88bb2658-5d9e-454f-aacd-a3933e079526"
+    },
+    "CustomAuthenticationExtension.ReadWrite.All": {
+      "delegated": "8dfcf82f-15d0-43b3-bc78-a958a13a5792",
+      "application": null
+    },
+    "CustomSecAttributeDefinition.Read.All": {
+      "delegated": "ce026878-a0ff-4745-a728-d4fedd086c07",
+      "application": "b185aa14-d8d2-42c1-a685-0f5596613624"
+    },
+    "CustomSecAttributeDefinition.ReadWrite.All": {
+      "delegated": "8b0160d4-5743-482b-bb27-efc0a485ca4a",
+      "application": null
+    },
+    "DelegatedPermissionGrant.ReadWrite.All": {
+      "delegated": "41ce6ca6-6826-4807-84f1-1c82854f7ee5",
+      "application": null
+    },
+    "Device.Read.All": {
+      "delegated": "951183d1-1a61-466f-a6d1-1fde911bfd95",
+      "application": "7438b122-aefc-4978-80ed-43db9fcc7715"
+    },
+    "DeviceManagementApps.Read.All": {
+      "delegated": "4edf5f54-4666-44af-9de9-0144fb4b6e8c",
+      "application": "7a6ee1e7-141e-4cec-ae74-d9db155731ff"
+    },
+    "DeviceManagementApps.ReadWrite.All": {
+      "delegated": "7b3f05d5-f68c-4b8d-8c59-a2ecd12f24af",
+      "application": null
+    },
+    "DeviceManagementConfiguration.Read.All": {
+      "delegated": "f1493658-876a-4c87-8fa7-edb559b3476a",
+      "application": "dc377aa6-52d8-4e23-b271-2a7ae04cedf3"
+    },
+    "DeviceManagementConfiguration.ReadWrite.All": {
+      "delegated": "0883f392-0a7a-443d-8c76-16a6d39c7b63",
+      "application": null
+    },
+    "DeviceManagementManagedDevices.Read.All": {
+      "delegated": "314874da-47d6-4978-88dc-cf0d37f0bb82",
+      "application": "2f51be20-0bb4-4fed-bf7b-db946066c75e"
+    },
+    "DeviceManagementManagedDevices.ReadWrite.All": {
+      "delegated": "44642bfe-8385-4adc-8fc6-fe3cb2c375c3",
+      "application": null
+    },
+    "DeviceManagementRBAC.Read.All": {
+      "delegated": "49f0cc30-024c-4dfd-ab3e-82e137ee5431",
+      "application": "58ca0d9a-1575-47e1-a3cb-007ef2e4583b"
+    },
+    "DeviceManagementRBAC.ReadWrite.All": {
+      "delegated": "0c5e8a55-87a6-4556-93ab-adc52c4d862d",
+      "application": null
+    },
+    "DeviceManagementScripts.Read.All": {
+      "delegated": "d32381d8-ee89-4220-9c83-b672aa68d404",
+      "application": "c7a5be92-2b3d-4540-8a67-c96dcaae8b43"
+    },
+    "DeviceManagementScripts.ReadWrite.All": {
+      "delegated": "8b9d79d0-ad75-4566-8619-f7500ecfcebe",
+      "application": null
+    },
+    "DeviceManagementServiceConfig.Read.All": {
+      "delegated": "8696daa5-bce5-4b2e-83f9-51b6defc4e1e",
+      "application": "06a5fe6d-c49d-46a7-b082-56b1b14103c7"
+    },
+    "DeviceManagementServiceConfig.ReadWrite.All": {
+      "delegated": "662ed50a-ac44-4eef-ad86-62eed9be2a29",
+      "application": null
+    },
+    "Directory.Read.All": {
+      "delegated": "06da0dbc-49e2-44d2-8312-53f166ab848a",
+      "application": "7ab1d382-f21e-4acd-a863-ba3e13f7da61"
+    },
+    "Directory.ReadWrite.All": {
+      "delegated": "c5366453-9fb0-48a5-a156-24f0c49a4b84",
+      "application": null
+    },
+    "Domain.Read.All": {
+      "delegated": "2f9ee017-59c1-4f1d-9472-bd5529a7b311",
+      "application": "dbb9058a-0e50-45d7-ae91-66909b5d4664"
+    },
+    "Domain.ReadWrite.All": {
+      "delegated": "0b5d694c-a244-4bde-86e6-eb5cd07730fe",
+      "application": null
+    },
+    "EntitlementManagement.Read.All": {
+      "delegated": "5449aa12-1393-4ea2-a7c7-d0e06c1a56b2",
+      "application": "c74fd47d-ed3c-45c3-9a9e-b8676de685d2"
+    },
+    "EntitlementManagement.ReadWrite.All": {
+      "delegated": "ae7a573d-81d7-432b-ad44-4ed5c9d89038",
+      "application": null
+    },
+    "EventListener.Read.All": {
+      "delegated": "f7dd3bed-5eec-48da-bc73-1c0ef50bc9a1",
+      "application": "b7f6385c-6ce6-4639-a480-e23c42ed9784"
+    },
+    "EventListener.ReadWrite.All": {
+      "delegated": "d11625a6-fe21-4fc6-8d3d-063eba5525ad",
+      "application": null
+    },
+    "Group.Read.All": {
+      "delegated": "5f8c59db-677d-491f-a6b8-5f174b11ec1d",
+      "application": "5b567255-7703-4780-807c-7be8301ae99b"
+    },
+    "Group.ReadWrite.All": {
+      "delegated": "4e46008b-f24c-477d-8fff-7bb4ec7aafe0",
+      "application": null
+    },
+    "GroupMember.Read.All": {
+      "delegated": "bc024368-1153-4739-b217-4326f2e966d0",
+      "application": "98830695-27a2-44f7-8c18-0c3ebc9698f6"
+    },
+    "GroupSettings.Read.All": {
+      "delegated": "2eb2bc92-94ef-4c6b-b4ab-2a09bc975e0e",
+      "application": "f3c4f514-c65a-43f5-bfce-1735872258dd"
+    },
+    "GroupSettings.ReadWrite.All": {
+      "delegated": "c1691a6d-99e2-4cfa-b4b5-9e4d67dc0f36",
+      "application": null
+    },
+    "IdentityProvider.Read.All": {
+      "delegated": "43781733-b5a7-4d1b-98f4-e8edff23e1a9",
+      "application": "e321f0bb-e7f7-481e-bb28-e3b0b32d4bd0"
+    },
+    "IdentityProvider.ReadWrite.All": {
+      "delegated": "f13ce604-1677-429f-90bd-8a10b9f01325",
+      "application": null
+    },
+    "IdentityUserFlow.Read.All": {
+      "delegated": "2903d63d-4611-4d43-99ce-a33f3f52e343",
+      "application": "1b0c317f-dd31-4305-9932-259a8b6e8099"
+    },
+    "IdentityUserFlow.ReadWrite.All": {
+      "delegated": "281892cc-4dbf-4e3a-b6cc-b21029bb4e82",
+      "application": null
+    },
+    "LifecycleWorkflows.Read.All": {
+      "delegated": "9bcb9916-765a-42af-bf77-02282e26b01a",
+      "application": "7c67316a-232a-4b84-be22-cea2c0906404"
+    },
+    "LifecycleWorkflows.ReadWrite.All": {
+      "delegated": "84b9d731-7db8-4454-8c90-fd9e95350179",
+      "application": null
+    },
+    "Mail.Send": {
+      "delegated": "e383f46e-2787-4529-855e-0e479a3ffac0",
+      "application": null
+    },
+    "MultiTenantOrganization.Read.All": {
+      "delegated": "526aa72a-5878-49fe-bf4e-357973af9b06",
+      "application": "4f994bc0-31bb-44bb-b480-7a7c1be8c02e"
+    },
+    "MultiTenantOrganization.ReadWrite.All": {
+      "delegated": "77af1528-84f3-4023-8d90-d219cd433108",
+      "application": null
+    },
+    "OnPremDirectorySynchronization.Read.All": {
+      "delegated": "f6609722-4100-44eb-b747-e6ca0536989d",
+      "application": null
+    },
+    "OnPremDirectorySynchronization.ReadWrite.All": {
+      "delegated": "c2d95988-7604-4ba1-aaed-38a5f82a51c7",
+      "application": null
+    },
+    "OrgContact.Read.All": {
+      "delegated": "08432d1b-5911-483c-86df-7980af5cdee0",
+      "application": "e1a88a34-94c4-4418-be12-c87b00e26bea"
+    },
+    "Organization.Read.All": {
+      "delegated": "4908d5b9-3fb2-4b1e-9336-1888b7937185",
+      "application": "498476ce-e0fe-48b0-b801-37ba7e2685c6"
+    },
+    "OrganizationalBranding.Read.All": {
+      "delegated": "9082f138-6f02-4f3a-9f4d-5f3c2ce5c688",
+      "application": null
+    },
+    "OrganizationalBranding.ReadWrite.All": {
+      "delegated": "15ce63de-b141-4c9a-a9a5-241bf27c6aaf",
+      "application": null
+    },
+    "Policy.Read.All": {
+      "delegated": "572fea84-0151-49b2-9301-11cb16974376",
+      "application": "246dd0d5-5bd0-4def-940b-0421030a5b68"
+    },
+    "Policy.Read.AuthenticationMethod": {
+      "delegated": "a6ff13ac-1851-4993-8ca9-a671d70de2d5",
+      "application": null
+    },
+    "Policy.Read.B2BManagementPolicy": {
+      "delegated": "4b293250-121d-4cb4-acc7-5280438c18a6",
+      "application": "227900ff-df89-40f8-90e2-8157cf6995d5"
+    },
+    "Policy.Read.DeviceConfiguration": {
+      "delegated": "3616a4b0-6746-49c4-a678-4c237599074d",
+      "application": "bdba4817-6ba1-4a7c-8a01-be9bc7c242dd"
+    },
+    "Policy.Read.PermissionGrant": {
+      "delegated": "414de6ea-2d92-462f-b120-6e2a809a6d01",
+      "application": "9e640839-a198-48fb-8b9a-013fd6f6cbcd"
+    },
+    "Policy.ReadWrite.AccessReview": {
+      "delegated": "4f5bc9c8-ea54-4772-973a-9ca119cb0409",
+      "application": null
+    },
+    "Policy.ReadWrite.ApplicationConfiguration": {
+      "delegated": "b27add92-efb2-4f16-84f5-8108ba77985c",
+      "application": null
+    },
+    "Policy.ReadWrite.AuthenticationFlows": {
+      "delegated": "edb72de9-4252-4d03-a925-451deef99db7",
+      "application": null
+    },
+    "Policy.ReadWrite.AuthenticationMethod": {
+      "delegated": "7e823077-d88e-468f-a337-e18f1f0e6c7c",
+      "application": null
+    },
+    "Policy.ReadWrite.Authorization": {
+      "delegated": "edd3c878-b384-41fd-95ad-e7407dd775be",
+      "application": null
+    },
+    "Policy.ReadWrite.B2BManagementPolicy": {
+      "delegated": "723c4a0c-85b0-4a02-bb2a-c9eb07959de9",
+      "application": null
+    },
+    "Policy.ReadWrite.ConditionalAccess": {
+      "delegated": "ad902697-1014-4ef5-81ef-2b4301988e8c",
+      "application": null
+    },
+    "Policy.ReadWrite.ConsentRequest": {
+      "delegated": "4d135e65-66b8-41a8-9f8b-081452c91774",
+      "application": null
+    },
+    "Policy.ReadWrite.CrossTenantAccess": {
+      "delegated": "014b43d0-6ed4-4fc6-84dc-4b6f7bae7d85",
+      "application": null
+    },
+    "Policy.ReadWrite.DeviceConfiguration": {
+      "delegated": "40b534c3-9552-4550-901b-23879c90bcf9",
+      "application": null
+    },
+    "Policy.ReadWrite.ExternalIdentities": {
+      "delegated": "b5219784-1215-45b5-b3f1-88fe1081f9c0",
+      "application": null
+    },
+    "Policy.ReadWrite.FedTokenValidation": {
+      "delegated": "be1be369-4540-4ac9-8928-79de99f70d8f",
+      "application": null
+    },
+    "Policy.ReadWrite.MobilityManagement": {
+      "delegated": "a8ead177-1889-4546-9387-f25e658e2a79",
+      "application": null
+    },
+    "Policy.ReadWrite.PermissionGrant": {
+      "delegated": "2672f8bb-fd5e-42e0-85e1-ec764dd2614e",
+      "application": null
+    },
+    "PrivilegedAccess.Read.AzureADGroup": {
+      "delegated": null,
+      "application": "01e37dc9-c035-40bd-b438-b2879c4870a6"
+    },
+    "PrivilegedAssignmentSchedule.Read.AzureADGroup": {
+      "delegated": "02a32cc4-7ab5-4b58-879a-0586e0f7c495",
+      "application": "cd4161cb-f098-48f8-a884-1eda9a42434c"
+    },
+    "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup": {
+      "delegated": "06dbc45d-6708-4ef0-a797-f797ee68bf4b",
+      "application": null
+    },
+    "PrivilegedEligibilitySchedule.Read.AzureADGroup": {
+      "delegated": "8f44f93d-ecef-46ae-a9bf-338508d44d6b",
+      "application": "edb419d6-7edc-42a3-9345-509bfdf5d87c"
+    },
+    "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup": {
+      "delegated": "ba974594-d163-484e-ba39-c330d5897667",
+      "application": null
+    },
+    "PublicKeyInfrastructure.Read.All": {
+      "delegated": "04a4b2a2-3f26-4fc8-87ee-9c46e68db175",
+      "application": "214fda0c-514a-4650-b037-b562b1a66124"
+    },
+    "PublicKeyInfrastructure.ReadWrite.All": {
+      "delegated": "3591b7f3-dba8-4bad-b667-7a64bd4f2b83",
+      "application": null
+    },
+    "RoleAssignmentSchedule.Read.Directory": {
+      "delegated": "344a729c-0285-42c6-9014-f12b9b8d6129",
+      "application": null
+    },
+    "RoleAssignmentSchedule.ReadWrite.Directory": {
+      "delegated": "8c026be3-8e26-4774-9372-8d5d6f21daff",
+      "application": null
+    },
+    "RoleEligibilitySchedule.Read.Directory": {
+      "delegated": "eb0788c2-6d4e-4658-8c9e-c0fb8053f03d",
+      "application": null
+    },
+    "RoleEligibilitySchedule.ReadWrite.Directory": {
+      "delegated": "62ade113-f8e0-4bf9-a6ba-5acb31db32fd",
+      "application": null
+    },
+    "RoleManagement.Read.Directory": {
+      "delegated": "741c54c3-0c1e-44a1-818b-3f97ab4e8c83",
+      "application": "483bed4a-2ad3-4361-a73b-c83ccdbdc53c"
+    },
+    "RoleManagement.ReadWrite.Directory": {
+      "delegated": "d01b97e9-cbc0-49fe-810a-750afd5527a3",
+      "application": null
+    },
+    "RoleManagementAlert.Read.Directory": {
+      "delegated": "cce71173-f76d-446e-97ff-efb2d82e11b1",
+      "application": "ef31918f-2d50-4755-8943-b8638c0a077e"
+    },
+    "RoleManagementAlert.ReadWrite.Directory": {
+      "delegated": "435644c6-a5b1-40bf-8f52-fe8e5b53e19c",
+      "application": null
+    },
+    "RoleManagementPolicy.Read.Directory": {
+      "delegated": "3de2cdbe-0ff5-47d5-bdee-7f45b4749ead",
+      "application": null
+    },
+    "RoleManagementPolicy.ReadWrite.Directory": {
+      "delegated": "1ff1be21-34eb-448c-9ac9-ce1f506b2a68",
+      "application": null
+    },
+    "Synchronization.Read.All": {
+      "delegated": "7aa02aeb-824f-4fbe-a3f7-611f751f5b55",
+      "application": "5ba43d2f-fa88-4db2-bd1c-a67c5f0fb1ce"
+    },
+    "Synchronization.ReadWrite.All": {
+      "delegated": "7bb27fa3-ea8f-4d67-a916-87715b6188bd",
+      "application": null
+    },
+    "User.Read": {
+      "delegated": "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
+      "application": null
+    },
+    "User.Read.All": {
+      "delegated": "a154be20-db9c-4678-8ab7-66f6cc099a59",
+      "application": "df021288-bdef-4463-88db-98f22de89214"
+    },
+    "User.ReadWrite.All": {
+      "delegated": "204e0828-b5ca-4ad8-b9f3-f32a958e7cc4",
+      "application": null
+    },
+    "User.Create": {
+      "delegated": "d8ce6a2a-46ff-438e-96bc-020f23870a55",
+      "application": null
+    },
+    "User.ReadUpdate.All": {
+      "delegated": "f8b099f1-a6ce-4e00-8fff-5f783ff4faeb",
+      "application": null
+    },
+    "GroupMember.ReadWrite.All": {
+      "delegated": "f81125ac-d3b7-4573-a3b2-7099cc39df9e",
+      "application": null
+    }
+  },
+  "parts": [
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["AuthorizationPolicy"],
+      "read": ["GET /policies/authorizationPolicy"],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.Authorization", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["SecurityDefaults"],
+      "read": ["GET /policies/identitySecurityDefaultsEnforcementPolicy"],
+      "write": [],
+      "live": "200",
+      "note": "The write also needs Policy.Read.All (Microsoft's permission model: AlsoRequires).",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["AdminConsentRequestPolicy"],
+      "read": ["GET /policies/adminConsentRequestPolicy"],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.ConsentRequest", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["PermissionGrantPolicies"],
+      "read": ["GET /policies/permissionGrantPolicies"],
+      "write": [],
+      "live": "403 without the role; Policy.Read.All does not cover it",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.PermissionGrant", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.PermissionGrant", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.PermissionGrant", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["PermissionGrantPreApprovalPolicies"],
+      "read": ["GET /policies/permissionGrantPreApprovalPolicies"],
+      "write": [],
+      "live": "403 without the role",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.PermissionGrant", "asked": true, "model": "no entry", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.PermissionGrant", "asked": false, "model": "no entry", "index": "not listed", "status": "implied"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.PermissionGrant", "asked": true, "model": "no entry", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["DefaultAppManagementPolicy"],
+      "read": ["GET /policies/defaultAppManagementPolicy"],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.ApplicationConfiguration", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["AppManagementPolicies", "TokenIssuancePolicies", "ClaimsMappingPolicies", "HomeRealmDiscoveryPolicies"],
+      "read": ["GET /policies/appManagementPolicies", "GET /policies/tokenLifetimePolicies", "GET /policies/tokenIssuancePolicies", "GET /policies/claimsMappingPolicies", "GET /policies/homeRealmDiscoveryPolicies", "GET /policies/activityBasedTimeoutPolicies"],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.ApplicationConfiguration", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": [
+        "TokenLifetimePolicies"
+      ],
+      "read": [
+        "GET /policies/tokenLifetimePolicies"
+      ],
+      "write": [
+        "POST /policies/tokenLifetimePolicies"
+      ],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.ApplicationConfiguration",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {
+            "permission": "Policy.ReadWrite.ApplicationConfiguration",
+            "asked": true,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Application.Read.All",
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed",
+            "asked": true
+          },
+          {
+            "permission": "Application.ReadWrite.All",
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed",
+            "asked": false
+          }
+        ],
+        "application": "unsupported"
+      },
+      "restoreReadDocumentation": [
+        "https://learn.microsoft.com/en-us/graph/api/tokenlifetimepolicy-list-appliesto?view=graph-rest-1.0"
+      ],
+      "restoreEvidence": "2026-11-18: least-privileged delegated operation permission from current Microsoft operation table; method, path and closed payload verified by app-only lab lifecycle. Product actor and safeguards verified with injected fetch. Token holds multiple read roles, so read role isolation is not inferred."
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": [
+        "ActivityBasedTimeoutPolicies"
+      ],
+      "read": [
+        "GET /policies/activityBasedTimeoutPolicies"
+      ],
+      "write": [
+        "POST /policies/activityBasedTimeoutPolicies"
+      ],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.ApplicationConfiguration",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {
+            "permission": "Policy.ReadWrite.ApplicationConfiguration",
+            "asked": true,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": "unsupported"
+      },
+      "restoreReadDocumentation": [],
+      "restoreEvidence": "2026-11-18: least-privileged delegated operation permission from current Microsoft operation table; method, path and closed payload verified by app-only lab lifecycle. Product actor and safeguards verified with injected fetch. Token holds multiple read roles, so read role isolation is not inferred."
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["DeviceRegistrationPolicy"],
+      "read": ["GET /policies/deviceRegistrationPolicy"],
+      "write": [],
+      "live": "200 with Policy.Read.All",
+      "note": "For app-only access Microsoft lists Policy.Read.DeviceConfiguration only, so the Backup Reader gets that one.",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Policy.Read.DeviceConfiguration", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.DeviceConfiguration", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.DeviceConfiguration", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["MdmEnrollmentPolicies", "MamEnrollmentPolicies"],
+      "read": ["GET /policies/mobileDeviceManagementPolicies", "GET /policies/mobileAppManagementPolicies"],
+      "write": [],
+      "live": "401 Unsupported app-only call",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.MobilityManagement", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": "unsupported"
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["DirectorySettings"],
+      "read": ["GET /settings", "GET /groupSettings"],
+      "write": [],
+      "live": "200 with Directory.Read.All",
+      "note": "The lab token held Directory.Read.All, so GroupSettings.Read.All is from Microsoft's permission model, not a live read.",
+      "backup": {
+        "delegated": [
+          {"permission": "GroupSettings.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "GroupSettings.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "GroupSettings.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["Organization"],
+      "read": ["GET /organization"],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Organization.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Organization.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["EntraCompanyBranding"],
+      "read": [
+        "GET /organization/{id}/branding",
+        "GET /organization/{id}/branding/localizations"
+      ],
+      "write": [
+        "PATCH /organization/{id}/branding",
+        "POST /organization/{id}/branding/localizations"
+      ],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Organization.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "OrganizationalBranding.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "OrganizationalBranding.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Organization.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {"permission": "OrganizationalBranding.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": "unsupported"
+      },
+      "restoreReadDocumentation": [],
+      "restoreEvidence": "2026-11-18: least-privileged delegated operation permission from current Microsoft operation table; method, path and closed payload verified by app-only lab lifecycle. Product actor and safeguards verified with injected fetch. Token holds multiple read roles, so read role isolation is not inferred."
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["Domains"],
+      "read": [
+        "GET /domains",
+        "GET /domains/{id}/federationConfiguration"
+      ],
+      "write": [],
+      "live": "200; federationConfiguration 403 without Domain.Read.All",
+      "note": "Only the federation settings of a domain are written. Microsoft's page for one federation setting lists Domain.Read.All; its list page names only Domain-InternalFederation.Read.All.",
+      "backup": {
+        "delegated": [
+          {"permission": "Domain.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Domain.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Domain.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": ["OnPremisesSynchronization"],
+      "read": ["GET /directory/onPremisesSynchronization"],
+      "write": [],
+      "live": "403 app-only",
+      "note": "Never restored: the flags belong to the sync server.",
+      "backup": {
+        "delegated": [
+          {"permission": "OnPremDirectorySynchronization.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "OnPremDirectorySynchronization.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": "unsupported"
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "authentication",
+      "folders": ["AuthenticationMethodsPolicy"],
+      "read": ["GET /policies/authenticationMethodsPolicy"],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Policy.Read.AuthenticationMethod", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.AuthenticationMethod", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "authentication",
+      "folders": ["AuthenticationFlowsPolicy"],
+      "read": ["GET /policies/authenticationFlowsPolicy"],
+      "write": ["PATCH /policies/authenticationFlowsPolicy"],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.AuthenticationFlows", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {"permission": "Policy.ReadWrite.AuthenticationFlows", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": "unsupported"
+      },
+      "restoreReadDocumentation": [],
+      "restoreEvidence": "2026-11-18: least-privileged delegated operation permission from current Microsoft operation table; method, path and closed payload verified by app-only lab lifecycle. Product actor and safeguards verified with injected fetch. Token holds multiple read roles, so read role isolation is not inferred."
+    },
+    {
+      "service": "entra",
+      "area": "authentication",
+      "folders": ["AuthenticationContexts"],
+      "read": ["GET /identity/conditionalAccess/authenticationContextClassReferences"],
+      "write": [],
+      "live": "200",
+      "note": "The lab token also held Policy.Read.ConditionalAccess, so the live read does not prove Policy.Read.All covers it.",
+      "backup": {
+        "delegated": [
+          {"permission": "AuthenticationContext.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "AuthenticationContext.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.ConditionalAccess", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "AuthenticationContext.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "authentication",
+      "folders": ["CertificateBasedAuthConfigurations"],
+      "read": [
+        "GET /organization/{id}/certificateBasedAuthConfiguration"
+      ],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Organization.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Organization.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "authentication",
+      "folders": ["CertificateBasedAuthPki"],
+      "read": ["GET /directory/publicKeyInfrastructure/certificateBasedAuthConfigurations"],
+      "write": [],
+      "live": "403 without the role",
+      "backup": {
+        "delegated": [
+          {"permission": "PublicKeyInfrastructure.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "PublicKeyInfrastructure.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "PublicKeyInfrastructure.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "authentication",
+      "folders": ["FederatedTokenValidationPolicy"],
+      "read": ["GET /policies/federatedTokenValidationPolicy"],
+      "write": [],
+      "live": "404 when never configured",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.FedTokenValidation", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "authentication",
+      "folders": ["ContinuousAccessEvaluationPolicy"],
+      "read": ["GET /identity/continuousAccessEvaluationPolicy"],
+      "write": [],
+      "live": "404 when never configured",
+      "note": "A legacy setting that Conditional Access replaced. Its write permission changes every Conditional Access policy, so setup never asks for it on Entra ID's account.",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "authentication",
+      "folders": ["HardwareOathDevices"],
+      "read": ["GET /directory/authenticationMethodDevices/hardwareOathDevices"],
+      "write": [],
+      "live": "200",
+      "note": "Never restored: Microsoft never returns the token seeds.",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "no entry", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "no entry", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": [
+        "CrossTenantAccessPolicy"
+      ],
+      "read": [
+        "GET /policies/crossTenantAccessPolicy",
+        "GET /policies/crossTenantAccessPolicy/default",
+        "GET /policies/crossTenantAccessPolicy/partners",
+        "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationIdentitySynchronization",
+        "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationPartnerConfiguration"
+      ],
+      "write": [
+        "PATCH /policies/crossTenantAccessPolicy"
+      ],
+      "live": "2026-11-18: live-save-change-verify-restore-original-verify. App-only lab grants do not isolate delegated authorization; generated-scope production-service tests cover that boundary.",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.CrossTenantAccess",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {
+            "permission": "Policy.ReadWrite.CrossTenantAccess",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": [
+        "CrossTenantAccessDefault",
+        "CrossTenantAccessPartners",
+        "CrossTenantAccessMtoTemplates"
+      ],
+      "read": [
+        "GET /policies/crossTenantAccessPolicy",
+        "GET /policies/crossTenantAccessPolicy/default",
+        "GET /policies/crossTenantAccessPolicy/partners",
+        "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationIdentitySynchronization",
+        "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationPartnerConfiguration"
+      ],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.CrossTenantAccess",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": ["ExternalIdentitiesPolicy"],
+      "read": ["GET /policies/externalIdentitiesPolicy"],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.ExternalIdentities", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": ["B2bManagementPolicies"],
+      "read": ["GET /policies/b2bManagementPolicies"],
+      "write": [],
+      "live": "200 with Policy.Read.All",
+      "note": "The lab read succeeded app-only with Policy.Read.All alone, but Microsoft lists only the B2B management permissions, so those are what TenuVault asks for.",
+      "backup": {
+        "delegated": [
+          {"permission": "Policy.Read.B2BManagementPolicy", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.ReadWrite.B2BManagementPolicy", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Policy.Read.B2BManagementPolicy", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": ["IdentityProviders"],
+      "read": ["GET /identity/identityProviders"],
+      "write": [],
+      "live": "403 names IdentityProvider.Read.All",
+      "backup": {
+        "delegated": [
+          {"permission": "IdentityProvider.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "IdentityProvider.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "IdentityProvider.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": ["UserFlows", "UserFlowAttributes"],
+      "read": ["GET /identity/b2xUserFlows", "GET /identity/userFlowAttributes"],
+      "write": [],
+      "live": "403 names IdentityUserFlow.Read.All",
+      "backup": {
+        "delegated": [
+          {"permission": "IdentityUserFlow.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "IdentityUserFlow.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "IdentityUserFlow.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": ["AuthenticationEventsFlows", "AuthenticationEventListeners"],
+      "read": ["GET /identity/authenticationEventsFlows", "GET /identity/authenticationEventListeners"],
+      "write": [],
+      "live": "listeners 200; flows 403 in a workforce tenant",
+      "backup": {
+        "delegated": [
+          {"permission": "EventListener.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "EventListener.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "EventListener.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": ["CustomAuthenticationExtensions"],
+      "read": ["GET /identity/customAuthenticationExtensions"],
+      "write": [],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "CustomAuthenticationExtension.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "CustomAuthenticationExtension.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "CustomAuthenticationExtension.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": ["ApiConnectors"],
+      "read": ["GET /identity/apiConnectors"],
+      "write": [],
+      "live": "403 names APIConnectors.Read.All",
+      "note": "Microsoft's pages list only APIConnectors.ReadWrite.All; the refusal in the lab names APIConnectors.Read.All as enough.",
+      "backup": {
+        "delegated": [
+          {"permission": "APIConnectors.Read.All", "asked": true, "model": "not listed", "index": "not listed", "status": "unconfirmed"},
+          {"permission": "APIConnectors.ReadWrite.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "APIConnectors.Read.All", "asked": true, "model": "not listed", "index": "not listed", "status": "confirmed live"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": ["MultiTenantOrganization"],
+      "read": ["GET /tenantRelationships/multiTenantOrganization"],
+      "write": [],
+      "live": "403 without the role",
+      "note": "Never restored: joining needs both tenants.",
+      "backup": {
+        "delegated": [
+          {"permission": "MultiTenantOrganization.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "MultiTenantOrganization.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "MultiTenantOrganization.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["EntraRoleDefinitions", "EntraRoleAssignments"],
+      "read": ["GET /roleManagement/directory/roleDefinitions", "GET /roleManagement/directory/roleAssignments"],
+      "write": [],
+      "live": "200 with Directory.Read.All",
+      "backup": {
+        "delegated": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagement.ReadWrite.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["RoleEligibilitySchedules"],
+      "read": ["GET /roleManagement/directory/roleEligibilitySchedules"],
+      "write": [],
+      "live": "403 names RoleManagement.Read.Directory",
+      "backup": {
+        "delegated": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "RoleEligibilitySchedule.Read.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleEligibilitySchedule.ReadWrite.Directory", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "RoleManagement.ReadWrite.Directory", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["RoleAssignmentSchedules"],
+      "read": ["GET /roleManagement/directory/roleAssignmentSchedules"],
+      "write": [],
+      "live": "403 names RoleManagement.Read.Directory",
+      "backup": {
+        "delegated": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "RoleAssignmentSchedule.Read.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleAssignmentSchedule.ReadWrite.Directory", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "RoleManagement.ReadWrite.Directory", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["RoleManagementPolicies"],
+      "read": ["GET /policies/roleManagementPolicies"],
+      "write": [],
+      "live": "403 names RoleManagement.Read.Directory",
+      "backup": {
+        "delegated": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagementPolicy.Read.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagementPolicy.ReadWrite.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagement.ReadWrite.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["RoleManagementPolicyAssignments"],
+      "read": ["GET /policies/roleManagementPolicyAssignments"],
+      "write": [],
+      "live": "403 names RoleManagement.Read.Directory",
+      "note": "Never restored: a read-only mapping of policy to role.",
+      "backup": {
+        "delegated": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagementPolicy.Read.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagementPolicy.ReadWrite.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagement.ReadWrite.Directory", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["PimGroupEligibilitySchedules"],
+      "read": ["GET /identityGovernance/privilegedAccess/group/eligibilitySchedules", "GET /groups?$select=id&$top=999"],
+      "write": [],
+      "note": "2026-11-16: PIM resource discovery returned zero but a directory group had two assignment schedules. Enumerate every group ID with GroupMember.Read.All, then filter schedules per group. The broad application schedule role was accepted by separate live probes.",
+      "live": "2026-11-16: 200 across 63 supported groups, zero schedules; broad application role accepted",
+      "backup": {
+        "delegated": [
+          {"permission": "PrivilegedEligibilitySchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "GroupMember.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Group.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "PrivilegedEligibilitySchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "PrivilegedAccess.Read.AzureADGroup", "asked": false, "model": "not listed", "index": "not listed", "status": "confirmed live"},
+          {"permission": "GroupMember.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["PimGroupAssignmentSchedules"],
+      "read": ["GET /identityGovernance/privilegedAccess/group/assignmentSchedules", "GET /groups?$select=id&$top=999"],
+      "write": [],
+      "note": "2026-11-16: PIM resource discovery returned zero but a directory group had two assignment schedules. Enumerate every group ID with GroupMember.Read.All, then filter schedules per group. The broad application schedule role was accepted by separate live probes.",
+      "live": "2026-11-16: 200 across 63 supported groups, 62 schedules; broad application role accepted",
+      "backup": {
+        "delegated": [
+          {"permission": "PrivilegedAssignmentSchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "GroupMember.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Group.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "PrivilegedAssignmentSchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "PrivilegedAccess.Read.AzureADGroup", "asked": false, "model": "not listed", "index": "not listed", "status": "confirmed live"},
+          {"permission": "GroupMember.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["PimAlertConfigurations"],
+      "read": ["GET /identityGovernance/roleManagementAlerts/alertConfigurations"],
+      "write": [],
+      "live": "403 names RoleManagementAlert.Read.Directory",
+      "backup": {
+        "delegated": [
+          {"permission": "RoleManagementAlert.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagementAlert.ReadWrite.Directory", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "RoleManagementAlert.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["AdministrativeUnits"],
+      "read": [
+        "GET /administrativeUnits",
+        "GET /administrativeUnits/{id}/scopedRoleMembers"
+      ],
+      "write": [],
+      "live": "200",
+      "note": "Scoped role members are read and written with the role management permission.",
+      "backup": {
+        "delegated": [
+          {"permission": "AdministrativeUnit.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "AdministrativeUnit.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagement.ReadWrite.Directory", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "AdministrativeUnit.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "roles",
+      "folders": ["AttributeSets", "CustomSecurityAttributeDefinitions"],
+      "read": ["GET /directory/attributeSets", "GET /directory/customSecurityAttributeDefinitions"],
+      "write": [],
+      "live": "403 without the role; Directory.Read.All does not cover it",
+      "backup": {
+        "delegated": [
+          {"permission": "CustomSecAttributeDefinition.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "CustomSecAttributeDefinition.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "CustomSecAttributeDefinition.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "governance",
+      "folders": [
+        "AccessPackageCatalogs"
+      ],
+      "read": [
+        "GET /identityGovernance/entitlementManagement/catalogs",
+        "GET /identityGovernance/entitlementManagement/accessPackages",
+        "GET /identityGovernance/entitlementManagement/assignmentPolicies",
+        "GET /identityGovernance/entitlementManagement/connectedOrganizations",
+        "GET /identityGovernance/entitlementManagement/settings"
+      ],
+      "write": [
+        "POST /identityGovernance/entitlementManagement/catalogs",
+        "PATCH /identityGovernance/entitlementManagement/catalogs/{accessPackageCatalogId}"
+      ],
+      "live": "2026-11-18: live-create-read-change-restore-delete. App-only lab grants do not isolate delegated authorization; generated-scope production-service tests cover that boundary.",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "EntitlementManagement.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "EntitlementManagement.ReadWrite.All",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "EntitlementManagement.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {
+            "permission": "EntitlementManagement.ReadWrite.All",
+            "asked": true,
+            "model": "listed",
+            "index": "no entry",
+            "status": "confirmed"
+          }
+        ],
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "governance",
+      "folders": [
+        "AccessPackages",
+        "AccessPackageAssignmentPolicies",
+        "ConnectedOrganizations",
+        "EntitlementManagementSettings"
+      ],
+      "read": [
+        "GET /identityGovernance/entitlementManagement/catalogs",
+        "GET /identityGovernance/entitlementManagement/accessPackages",
+        "GET /identityGovernance/entitlementManagement/assignmentPolicies",
+        "GET /identityGovernance/entitlementManagement/connectedOrganizations",
+        "GET /identityGovernance/entitlementManagement/settings"
+      ],
+      "write": [],
+      "live": "403 without the role",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "EntitlementManagement.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "EntitlementManagement.ReadWrite.All",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "EntitlementManagement.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "governance",
+      "folders": ["AccessReviewDefinitions"],
+      "read": ["GET /identityGovernance/accessReviews/definitions"],
+      "write": [],
+      "live": "403 without the role",
+      "backup": {
+        "delegated": [
+          {"permission": "AccessReview.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "AccessReview.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "AccessReview.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "governance",
+      "folders": [
+        "AccessReviewPolicy"
+      ],
+      "read": [
+        "GET /policies/accessReviewPolicy"
+      ],
+      "write": [
+        "PATCH /policies/accessReviewPolicy"
+      ],
+      "live": "2026-11-18: live-save-change-verify-restore-original-verify; ownership flag only. App-only lab grants do not isolate delegated authorization; generated-scope production-service tests cover that boundary.",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.AccessReview",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {
+            "permission": "Policy.ReadWrite.AccessReview",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "governance",
+      "folders": ["LifecycleWorkflows", "LifecycleWorkflowCustomTaskExtensions", "LifecycleWorkflowSettings"],
+      "read": ["GET /identityGovernance/lifecycleWorkflows/workflows", "GET /identityGovernance/lifecycleWorkflows/customTaskExtensions", "GET /identityGovernance/lifecycleWorkflows/settings"],
+      "write": [],
+      "live": "403 names the Lifecycle Workflows permissions",
+      "backup": {
+        "delegated": [
+          {"permission": "LifecycleWorkflows.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "LifecycleWorkflows.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "LifecycleWorkflows.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "governance",
+      "folders": ["TermsOfUseAgreements"],
+      "read": ["GET /identityGovernance/termsOfUse/agreements"],
+      "write": [],
+      "live": "403 names the application role Agreement.Read.All",
+      "note": "Microsoft's pages list delegated access only; the refusal of an app-only read in the lab names the application role.",
+      "backup": {
+        "delegated": [
+          {"permission": "Agreement.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Agreement.ReadWrite.All", "asked": false, "model": "not listed", "index": "not listed", "status": "implied"}
+        ],
+        "application": [
+          {"permission": "Agreement.Read.All", "asked": true, "model": "no entry", "index": "not listed", "status": "confirmed live"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "groups",
+      "folders": ["Groups"],
+      "read": [
+        "GET /groups",
+        "GET /groups/{id}/members",
+        "GET /groups/{id}/owners"
+      ],
+      "write": ["POST /groups", "PATCH /groups/{id}", "POST /groups/{id}/members/$ref", "DELETE /groups/{id}/members/{id}/$ref", "POST /groups/{id}/owners/$ref", "DELETE /groups/{id}/owners/{id}/$ref"],
+      "live": "2026-11-18 approved 9a fixture lifecycle. The application token holds a union of roles, so acceptance does not isolate each alternative. Current operation tables and reference identifiers establish delegated least privilege. The published Graph scope covers user recycle restore, which remains blocked by the 9a evidence gate. Privileged variants stay blocked.",
+      "backup": {
+        "delegated": [
+          {"permission": "Group.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Group.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Group.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {"permission": "Group.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "GroupMember.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "User.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "groups",
+      "folders": ["GroupLifecyclePolicies"],
+      "read": ["GET /groupLifecyclePolicies"],
+      "write": [],
+      "live": "200",
+      "note": "Microsoft offers no narrower permission. The write permission changes the whole directory, so setup never asks for it.",
+      "backup": {
+        "delegated": [
+          {"permission": "Directory.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Directory.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "groups",
+      "folders": ["OwnerlessGroupPolicy"],
+      "read": ["GET /policies/ownerlessGroupPolicy"],
+      "write": [],
+      "live": "403 app-only although the token holds Group.Read.All",
+      "backup": {
+        "delegated": [
+          {"permission": "Group.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Group.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": "unsupported"
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "usersAndDevices",
+      "folders": ["Users"],
+      "read": ["GET /users"],
+      "write": ["POST /users", "PATCH /users/{id}", "PUT /users/{id}/manager/$ref", "POST /beta/directory/deletedItems/{id}/restore"],
+      "live": "2026-11-18 approved 9a fixture lifecycle. The application token holds a union of roles, so acceptance does not isolate each alternative. Current operation tables and reference identifiers establish delegated least privilege. The published Graph scope covers user recycle restore, which remains blocked by the 9a evidence gate. Privileged variants stay blocked.",
+      "backup": {
+        "delegated": [
+          {"permission": "User.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "User.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "User.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {"permission": "User.Create", "asked": true, "model": "no entry", "index": "no entry", "status": "confirmed"},
+          {"permission": "User.ReadUpdate.All", "asked": true, "model": "no entry", "index": "no entry", "status": "confirmed"},
+          {"permission": "User.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "usersAndDevices",
+      "folders": ["EntraDevices"],
+      "read": ["GET /devices"],
+      "write": [],
+      "live": "200",
+      "note": "Never restored: a device object is created by registration.",
+      "backup": {
+        "delegated": [
+          {"permission": "Device.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Device.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "usersAndDevices",
+      "folders": ["OrgContacts"],
+      "read": ["GET /contacts"],
+      "write": [],
+      "live": "200",
+      "note": "Never restored: contacts are managed through Exchange.",
+      "backup": {
+        "delegated": [
+          {"permission": "OrgContact.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "OrgContact.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "applications",
+      "folders": ["Applications"],
+      "read": ["GET /applications"],
+      "write": ["PATCH /applications/{id}"],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Application.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {"permission": "Application.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
+        "application": "unsupported"
+      },
+      "restoreDocumentation": ["https://learn.microsoft.com/en-us/graph/api/application-update?view=graph-rest-1.0"],
+      "restoreEvidence": "2026-11-19: current Microsoft operation table names Application.ReadWrite.All as least privileged for delegated metadata updates. Closed nonempty displayName/description change and restore matched repeated fixture GETs. Lab token holds a union of application roles; delegated minimum-scope isolation is not inferred. Production scope, approval and identity gates are integration tested."
+    },
+    {
+      "service": "entra",
+      "area": "applications",
+      "folders": ["ServicePrincipals"],
+      "read": [
+        "GET /servicePrincipals",
+        "GET /servicePrincipals/{id}/synchronization/jobs"
+      ],
+      "write": [],
+      "live": "200",
+      "note": "Provisioning jobs are read with the synchronization permission. App role assignments are written with AppRoleAssignment.ReadWrite.All.",
+      "backup": {
+        "delegated": [
+          {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Application.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Synchronization.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Synchronization.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Synchronization.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "applications",
+      "folders": ["OAuth2PermissionGrants"],
+      "read": ["GET /oauth2PermissionGrants"],
+      "write": [],
+      "live": "200",
+      "note": "Microsoft offers no narrower read permission.",
+      "backup": {
+        "delegated": [
+          {"permission": "Directory.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "DelegatedPermissionGrant.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+        ],
+        "application": [
+          {"permission": "Directory.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    }
+  ],
+  "leftOut": [
+    {
+      "service": "entra",
+      "folder": "ServicePrincipalCreationPolicies",
+      "path": "/policies/servicePrincipalCreationPolicies",
+      "reason": "Microsoft documents no permission for it."
+    },
+    {
+      "service": "entra",
+      "folder": "EntraUxSetting",
+      "path": "/admin/entra/uxSetting",
+      "reason": "Microsoft's page lists delegated and application access as not supported."
+    },
+    {
+      "service": "entra",
+      "folder": "DirectoryRoleAccessReviewPolicy",
+      "path": "/policies/directoryRoleAccessReviewPolicy",
+      "reason": "Microsoft documents no permission for it."
+    },
+    {
+      "service": "entra",
+      "folder": "FeatureRolloutPolicies",
+      "path": "/policies/featureRolloutPolicies",
+      "reason": "Its read permission Policy.Read.HybridAuthentication is not published on Microsoft Graph; the only other documented one is Directory.ReadWrite.All, a write permission."
+    },
+    {
+      "service": "entra",
+      "folder": "OnPremAuthenticationPolicies",
+      "path": "/policies/onPremAuthenticationPolicies",
+      "reason": "Its read permission Policy.Read.OnPremAuthenticationPolicy is not in Microsoft's permissions reference."
+    },
+    {
+      "service": "entra",
+      "folder": "AppProxyConnectorGroups",
+      "path": "/onPremisesPublishingProfiles/applicationProxy/connectorGroups",
+      "reason": "Microsoft documents only Directory.ReadWrite.All, a write permission, for reading it."
+    }
+  ]
+}

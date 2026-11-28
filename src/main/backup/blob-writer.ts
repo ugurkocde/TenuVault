@@ -1,16 +1,17 @@
+import { backupBlobName, backupContainer, backupStoragePath, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../../shared/backup-storage"
 import { assertStorageAccountName } from "../../shared/storage-account"
 import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constants"
-import { createHash, randomUUID } from "node:crypto"
 import { backupReadKeyFingerprint, wasBackupReadAuthenticated } from "../storage/authenticated-read"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { releaseLocalRetentionGuard, type ExpectedReplacement } from "../storage/local-blob-store"
-import { withHeaderOnlyBackupRead, type RetentionBudget } from "./retention-budget"
-import { readBytesCapped } from "../../shared/capped-body"
+import { createHash, randomUUID } from "node:crypto"
+import { readBytesCapped, readJsonCapped } from "../../shared/capped-body"
 import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
+import type { RetentionBudget } from "./retention-budget"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, DeleteConditionError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, DeleteConditionError, ImmutableBlobError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 const LEASE_RELEASE_TIMEOUT_MS = 15_000
 const deleteConfirmedUnchanged = new WeakSet<object>()
@@ -22,7 +23,7 @@ export function wasDeleteConfirmedUnchanged(error: unknown): boolean {
 
 export type { ExpectedReplacement }
 
-/** A replacement backup changed before a quarantined local delete could be finalized. */
+/** A replacement backup changed before cleanup completed or before a quarantined local delete could be finalized. */
 export class ReplacementChangedError extends FetchApplicationError {
   constructor(cause: unknown, readonly restoredEtag?: string) {
     super(cause)
@@ -58,13 +59,12 @@ export interface RetentionBlob { value: unknown; etag: string; authenticated: bo
 export interface BlobListing {
   blobs: string[]
   prefixes: string[]
+  sizes: Map<string, number>
   etags: Map<string, string>
 }
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
-  private headEtagUnsupported = false
-
   constructor(
     private readonly fetchImpl: typeof fetch,
     private readonly account: string,
@@ -83,10 +83,10 @@ export class BlobWriter {
     return new BlobWriter(this.fetchImpl, this.account, this.token, this.network)
   }
 
-  async ensureContainer(): Promise<void> {
-    await this.request(`${BACKUP_CONTAINER}?restype=container`, { method: "PUT" }, async (response) => {
+  async ensureContainer(container = BACKUP_CONTAINER): Promise<void> {
+    await this.request(`${container}?restype=container`, { method: "PUT" }, async (response) => {
       if (response.ok || response.status === 409) return
-      throw new StorageError(await storageError(response, this.account))
+      throw await storageError(response, this.account)
     })
   }
 
@@ -95,12 +95,12 @@ export class BlobWriter {
    * A create-only body must be unique to its writer (the engine includes the run id), so a retry
    * that finds identical bytes knows its own earlier attempt created the blob.
    */
-  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, onUnconfirmed?: () => void): Promise<void> {
-    const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, signal?: AbortSignal, onUnconfirmed?: () => void): Promise<void> {
+    const path = backupStoragePath(name)
     // The earlier PUT may have landed. Read it back and compare it with what this writer sent.
     const landed = async (response: Response, signal: AbortSignal) => {
       const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
-        if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
+        if (!readBack.ok) throw await storageError(readBack, this.account)
         return readBack.text()
       })
       if (stored !== body) return false
@@ -111,6 +111,7 @@ export class BlobWriter {
       method: "PUT",
       headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json", ...(createOnly ? { "if-none-match": "*" } : {}) },
       body,
+      ...(signal ? { signal } : {}),
     }, async (response, signal, ambiguous) => {
       if (response.ok) return
       if (createOnly && (response.status === 412 || response.headers.get("x-ms-error-code") === "BlobAlreadyExists")) {
@@ -125,32 +126,41 @@ export class BlobWriter {
         || isImmutabilityRefusal(response.status, response.headers.get("x-ms-error-code") ?? ""))) {
         if (await landed(response, signal)) return
       }
-      throw new StorageError(await storageError(response, this.account))
+      // A refusal by an immutability policy or legal hold keeps the provider's code, so a caller can tell
+      // it from a permission refusal.
+      const headerCode = response.headers.get("x-ms-error-code") ?? ""
+      const bodyCode = isImmutabilityRefusal(response.status, headerCode) ? headerCode : /<Code>([^<]+)<\/Code>/.exec(await response.clone().text())?.[1] ?? ""
+      const error = await storageError(response, this.account)
+      if (isImmutabilityRefusal(response.status, bodyCode)) throw new ImmutableBlobError(bodyCode, error.message)
+      throw error
     }, beforeCommit, onDispatch, onUnconfirmed)
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
-  async list(prefix: string, delimiter = ""): Promise<BlobListing> {
+  async list(prefix: string, delimiter = "", container = backupContainer(prefix), physicalPrefix = false): Promise<BlobListing> {
     const blobs: string[] = []
-    const prefixes: string[] = []
+    const sizes = new Map<string, number>()
     const etags = new Map<string, string>()
+    const prefixes: string[] = []
     let marker = ""
     const seen = new Set<string>()
     do {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Storage listing did not finish after ${MAX_LIST_PAGES} pages`)
-      const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
-      const xml = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" }, async (response) => {
+      const query = new URLSearchParams({ restype: "container", comp: "list", prefix: physicalPrefix ? prefix : backupBlobName(prefix), ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
+      const xml = await this.request(`${container}?${query.toString()}`, { method: "GET" }, async (response) => {
         if (response.status === 404) return null
         if (!response.ok) throw await storageFailure(response, this.account)
         return response.text()
       })
       if (xml === null) break
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
-      for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
+      for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(logicalBackupName(decode(m[1]!)))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>([\s\S]*?)<\/Blob>/g)) {
-        const name = decode(m[1]!)
+        const name = logicalBackupName(decode(m[1]!))
         const properties = m[2]!
         blobs.push(name)
+        const size = /<Content-Length>(\d+)<\/Content-Length>/.exec(properties)?.[1]
+        if (size !== undefined) sizes.set(name, Number(size))
         const raw = /<Etag>([^<]+)<\/Etag>/i.exec(properties)?.[1]
         if (raw) {
           const etag = decode(raw)
@@ -162,26 +172,51 @@ export class BlobWriter {
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes, etags }
+    return { blobs, prefixes, sizes, etags }
+  }
+
+  /** Root records and payload together, for deletion after ownership has been checked. */
+  async listFolder(prefix: string): Promise<BlobListing> {
+    const payload = await this.list(prefix)
+    if (backupContainer(prefix) !== LARGE_BACKUP_CONTAINER) return payload
+    const roots = await this.list(prefix, "", LARGE_BACKUP_CONTAINER, true)
+    return {
+      blobs: [...roots.blobs, ...payload.blobs],
+      prefixes: [],
+      sizes: new Map([...roots.sizes, ...payload.sizes]),
+      etags: new Map([...roots.etags, ...payload.etags]),
+    }
+  }
+
+  /**
+   * A JSON object blob, or null when it does not exist. A blob that exists but is not a JSON object
+   * (damaged, or written by something else) throws a FetchApplicationError: it is unreadable, never
+   * the same as a missing blob, so retention keeps it and counts the container as shared.
+   */
+  async readJson(name: string): Promise<Record<string, unknown> | null> {
+    return this.request(backupStoragePath(name), { method: "GET" }, async (response) => {
+      if (response.status === 404) return null
+      if (!response.ok) throw await storageFailure(response, this.account)
+      // Capped like every other backup read; an oversized file is unreadable, never buffered whole.
+      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      if (body.kind === "oversized") throw new FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))
+      if (body.kind === "invalid") throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not valid JSON`))
+      const value = body.value
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not a JSON object`))
+      return value as Record<string, unknown>
+    })
   }
 
   /** Retain the identity and the authentication evidence from the same read. */
-  async readForRetention(name: string): Promise<RetentionBlob>
-  async readForRetention(name: string, optional: true): Promise<RetentionBlob | null>
-  async readForRetention(name: string, optional = false): Promise<RetentionBlob | null> {
-    return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
-      if (optional && response.status === 404) {
-        void response.body?.cancel().catch(() => undefined)
-        return null
-      }
+  async readForRetention(name: string): Promise<RetentionBlob> {
+    return this.request(backupStoragePath(name), { method: "GET" }, async (response) => {
       if (!response.ok) throw await storageFailure(response, this.account)
       const bytes = await readBytesCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
       const etag = response.headers.get("etag")
-      if (!bytes) throw new FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))
-      if (!etag || etag === "*") throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`))
+      if (!bytes || !etag || etag === "*") throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`))
       try {
         const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
-        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected JSON object")
+        if (!value || typeof value !== "object") throw new Error("Expected JSON data")
         return { value, etag, authenticated: wasBackupReadAuthenticated(response), keyFingerprint: backupReadKeyFingerprint(response), sha256: createHash("sha256").update(bytes).digest("hex") }
       } catch (error) {
         throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`, { cause: error }))
@@ -189,65 +224,42 @@ export class BlobWriter {
     })
   }
 
-  /** Reads a blob's ETag with HEAD where supported, falling back to a header-only GET when HEAD is unsupported or omits the ETag. */
-  async readEtag(name: string): Promise<string | null> {
-    const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
-    if (!this.headEtagUnsupported) {
-      const head = await this.request(path, { method: "HEAD" }, async (response) => {
-        void response.body?.cancel().catch(() => undefined)
-        if (response.status === 404) return { kind: "missing" as const }
-        if (response.status === 405 || response.status === 501) return { kind: "unsupported" as const }
-        if (!response.ok) throw await storageFailure(response, this.account)
-        const etag = response.headers.get("etag")
-        if (!etag || etag === "*") return { kind: "missing-etag" as const }
-        return { kind: "etag" as const, etag }
-      })
-      if (head.kind === "missing") return null
-      if (head.kind === "etag") return head.etag
-      this.headEtagUnsupported = true
-    }
-    return withHeaderOnlyBackupRead(() => this.request(path, { method: "GET" }, async (response) => {
-      if (response.status === 404) {
-        void response.body?.cancel().catch(() => undefined)
-        return null
-      }
+  /** Reads only the current ETag identity of a blob, or null if it no longer exists. */
+  async headETag(name: string): Promise<string | null> {
+    return this.request(backupStoragePath(name), { method: "HEAD" }, async (response) => {
+      if (response.status === 404) return null
       if (!response.ok) throw await storageFailure(response, this.account)
-      void response.body?.cancel().catch(() => undefined)
       const etag = response.headers.get("etag")
-      if (!etag || etag === "*") throw new FetchApplicationError(new Error(`${name} could not be verified for retention.`))
-      return etag
-    }))
+      return etag && etag !== "*" ? etag : null
+    })
   }
 
   /** Acquires a finite lease on a blob (Azure) without modifying its content. */
   async acquireLease(name: string, durationSeconds = 60): Promise<string> {
-    const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}?comp=lease`
-    return this.acquireLeaseAt(path, durationSeconds)
+    return this.acquireLeaseAt(`${backupStoragePath(name)}?comp=lease`, durationSeconds)
   }
 
-  /** Renews an active blob lease. Runs outside the retention request budget so long deletes stay protected. */
+  /** Renews an active blob lease outside the retention request budget. */
   async renewLease(name: string, leaseId: string, signal?: AbortSignal): Promise<void> {
-    const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}?comp=lease`
-    await this.withoutBudget().renewLeaseAt(path, leaseId, undefined, signal)
+    await this.withoutBudget().renewLeaseAt(`${backupStoragePath(name)}?comp=lease`, leaseId, undefined, signal)
   }
 
   /** Releases a blob lease outside the retention budget and aborted job circuit. Throws on HTTP 5xx; callers catch it, and an unreleased lease expires on its own. */
   async releaseLease(name: string, leaseId: string, signal?: AbortSignal): Promise<void> {
-    const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}?comp=lease`
-    await this.releaseLeaseAt(path, leaseId, signal)
+    await this.releaseLeaseAt(`${backupStoragePath(name)}?comp=lease`, leaseId, signal)
   }
 
   /** Acquires the local cross-process retention lock file and registers protected replacement prefixes in-process. */
-  async acquireContainerLease(protectedPrefixes?: string[]): Promise<string> {
+  async acquireContainerLease(container = BACKUP_CONTAINER, protectedPrefixes?: string[]): Promise<string> {
     const headers = protectedPrefixes?.length
       ? { "x-tenuvault-protected-prefixes": JSON.stringify(protectedPrefixes) }
       : undefined
-    return this.acquireLeaseAt(`${BACKUP_CONTAINER}?restype=container&comp=lease`, undefined, headers)
+    return this.acquireLeaseAt(`${container}?restype=container&comp=lease`, undefined, headers)
   }
 
   /** Best-effort release of a container lock; retries once and always clears the local in-process guard. */
-  async releaseContainerLease(leaseId: string, signal?: AbortSignal): Promise<string | undefined> {
-    const path = `${BACKUP_CONTAINER}?restype=container&comp=lease`
+  async releaseContainerLease(leaseId: string, container = BACKUP_CONTAINER, signal?: AbortSignal): Promise<string | undefined> {
+    const path = `${container}?restype=container&comp=lease`
     try {
       try {
         return await this.releaseLeaseAt(path, leaseId, signal)
@@ -291,7 +303,6 @@ export class BlobWriter {
           return leaseId
         }
         if (ambiguous && response.status === 409) {
-          // An earlier attempt may have acquired this proposed lease before its response was lost.
           await this.releaseLeaseAt(path, proposedId).catch(() => undefined)
         }
         const code = await this.leaseResponseCode(response)
@@ -384,7 +395,7 @@ export class BlobWriter {
         headers["x-tenuvault-expected-replacements"] = "1"
         headers["content-type"] = "application/json"
       }
-      await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, {
+      await this.request(backupStoragePath(name), {
         method: "DELETE",
         ...(Object.keys(headers).length ? { headers } : {}),
         ...(sendReplacements ? { body: JSON.stringify(expectedReplacements) } : {}),
@@ -411,8 +422,7 @@ export class BlobWriter {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
             throw new ProtectedBlobError(code)
           }
-          if (response.status === 412 && (etag || code === "BlobQuarantined")) {
-            if (code === "BlobQuarantined") throw new DeleteConditionError(await storageFailure(response, this.account))
+          if (response.status === 412 && code !== "BlobQuarantined") {
             if (!ambiguous && (!local || unchangedHeader)) confirmedUnchanged = true
             void response.body?.cancel().catch(() => undefined)
             throw new DeleteConditionError(new Error(`${name} changed before it could be deleted.`))
@@ -474,8 +484,8 @@ export class BlobWriter {
             },
           })
           response = await (this.budget ? this.budget.fetch(send) : send())
-          if (retryableStatus(response.status) && !(init.method === "HEAD" && response.status === 501) && attempt < REQUEST_ATTEMPTS - 1) {
-            throw new RetryableStorageError(await storageError(response, this.account))
+          if (retryableStatus(response.status) && attempt < REQUEST_ATTEMPTS - 1) {
+            throw new RetryableStorageError((await storageError(response, this.account)).message)
           }
           const result = await read(response, signal, ambiguous)
           signal.throwIfAborted()
@@ -486,6 +496,9 @@ export class BlobWriter {
         if (attempted && (!response || response.ok || response.status === 408 || response.status >= 500)) onUnconfirmed?.()
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
+        if (path.startsWith(`${LARGE_BACKUP_CONTAINER}/`) || path.startsWith(`${LARGE_BACKUP_CONTAINER}?`)) {
+          if (error instanceof StorageError && !(error instanceof BlobClaimError) && !(error instanceof InventoryDamagedError)) throw new LargeStorageError(response?.status, { cause: error })
+        }
         if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError) && !(error instanceof BlobLeaseError)) {
           this.network?.authFailed("backup storage", response.status, error instanceof Error ? error.message : String(error))
         }
@@ -493,9 +506,10 @@ export class BlobWriter {
         if (!attempted && error instanceof RequestTimeoutError && attempt >= REQUEST_ATTEMPTS - 1) throw new TokenError(error.message, { cause: error })
         if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
-        const retrySignals = [beforeCommit?.signal, this.network?.signal, init.signal ?? undefined].filter((value): value is AbortSignal => value !== undefined)
-        const retrySignal = retrySignals.length > 1 ? AbortSignal.any(retrySignals) : retrySignals[0]
-        await sleep(retryDelay(response, attempt), retrySignal)
+        const retrySignal = beforeCommit
+          ? AbortSignal.any([beforeCommit.signal, ...(this.network ? [this.network.signal] : [])])
+          : this.network?.signal
+        await sleep(retryDelay(response, attempt), init.signal ? AbortSignal.any([init.signal, ...(retrySignal ? [retrySignal] : [])]) : retrySignal)
       }
     }
   }

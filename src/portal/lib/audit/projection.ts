@@ -50,7 +50,7 @@ const fixedActions = new Set([
 export function auditId(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value) return undefined
   if (isGuid(value) || /^(?:desktop-|app-)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)
-    || /^(?:backup-)?\d{4}-?\d{2}-?\d{2}(?:[T_-][0-9Z_.-]+)?$/.test(value)
+    || /^(?:backup-(?:large-)?)?\d{4}-?\d{2}-?\d{2}(?:[T_-][0-9Z_.-]+)?$/.test(value)
     || /^sha256-[a-f0-9]{64}$/.test(value)) return value
   return 'sha256-' + sha256Hex(value)
 }

@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto"
 import { authenticatedBackupRead } from "./authenticated-read"
+import { LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
@@ -14,6 +16,16 @@ import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobDeleteInterrupted
  */
 
 const HOST = /^(tvlocal-[a-z0-9-]+)\.blob\.core\.windows\.net$/i
+const blobLeases = new WeakMap<LocalBlobStore, Map<string, { id: string; expiresAt: number }>>()
+
+function storeBlobLeases(store: LocalBlobStore): Map<string, { id: string; expiresAt: number }> {
+  let leases = blobLeases.get(store)
+  if (!leases) {
+    leases = new Map()
+    blobLeases.set(store, leases)
+  }
+  return leases
+}
 
 export function localAccountFromUrl(url: URL): string | null {
   const match = HOST.exec(url.hostname)
@@ -41,6 +53,10 @@ export function localRoutesRunning(): boolean {
 export function withRouteTenant<T>(tenantId: unknown, run: () => T, storageAccountName?: unknown): T {
   const storageAccount = text(storageAccountName)?.toLowerCase() ?? null
   return routeContext.run({ tenant: text(tenantId), storageAccount }, () => isLocalAccount(storageAccount ?? undefined) ? counted(run) : run())
+}
+
+export function currentRouteTenant(): string | null {
+  return routeContext.getStore()?.tenant ?? null
 }
 
 function counted<T>(run: () => T): T {
@@ -217,7 +233,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       if (method === "GET" || method === "HEAD") {
         // Container properties say how much of the backup folder could not be read, so a list of
         // backups can say that some may be missing from it.
-        const damage: InventoryDamage = container === BACKUP_CONTAINER ? await store.damage(account, container) : { files: [], unavailable: new Map(), unattributed: 0 }
+        const damage: InventoryDamage = [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].includes(container) ? await store.damage(account, container) : { files: [], unavailable: new Map(), unattributed: 0 }
         return new Response(null, {
           status: 200,
           headers: {
@@ -236,7 +252,47 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     if (!blobName) return error(400, "InvalidUri", "A blob name is required.")
 
     // Blob level.
+    const leaseKey = `${account}\0${container}\0${blobName}`
+    const leases = storeBlobLeases(store)
+    const activeLease = () => {
+      const held = leases.get(leaseKey)
+      if (!held) return undefined
+      if (held.expiresAt <= Date.now()) {
+        leases.delete(leaseKey)
+        return undefined
+      }
+      return held
+    }
+    if (method === "PUT" && query.get("comp") === "lease") {
+      await store.get(account, container, blobName)
+      const action = (request.headers.get("x-ms-lease-action") ?? "").toLowerCase()
+      const durationSec = Number(request.headers.get("x-ms-lease-duration") ?? "60")
+      const durationMs = Number.isFinite(durationSec) && durationSec > 0 ? durationSec * 1000 : 60_000
+      const held = activeLease()
+      if (action === "acquire") {
+        if (held) return error(409, "LeaseAlreadyPresent", "There is already a lease present.")
+        const leaseId = request.headers.get("x-ms-proposed-lease-id") || randomUUID()
+        leases.set(leaseKey, { id: leaseId, expiresAt: Date.now() + durationMs })
+        return new Response(null, { status: 201, headers: { "x-ms-lease-id": leaseId } })
+      }
+      const leaseId = request.headers.get("x-ms-lease-id") ?? ""
+      if (!leaseId) return error(400, "MissingRequiredHeader", "x-ms-lease-id is required.")
+      if (!held || held.id !== leaseId) return error(412, "LeaseIdMismatchWithLeaseOperation", "The lease ID specified did not match the lease ID for the blob.")
+      if (action === "renew") {
+        held.expiresAt = Date.now() + durationMs
+        return new Response(null, { status: 200, headers: { "x-ms-lease-id": leaseId } })
+      }
+      if (action === "release") {
+        leases.delete(leaseKey)
+        return new Response(null, { status: 200 })
+      }
+      return error(400, "InvalidHeaderValue", `Unsupported lease action: ${action}`)
+    }
     if (method === "PUT") {
+      const held = activeLease()
+      if (held && request.headers.get("x-ms-lease-id") !== held.id) {
+        return error(412, "LeaseIdMissing", "There is currently a lease on the blob and no lease ID was specified in the request.")
+      }
       const data = new Uint8Array(await request.arrayBuffer())
       const metadata = Object.fromEntries([...request.headers].filter(([key]) => key.startsWith("x-ms-meta-")).map(([key, value]) => [key.slice("x-ms-meta-".length), value]))
       const blob = await store.put(account, container, blobName, data, request.headers.get("content-type") ?? "application/octet-stream", request.headers.get("if-none-match") === "*", Object.keys(metadata).length ? metadata : undefined, request.headers.get("if-match") ?? undefined)
@@ -256,6 +312,10 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       return authenticatedBackupRead(new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers }))
     }
     if (method === "DELETE") {
+      const held = activeLease()
+      if (held && request.headers.get("x-ms-lease-id") !== held.id) {
+        return error(412, "LeaseIdMissing", "There is currently a lease on the blob and no lease ID was specified in the request.", { "x-tenuvault-delete-unchanged": "1" })
+      }
       let expectedReplacements: ExpectedReplacement[] | undefined
       if (request.headers.get("x-tenuvault-expected-replacements") === "1") {
         try {
@@ -280,6 +340,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
         retentionLockId: request.headers.get("x-tenuvault-retention-lock-id") ?? undefined,
         expectedReplacements,
       })
+      leases.delete(leaseKey)
       return new Response(null, { status: 202 })
     }
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)

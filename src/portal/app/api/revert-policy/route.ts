@@ -1,8 +1,10 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { randomUUID } from "node:crypto"
 import { beginRestoreAudit, recordRestorePreparationFailure, restoreAuditItem } from "~/lib/audit/restore"
 import { AuditEventType } from "~/lib/audit/types"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
+import { backupOnlyRestoreMessage } from "../../../../shared/intune/restore-availability"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId, isGuid } from "../../../../shared/security"
@@ -10,6 +12,7 @@ import { graphCaller, Restorer, type RestoreOutcome } from "~/lib/policies/graph
 import { readLegacyRevertHistory, revertHistoryPath } from "~/lib/policies/revert-history"
 import { type NextRequest, NextResponse } from "next/server"
 interface RevertPolicyRequest {
+  guardedRunId?: string
   tenantId: string
   appId: string
   clientSecret: string
@@ -92,7 +95,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid policy backup path' }, { status: 400 })
     }
 
-    const backupId = backupPath.split('/')[0] ?? ''
+    const [backupId = '', folder = ''] = backupPath.split('/')
+    const backupOnly = backupOnlyRestoreMessage(folder)
+    if (backupOnly) return NextResponse.json({ error: backupOnly }, { status: 422 })
     const operationId = randomUUID()
     const auditAction = action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy"
     let auditToken: string | undefined
@@ -112,7 +117,7 @@ export async function POST(request: NextRequest) {
 
     // A shared container can hold other tenants' backups; never restore from one of those. Revert
     // and recreate change the live policy, so they need a backup that names this tenant.
-    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}` },
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
@@ -122,7 +127,7 @@ export async function POST(request: NextRequest) {
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
 
     // Fetch the policy content from the backup
-    const policyUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${backupPath.split("/").map(encodeURIComponent).join("/")}`
+    const policyUrl = `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(backupPath)}`
     
     const backupResponse = await fetch(policyUrl, {
       headers: {
@@ -170,7 +175,7 @@ export async function POST(request: NextRequest) {
     audit?.started(0)
     let outcome: RestoreOutcome
     try {
-      outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken), operationId,
+      outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { identityOrigin: "drift", guardedRunId: body.guardedRunId, mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken), clientId: appId, operationId,
         auditProgress: result => audit?.item(0, restoreAuditItem(backupPath, result, policyContent.id)) })
         .restore(backupPath, policyContent)
       audit?.item(0, restoreAuditItem(backupPath, outcome, policyContent.id))
@@ -286,7 +291,7 @@ async function writeRevertMetadata(
     console.error("Invalid tenant ID; not recording revert history")
     return
   }
-  const blobUrl = (name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
+  const blobUrl = (name: string) => `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`
   const metadataUrl = blobUrl(metadataPath)
 
   try {
@@ -318,7 +323,7 @@ async function writeRevertMetadata(
         }
       } else if (getResponse.status !== 404) {
         // Only a missing file starts a new history. Any other failure would erase it.
-        console.error("Failed to read revert history:", getResponse.status, getResponse.statusText)
+        console.error("blob_request_failed", "revert history", getResponse.status)
         return
       } else {
         // A new history starts with this tenant's entries from the old shared file, which stays as it is.

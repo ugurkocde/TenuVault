@@ -1,0 +1,12 @@
+{
+  "source": "Live diagnostic only: resource discovery is insufficient for schedule coverage",
+  "objectCount": 0,
+  "responses": {
+    "/v1.0/identityGovernance/privilegedAccess/group/resources?$select=id": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

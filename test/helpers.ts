@@ -29,7 +29,18 @@ export function endlessBody(chunks = 40, first: Uint8Array = new Uint8Array(0)):
   return { body, pulled: () => pulled }
 }
 
-export function withBackupServerTime(response: Response, time = new Date()): Response {
+/** Answer an otherwise empty Intune tenant, including its tenant-wide compliance settings. */
+export function emptyIntuneRead(pathname: string): Response {
+  return Response.json(pathname === "/beta/deviceManagement/settings" ? {
+    deviceComplianceCheckinThresholdDays: 0,
+    isScheduledActionEnabled: true,
+    secureByDefault: false,
+    enhancedJailBreak: false,
+  } : { value: [] })
+}
+
+/** Add the response time of the synthetic Microsoft endpoint. */
+export function withServerDate(response: Response, time: Date): Response {
   response.headers.set("date", time.toUTCString())
   return response
 }

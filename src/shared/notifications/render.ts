@@ -1,3 +1,4 @@
+import { COMPARISON_COVERAGE_DETAIL } from "../intune/backup-read-coverage"
 /**
  * Rendering of one envelope per channel kind. Every tenant controlled string is escaped
  * for its target format, and no link is ever derived from tenant data, so a hostile
@@ -40,8 +41,17 @@ export function itemSettingsText(item: NotificationEnvelope["items"][number]): s
 }
 
 /** The local system notification text. Tenant data stays in the title only. */
+function isDriftCoverage(envelope: NotificationEnvelope, detail: NotificationEnvelope["details"][number]): boolean {
+  return envelope.type === "drift.detected" && (detail.label === COMPARISON_COVERAGE_DETAIL || detail.label === "Types not compared")
+}
+
+function driftCoverageText(detail: NotificationEnvelope["details"][number]): string {
+  return detail.label === COMPARISON_COVERAGE_DETAIL ? detail.value : `${detail.label}: ${detail.value}.`
+}
+
 export function localText(envelope: NotificationEnvelope): { title: string; body: string } {
-  return { title: envelope.title, body: envelope.summary }
+  const coverage = envelope.details.filter(detail => isDriftCoverage(envelope, detail))
+  return { title: envelope.title, body: [envelope.summary, ...coverage.map(driftCoverageText)].join(" ") }
 }
 
 const ACCENT_CONTAINER: Record<Exclude<CardAccent, "severity">, string> = { accent: "accent", emphasis: "emphasis", good: "good" }
@@ -101,7 +111,7 @@ export function teamsWorkflowsPayload(envelope: NotificationEnvelope, style: Car
 
 /** The fitted payload and whether it had to be shortened, for the editor's status line. */
 export function fitTeamsPayload(envelope: NotificationEnvelope, style: CardStyle = DEFAULT_CARD_STYLE): { payload: Record<string, unknown>; shortened: boolean } {
-  const fit: CardFit = { items: Math.min(style.maxItems, envelope.items.length), details: envelope.details.length, summaryMax: Number.POSITIVE_INFINITY, note: true }
+  const fit: CardFit = { items: Math.min(style.maxItems, envelope.items.length), details: envelope.details.filter(entry => !isDriftCoverage(envelope, entry)).length, summaryMax: Number.POSITIVE_INFINITY, note: true }
   let payload = buildTeamsPayload(envelope, style, fit)
   if (teamsPayloadBytes(payload) <= TEAMS_MESSAGE_BUDGET_BYTES) return { payload, shortened: false }
   while (fit.items > 0) {
@@ -133,6 +143,10 @@ function buildTeamsPayload(envelope: NotificationEnvelope, style: CardStyle, fit
   headerItems.push({ type: "TextBlock", size: "Medium", weight: "Bolder", text: escapeMarkdown(prefix ? `${prefix} ${envelope.title}` : envelope.title), wrap: true, spacing: "None" })
   const containerStyle = style.accent !== "severity" ? ACCENT_CONTAINER[style.accent] : style.severityStyle === "label" ? "default" : severity.container
   const body: Array<Record<string, unknown>> = [{ type: "Container", style: containerStyle, bleed: true, items: headerItems }]
+  // Coverage is part of the result, even when an alert has a custom summary or hidden details.
+  for (const detail of envelope.details.filter(entry => isDriftCoverage(envelope, entry))) {
+    body.push({ type: "TextBlock", text: escapeMarkdown(driftCoverageText(detail)), wrap: true })
+  }
   for (const block of style.order) {
     if (style.hidden.includes(block)) continue
     if (block === "summary") {
@@ -140,7 +154,7 @@ function buildTeamsPayload(envelope: NotificationEnvelope, style: CardStyle, fit
       const text = full.length > fit.summaryMax ? `${full.slice(0, fit.summaryMax)}...` : full
       body.push({ type: "TextBlock", text: escapeMarkdown(text), wrap: true, ...(compact ? { spacing: "Small" } : {}) })
     } else if (block === "details") {
-      const facts = envelope.details.slice(0, fit.details).filter((entry) => !style.hiddenDetails.includes(entry.label)).map((entry) => ({ title: escapeMarkdown(entry.label), value: escapeMarkdown(entry.value) }))
+      const facts = envelope.details.filter(entry => !isDriftCoverage(envelope, entry)).slice(0, fit.details).filter((entry) => !style.hiddenDetails.includes(entry.label)).map((entry) => ({ title: escapeMarkdown(entry.label), value: escapeMarkdown(entry.value) }))
       if (facts.length) body.push({ type: "FactSet", facts, ...(compact ? { spacing: "Small" } : {}) })
     } else if (block === "items") {
       const shown = envelope.items.slice(0, fit.items)

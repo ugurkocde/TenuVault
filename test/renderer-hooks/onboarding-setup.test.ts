@@ -1,13 +1,23 @@
-import { act, createElement, useEffect, type ReactElement } from "react"
+import { act, createElement, Profiler, useEffect, type ReactElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SignedInAccount } from "../../src/shared/ipc"
+import { TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
+import { delegatedBackupCoverage } from "../../src/shared/services/backup-coverage"
+import { graphPermissions, type PermissionChoice } from "../../src/shared/services/manifest"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const state = vi.hoisted(() => ({
   createRegistration: vi.fn(),
+  checkPermissions: vi.fn<(tenantId: string, clientId: string, choice: PermissionChoice) => Promise<{ missing: string[]; coverage?: import("../../src/shared/tenant-connection").BackupScopeCoverage[] }>>(),
+  enrollOwnApp: vi.fn(async () => ({ result: true })),
+  tenuvaultAppAvailable: vi.fn(async () => false),
+  wizardStage: vi.fn(),
+  wizardFinish: vi.fn(async (_id: string, _profile: string, _services: PermissionChoice) => ({ result: true })),
+  wizardDiscard: vi.fn(async () => undefined),
+  wizardPackConsent: vi.fn(),
   cancelCreateRegistration: vi.fn(async () => undefined),
   progress: null as null | ((value: import("../../src/shared/ipc").SetupProgress) => void),
   clipboardIds: vi.fn(async (): Promise<{ tenantId: string; clientId: string } | null> => null),
@@ -16,6 +26,7 @@ const state = vi.hoisted(() => ({
   cancelSignIn: vi.fn(async () => undefined),
   accounts: vi.fn(async (): Promise<SignedInAccount[]> => []),
   releaseTenant: vi.fn(async () => undefined),
+  tenantsLoaded: true,
   tenants: [] as { credentials?: { tenantId?: string } }[],
   storageChoice: null as unknown,
   checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
@@ -32,6 +43,7 @@ const state = vi.hoisted(() => ({
   transferImport: vi.fn(),
 }))
 
+vi.mock("../../src/renderer/lib/appearance", () => ({}))
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     storage: {
@@ -39,9 +51,11 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       setItem: async (key: string, value: string) => void state.store.set(key, value),
       removeItem: async (key: string) => void state.store.delete(key),
     },
-    auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, accounts: state.accounts },
+    auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, accounts: state.accounts,
+      tenuvaultAppAvailable: state.tenuvaultAppAvailable,
+      wizardStage: state.wizardStage, wizardFinish: state.wizardFinish, wizardDiscard: state.wizardDiscard, wizardPackConsent: state.wizardPackConsent },
     license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant, tenantTrialAction: state.trialAction },
-    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
+    setup: { checkPermissions: state.checkPermissions, enrollOwnApp: state.enrollOwnApp, createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
     preferences: { get: async () => ({ firstBackupNoteSeen: true }) },
     schedules: { list: async () => [] },
     backups: { settings: async () => ({ recoveryExported: true }) },
@@ -50,7 +64,8 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     diagnostics: { record: state.record, status: async () => state.diagnostics, reminderShown: async () => undefined, consent: async () => state.diagnostics, decline: async () => state.diagnostics },
   },
 }))
-vi.mock("../../src/renderer/lib/license", () => ({
+vi.mock("../../src/renderer/lib/license", async original => ({
+  ...(await original<typeof import("../../src/renderer/lib/license")>()),
   useTenantPlan: () => "community",
   useLicense: () => ({ status: state.license, error: null, refresh: async () => undefined }),
   tenantLicense: (status: { tenants?: unknown[] } | undefined) => status?.tenants?.[0],
@@ -59,6 +74,7 @@ vi.mock("../../src/renderer/lib/license", () => ({
 }))
 vi.mock("~/contexts/TenantContext", () => ({
   useTenants: () => state.tenants,
+  useTenantsLoaded: () => state.tenantsLoaded,
   useTenantOperations: () => ({ addTenant: state.addTenant, updateTenant: vi.fn() }),
   useSelectedTenant: () => ({ setSelectedTenantId: vi.fn() }),
 }))
@@ -72,6 +88,13 @@ vi.mock("../../src/renderer/components/StorageChooser", () => ({
   },
 }))
 
+const BACKUP_INTUNE_PERMISSIONS = { intune: { access: "backup" } } as const
+const ALL_SERVICES = { ...BACKUP_INTUNE_PERMISSIONS, entra: { access: "backup" }, conditionalAccess: { access: "backup" } } as const
+const fullCoverage = async (_tenantId: string, _clientId: string, choice: PermissionChoice) => ({
+  missing: [], coverage: delegatedBackupCoverage(new Set(graphPermissions(choice, "delegated")), choice),
+})
+const noCoverage = (choice: PermissionChoice) => ({ missing: ["Policy.Read.All"], coverage: delegatedBackupCoverage(new Set(), choice) })
+import { Home, LicenseGate } from "../../src/renderer/App"
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
 import { setupCommand, TenantSignInForm } from "../../src/renderer/components/TenantSignInForm"
 import { loadOnboardingDraft, pendingSignInTenant, PENDING_SIGN_IN_MAX_AGE_MS, saveOnboardingDraft } from "../../src/renderer/lib/onboarding-draft"
@@ -85,14 +108,20 @@ const OUTPUT = `Done. Copy the two lines below and paste them into the Sign in s
 const roots: Root[] = []
 
 beforeEach(() => {
+  state.tenuvaultAppAvailable.mockResolvedValue(false)
+  state.wizardStage.mockReset()
+  state.wizardPackConsent.mockReset()
   state.accounts.mockReset()
   state.accounts.mockResolvedValue([])
+  state.checkPermissions.mockReset()
+  state.checkPermissions.mockImplementation(fullCoverage)
   state.signIn.mockReset()
   state.createRegistration.mockReset()
   state.clipboardIds.mockReset()
   state.clipboardIds.mockResolvedValue(null)
   state.store.clear()
   state.tenants = []
+  state.tenantsLoaded = true
   state.storageChoice = null
   state.license = null
   state.activeJobs = []
@@ -112,18 +141,34 @@ async function flush() {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 }
 
-async function render(element: ReactElement) {
+async function render(element: ReactElement, continueDefault = true) {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
   act(() => root.render(createElement(MemoryRouter, { initialEntries: ["/portal/onboarding"] }, element)))
   await flush()
+  if (continueDefault) {
+    if (button(container, "Choose Your own app registration")) await chooseOwnServices(container)
+  }
   return container
 }
 
 const button = (container: HTMLElement, label: string) =>
-  [...container.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim().includes(label))
+  [...container.querySelectorAll<HTMLButtonElement>("button")].find((item) => (item.getAttribute("aria-label") ?? item.textContent?.trim())?.includes(label))
+
+async function chooseOwnServices(container: HTMLElement) {
+  await act(async () => button(container, "Choose Your own app registration")!.click())
+}
+
+const entraSwitch = (container: HTMLElement) => container.querySelector<HTMLInputElement>('input[role="switch"][aria-label^="Also back up Entra ID"]')!
+
+const checkAction = (container: HTMLElement, label: string) =>
+  [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Check actions"] button')].find(item => item.textContent?.startsWith(label))
+
+async function continueToStorage(container: HTMLElement) {
+  await act(async () => checkAction(container, "Continue")!.click())
+}
 
 function type(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
   const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
@@ -186,8 +231,8 @@ describe("onboarding draft", () => {
   it("keeps progress and drops an empty or broken draft", async () => {
     saveOnboardingDraft({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
     await flush()
-    expect(loadOnboardingDraft()).toEqual({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
-    saveOnboardingDraft({ step: 0, tenant: "", clientId: "", displayName: "", account: null })
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
+    saveOnboardingDraft({ step: -2, tenant: "", clientId: "", displayName: "", account: null })
     await flush()
     expect(state.store.has(DRAFT_KEY)).toBe(false)
     state.store.set(DRAFT_KEY, "{not json")
@@ -238,7 +283,7 @@ describe("OnboardingPage", () => {
     const container = await render(createElement(OnboardingPage))
     expect(container.textContent).toContain("Welcome back.")
     expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
-    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Sign in")
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Connect")
     // No tenant yet: there is no dashboard to go back to.
     expect(container.textContent).not.toContain("Back to dashboard")
   })
@@ -248,8 +293,10 @@ describe("OnboardingPage", () => {
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
     state.accounts.mockResolvedValueOnce([account])
     let container = await render(createElement(OnboardingPage))
-    expect(container.textContent).toContain("Choose where backups are stored")
-    expect(container.textContent).toContain("signed in as admin@contoso.com")
+    expect(container.textContent).toContain("Where should backups go?")
+    expect(container.textContent).toContain("Signed in as admin@contoso.com")
+    const resumeMessage = [...container.querySelectorAll('[role="status"]')].find(item => item.textContent?.includes("Welcome back."))
+    expect(button(container, "Start first backup")!.nextElementSibling).toBe(resumeMessage)
     for (const root of roots.splice(0)) act(() => root.unmount())
 
     state.accounts.mockResolvedValueOnce([])
@@ -276,12 +323,12 @@ describe("OnboardingPage", () => {
     state.storageChoice = { kind: "azure", storageAccountName: "contosobackups", subscriptionId: "sub", resourceGroupName: "rg", location: "westeurope" }
     state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ tenantId: TENANT, plan: "community" }] })
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Continue")!.click() })
+    await act(async () => { button(container, "Start first backup")!.click() })
     await flush()
     expect(state.checkNewTenant).toHaveBeenCalledWith(TENANT)
     expect(state.addTenant).not.toHaveBeenCalled()
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant is on Community now")
-    expect(button(container, "Continue")!.disabled).toBe(true)
+    expect(button(container, "Start first backup")!.disabled).toBe(true)
   })
 
   it.each([
@@ -300,7 +347,7 @@ describe("OnboardingPage", () => {
     state.license = { tenants: [{ tenantId: TENANT, plan: "pro", ...shown }] }
     state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ tenantId: TENANT, plan: "pro", ...checked }] })
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Continue")!.click() })
+    await act(async () => { button(container, "Start first backup")!.click() })
     await flush()
     expect(state.addTenant).toHaveBeenCalled()
     if (acknowledged) expect(state.trialAction).toHaveBeenCalledWith(TENANT, "acknowledge")
@@ -317,11 +364,10 @@ describe("OnboardingPage", () => {
     state.license = { tenants: [{ tenantId: TENANT, plan: "pro", source: "trial", trial: true, trialAcknowledged: false }] }
     state.checkNewTenant.mockResolvedValueOnce(state.license)
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Continue")!.click() })
+    await act(async () => { button(container, "Start first backup")!.click() })
     await flush()
     expect(state.trialAction).toHaveBeenCalledWith(TENANT, "acknowledge")
-    expect(container.textContent).toContain("Take a first backup")
-    expect(container.textContent).toContain("A restore needs a backup from before the change, so this first backup cannot bring back a policy already lost. It protects what you back up from now on.")
+    expect(container.textContent).toContain("Your first backup")
   })
 
   it("does not mark the trial as seen when the tenant cannot be saved", async () => {
@@ -333,7 +379,7 @@ describe("OnboardingPage", () => {
     state.license = { tenants: [{ tenantId: TENANT, plan: "pro", source: "trial", trial: true, trialAcknowledged: false }] }
     state.checkNewTenant.mockRejectedValueOnce(new Error("The licensing service could not be reached."))
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Continue")!.click() })
+    await act(async () => { button(container, "Start first backup")!.click() })
     await flush()
     expect(state.trialAction).not.toHaveBeenCalled()
   })
@@ -341,12 +387,12 @@ describe("OnboardingPage", () => {
   it("shows the Connect checklist with the permissions and the handoff", async () => {
     const container = await render(createElement(OnboardingPage))
     expect(button(container, "Set up with Microsoft sign-in")).toBeDefined()
-    expect(container.textContent).toContain("Connect your tenant")
+    expect(container.textContent).toContain("Create your TenuVault app registration")
     expect(container.textContent).toContain("Microsoft Graph Command Line Tools")
     expect(container.textContent).toContain("Application Administrator")
     expect(container.textContent).not.toContain("Privileged Role Administrator")
     expect(container.textContent).toContain("Permissions the app registration gets")
-    expect(button(container, "Someone else is the admin? Copy instructions")).toBeDefined()
+    expect(button(container, "Copy instructions for my admin")).toBeDefined()
     // The script route, and creating the registration by hand, sit behind one more click.
     expect(button(container, "Create it by hand instead")).toBeUndefined()
     await act(async () => button(container, "Use the setup script instead")!.click())
@@ -397,7 +443,7 @@ it("offers purchasing help when saving a connected tenant refuses its trial key"
   state.storageChoice = { kind: "local" }
   state.checkNewTenant.mockRejectedValueOnce(new Error("This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."))
   const container = await render(createElement(OnboardingPage))
-  await act(async () => button(container, "Continue")!.click())
+  await act(async () => button(container, "Start first backup")!.click())
   await flush()
   const alert = container.querySelector('[role="alert"]')!
   expect(alert.textContent).toContain("This tenant already had a Pro trial.")
@@ -449,14 +495,13 @@ it("does not bring the same clipboard IDs back after the admin cleared the field
   expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe("")
 })
 
-
 describe("in-app tenant setup", () => {
   const result = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] }
   const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
   it("explains the setup before it starts", async () => {
     const container = await render(createElement(OnboardingPage))
-    for (const text of ["One Microsoft sign-in.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
+    for (const text of ["TenuVault creates an app registration and signs you in through it.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
     // Claims the app cannot stand behind are not made: no time promise, and no "everything stays in your tenant".
     expect(container.textContent).not.toMatch(/about (a|one|two) minutes?|stays in your tenant|no background access/i)
     expect(container.querySelector("#setup-tenant")).not.toBeNull()
@@ -469,17 +514,16 @@ describe("in-app tenant setup", () => {
     state.signIn.mockResolvedValueOnce(result)
     const container = await render(createElement(OnboardingPage))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
-    expect(container.textContent).toContain("Setting up your tenant")
-    expect(container.textContent).toContain("Nothing is created before you are signed in.")
+    expect(container.textContent).toContain("Finish signing in in your browser.")
     expect(button(container, "Cancel")).toBeDefined()
     await act(async () => state.progress?.({ phase: "registration", reused: true }))
     expect(container.textContent).toContain("Use the app registration this tenant already has")
     expect(button(container, "Cancel")).toBeDefined()
     await act(async () => { finish(result); await settle() })
-    expect(state.createRegistration).toHaveBeenCalledWith(undefined)
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: BACKUP_INTUNE_PERMISSIONS })
     expect(state.signIn).toHaveBeenCalledTimes(1)
-    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test" })
-    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test", wizard: true, expectedTenant: TENANT })
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
   })
 
   it.each([1, 2])("names a reused registration and explains selection among %s candidates", async candidateCount => {
@@ -487,7 +531,7 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(container.textContent).toContain('This tenant already had a TenuVault app registration, "TenuVault Desktop (Lab)", so TenuVault uses that one.')
-    expect(container.textContent!.includes('To use another one, select Previous')).toBe(candidateCount > 1)
+    expect(container.textContent!.includes('To use another one, select Back')).toBe(candidateCount > 1)
     expect(container.textContent).toContain("Microsoft is still making it available for sign-in")
     expect(state.signIn).not.toHaveBeenCalled()
   })
@@ -505,7 +549,7 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(state.signIn).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('It has no tenant-wide admin consent for 2 permissions TenuVault uses by default: DeviceManagementScripts.ReadWrite.All, user_impersonation (Azure Storage). TenuVault did not change it, and what needs these permissions does not work until an administrator grants them under Entra admin center > App registrations > TenuVault Desktop (Lab) > API permissions. To use it, select Sign in with Microsoft.')
+    expect(container.textContent).toContain('It has no tenant-wide admin consent for some permissions TenuVault uses by default: DeviceManagementScripts.ReadWrite.All, user_impersonation (Azure Storage). TenuVault did not change it, and what needs these permissions does not work until an administrator grants them under Entra admin center > App registrations > TenuVault Desktop (Lab) > API permissions. To use it, select Sign in with Microsoft.')
     expect(container.textContent).not.toContain("To use another one")
   })
 
@@ -514,7 +558,7 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(state.signIn).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('so TenuVault uses that one. It is one of 2 in this tenant. To use it, select Sign in with Microsoft. To use another one, select Previous, then "I already have an app registration" and enter its client ID.')
+    expect(container.textContent).toContain('so TenuVault uses that one. It is one of 2 in this tenant. To use it, select Sign in with Microsoft. To use another one, select Back, then "I already have an app registration" and enter its client ID.')
     // The IDs are filled in: one click signs in with the registration TenuVault picked.
     state.signIn.mockResolvedValueOnce(result)
     await act(async () => { button(container, "Sign in with Microsoft")!.click(); await settle() })
@@ -528,7 +572,7 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     type(container.querySelector<HTMLInputElement>("#setup-tenant")!, " fabrikam.onmicrosoft.com ")
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
-    expect(state.createRegistration).toHaveBeenCalledWith({ tenant: "fabrikam.onmicrosoft.com" })
+    expect(state.createRegistration).toHaveBeenCalledWith({ tenant: "fabrikam.onmicrosoft.com", choice: BACKUP_INTUNE_PERMISSIONS })
   })
 
   it("keeps the IDs on the Sign in step when the last sign-in fails, and a retry asks for the account again", async () => {
@@ -546,11 +590,9 @@ describe("in-app tenant setup", () => {
     state.signIn.mockResolvedValueOnce(result)
     await act(async () => { button(container, "Sign in with Microsoft")!.click(); await settle() })
     expect(state.createRegistration).toHaveBeenCalledTimes(1)
-    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT)
-    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { wizard: true, expectedTenant: TENANT })
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
   })
-
-  const MANUAL = "https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually"
 
   it("offers the manual route next to an error that needs it, because the setup script is blocked too", async () => {
     state.createRegistration.mockRejectedValueOnce(new Error("This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (AADSTS7000112). Ask your Entra administrator to allow it for your account, or create the app registration by hand in the Entra admin center. Nothing was changed."))
@@ -559,17 +601,17 @@ describe("in-app tenant setup", () => {
     const alert = container.querySelector<HTMLElement>('[role="alert"]')!
     expect(alert.textContent).toContain("AADSTS7000112")
     await act(async () => button(alert, "Create it by hand")!.click())
-    expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    expect(container.textContent).toContain("Create the app registration manually")
     // Once it exists, the admin goes on from the same place to enter its IDs.
     await act(async () => { button(alert, "I already have an app registration")!.click(); await settle() })
     expect(container.textContent).toContain("Sign in to your tenant")
   })
 
-  it("says next to the button, not only in the collapsed details, that national cloud tenants are not supported", async () => {
+  it("explains the supported cloud in the setup disclosure", async () => {
     const container = await render(createElement(OnboardingPage))
     const note = [...container.querySelectorAll("p")].find(item => item.textContent?.includes("GCC High, DoD and 21Vianet tenants are not supported"))
     expect(note).toBeDefined()
-    expect(note!.closest("details")).toBeNull()
+    expect(note!.closest("details")?.querySelector("summary")?.textContent?.trim()).toBe("What the setup does")
   })
 
   it("offers both routes next to the timeout, because Microsoft's own error pages never come back", async () => {
@@ -579,7 +621,7 @@ describe("in-app tenant setup", () => {
     const alert = container.querySelector<HTMLElement>('[role="alert"]')!
     expect(button(alert, "Create it by hand")).toBeDefined()
     expect(button(alert, "I already have an app registration")).toBeDefined()
-    expect(button(container, "Someone else is the admin? Copy instructions")).toBeDefined()
+    expect(button(container, "Copy instructions for my admin")).toBeDefined()
   })
 
   it("does not offer the manual route next to an error it does not help with", async () => {
@@ -591,14 +633,13 @@ describe("in-app tenant setup", () => {
     expect(button(alert, "Create it by hand")).toBeUndefined()
   })
 
-  it("says while it waits which refusal in the browser needs which route", async () => {
+  it("offers browser reopening and cancellation while waiting", async () => {
     state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
     const container = await render(createElement(OnboardingPage))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
-    expect(container.textContent).toContain('If Microsoft says that you need admin approval, this account cannot approve the setup. Select Cancel and use "Someone else is the admin?" below.')
-    expect(container.textContent).toContain("the setup script is blocked too")
-    await act(async () => button(container, "create the app registration by hand")!.click())
-    expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    expect(container.textContent).toContain("Finish signing in in your browser.")
+    expect(button(container, "Open the browser again")).toBeDefined()
+    expect(button(container, "Cancel")).toBeDefined()
   })
 
   it("does not report a cancelled last sign-in as an error", async () => {
@@ -625,11 +666,11 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("lacks a role")
-    expect(container.textContent).toContain("Connect your tenant")
+    expect(container.textContent).toContain("Create your TenuVault app registration")
     state.createRegistration.mockResolvedValueOnce(result)
     state.signIn.mockResolvedValueOnce(result)
     await act(async () => { button(container, "Try again")!.click(); await settle() })
-    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
   })
 
   it.each(["signingIn", "registration", "consent", "publishing"] as const)("cancels %s without an error and keeps the other ways open", async phase => {
@@ -656,23 +697,24 @@ describe("in-app tenant setup", () => {
     state.accounts.mockResolvedValueOnce([{ tenantId: earlier, clientId: CLIENT, username: "alex@fabrikam.test" }])
     const container = await render(createElement(OnboardingPage))
     expect(container.textContent).toContain("Signed in as alex@fabrikam.test")
-    await act(async () => button(container, "Previous")!.click())
-    await act(async () => button(container, "Previous")!.click())
-    expect(container.textContent).toContain("Connect your tenant")
+    await act(async () => button(container, "Back")!.click())
+    await act(async () => button(container, "Back")!.click())
+    await act(async () => button(container, "Back")!.click())
+    expect(container.textContent).toContain("Create your TenuVault app registration")
 
     state.createRegistration.mockResolvedValueOnce(result)
     state.signIn.mockResolvedValueOnce(result)
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(state.releaseTenant).toHaveBeenCalledWith(earlier)
-    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test" })
-    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test", wizard: true, expectedTenant: TENANT })
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
     expect(container.textContent).toContain("Signed in as admin@contoso.test")
     expect(container.textContent).not.toContain("alex@fabrikam.test")
     await flush()
     expect(loadOnboardingDraft()).toMatchObject({ tenant: TENANT, clientId: CLIENT, account: { tenantId: TENANT, username: "admin@contoso.test" } })
   })
 
-  it("says how long Microsoft may take while it waits, and what to do if the browser reports a missing application", async () => {
+  it("shows each registration phase and the publishing wait", async () => {
     let finish!: (value: typeof result) => void
     state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
     state.signIn.mockImplementationOnce(() => new Promise(() => {}))
@@ -680,15 +722,14 @@ describe("in-app tenant setup", () => {
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
     await act(async () => state.progress?.({ phase: "consent" }))
     const progress = () => container.querySelector('[role="status"]')!.textContent
-    expect(progress()).toContain("This takes a few seconds.")
-    expect(progress()).not.toContain("your browser opens once more")
+    expect(progress()).toContain("Grant admin consent")
+    expect(progress()).not.toContain("your browser opens again")
     await act(async () => state.progress?.({ phase: "publishing" }))
-    expect(progress()).toContain("at most a minute and a half")
-    expect(progress()).toContain("your browser opens once more")
+    expect(progress()).toContain("up to 90 seconds")
+    expect(progress()).toContain("your browser opens again")
     await act(async () => { finish(result); await settle() })
-    expect(container.textContent).toContain("There is nothing to enter this time.")
-    expect(container.textContent).toContain("If Microsoft says it cannot find the application")
-    expect(button(container, "Cancel sign-in")).toBeDefined()
+    expect(container.textContent).toContain("Finish signing in in your browser.")
+    expect(button(container, "Cancel")).toBeDefined()
   })
 })
 
@@ -698,12 +739,12 @@ it("cancels a sign-in left behind and ignores its late result", async () => {
   state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "", account: null }))
   const container = await render(createElement(OnboardingPage))
   await act(async () => button(container, "Sign in with Microsoft")!.click())
-  await act(async () => button(container, "Previous")!.click())
+  await act(async () => button(container, "Back")!.click())
   await flush()
   expect(state.cancelSignIn).toHaveBeenCalledOnce()
   await act(async () => finish({ tenantId: TENANT, clientId: CLIENT, username: "late" }))
-  expect(container.textContent).toContain("Connect your tenant")
-  expect(container.textContent).not.toContain("Choose where backups are stored")
+  expect(container.textContent).toContain("Create your TenuVault app registration")
+  expect(container.textContent).not.toContain("Where should backups go?")
   await act(async () => button(container, "I already have an app registration")!.click())
   state.signIn.mockResolvedValueOnce({ tenantId: TENANT, clientId: CLIENT, username: "current" })
   await act(async () => button(container, "Sign in with Microsoft")!.click())
@@ -718,8 +759,15 @@ it.each([false, true])("refuses a connected tenant without releasing it, resumed
   state.storageChoice = { kind: "local" }
   state.accounts.mockResolvedValueOnce([account])
   if (!resumed) state.signIn.mockResolvedValueOnce(account)
-  const container = await render(createElement(OnboardingPage))
-  await act(async () => button(container, resumed ? "Continue" : "Sign in with Microsoft")!.click())
+  const container = await render(createElement(OnboardingPage), false)
+  if (resumed) {
+    expect(container.textContent).toContain("How do you want to connect?")
+    expect(state.signIn).not.toHaveBeenCalled()
+    expect(state.releaseTenant).not.toHaveBeenCalled()
+    expect(state.enrollOwnApp).not.toHaveBeenCalled()
+    return
+  }
+  await act(async () => button(container, "Sign in with Microsoft")!.click())
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant is already connected to TenuVault.")
   expect(container.querySelector('[role="alert"] a')?.getAttribute("href")).toBe("/portal/dashboard")
   expect(container.querySelector("#tenant")).not.toBeNull()
@@ -765,6 +813,76 @@ it("resumes with the current live account instead of the saved admin", async () 
   expect(loadOnboardingDraft()?.account).toEqual(live)
 })
 
+it("shows the verified tenant on Check and Storage and keeps Check completed during the first backup", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "guest@fabrikam.test" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "My label", account, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValueOnce([account])
+  state.storageChoice = { kind: "local" }
+  state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ plan: "community" }] })
+  const request = vi.fn(async (url: string) => Response.json(url === "/api/backup/start"
+    ? { jobId: "first" } : { organization: { id: TENANT, displayName: "Contoso Ltd" } }))
+  vi.stubGlobal("fetch", request)
+  const container = await render(createElement(OnboardingPage))
+  for (const action of ["Continue", "Start first backup"]) {
+    expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
+    expect(button(container, "Different tenant?")).toBeDefined()
+    await act(async () => button(container, action)!.click())
+  }
+  expect(container.textContent).toContain("Your first backup")
+  expect(container.querySelector('[aria-label="Setup steps"]')?.textContent).toContain("Check (done)")
+  expect(request.mock.calls.filter(([url]) => url === "/api/fetch-tenant-details")).toHaveLength(1)
+})
+
+it("releases an unfinished own-app sign-in when the admin chooses a different tenant on Check", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "guest@fabrikam.test" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValueOnce([account])
+  const container = await render(createElement(OnboardingPage), false)
+  await act(async () => button(container, "Different tenant?")!.click())
+  expect(state.releaseTenant).toHaveBeenCalledWith(TENANT)
+  expect(container.textContent).toContain("Create your TenuVault app registration")
+  expect(loadOnboardingDraft()).toMatchObject({ step: 0, tenant: "", clientId: "", account: null })
+})
+
+it("retries an aborted tenant details prefetch when enrolling", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValueOnce([account])
+  state.storageChoice = { kind: "local" }
+  const prefetch = new AbortController()
+  const request = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/backup/start") return Response.json({ jobId: "first" })
+    return init?.signal === prefetch.signal
+      ? new Promise<Response>((_resolve, reject) => prefetch.signal.addEventListener("abort", () => reject(prefetch.signal.reason), { once: true }))
+      : Response.json({ organization: { id: TENANT, displayName: "Contoso Ltd" } })
+  })
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(prefetch.signal)
+  vi.stubGlobal("fetch", request)
+  const container = await render(createElement(OnboardingPage), false)
+  timeout.mockRestore()
+  expect(request).toHaveBeenCalledWith("/api/fetch-tenant-details", expect.objectContaining({ signal: prefetch.signal }))
+  await act(async () => prefetch.abort(new DOMException("Timed out", "TimeoutError")))
+  await continueToStorage(container)
+  await act(async () => button(container, "Start first backup")!.click())
+  expect(request.mock.calls.filter(([url]) => url === "/api/fetch-tenant-details")).toHaveLength(2)
+  expect(state.addTenant).toHaveBeenCalledWith(expect.objectContaining({ name: "Contoso Ltd" }))
+})
+
+it("keeps permission names in a second disclosure and lists each name once", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now(),
+    services: ALL_SERVICES }))
+  state.accounts.mockResolvedValueOnce([account])
+  state.checkPermissions.mockResolvedValue({ ...noCoverage(ALL_SERVICES), missing: ["Policy.Read.All", "Policy.Read.All", "Sites.Read.All"] })
+  const container = await render(createElement(OnboardingPage), false)
+  const disclosures = [...container.querySelectorAll("details")]
+  const missing = container.querySelector('button[aria-label^="Details:"]')!
+  const names = disclosures.find(item => item.firstElementChild?.textContent === "Show permission names")!
+  expect(missing.getAttribute("aria-expanded")).toBe("false")
+  expect(names.open).toBe(false)
+  expect([...names.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Policy.Read.All", "Sites.Read.All"])
+})
+
 it.each([false, true])("reveals only an unfinished first backup when leaving, complete: %s", async complete => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
   state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
@@ -774,8 +892,7 @@ it.each([false, true])("reveals only an unfinished first backup when leaving, co
   vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url === "/api/backup/start" ? { jobId: "first" } : {})))
   state.activeJobs = [{ jobId: "first", isComplete: complete, isSuccessful: complete, status: complete ? "Completed" : "Running", progress: complete ? 100 : 5 }]
   const container = await render(createElement(OnboardingPage))
-  await act(async () => button(container, "Continue")!.click())
-  await act(async () => button(container, "Run first backup")!.click())
+  await act(async () => button(container, "Start first backup")!.click())
   expect(state.addJob).toHaveBeenCalledWith(expect.objectContaining({ isHidden: true, quiet: true }))
   for (const root of roots.splice(0)) act(() => root.unmount())
   if (complete) expect(state.updateJob).not.toHaveBeenCalled()
@@ -791,8 +908,7 @@ it("registers a first backup that starts after the admin left as visible", async
   let started!: (response: Response) => void
   vi.stubGlobal("fetch", vi.fn((url: string) => url === "/api/backup/start" ? new Promise<Response>(resolve => { started = resolve }) : Promise.resolve(Response.json({}))))
   const container = await render(createElement(OnboardingPage))
-  await act(async () => button(container, "Continue")!.click())
-  await act(async () => button(container, "Run first backup")!.click())
+  await act(async () => button(container, "Start first backup")!.click())
   for (const root of roots.splice(0)) act(() => root.unmount())
   await act(async () => { started(Response.json({ jobId: "late" })); await new Promise(resolve => setTimeout(resolve, 0)) })
   expect(state.addJob).toHaveBeenCalledWith(expect.objectContaining({ jobId: "late", isHidden: false, quiet: true }))
@@ -810,7 +926,7 @@ it("refuses an already connected tenant after the in-app setup with one automati
   expect(state.signIn).toHaveBeenCalledOnce()
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant is already connected to TenuVault.")
   expect(container.querySelector('[role="alert"] a')?.getAttribute("href")).toBe("/portal/dashboard")
-  expect(container.textContent).not.toContain("Choose where backups are stored")
+  expect(container.textContent).not.toContain("Where should backups go?")
   expect(state.releaseTenant).not.toHaveBeenCalled()
   expect(state.addTenant).not.toHaveBeenCalled()
 })
@@ -828,8 +944,12 @@ it("says when a cancelled setup keeps the app registration it created", async ()
 it("explains the consent checkbox in both setup notes", async () => {
   const container = await render(createElement(OnboardingPage))
   const text = (container.textContent ?? "").replace(/\s+/g, " ")
-  expect(text).toContain('Leave "Consent on behalf of your organization" unticked; the setup does not need it.')
-  expect(text).toContain('stays with your account, as long as you leave "Consent on behalf of your organization" unticked; the setup does not need it.')
+  expect(text).toContain('Leave "Consent on behalf of your organization" unticked.')
+  const details = [...container.querySelectorAll("details")].find(item => item.querySelector("summary")?.textContent?.trim() === "What the setup does")
+  const detailText = (details?.textContent ?? "").replace(/\s+/g, " ")
+  expect(details?.open).toBe(false)
+  expect(detailText).toContain("Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All")
+  expect(detailText).toContain('stays with your account, as long as you leave "Consent on behalf of your organization" unticked; the setup does not need it.')
 })
 
 describe("setup diagnostics hooks", () => {
@@ -839,7 +959,7 @@ describe("setup diagnostics hooks", () => {
     state.createRegistration.mockRejectedValueOnce(new Error("Graph POST failed. Nothing was changed."))
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
-    await act(async () => { button(container, "Someone else is the admin? Copy instructions")!.click(); await settle() })
+    await act(async () => { button(container, "Copy instructions for my admin")!.click(); await settle() })
     await act(async () => { button(container, "Use the setup script instead")!.click(); await settle() })
     await act(async () => { [...container.querySelectorAll("button")].filter((item) => item.textContent?.trim() === "I already have an app registration").at(-1)!.click(); await settle() })
     expect(state.record.mock.calls.map(([event]) => event)).toEqual([
@@ -850,23 +970,23 @@ describe("setup diagnostics hooks", () => {
     ])
   })
 
-  it("offers the reminder next to a setup error main holds for it", async () => {
+  it("keeps diagnostics off when setup stops at an error", async () => {
     state.diagnostics = { state: "unasked", policy: false, reminder: { setup: true, signin: false } }
     state.createRegistration.mockRejectedValueOnce(new Error("Conditional Access blocked the sign-in (AADSTS53003). Nothing was changed."))
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     await flush()
-    expect(container.textContent).toContain("Share this error and the next setup steps with TenuVault")
+    expect(container.textContent).not.toContain("Share this error and the next setup steps with TenuVault")
   })
 
-  it("offers the reminder next to the notice of a reused registration that lacks admin consent", async () => {
+  it("keeps diagnostics off on an existing registration notice", async () => {
     state.diagnostics = { state: "unasked", policy: false, reminder: { setup: true, signin: false } }
     state.createRegistration.mockResolvedValueOnce({ tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com", reused: true, ready: true, displayName: "TenuVault Desktop", candidateCount: 1, missingConsent: ["DeviceManagementApps.ReadWrite.All"] })
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     await flush()
     expect(container.textContent).toContain("has no tenant-wide admin consent")
-    expect(container.textContent).toContain("Share this error and the next setup steps with TenuVault")
+    expect(container.textContent).not.toContain("Share this error and the next setup steps with TenuVault")
   })
 
   it("reports the storage kind before the tenant is saved", async () => {
@@ -879,13 +999,209 @@ describe("setup diagnostics hooks", () => {
     state.record.mockImplementation(async () => { order.push("record") })
     state.addTenant.mockImplementation(() => { order.push("addTenant") })
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Continue")!.click() })
+    await act(async () => { button(container, "Start first backup")!.click() })
     await flush()
     expect(state.record).toHaveBeenCalledWith({ name: "storage", props: { kind: "local" } })
     expect(order).toEqual(["record", "addTenant"])
     state.record.mockImplementation(async () => undefined)
     state.addTenant.mockImplementation(() => undefined)
   })
+})
+
+describe("onboarding service choices", () => {
+  it("opens the sign-in wizard from Welcome and asks for explicit backup access", async () => {
+    state.license = { hasKey: false, tenants: [] }
+    const container = await render(createElement(LicenseGate, { children: createElement(OnboardingPage) }), false)
+    expect(container.textContent).toContain("Welcome to TenuVault")
+    await act(async () => button(container, "Connect your tenant")!.click())
+    expect(container.textContent).toContain("How do you want to connect?")
+    expect(container.textContent).toContain("Step 1 of 4")
+    await chooseOwnServices(container)
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: BACKUP_INTUNE_PERMISSIONS })
+  })
+
+  it("resumes an old service step at Connect with Intune and the Entra switch off", () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: -1, tenant: TENANT, services: { entra: { access: "backup" }, obsolete: { access: "backup" } } }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: -2, account: null, services: { intune: { access: "backup" } } })
+  })
+
+  it("preserves the legacy Intune choice with backup access only", () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, services: { intune: { access: "backup" } } })
+  })
+
+  it("keeps Back disabled while a deferred quick setup completes with the confirmed choice", async () => {
+    let finish!: (value: unknown) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(button(container, "Back")!.disabled).toBe(true)
+    await act(async () => button(container, "Back")!.click())
+    await act(async () => { finish({ tenantId: TENANT, clientId: CLIENT, username: "admin", reused: true, candidateCount: 2, ready: true, missingConsent: [] }) })
+    expect(container.textContent).toContain("Sign in to your tenant")
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: BACKUP_INTUNE_PERMISSIONS })
+    expect(loadOnboardingDraft()?.services).toEqual({ intune: { access: "backup" } })
+    expect(button(container, "Back")!.disabled).toBe(false)
+  })
+
+  it("waits for a deferred missing-permission answer before Continue can save the signed-in tenant", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    await act(async () => button(container, "Continue")?.click())
+    expect(state.checkNewTenant).not.toHaveBeenCalled()
+    expect(state.enrollOwnApp).not.toHaveBeenCalled()
+    expect(state.addTenant).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("Checking permissions")
+    expect(container.textContent).not.toContain("Storage chooser")
+    await act(async () => answer(noCoverage(BACKUP_INTUNE_PERMISSIONS)))
+    expect(container.textContent).toContain("TenuVault can't read any of the services you picked with this sign-in.")
+    expect(container.textContent).not.toContain("Storage chooser")
+    expect(checkAction(container, "Continue")).toBeUndefined()
+    state.checkPermissions.mockImplementation(fullCoverage)
+    await act(async () => button(container, "Check again")!.click())
+    await continueToStorage(container)
+    expect(container.textContent).toContain("Storage chooser")
+    await act(async () => button(container, "Start first backup")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
+  it("releases a stalled permission check after 20 seconds and ignores its late answer", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      expect(container.textContent).not.toContain("Storage chooser")
+      await act(async () => vi.advanceTimersByTime(19_999))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(button(container, "Continue")).toBeUndefined()
+      await act(async () => vi.advanceTimersByTime(1))
+      expect(container.textContent).toContain("Some backup access could not be checked.")
+      expect(container.textContent).toContain("You can continue")
+      expect(container.textContent).not.toContain("Storage chooser")
+      expect(checkAction(container, "Continue")!.disabled).toBe(false)
+      await act(async () => answer({ missing: ["Policy.Read.All"] }))
+      expect(container.textContent).not.toContain("Permission not granted")
+      await continueToStorage(container)
+      await act(async () => button(container, "Start first backup")!.click())
+      expect(state.addTenant).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("clears the 20-second permission timer on unmount", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    state.checkPermissions.mockImplementationOnce(() => new Promise(() => {}))
+    const container = await render(createElement(OnboardingPage))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(vi.getTimerCount()).toBe(1)
+      act(() => roots.pop()!.unmount())
+      expect(vi.getTimerCount()).toBe(0)
+      await act(async () => vi.advanceTimersByTime(20_000))
+      expect(container.textContent).toBe("")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("clears permission timers when leaving a step and ignores answers after leaving", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    const answers: ((result: { missing: string[] }) => void)[] = []
+    state.checkPermissions.mockImplementation(() => new Promise(resolve => { answers.push(resolve) }))
+    const onRender = vi.fn()
+    const container = await render(createElement(Profiler, { id: "permission-wait", onRender }, createElement(OnboardingPage)))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(vi.getTimerCount()).toBe(1)
+      await act(async () => vi.advanceTimersByTime(5000))
+      await act(async () => button(container, "Back")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(state.checkPermissions).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+      await act(async () => vi.advanceTimersByTime(15_000))
+      expect(vi.getTimerCount()).toBe(0)
+      await act(async () => button(container, "Back")!.click())
+      expect(container.querySelector("#setup-step-0")).not.toBeNull()
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(vi.getTimerCount()).toBe(0)
+      const content = container.textContent
+      const commits = onRender.mock.calls.length
+      await act(async () => { for (const answer of answers) answer({ missing: ["Policy.Read.All"] }) })
+      await act(async () => vi.advanceTimersByTime(20_000))
+      expect(onRender).toHaveBeenCalledTimes(commits)
+      expect(container.textContent).toBe(content)
+      expect(container.querySelector('[aria-label="Permission result"]')).toBeNull()
+      expect(state.addTenant).not.toHaveBeenCalled()
+      expect(state.enrollOwnApp).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("checks permissions again from Results without saving before Storage", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.checkPermissions.mockResolvedValue(noCoverage(ALL_SERVICES))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    await act(async () => button(container, "Check again")!.click())
+    await act(async () => button(container, "Continue")?.click())
+    expect(container.textContent).toContain("Checking permissions")
+    expect(container.textContent).not.toContain("Storage chooser")
+    expect(state.addTenant).not.toHaveBeenCalled()
+    await act(async () => answer(noCoverage(BACKUP_INTUNE_PERMISSIONS)))
+    expect(container.textContent).toContain("TenuVault can't read any of the services you picked with this sign-in.")
+    expect(container.textContent).not.toContain("Storage chooser")
+    expect(checkAction(container, "Continue")).toBeUndefined()
+    state.checkPermissions.mockImplementation(fullCoverage)
+    await act(async () => button(container, "Check again")!.click())
+    await continueToStorage(container)
+    await act(async () => button(container, "Start first backup")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
+  it("lets the admin continue after the permission check fails", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 4, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.checkPermissions.mockRejectedValue(new Error("Microsoft could not be reached."))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Some backup access could not be checked.")
+    expect(container.textContent).not.toContain("Welcome back.")
+    await continueToStorage(container)
+    await act(async () => button(container, "Start first backup")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
 })
 
 describe("setup from a file", () => {
@@ -908,13 +1224,34 @@ describe("setup from a file", () => {
     groups: [{ id: FILE_TENANT, title: "Fabrikam", connected: false, items: [], setup: { tenantId: FILE_TENANT, name: "Fabrikam", clientId, storage: { kind: "local" } } }],
   })
 
+  it("goes from a fresh setup to Sign in with the file's IDs and keeps the service choice", async () => {
+    const container = await openWith(filePreview())
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
+    expect(JSON.parse(state.store.get(DRAFT_KEY)!)).toMatchObject({ step: 1, tenant: FILE_TENANT, services: { intune: expect.any(Object) } })
+  })
+
+  it("shows Connect with the error when a fresh setup's file cannot be read", async () => {
+    state.transferPreview.mockRejectedValueOnce(new Error("This settings file was reviewed too long ago."))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(MemoryRouter, { initialEntries: [`/portal/onboarding?setup=import-1&tenant=${FILE_TENANT}`] }, createElement(OnboardingPage))))
+    await flush()
+    await flush()
+    expect(container.textContent).toContain("How do you want to connect?")
+    expect(container.textContent).toContain("This settings file was reviewed too long ago.")
+  })
+
   it("keeps a sign-in to the file's tenant and app registration and goes on to storage", async () => {
     const account = { tenantId: FILE_TENANT, clientId: FILE_CLIENT, username: "admin@fabrikam.com" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: FILE_TENANT, clientId: FILE_CLIENT, displayName: "", account, signedInAt: Date.now() }))
     state.accounts.mockResolvedValue([account])
     const container = await openWith(filePreview())
     expect(state.releaseTenant).not.toHaveBeenCalled()
-    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.querySelector("#setup-step-4")).not.toBeNull()
+    await continueToStorage(container)
     expect(container.textContent).toContain("The setup file chose This device.")
   })
 
@@ -996,7 +1333,7 @@ describe("setup from a file", () => {
     await flush()
     await flush()
     expect(state.transferPreview).toHaveBeenCalled()
-    expect(container.textContent).not.toContain("Choose where backups are stored")
+    expect(container.textContent).not.toContain("Where should backups go?")
     expect(container.textContent).toContain("From a setup file")
     expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
   })
@@ -1057,5 +1394,189 @@ describe("setup from a file", () => {
     expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(FILE_TENANT)
     expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(FILE_CLIENT)
     expect(JSON.parse(state.store.get(DRAFT_KEY)!)).toMatchObject({ tenant: FILE_TENANT, clientId: FILE_CLIENT })
+  })
+})
+
+describe("sign-in method wizard", () => {
+  const stageResult = {
+    id: "draft-1",
+    account: { tenantId: TENANT, clientId: TENUVAULT_CLIENT_ID, username: "admin@example.test" },
+    coverage: [
+      { service: "entra", folders: ["three"], readable: null },
+      { service: "intune", folders: ["four"], readable: ["four"] },
+    ],
+  }
+
+  it("shows only the two methods and explains when the TenuVault app is temporarily unavailable", async () => {
+    const container = await render(createElement(OnboardingPage), false)
+    expect(container.querySelector("#setup-step--2")?.textContent).toBe("How do you want to connect?")
+    const cards = [...container.querySelectorAll<HTMLButtonElement>("[data-sign-in-method]")]
+    expect(cards.map(card => card.getAttribute("aria-label"))).toEqual(["Choose TenuVault app", "Choose Your own app registration"])
+    expect(cards.map(card => card.disabled)).toEqual([true, false])
+    expect(cards[0]?.textContent).toContain("The TenuVault app is temporarily unavailable.")
+    expect(container.textContent).not.toContain("Start now")
+  })
+
+  it("shows the TenuVault app first and marked recommended when enabled", async () => {
+    state.tenuvaultAppAvailable.mockResolvedValue(true)
+    const container = await render(createElement(OnboardingPage), false)
+    const cards = [...container.querySelectorAll<HTMLButtonElement>("[data-sign-in-method]")]
+    expect(cards.map(card => card.getAttribute("aria-label"))).toEqual(["Choose TenuVault app", "Choose Your own app registration"])
+    expect(cards.map(card => card.disabled)).toEqual([false, false])
+    expect(cards[0]?.textContent).toContain("Recommended")
+  })
+
+  it("waits for stored legacy tenants before deciding whether to open the wizard", async () => {
+    state.tenantsLoaded = false
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    const routes = () => createElement(MemoryRouter, { initialEntries: ["/"] },
+      createElement(Routes, null,
+        createElement(Route, { path: "/", element: createElement(Home) }),
+        createElement(Route, { path: "/portal/dashboard", element: createElement("p", null, "Dashboard") }),
+        createElement(Route, { path: "/portal/onboarding", element: createElement(OnboardingPage) }),
+      ))
+    await act(async () => root.render(routes()))
+    expect(container.querySelector(".animate-spin")).not.toBeNull()
+    const legacy = { credentials: { tenantId: TENANT, appId: CLIENT }, services: { intune: { access: "restore" } } }
+    state.tenants = [legacy]
+    state.tenantsLoaded = true
+    await act(async () => root.render(routes()))
+    expect(container.textContent).toBe("Dashboard")
+    expect(state.tenants).toEqual([legacy])
+    expect(state.wizardStage).not.toHaveBeenCalled()
+    expect(state.enrollOwnApp).not.toHaveBeenCalled()
+  })
+
+  it("preselects only Intune when adding a tenant on an existing install", async () => {
+    const legacy = { credentials: { tenantId: TENANT, appId: CLIENT }, services: { intune: { access: "restore" } } }
+    state.tenants = [legacy]
+    const container = await render(createElement(OnboardingPage), false)
+    expect(container.textContent).toContain("Back to dashboard")
+    expect(container.textContent).toContain("Step 1 of 4")
+    expect(entraSwitch(container)).toBeNull()
+    expect(state.tenants).toEqual([legacy])
+  })
+
+  async function publicConnect() {
+    state.tenuvaultAppAvailable.mockResolvedValue(true)
+    const container = await render(createElement(OnboardingPage), false)
+    await act(async () => button(container, "Choose TenuVault app")!.click())
+    return container
+  }
+
+  it("enrolls the verified organization name shown during TenuVault app setup", async () => {
+    state.wizardStage.mockResolvedValue({ result: {
+      ...stageResult,
+      account: { ...stageResult.account, clientId: TENUVAULT_CLIENT_ID, username: "guest@fabrikam.test" },
+      coverage: [{ service: "intune", folders: ["DeviceConfigurations"], readable: ["DeviceConfigurations"] }],
+      organizationName: "Contoso Ltd",
+    } })
+    state.storageChoice = { kind: "local" }
+    const container = await publicConnect()
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(container.textContent).toContain("Signed in as guest@fabrikam.test")
+    expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
+    await continueToStorage(container)
+    expect(container.textContent).toContain("Where should backups go?")
+    expect(container.textContent).toContain(`Tenant Contoso Ltd ${TENANT}`)
+    expect(state.wizardFinish).not.toHaveBeenCalled()
+    expect(loadOnboardingDraft()?.account).toBeFalsy()
+    await act(async () => button(container, "Start first backup")!.click())
+    const [, profile] = state.wizardFinish.mock.calls[0]!
+    expect(JSON.parse(profile)).toEqual([expect.objectContaining({ name: "Contoso Ltd" })])
+    expect(state.addTenant).toHaveBeenCalledWith(expect.objectContaining({ name: "Contoso Ltd" }))
+  })
+
+  it("keeps every chosen service when the TenuVault app can read Intune and part of Entra ID", async () => {
+    const permissions = new Set([...graphPermissions(BACKUP_INTUNE_PERMISSIONS, "delegated"), "Policy.Read.All"])
+    state.wizardStage.mockResolvedValue({ result: {
+      ...stageResult, coverage: delegatedBackupCoverage(permissions, ALL_SERVICES), missing: ["Agreement.Read.All"],
+    } })
+    state.storageChoice = { kind: "local" }
+    const container = await publicConnect()
+    type(container.querySelector("input")!, "contoso.onmicrosoft.com")
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(state.wizardStage).toHaveBeenCalledWith("contoso.onmicrosoft.com", "tenuvaultApp", { intune: { access: "backup" } })
+    expect(entraSwitch(container).checked).toBe(false)
+    expect(container.textContent).toContain("Step 2 of 4")
+    await act(async () => entraSwitch(container).click())
+    expect(container.querySelector("#setup-step-4")?.textContent).toBe("You're ready to back up Intune and Entra ID (4 of 6 areas).")
+    expect([...container.querySelectorAll('[aria-label="Check actions"] button')].map(item => item.textContent)).toEqual(["Continue with Intune and Entra ID"])
+    expect(container.querySelector("details[open]")).toBeNull()
+    expect(container.querySelector('[aria-label="Areas needing access"]')?.textContent).toContain("Terms of use")
+    expect(state.wizardPackConsent).not.toHaveBeenCalled()
+    await continueToStorage(container)
+    await act(async () => button(container, "Start first backup")!.click())
+    expect(state.wizardFinish).toHaveBeenCalledWith(stageResult.id, expect.any(String), ALL_SERVICES)
+    expect(container.textContent).toContain("Backing up Intune and part of Entra ID.")
+  })
+
+  it("uses the singular when one backup area needs access", async () => {
+    const permissions = new Set([...graphPermissions(BACKUP_INTUNE_PERMISSIONS, "delegated"), "Policy.Read.All", "AuthenticationContext.Read.All"])
+    state.wizardStage.mockResolvedValue({ result: {
+      ...stageResult, coverage: delegatedBackupCoverage(permissions, ALL_SERVICES), missing: ["Agreement.Read.All"],
+    } })
+    const container = await publicConnect()
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    await act(async () => entraSwitch(container).click())
+    expect(container.querySelector('[data-notice-tone] [role="status"]')?.textContent).toBe("Needs access for 1 backup area.")
+  })
+
+  it.each([false, true])("keeps Continue available and respects reduced motion (%s)", async reduce => {
+    state.wizardStage.mockResolvedValue({ result: {
+      ...stageResult,
+      coverage: delegatedBackupCoverage(new Set(graphPermissions(ALL_SERVICES, "delegated")), ALL_SERVICES),
+    } })
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: reduce })))
+    const container = await publicConnect()
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      expect(container.querySelector("#setup-step-4")?.textContent).toBe("You're ready to back up Intune.")
+      expect(checkAction(container, "Continue")).toBeDefined()
+      await act(async () => vi.advanceTimersByTime(1800))
+      if (reduce) {
+        expect(container.querySelector("#setup-step-4")).not.toBeNull()
+        await continueToStorage(container)
+      }
+      expect(container.textContent).toContain("Where should backups go?")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("adds the stable Entra scopes to the TenuVault app consent request from Check", async () => {
+    state.wizardStage.mockResolvedValue({ result: {
+      ...stageResult, coverage: delegatedBackupCoverage(new Set(["DeviceManagementConfiguration.Read.All"])),
+      verifiedScopes: ["DeviceManagementConfiguration.Read.All"],
+    } })
+    const container = await publicConnect()
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    expect(entraSwitch(container).checked).toBe(false)
+    await act(async () => entraSwitch(container).click())
+    expect(container.textContent).toContain("Agreement.Read.All")
+    expect(container.textContent).not.toContain("IdentityProvider.Read.All")
+    state.wizardPackConsent.mockResolvedValue({ status: "received" })
+    await act(async () => button(container, "Open admin consent")!.click())
+    expect(state.wizardPackConsent).toHaveBeenCalledWith(TENANT, ALL_SERVICES, "onboarding-backup", "open")
+    expect(checkAction(container, "Continue with Intune")).toBeDefined()
+  })
+
+  it("lists only the selected permissions and copies an admin consent request without an ID", async () => {
+    const container = await publicConnect()
+    const writeText = vi.fn(async (_value: string) => undefined)
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+    state.wizardPackConsent.mockResolvedValue({ status: "handoff", url: "https://example.test/consent", message: "Approve Intune backup" })
+    const details = [...container.querySelectorAll("details")].find(item => item.textContent?.includes("Permissions an admin will approve"))!
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain("DeviceManagementApps.Read.All")
+    expect(details.textContent).not.toContain("DeviceManagementApps.ReadWrite.All")
+    await act(async () => button(container, "Send to my admin")!.click())
+    expect(state.wizardPackConsent).toHaveBeenCalledWith("", { intune: { access: "backup" } }, "onboarding-backup", "handoff")
+    expect(writeText).toHaveBeenCalledWith("Approve Intune backup")
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
   })
 })

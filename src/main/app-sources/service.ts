@@ -7,11 +7,14 @@ import { AppSourceStore, sourceTenant } from "./store"
 import type { AcknowledgementRequired } from "../../shared/disclaimer"
 import { allows, PlanRequired, type Plan } from "../../shared/plans"
 import { recordRestorePreparationFailure } from "../../portal/lib/audit/restore"
+import { executionMetadata } from "../api/execution-metadata"
+import type { AppRestoreAuthorization } from "../auth/connection-capabilities"
 
 export interface AppSourceHost {
   restoreOwner?: () => string
   signInWithDeviceCode?: (tenant: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal) => Promise<void>
-  restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void, operationId: string) => Promise<AppRestoreResult | AcknowledgementRequired>
+  restoreAuthorization?: (source: string, destination: string) => AppRestoreAuthorization
+  restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void, operationId: string, authorizeRestore: (() => Promise<void>) | undefined) => Promise<AppRestoreResult | AcknowledgementRequired>
   loadRestoreSettings?: (tenant: string, appId: string) => Promise<AppRestoreSnapshot>
   /** The plan of a restore destination that is not the installer's source tenant, or null when it has none. */
   restorePlan?: (tenant: string) => Promise<Plan | null>
@@ -26,6 +29,7 @@ export interface AppSourceHost {
   pickFolder: (current: string) => Promise<string | null>
   confirmNewStore: (tenant: string) => Promise<boolean>
   pickExport: (fileName: string) => Promise<string | null>
+  saveExport?: (destination: string, write: (path: string) => Promise<void>, signal: AbortSignal) => Promise<void>
   openFolder: (folder: string) => Promise<void>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenant: string) => Promise<void>
@@ -154,17 +158,21 @@ export class AppSourceService {
     if (typeof name !== "string" || typeof settingsHash !== "string" || !/^[a-f0-9]{64}$/.test(settingsHash)) return Promise.reject(new Error("Review the app settings and destination before restoring."))
     return this.job(raw, operation, async (tenant, signal) => {
       try {
+        const authorization = this.host.restoreAuthorization?.(tenant, destination)
         const store = this.store(tenant), captured = await store.capturedSource(tenant, sourceId), snapshot = await store.configuration(tenant, sourceId)
         if (!snapshot || snapshotHash(snapshot) !== settingsHash) throw new Error("The app settings changed. Review them before restoring.")
-        if (!this.host.restore) throw new Error("App restore is unavailable in this build.")
+        const restore = this.host.restore
+        if (!restore) throw new Error("App restore is unavailable in this build.")
         restoreBody(snapshot, name); this.tenant(destination)
         await this.requireDestinationPlan(captured, destination)
         signal.throwIfAborted(); this.tenant(destination)
         // Execution owns its own audit. This catch handles preparation before the handoff.
-        return this.host.restore(store, captured, snapshot, destination, name, signal, value => {
-          const job = this.jobs.get(operationId)
-          if (job?.tenant === tenant) job.restoreProgress = value
-        }, operationId)
+        return executionMetadata.run({ appRestoreDestination: destination, connections: authorization?.connections }, () =>
+          restore(store, captured, snapshot, destination, name, signal, value => {
+            const job = this.jobs.get(operationId)
+            if (job?.tenant === tenant) job.restoreProgress = value
+          }, operationId, authorization?.authorize))
+
       } catch (error) {
         void recordRestorePreparationFailure({ destination, sourceTenantId: tenant, sourceBackupId: sourceId, operationId, runId: randomUUID(), action: "Restore app backup" })
           .catch(() => console.warn("[audit] App restore preparation failure could not be recorded"))
@@ -192,7 +200,9 @@ export class AppSourceService {
       signal.throwIfAborted()
       if (!destination) return false
       this.tenant(tenant)
-      await store.export(tenant, item.id, destination, signal)
+      const write = (path: string) => store.export(tenant, item.id, path, signal)
+      if (this.host.saveExport) await this.host.saveExport(destination, write, signal)
+      else await write(destination)
       return true
     })
   }

@@ -1,4 +1,6 @@
-import { normalizeBackupStatus, backupHealth, backupSummary, latestComplete } from "~/lib/backup-health"
+import { moduleForFolder } from "../../../shared/services/modules"
+import type { ModuleId } from "../../../shared/services/modules"
+import { normalizeBackupStatus, backupHealth, backupSummary, latestComplete, type LiveBackupRun } from "~/lib/backup-health"
 import { useLicense, tenantLicense, tenantPlan } from "@desktop/lib/license"
 import { allows } from "../../../shared/plans"
 import { bridge } from "@desktop/lib/bridge"
@@ -28,7 +30,7 @@ export interface PolicyBreakdown {
 }
 
 /** `runId` is the backup job that wrote the folder, when the folder records it. */
-export type DashboardBackup = BackupHistoryItem & { policies?: PolicyBreakdown; runId?: string | null }
+export type DashboardBackup = BackupHistoryItem & { policies?: PolicyBreakdown; runId?: string | null; capturedServices?: ModuleId[]; coverageIncomplete?: boolean; needsAccess?: boolean }
 
 /** A failed backup attempt, recorded by the app on this device. */
 export interface FailedAttemptItem {
@@ -56,6 +58,7 @@ export interface TenantDashboardStats extends DashboardStats {
   failedAttempts: FailedAttemptItem[]
   /** Run ids of backups the app is running for the tenant, from any trigger. */
   liveRuns: string[]
+  scopedLiveRuns?: LiveBackupRun[]
   /** Start of the selected reporting period. Pass these to backupSummary for the tile counts. */
   periodStart: Date
   /** Set when the backup list could not be loaded, so an empty list is not shown as "no backups". */
@@ -102,11 +105,18 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
       tenantName: tenant.name,
       timestamp: new Date(backup.lastModified || backup.properties?.lastModified || backup.timestamp),
       status: normalizeBackupStatus(backup),
-      policiesBackedUp: backup.metadata?.policyCount || backup.policyCount || backup.totalPolicies || 0, // Use actual count from backup
+      policiesBackedUp: backup.metadata?.policyCount ?? backup.policyCount ?? backup.totalPolicies ?? 0, // Use actual count from backup
+      inventoryBackedUp: backup.inventoryCount ?? Math.max(0, (backup.totalPolicies ?? 0) - (backup.metadata?.policyCount ?? backup.policyCount ?? backup.totalPolicies ?? 0)),
       duration: backup.duration || 0,
       size: backup.size || backup.properties?.contentLength || 0,
       error: backup.error || backup.errorMessage || backup.properties?.errorMessage,
       policies: backup.policies,
+      capturedServices: [...new Set<ModuleId>(Object.entries(backup.counts ?? {}).flatMap(([folder, count]) => {
+        const module = moduleForFolder(folder)?.module.id
+        return module && typeof count === "number" && count > 0 ? [module === "conditionalAccess" ? "entra" : module] : []
+      }))],
+      coverageIncomplete: backup.coverage === "incomplete",
+      needsAccess: Object.values(backup.notReadCauses ?? {}).some(cause => cause === "permission" || cause === "role"),
       runId: typeof backup.runId === "string" ? backup.runId : null,
     })).sort((a: BackupHistoryItem, b: BackupHistoryItem) => 
       b.timestamp.getTime() - a.timestamp.getTime() // Sort by newest first
@@ -260,6 +270,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       const backupsInPeriod = backupHistory.filter(b => b.timestamp >= periodStart)
       const failedAttempts = allFailedAttempts.flat()
       const liveRuns = allLiveRuns.flat()
+      const scopedLiveRuns = allLiveRuns.flatMap((runs, index) => runs.map(runId => ({ tenantId: tenants[index]!.id, runId })))
       const tenantHealth = tenants.map((tenant, index) => backupHealth(
         backupHistory.filter((backup) => backup.tenantId === tenant.id), now, !!allBackups[index]?.error,
       ))
@@ -278,8 +289,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       
       // Calculate trend (compare to previous period)
       const prevPeriodStart = new Date(periodStart.getTime() - periodMs)
-      const successRate = backupSummary(backupHistory, failedAttempts, { since: periodStart, live: liveRuns }).successRate
-      const prevSuccessRate = backupSummary(backupHistory, failedAttempts, { since: prevPeriodStart, until: periodStart, live: liveRuns }).successRate
+      const successRate = backupSummary(backupHistory, failedAttempts, { since: periodStart, live: scopedLiveRuns }).successRate
+      const prevSuccessRate = backupSummary(backupHistory, failedAttempts, { since: prevPeriodStart, until: periodStart, live: scopedLiveRuns }).successRate
       const trend = successRate !== null && prevSuccessRate !== null ? successRate - prevSuccessRate : 0
       
       // Create recent activity from audit logs and backups
@@ -317,8 +328,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
             ? `Backup failed${backup.error ? `: ${truncateMessage(backup.error)}` : ""}`
             : backup.status === "cancelled" ? "Backup cancelled"
             : backup.status === "partial"
-              ? `Backup completed with warnings - ${backup.policiesBackedUp} policies`
-              : backup.status === "success" ? `Backup completed successfully - ${backup.policiesBackedUp} policies`
+              ? `Backup completed with warnings - ${backup.policiesBackedUp} policies${backup.inventoryBackedUp ? `, ${backup.inventoryBackedUp} inventory objects` : ""}`
+              : backup.status === "success" ? `Backup completed successfully - ${backup.policiesBackedUp} policies${backup.inventoryBackedUp ? `, ${backup.inventoryBackedUp} inventory objects` : ""}`
               : backup.status === "running" ? "Backup is still running"
               : backup.status === "incomplete" ? "Backup is incomplete" : "Backup status is unknown",
           details: backup,
@@ -352,6 +363,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
         backupHistory,
         failedAttempts,
         liveRuns,
+        scopedLiveRuns,
         periodStart,
         backupsError,
         unresolvedBackups,

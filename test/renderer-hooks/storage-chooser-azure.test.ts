@@ -1,6 +1,7 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { TENUVAULT_CLIENT_ID } from "../../src/shared/tenant-connection"
 import type { BackupSettings } from "../../src/shared/ipc"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -9,12 +10,14 @@ const backups = vi.hoisted(() => ({
   settings: vi.fn(),
   inventoryProblem: vi.fn(),
   verifyAzureStorage: vi.fn(),
+  discoverAzureStorage: vi.fn(),
   exportRecoveryKey: vi.fn(),
 }))
+const auth = vi.hoisted(() => ({ azureStoragePackConsent: vi.fn() }))
 const license = vi.hoisted(() => ({ plan: "pro" }))
 const clipboard = vi.hoisted(() => ({ writeText: vi.fn() }))
 
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { backups, app: { openExternal: async () => undefined } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth, backups, app: { openExternal: async () => undefined } } }))
 vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => license.plan }))
 
 import { azureStorageBlocker, StorageChooser, type StorageChooserDraft } from "../../src/renderer/components/StorageChooser"
@@ -45,7 +48,7 @@ async function flush(): Promise<void> {
   })
 }
 
-async function renderChooser(initialDraft?: StorageChooserDraft) {
+async function renderChooser(initialDraft?: StorageChooserDraft, onboarding = false, shared = false) {
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard })
   vi.stubGlobal("fetch", fetchMock)
   const onChange = vi.fn()
@@ -55,7 +58,7 @@ async function renderChooser(initialDraft?: StorageChooserDraft) {
   containers.push(container)
   const root = createRoot(container)
   roots.push(root)
-  act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onChange, onDraftChange, initialDraft })))
+  act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: shared ? TENUVAULT_CLIENT_ID : "client", wizardId: shared && onboarding ? "staged-sign-in" : undefined, onChange, onDraftChange, initialDraft, onboarding })))
   await flush()
   const unmount = () => {
     const index = roots.indexOf(root)
@@ -92,6 +95,56 @@ async function selectAccount(container: HTMLElement, name: string) {
 }
 
 describe("storage chooser Azure path", () => {
+  it.each([true, false])("verifies both named packs before discovery (onboarding=%s)", async onboarding => {
+    backups.settings.mockResolvedValue(unsaved)
+    backups.inventoryProblem.mockResolvedValue(null)
+    backups.discoverAzureStorage.mockResolvedValue([ACCOUNT])
+    backups.verifyAzureStorage.mockResolvedValue(undefined)
+    auth.azureStoragePackConsent.mockResolvedValueOnce({ status: "waiting" }).mockResolvedValue({ status: "verified" })
+    const wizardId = onboarding ? "staged-sign-in" : undefined
+    const { container, last } = await renderChooser(undefined, onboarding, true)
+
+    await chooseAzure(container)
+    expect(backups.discoverAzureStorage).not.toHaveBeenCalled()
+    expect(last()).toBeNull()
+    await clickText(container, "Review Azure permission packs")
+    expect(document.body.textContent).toContain("Azure Service Management")
+    expect(document.body.textContent).toContain("Azure Storage")
+    await clickText(document.body, "Check again")
+    expect(backups.discoverAzureStorage).not.toHaveBeenCalled()
+    await clickText(document.body, "Check again")
+    expect(backups.discoverAzureStorage).not.toHaveBeenCalled()
+    await clickText(document.body, "Check again")
+    expect(auth.azureStoragePackConsent.mock.calls).toEqual([
+      [TENANT, "management", "check", wizardId],
+      [TENANT, "management", "check", wizardId],
+      [TENANT, "storage", "check", wizardId],
+    ])
+    expect(backups.discoverAzureStorage).toHaveBeenCalledExactlyOnceWith(TENANT, wizardId)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await selectAccount(container, ACCOUNT.name)
+    if (!onboarding) await clickText(container, "Check access")
+    expect(backups.verifyAzureStorage).toHaveBeenCalledExactlyOnceWith(TENANT, TENUVAULT_CLIENT_ID, ACCOUNT.name, wizardId)
+    expect(last()).toMatchObject({ kind: "azure", storageAccountName: ACCOUNT.name })
+  })
+
+  it("checks an Azure account as soon as it is selected during onboarding", async () => {
+    backups.settings.mockResolvedValue(unsaved)
+    backups.inventoryProblem.mockResolvedValue(null)
+    backups.verifyAzureStorage.mockResolvedValue(undefined)
+    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
+
+    const { container, last } = await renderChooser(undefined, true)
+    expect(last()).toEqual({ kind: "local" })
+    await chooseAzure(container)
+    await selectAccount(container, ACCOUNT.name)
+
+    expect(backups.verifyAzureStorage).toHaveBeenCalledExactlyOnceWith(TENANT, "client", ACCOUNT.name)
+    expect(container.textContent).toContain("Access confirmed")
+    expect(container.querySelector("button[aria-label='Check access']")).toBeNull()
+    expect(last()).toMatchObject({ kind: "azure", storageAccountName: ACCOUNT.name })
+  })
+
   it("completes the Azure choice once access is confirmed, without a recovery key", async () => {
     backups.settings.mockResolvedValue(unsaved)
     backups.inventoryProblem.mockResolvedValue(null)

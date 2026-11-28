@@ -1,0 +1,88 @@
+{
+  "folder": "AccessPackageAssignmentPolicies",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/entitlementManagement/assignmentPolicies": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example assignment policy"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/assignmentPolicies/example?$expand=accessPackage($select=id),questions,customExtensionStageSettings($expand=customExtension)": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example assignment policy",
+        "accessPackage": {
+          "id": "package"
+        },
+        "allowedTargetScope": "specificDirectoryUsers",
+        "specificAllowedTargets": [
+          {
+            "@odata.type": "#microsoft.graph.singleUser",
+            "userId": "b"
+          },
+          {
+            "@odata.type": "#microsoft.graph.singleUser",
+            "userId": "a"
+          }
+        ],
+        "requestApprovalSettings": {
+          "stages": [
+            {
+              "durationBeforeAutomaticDenial": "P14D",
+              "primaryApprovers": [
+                {
+                  "@odata.type": "#microsoft.graph.singleUser",
+                  "userId": "b"
+                },
+                {
+                  "@odata.type": "#microsoft.graph.singleUser",
+                  "userId": "a"
+                }
+              ]
+            }
+          ]
+        },
+        "expiration": {
+          "type": "afterDuration",
+          "duration": "P90D"
+        },
+        "questions": [
+          {
+            "id": "question",
+            "sequence": 1,
+            "text": "Purpose",
+            "localizations": [
+              {
+                "languageCode": "en-US",
+                "text": "Purpose"
+              },
+              {
+                "languageCode": "de-DE",
+                "text": "Zweck"
+              }
+            ]
+          }
+        ],
+        "customExtensionStageSettings": [
+          {
+            "id": "extension-stage",
+            "stage": "assignmentRequestCreated",
+            "customExtension": {
+              "id": "extension",
+              "displayName": "Example extension"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

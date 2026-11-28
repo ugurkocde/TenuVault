@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { typeForFolder } from '../../shared/intune/registry'
 import { comparableSnapshot } from '../../shared/intune/compare'
 const snapshotHash = (value: Record<string, any>) => createHash('sha256').update(JSON.stringify(comparableSnapshot(value))).digest('base64').slice(0, 22)
-import { LocalBlobStore } from '../storage/local-blob-store'
+import { BlobQuarantinedError, type LocalBlobStore } from '../storage/local-blob-store'
 import { MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from '../../shared/constants'
 
 const MAX = MAX_BACKUP_ARCHIVE_TOTAL_BYTES
@@ -67,6 +67,7 @@ export async function reviewArchive(raw: Buffer): Promise<ReviewedArchive> {
   for (const [identity, item] of Object.entries(metadata.Items)) {
     const [folder, id, ...rest] = identity.split('/')
     if (!folder || !id || rest.length || !typeForFolder(folder) || !object(item) || typeof item.file !== 'string' || !/^[^/\\]+\.json$/.test(item.file)) throw new Error('Unsupported backup item')
+    if (typeForFolder(folder)?.volume === 'large') throw new Error('Large directory inventories require sharded archives')
     const path = `${folder}/${item.file}`, snapshot = parse(path)
     if (expected.has(path) || !object(snapshot) || snapshot.id !== id || snapshotHash(snapshot) !== item.hash) throw new Error('Backup contents do not match the export inventory')
     expected.add(path); counts[folder] = (counts[folder] ?? 0) + 1
@@ -87,7 +88,15 @@ export async function importArchive(store: LocalBlobStore, archive: ReviewedArch
       const blob = await store.put(account, container, prefix + name, data, 'application/json', true)
       written.set(blob.name, blob.etag!)
     }
-  } catch (error) { for (const [name, etag] of written) await store.delete(account, container, name, { despiteDamage: true, ifMatch: etag }).catch(() => undefined); throw error }
+  } catch (error) {
+    const retained: string[] = []
+    for (const [name, etag] of written) {
+      try { await store.delete(account, container, name, { despiteDamage: true, ifMatch: etag }) }
+      catch (failure) { if (failure instanceof BlobQuarantinedError) retained.push(failure.message) }
+    }
+    if (retained.length) throw new Error(`Archive import failed. ${retained.join(" ")}`, { cause: error })
+    throw error
+  }
 }
 /**
  * Imports a reviewed archive once the admin confirms it. The archive's tenant uses a license slot

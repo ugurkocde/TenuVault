@@ -7,7 +7,9 @@ import { apiBody } from '../src/main/features/deps'
 import { call, TENANT_A } from './feature-helpers'
 import { memoryStore } from './helpers'
 import { parseBackupName } from '../src/shared/intune/backup-names'
+import { POST as backupChanges } from '../src/portal/app/api/backup-changes/route'
 import { POST as listBackups } from '../src/portal/app/api/list-backups/route'
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
 import { compareBackups, summarize } from '../src/shared/intune/backup-changes'
 import { createAuditRecorder } from '../src/main/api/audit'
 import { CANCELLED_HEADER, registerDriftScan } from '../src/portal/lib/drift/scan-hooks'
@@ -175,6 +177,36 @@ const request = (body: Record<string, unknown> = {}) => new NextRequest('http://
 const comparable = (drifts: any[]) => drifts.map(({ id: _id, detectedAt: _at, ...rest }) => rest).sort((a, b) => a.backupFile.localeCompare(b.backupFile))
 
 describe('Drift scan', () => {
+  it('reports unread Users declared on the ordinary manifest in an interactive comparison', async () => {
+    const files = { 'DeviceConfigurations/A.json': policy('a', 'A') }
+    const ordinary = { TenantId: TENANT_A, Scope: { Included: ['DeviceConfigurations'] }, Outcomes: [{ Folder: 'DeviceConfigurations', Outcome: 'saved', Saved: 1 }] }
+    fakeStorage({
+      [OLD]: { metadata: { ...ordinary, Status: 'Success' }, files },
+      [NEW]: { metadata: { ...ordinary, Status: 'Success',
+        LargeBackupOutcomes: [{ Folder: 'Users', Outcome: 'failed', Saved: 0, Error: 'Could not read Users.' }] }, files },
+    })
+    const response = await drift(request({ baseline: OLD, comparison: NEW }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ drifts: [], unknownTypes: ['Users'], summary: { deleted: 0 } })
+  })
+
+  it.each([OLD, NEW])('keeps legacy compliance deletions when %s carries large inventory', async largeBackup => {
+    const backups: Record<string, FakeBackup> = {
+      [OLD]: { metadata: { TenantId: TENANT_A, Status: 'Success', Scope: { Included: ['CompliancePolicies', 'DeviceConfigurations'] } }, files: {
+        'DeviceCompliancePolicies/Legacy.json': { id: 'legacy', displayName: 'Legacy compliance', '@odata.type': '#microsoft.graph.windows10CompliancePolicy', passwordRequired: true },
+      } },
+      [NEW]: { metadata: { TenantId: TENANT_A, Status: 'Success', Scope: { Included: ['CompliancePolicies', 'DeviceConfigurations'] } }, files: {} },
+    }
+    backups[largeBackup]!.metadata!.LargeItems = { DeviceConfigurations: { version: 1, count: 150000, shards: 150, complete: true } }
+    const { stub } = fakeStorage(backups)
+    const response = await drift(request({ baseline: OLD, comparison: NEW }))
+    expect(response.status).toBe(200)
+    const result = await response.json()
+    expect(result.drifts).toMatchObject([{ changeType: 'deleted', configId: 'legacy', configName: 'Legacy compliance' }])
+    const prefixes = stub.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('prefix')).filter(Boolean)
+    expect(prefixes.sort()).toEqual([`${OLD}/CompliancePolicies/`, `${OLD}/DeviceCompliancePolicies/`, `${NEW}/CompliancePolicies/`, `${NEW}/DeviceCompliancePolicies/`].sort())
+  })
+
   it('skips items whose stored fingerprints match and finds the same drift as a full compare', async () => {
     const full = fakeStorage(twoBackups(false))
     const fullResponse = await drift(request())
@@ -289,10 +321,10 @@ describe('Drift scan', () => {
     expect(response.status).toBe(200)
     expect((await response.json()).summary.total).toBe(3)
 
-    // The container once for its backups, then each backup once. Listing every type folder of
+    // Both discovery namespaces, then each backup once. Listing every type folder of
     // both backups took 1 + 2 x 40 requests.
     const lists = storage.stub.mock.calls.map(([input]) => new URL(String(input))).filter(url => url.searchParams.get('comp') === 'list')
-    expect(lists.map(url => url.searchParams.get('prefix'))).toEqual([null, `${NEW}/`, `${OLD}/`])
+    expect(lists.map(url => url.searchParams.get('prefix'))).toEqual([null, 'backup-large-', `${NEW}/`, `${OLD}/`])
 
     // Found the backups, read both metadata files, listed both backups, then compared.
     expect(progress.slice(0, 7).map(step => `${step.phase} ${step.done}/${step.total}`)).toEqual([
@@ -405,6 +437,58 @@ describe('Drift item matching', () => {
     const result = await (await drift(request())).json()
     expect(result.drifts).toEqual([])
     expect(result.warnings).toEqual([{ file: 'DeviceConfigurations/A v2.json', backup: NEW, message: expect.stringContaining('403') }])
+  })
+
+  it.each([
+    ['own registration', 'own-app', 'TermsOfUseAgreements', 'NamedLocations', 'DeviceConfigurations'],
+    ['TenuVault app', TENUVAULT_CLIENT_ID, 'NamedLocations', 'DeviceConfigurations', 'TermsOfUseAgreements'],
+  ])('omits unread types in all services from backup changes and drift for %s', async (_method, appId, excluded, refused, unresolved) => {
+    const covered = 'CompliancePolicies'
+    const folders = [excluded, refused, unresolved, covered]
+    const oldItems = Object.fromEntries(folders.map(folder => [`${folder}/a`, { file: 'A.json', hash: 'old' }]))
+    const before = {
+      Status: 'Success', TenantId: TENANT_A, AuthMode: 'delegated', Scope: { Included: folders }, Items: oldItems,
+      Outcomes: folders.map(Folder => ({ Folder, Outcome: 'saved', Saved: 1 })),
+    }
+    const after = {
+      Status: 'Success', TenantId: TENANT_A, AuthMode: 'delegated', Scope: { Included: [refused, unresolved, covered], Excluded: [excluded] },
+      Items: { [`${refused}/b`]: { file: 'B.json', hash: 'partial' } }, Coverage: 'Incomplete',
+      Outcomes: [{ Folder: refused, Outcome: 'skipped', Cause: 'role', Saved: 1 }, { Folder: covered, Outcome: 'notConfigured' }],
+    }
+    const { reads } = fakeStorage({
+      [OLD]: { metadata: before, files: Object.fromEntries(folders.map(folder => [`${folder}/A.json`, policy('a', folder)])) },
+      [NEW]: { metadata: after, files: { [`${refused}/B.json`]: policy('b', 'Partially captured') } },
+    })
+    expect(compareBackups(before, after)).toMatchObject([{ folder: covered, change: 'removed' }])
+    expect(compareBackups(after, before)).toMatchObject([{ folder: covered, change: 'added' }])
+    const changed = await (await backupChanges(request({ appId, backupId: NEW }))).json()
+    expect(changed.changes).toMatchObject([{ folder: covered, change: 'removed' }])
+    expect(new Set(changed.unknownTypes)).toEqual(new Set([excluded, refused, unresolved]))
+    const listed = await (await listBackups(request({ appId, subscriptionId: 'local', resourceGroupName: 'local' }))).json()
+    expect(listed.backups[0].changes).toEqual({ added: 0, modified: 0, removed: 1 })
+    for (const documentItems of [false, true]) {
+      const result = await (await drift(request({ appId, documentItems }))).json()
+      expect(result.drifts).toMatchObject([{ backupFile: `${covered}/A.json`, changeType: 'deleted' }])
+      expect(new Set(result.unknownTypes)).toEqual(new Set([excluded, refused, unresolved]))
+    }
+    expect(reads.filter(file => [excluded, refused, unresolved].some(folder => file.includes(`/${folder}/`)))).toEqual([])
+  })
+
+  it('preserves legacy changes and warns when a read failure did not name a type', async () => {
+    const backups = twoBackups(true)
+    backups[NEW]!.metadata!.Failures = 1
+    backups[NEW]!.metadata!.Status = 'CompletedWithWarnings'
+    fakeStorage(backups)
+    const changes = summarize(compareBackups(backups[OLD]!.metadata!, backups[NEW]!.metadata!))
+    expect(changes).toEqual({ added: 1, modified: 1, removed: 1 })
+    const body = { appId: 'app', backupId: NEW }
+    const changed = await (await backupChanges(request(body))).json()
+    expect(changed).toMatchObject({ legacyReadFailure: true, changes: expect.arrayContaining([expect.objectContaining({ change: 'removed', id: 'd' })]) })
+    const listed = await (await listBackups(request({ subscriptionId: 'local', resourceGroupName: 'local' }))).json()
+    expect(listed.backups[0]).toMatchObject({ legacyReadFailure: true, changes })
+    const result = await (await drift(request({ baseline: OLD, comparison: NEW }))).json()
+    expect(result).toMatchObject({ legacyReadFailure: true, summary: { added: 1, modified: 1, deleted: 1 } })
+    expect(result.unknownTypes).toBeUndefined()
   })
 
   it('agrees with the backup list counts for the same pair', async () => {
@@ -612,4 +696,18 @@ describe('Drift scan jobs', () => {
     expect((await call(routes, '/api/drift-scan', { action: 'cancel', tenantId: TENANT_A, jobId: 'missing' })).status).toBe(404)
     expect(new DriftJobError('x').status).toBe(400)
   })
+})
+
+
+it("selects an ordinary pair past a lone newer large backup and refuses cross-class pairs", async () => {
+  const folders = [
+    { name: "backup-large-2026-11-17-120000", timestamp: "2026-11-17T12:00:00Z" },
+    { name: "backup-2026-11-16-120000", timestamp: "2026-11-16T12:00:00Z" },
+    { name: "backup-2026-11-15-120000", timestamp: "2026-11-15T12:00:00Z" },
+  ]
+  const options = { folders, tenantId: TENANT_A, load: async () => ({ Status: "Success" }) }
+  const pair = await selectBackupPair(options)
+  expect(pair.comparison.name).toBe(folders[1]!.name)
+  expect(pair.baseline.name).toBe(folders[2]!.name)
+  await expect(selectBackupPair({ ...options, baseline: folders[2]!.name, comparison: folders[0]!.name })).rejects.toMatchObject({ code: "INVALID_PAIR" })
 })

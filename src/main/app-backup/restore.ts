@@ -6,6 +6,7 @@ import type { AuditJobItem } from "~/lib/audit/types"
 import type { AppSourceStore } from "../app-sources/store"
 import type { ContentEncryption } from "./content-stream"
 import { encryptRestoreContent, newRestoreSecrets, type RestoreSecrets } from "./restore-encryption"
+import { FetchPreconditionError } from "../api/network-error"
 import { putRestoreBlock, restoreGraph, type RestoreGraph } from "./restore-graph"
 import { assertRestoredSettings, restoreBody, snapshotHash, type AppRestoreSnapshot } from "./restore-snapshot"
 
@@ -20,6 +21,7 @@ interface RestoreRecord {
 export interface RestoreOptions {
   graph: RestoreGraph; fetch: typeof fetch; signal: AbortSignal
   progress: (value: AppRestoreProgress) => void
+  authorizeUpload?: () => Promise<void>
   audit?: (value: AppRestoreAuditObservation) => void
   wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>
 }
@@ -36,7 +38,7 @@ export interface AppRestoreAuditObservation {
 }
 
 export async function restoreAppWithAudit(store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, options: {
-  getGraphToken: () => Promise<string>; fetch: typeof fetch; signal: AbortSignal; progress: RestoreOptions["progress"]; operationId: string
+  getGraphToken: () => Promise<string>; authorizeDispatch?: () => Promise<void>; authorizeUpload: () => Promise<void>; fetch: typeof fetch; signal: AbortSignal; progress: RestoreOptions["progress"]; operationId: string
 }): Promise<AppRestoreResult> {
   const { getGraphToken, fetch, signal, progress, operationId } = options
   const preparation = { destination: target, sourceTenantId: source.receipt.tenantId, sourceBackupId: source.id, operationId,
@@ -54,10 +56,10 @@ export async function restoreAppWithAudit(store: AppSourceStore, source: Capture
     audit = beginRestoreAudit({ ...preparation, operationId: observed?.operationId ?? operationId, graphToken, items: [original] })
     audit?.started(0)
     return graphToken
-  }, fetch, signal)
+  }, fetch, signal, options.authorizeDispatch)
   try {
     return await restoreCapturedApp(store, source, snapshot, target, name, {
-      graph, fetch, signal, progress,
+      graph, fetch, signal, progress, authorizeUpload: options.authorizeUpload,
       audit: state => {
         if (observed?.operationId !== state.operationId) audit?.correlate(state.operationId)
         observed = state
@@ -164,7 +166,16 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
       // can create the app; unknown POST outcomes still require reconciliation.
       record.creationStarted = false; await save(); signal.throwIfAborted()
     }
-    record.appId = identifier((await write(() => graph("POST", BASE, body), { creationApplied: true })).id)
+    try {
+      record.appId = identifier((await write(() => graph("POST", BASE, body), { creationApplied: true })).id)
+    } catch (error) {
+      if (error instanceof FetchPreconditionError) {
+        record.creationStarted = false
+        audit({ dispatched: false })
+        await save()
+      }
+      throw error
+    }
     audit()
     await save()
   }
@@ -228,7 +239,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
         sas = String(renewedFile.azureStorageUri ?? ""); renewed = Date.now()
       }
       const id = Buffer.from(String(ids.length).padStart(6, "0")).toString("base64")
-      await write(() => putRestoreBlock(sas, { comp: "block", blockid: id }, block.subarray(0, used), fetchImpl, signal))
+      await write(() => putRestoreBlock(sas, { comp: "block", blockid: id }, block.subarray(0, used), fetchImpl, signal, options.authorizeUpload))
       ids.push(id); uploaded += used; used = 0; report("uploading", uploaded)
     }
     report("uploading")
@@ -243,7 +254,7 @@ async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource,
     if (used) await upload()
     if (uploaded !== totalBytes || !second.profile) throw new Error("The uploaded installer length is invalid.")
     signal.throwIfAborted()
-    await write(() => putRestoreBlock(sas, { comp: "blocklist" }, `<?xml version="1.0" encoding="utf-8"?><BlockList>${ids.map(id => `<Latest>${id}</Latest>`).join("")}</BlockList>`, fetchImpl, signal))
+    await write(() => putRestoreBlock(sas, { comp: "blocklist" }, `<?xml version="1.0" encoding="utf-8"?><BlockList>${ids.map(id => `<Latest>${id}</Latest>`).join("")}</BlockList>`, fetchImpl, signal, options.authorizeUpload))
     report("committing", totalBytes)
     await write(() => graph("POST", `${fileUrl}/commit`, { fileEncryptionInfo: second.profile }))
     file = await poll(["commitFileSuccess"])

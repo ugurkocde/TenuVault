@@ -1,3 +1,4 @@
+import { NoticeCard, noticeActionClass } from "./NoticeCard"
 import { useEffect, useMemo, useState } from "react"
 import { AlertCircle, CalendarClock, Check, CheckCircle2, Cloud, Copy, ExternalLink, RefreshCw, Trash2 } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -6,6 +7,7 @@ import setupScript from "../../../resources/New-TenuVaultCloudBackup.ps1?raw"
 import runbookScript from "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1?raw"
 import {
   CLOUD_BACKUP_GUIDE_URL,
+  PLAIN_CLOUD_RUNBOOK,
   cloudRunbookNeedsUpgrade,
   cloudSchedulePortalUrl,
   cloudSetupCommand,
@@ -173,25 +175,21 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
     [config, timeZone],
   )
   const previewRuns = useMemo(() => nextRunsInZone({ frequency, time, weekday }, timeZone, new Date(), 40), [frequency, time, weekday, timeZone])
+  const storageMoved = Boolean(storageAccount && config?.storageAccount && storageAccount.toLowerCase() !== config.storageAccount.toLowerCase())
+  const oldRunbook = cloud.status && cloudRunbookNeedsUpgrade(cloud.status.runbookVersion)
+  const audit = cloud.status
+  const auditEventCount = (audit?.auditPending ?? 0) + (audit?.auditOlderPending ?? 0)
+  const auditNeedsReview = audit && (!audit.auditCapability || audit.auditStatusUnavailable || auditEventCount > 0 || audit.auditScanIncomplete || audit.auditOlderUnchecked || audit.auditReceiptFailed)
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
 
   return (
     <div className="space-y-5">
-      <p className="text-sm text-gray-700">
-        A runbook in an Azure Automation account in your own subscription backs up {tenantName} on a schedule, with a
-        managed identity and read-only permissions. No computer has to run, no admin has to stay signed in, and
-        Conditional Access sign-in frequency cannot stop it. Backups land in the same storage as your other backups,
-        so they appear in Backup History like any backup. Azure encrypts them at rest and your role assignments decide
-        who can read them; no recovery key or Key Vault is involved.
-      </p>
+      <NoticeCard summary={`Run scheduled backups for ${tenantName} in Azure.`}
+        details="The runbook runs in your Azure Automation account with a managed identity. Backups appear in Backup History and Azure encrypts them at rest." />
 
       {community && <UpgradeNote feature="azureStorage" />}
-      {!community && localStorage && (
-        <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Cloud backups write to your Azure storage account, but {tenantName} currently keeps backups on this device.
-          Choose your Azure storage account in step 1 first, then set up the cloud runner for that account.
-        </p>
-      )}
+      {!community && localStorage && <NoticeCard summary="The Azure runner needs Azure backup storage."
+        details="Choose an Azure storage account in step 1, then set up the cloud runner for that account." />}
 
       {config && !replacing ? (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -210,7 +208,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
                 <dt className="text-xs text-gray-500">Last cloud backup</dt>
                 <dd className="mt-0.5 flex items-start gap-2 text-base text-gray-900">
                   {cloud.statusError ? (
-                    <span role="alert" className="text-sm text-red-600">Could not read the last cloud run: {cloud.statusError}</span>
+                    <NoticeCard summary="The last cloud run could not be read." tone="error" details={cloud.statusError} />
                   ) : cloud.status ? (
                     <>
                       {cloud.status.lastStatus === "Success"
@@ -229,38 +227,30 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
                 </dd>
               </div>
             </dl>
-            {storageAccount && config.storageAccount && storageAccount.toLowerCase() !== config.storageAccount.toLowerCase() && (
-              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                This tenant's storage is now {storageAccount}, but the cloud runner still writes to {config.storageAccount},
-                so its backups and status do not appear here. Run the setup again for the new account and paste its
-                output, or change the storage back in step 1.
-              </p>
-            )}
-            {cloud.status && cloudRunbookNeedsUpgrade(cloud.status.runbookVersion) && (
-              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                The cloud runner still uses runbook {cloud.status.runbookVersion}, which encrypts backups with the
-                recovery key from Key Vault. Run the setup script again with the same values to update it to plain
-                backups. Delete the old Key Vault only once no TenuVault setup still has a TenuVaultKeyVault variable. Backups made before stay
-                readable here with the recovery key.
-              </p>
-            )}
-            {cloud.status && !cloud.status.auditCapability && <p className="text-sm text-gray-700">Run the cloud setup again to enable audit recording for future runs.</p>}
-            {cloud.status?.auditStatusUnavailable && <p role="status" className="text-sm text-gray-700">Audit delivery status is unavailable for this run. Check the Automation job output.</p>}
-            {!!cloud.status?.auditPending && <p role="status" className="text-sm text-amber-800">At least {cloud.status.auditPending} cloud audit event(s) are pending delivery.</p>}
-            {cloud.status?.auditScanIncomplete && <p className="text-sm text-gray-700">The latest cloud run checked part of the audit receipt history.</p>}
-            {!!cloud.status?.auditOlderPending && <p role="status" className="text-sm text-amber-800">{cloud.status.auditOlderPending} older audit receipts need operator replay with REPLAYOLDERAUDIT.</p>}
-            {cloud.status?.auditOlderUnchecked && <p role="status" className="text-sm text-gray-700">Older audit receipts remain unchecked. Run REPLAYOLDERAUDIT to check them.</p>}
-            {cloud.status?.auditReceiptFailed && <p role="alert" className="text-sm text-amber-800">The last cloud backup audit receipt could not be saved. Check the Automation job output.</p>}
-            {!config.linked && (
-              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                The Azure resources exist, but the schedule is not linked: the managed identity is still missing its
-                Microsoft Graph roles. A Global Administrator assigns them, then the setup is run again. The{" "}
-                <button type="button" className="font-medium underline" onClick={() => void bridge.app.openExternal(CLOUD_BACKUP_GUIDE_URL)}>
-                  cloud backup guide
-                </button>{" "}
-                has the request text.
-              </p>
-            )}
+            {(storageMoved || oldRunbook || !config.linked) && <NoticeCard
+              tone={storageMoved || oldRunbook ? "warning" : "neutral"}
+              summary={storageMoved ? "The Azure runner writes to a different storage account."
+                : oldRunbook ? "Update the Azure backup runbook." : "The Azure runner's managed identity needs access."}
+              action={<button type="button" className={noticeActionClass} onClick={() => void bridge.app.openExternal(CLOUD_BACKUP_GUIDE_URL)}>Open cloud backup guide</button>}
+              details={<>
+                {storageMoved && <p>The runner writes to {config.storageAccount}, but this tenant uses {storageAccount}. Run setup again for the new account or change storage back in step 1.</p>}
+                {oldRunbook && audit && (cloudRunbookNeedsUpgrade(audit.runbookVersion, PLAIN_CLOUD_RUNBOOK)
+                  ? <p>The runner uses runbook {audit.runbookVersion}, which encrypts backups with the recovery key from Key Vault. Run setup again with the same values. Keep the Key Vault while any TenuVault setup still has a TenuVaultKeyVault variable. Use the recovery key to read older backups.</p>
+                  : <p>The runner uses runbook {audit.runbookVersion}. Run the setup script again with the same values to update the runbook and get accurate change reports for backups with partial coverage.</p>)}
+                {!config.linked && <p>A Global Administrator must assign the missing roles to the managed identity. Then run setup again to link the schedule. The cloud backup guide has the request text.</p>}
+              </>} />}
+            {auditNeedsReview && <NoticeCard
+              tone={audit.auditReceiptFailed ? "error" : auditEventCount > 0 ? "warning" : "neutral"}
+              summary={audit.auditReceiptFailed ? "The last Azure backup audit receipt could not be saved."
+                : auditEventCount > 0 ? `At least ${auditEventCount} Azure audit events are pending delivery.` : "Azure audit recording needs review."}
+              details={<>
+                {!audit.auditCapability && <p>Run cloud setup again to enable audit recording for future runs.</p>}
+                {(audit.auditStatusUnavailable || audit.auditReceiptFailed) && <p>Check the Automation job output for audit delivery status and receipt errors.</p>}
+                {!!audit.auditPending && <p>At least {audit.auditPending} cloud audit events are pending delivery.</p>}
+                {audit.auditScanIncomplete && <p>The latest cloud run checked part of the audit receipt history.</p>}
+                {!!audit.auditOlderPending && <p>{audit.auditOlderPending} older audit receipts need operator replay with REPLAYOLDERAUDIT.</p>}
+                {audit.auditOlderUnchecked && <p>Run REPLAYOLDERAUDIT to check older audit receipts.</p>}
+              </>} />}
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => void bridge.app.openExternal(cloudSchedulePortalUrl(config))}>
                 <ExternalLink className="mr-2 h-4 w-4" /> Open schedule in Azure

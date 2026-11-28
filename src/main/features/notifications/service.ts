@@ -6,7 +6,7 @@ import { hasConditions, isChangeEventType, parseConditions, parseDelivery, planC
 import { DEFAULT_CARD_LAYOUT, parseCardLayout, styleFor, type CardLayout } from "../../../shared/notifications/layout"
 import { ENTRA_AUDIT_FILTER, ENTRA_AUDIT_SELECT, mapEntraAuditEvent, type EntraAuditRaw } from "../../../shared/notifications/entra"
 import { allows } from "../../../shared/plans"
-import type { FeatureDeps } from "../deps"
+import { withTenantConnection, type FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { retryable } from "../health-review/rules"
@@ -701,7 +701,8 @@ const pushQueues = new Map<string, Promise<unknown>>()
  */
 export function writeWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: string | null, options: { requireOwnership?: boolean } = {}): Promise<WatcherPushResult> {
   const key = tenantId.toLowerCase()
-  const run = (pushQueues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => writeWatcherAlertsNow(deps, tenantId, actor, options.requireOwnership ?? true))
+  const run = withTenantConnection(deps, tenantId, () => (pushQueues.get(key) ?? Promise.resolve())
+    .catch(() => undefined).then(() => writeWatcherAlertsNow(deps, tenantId, actor, options.requireOwnership ?? true)))
   pushQueues.set(key, run)
   // The caller handles a failure of run; this cleanup must not raise it a second time.
   run.finally(() => { if (pushQueues.get(key) === run) pushQueues.delete(key) }).catch(() => undefined)

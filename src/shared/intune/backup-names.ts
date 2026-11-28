@@ -1,6 +1,7 @@
 /**
  * Backup folder names in the intune-backups container, shared by the backup list, drift detection
  * and the drift scan job so every listed backup can be compared and every comparable one is listed:
+ * - backup-large-2026-09-25-120000: a large run in intune-backups-large
  * - backup-2026-09-25-120000: every current backup (UTC, to the second)
  * - 2026-09-25_12-00-00 or 2026-09-25_12-00-00_1727265600000: earlier runbook backups
  * - 2026-09-25: the oldest runbook backups, which record only the day
@@ -12,7 +13,7 @@ export interface BackupName {
   precision: "second" | "day"
 }
 
-const CURRENT = /^backup-(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})$/
+const CURRENT = /^backup-(?:large-)?(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})$/
 const UNDERSCORE = /^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})(?:_\d+)?$/
 const DAY = /^(\d{4}-\d{2}-\d{2})$/
 

@@ -1,6 +1,6 @@
 ---
 title: "Compare backups"
-description: See what was added, changed and deleted in Intune between one backup and the one before it.
+description: See what changed across Entra ID and Intune between two configuration backups.
 ---
 
 Every backup records a fingerprint of each item it saved. TenuVault compares these fingerprints with the previous backup, so you can see what was added, changed and deleted in the tenant between two backups, down to the individual setting.
@@ -58,20 +58,39 @@ Click a changed item to expand it. TenuVault lists each changed setting with its
 ## How the comparison works
 
 * **Which backup it compares with.** Each backup is compared with the newest older backup that finished and records fingerprints. Failed backups and incomplete backups are skipped. Backups that completed with warnings are included.
-* **Only shared types.** Only types that both backups hold a complete copy of are compared. If one backup left out apps, apps are not reported as added or deleted.
-* **What does not count as a change.** Values Intune changes on every read or write, such as modification times, version counters and the reference IDs of encrypted values, are ignored. Earlier versions saved Settings Catalog policies (including endpoint security and Settings Catalog compliance policies) without their assignments, so against a backup from such a version their assignments are not compared.
+* **Only shared types.** An excluded type or unconfirmed read appears under **Types not compared** and is left out of all change counts.
+* **What does not count as a change.** Values the service changes on every read or write, such as modification times, version counters and the reference IDs of encrypted values, are ignored. Earlier versions saved Settings Catalog policies (including endpoint security and Settings Catalog compliance policies) without their assignments, so against a backup from such a version their assignments are not compared.
 * **Setting details.** The setting-by-setting view is shown for the first 100 changed items, with up to 50 settings each. Long values are shortened. Some properties, such as the description, are not listed in the setting details, so an item can show as **Changed** without a list of settings.
 
 :::note
 To compare the tenant as it is right now with your last backup, run a new backup first, then view its changes.
 :::
 
+### Examples by service
+
+For backups that record per-type outcomes, only complete reads are compared. TenuVault needs every page of a policy list to confirm what was present. A complete list with zero policies can confirm a deletion. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without naming the type, the comparison shows a coverage warning. Some reported additions or deletions may be policies that backup failed to read.
+
+When comparing Intune roles from older Azure backups, TenuVault treats empty and single-value assignment lists the same as their current backup format. Changes to the members, scopes or scope tags still appear in drift and change reports.
+
+| Service | Example of coverage shown as unknown |
+| --- | --- |
+| Entra ID | One backup could not read named locations. |
+| Intune | One backup left apps out of its scope. |
+
+## Large inventory comparisons
+
+Large directory inventories use a separate paged comparison in **Drift Detection**. Choose the inventory and use **Next page** to inspect the next window. Each window compares at most 1,000 identities, returns at most 200 changes and replaces the rows already shown. Matching fingerprints avoid reading the snapshots. Both backups must completely cover the selected type. An unread index is an error, never an empty collection interpreted as deletions.
+
+Backup History and the policy drift totals exclude this separately paged inventory and say that it is compared on demand. Backup Details browses its object IDs in pages. Conditional Access comparisons are part of Entra ID coverage. See [Large tenants](/backups/storage/#large-tenants) for limits and the reproducible synthetic check.
+
 ## Act on a change
 
-* To put an item back as it was, open **Restore from this backup** on the older backup. See [Restore Intune policies](/restore/).
+* To put an item back as it was, open **Restore from this backup** on the older backup. See [Restore supported configuration](/restore/).
 * To revert a recent change in place, or restore a copy, use [Drift detection](/drift/).
 
 ## Related pages
 
 * [Change reports](/reports/): the same changes as a document with who made them, saved as PDF or Markdown or sent by email
 * [Intune drift detection](https://www.tenuvault.com/intune-drift-detection): compare and revert changes, on the product site
+
+Policy comparisons continue to include compliance policies stored by older versions under `DeviceCompliancePolicies`, including when either backup also contains a large inventory.

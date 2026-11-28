@@ -22,6 +22,7 @@ const plan = vi.hoisted(() => ({ current: "msp" as "community" | "pro" | "msp" }
 const opened = vi.hoisted(() => [] as unknown[])
 vi.mock("~/contexts/TenantContext", () => ({
   useTenants: () => TENANTS,
+  useTenantById: () => undefined,
   useSelectedTenant: () => ({ selectedTenant: TENANTS[0], selectedTenantId: 1, setSelectedTenantId: () => undefined }),
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({
@@ -254,16 +255,16 @@ describe("Sync page plans", () => {
     plan.current = "community"
     const container = await render()
     expect(container.querySelector('section[aria-label="Copy to Tenants preview"]')).not.toBeNull()
-    expect(container.textContent).toContain("Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.")
+    expect(container.textContent).toContain("Each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run.")
     expect(container.querySelector('ol[aria-label="Steps"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Recent copies"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Choose settings"]')).toBeNull()
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it("B3: on Pro only the tenant sharing the license can be chosen; the others show MSP and the neutral notice", async () => {
+  it("B3: shows plan and availability reasons separately from the multi-target MSP requirement", async () => {
     plan.current = "pro"
-    scenario.targets = [{ tenantId: B, eligible: true, multiple: false, reason: null }, { tenantId: C, eligible: false, multiple: false, reason: "msp" }, { tenantId: D, eligible: false, multiple: false, reason: "msp" }]
+    scenario.targets = [{ tenantId: B, eligible: true, multiple: false, reason: null }, { tenantId: C, eligible: false, multiple: false, reason: "plan" }, { tenantId: D, eligible: false, multiple: false, reason: "unavailable" }]
     const container = await render()
     await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
@@ -271,24 +272,24 @@ describe("Sync page plans", () => {
     await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
     expect(card(container, "Contoso Germany").textContent).toContain("Available on Pro")
     expect(card(container, "Contoso Germany").textContent).toContain("1 policy linked")
-    for (const name of ["Contoso France", "Contoso Japan"]) {
-      expect(card(container, name).textContent).toContain("MSP")
+    for (const [name, reason] of [["Contoso France", "Not in plan"], ["Contoso Japan", "Not available"]] as const) {
+      expect(card(container, name).textContent).toContain(reason)
       expect(card(container, name).getAttribute("aria-disabled")).toBe("true")
       await click(card(container, name))
       expect(card(container, name).getAttribute("aria-pressed")).toBe("false")
     }
     await click(card(container, "Contoso Germany"))
     expect(card(container, "Contoso Germany").getAttribute("aria-pressed")).toBe("true")
-    expect(container.textContent).toContain("Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.")
+    expect(container.textContent).toContain("Each copy goes to one tenant on Pro, a Pro trial or MSP. Copying to several tenants at once needs MSP on every tenant in the run.")
     expect(container.textContent).not.toMatch(/upsell|upgrade now|unlock/i)
     await click(button(container, "See plans"))
     expect(opened).toEqual([["buy", { source: "sync-targets" }]])
     expect(button(container, "Review 1 tenant")?.disabled).toBe(false)
   })
 
-  it("B4: on Pro with two other trial tenants, reads each target's status on its own and lets only one be chosen", async () => {
+  it("B4: on Pro with two other eligible tenants, reads each target's status on its own and lets only one be chosen", async () => {
     plan.current = "pro"
-    scenario.targets = [{ tenantId: B, eligible: true, multiple: false, reason: null }, { tenantId: C, eligible: true, multiple: false, reason: null }, { tenantId: D, eligible: false, multiple: false, reason: "msp" }]
+    scenario.targets = [{ tenantId: B, eligible: true, multiple: false, reason: null }, { tenantId: C, eligible: true, multiple: false, reason: null }, { tenantId: D, eligible: false, multiple: false, reason: "plan" }]
     const container = await render()
     await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
     await until(() => calls.filter((call) => call.action === "status").length === 2, "status reads")
@@ -304,6 +305,16 @@ describe("Sync page plans", () => {
     await click(card(container, "Contoso France"))
     expect(card(container, "Contoso France").getAttribute("aria-pressed")).toBe("true")
     expect(card(container, "Contoso Germany").getAttribute("aria-pressed")).toBe("false")
+  })
+  it("on MSP with a Pro target among MSP targets, reads the MSP targets together and the Pro target on its own", async () => {
+    plan.current = "msp"
+    scenario.targets = [{ tenantId: B, eligible: true, multiple: true, reason: null }, { tenantId: C, eligible: true, multiple: true, reason: null }, { tenantId: D, eligible: true, multiple: false, reason: null }]
+    const container = await render()
+    await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
+    await until(() => calls.filter((call) => call.action === "status").length === 2, "status reads")
+    const reads = calls.filter((call) => call.action === "status").map((call) => (call.body.targetTenants as Array<{ tenantId: string }>).map((target) => target.tenantId).sort())
+    expect(reads).toEqual(expect.arrayContaining([[B, C].sort(), [D]]))
+    expect(reads).toHaveLength(2)
   })
 })
 

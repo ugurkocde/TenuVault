@@ -1,3 +1,4 @@
+import { IntunePageGuard } from "./components/IntunePageGuard"
 import { CommunityTenantPicker } from "./components/CommunityTenantPicker"
 import "./lib/appearance"
 import { lazy, Suspense, useState, type ReactNode } from "react"
@@ -6,7 +7,7 @@ import { HashRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-
 import { BackupProgressProvider } from "~/contexts/BackupProgressContext"
 import { TenantProvider } from "~/contexts/TenantContext"
 import { queryClient } from "~/lib/query-client"
-import { useTenants } from "~/contexts/TenantContext"
+import { useTenants, useTenantsLoaded } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { DesktopLayout } from "./components/DesktopLayout"
 import { ErrorBoundary, ErrorPanel } from "./components/ErrorBoundary"
@@ -48,8 +49,10 @@ function Spinner() {
 }
 
 /** Start page: the guided setup until a tenant is connected, then the all-tenants overview or the dashboard. */
-function Home() {
+export function Home() {
   const tenants = useTenants()
+  const loaded = useTenantsLoaded()
+  if (!loaded) return <Spinner />
   if (tenants.length === 0) return <Navigate to="/portal/onboarding" replace />
   return <Navigate to={tenants.length > 1 ? "/portal/overview" : "/portal/dashboard"} replace />
 }
@@ -59,7 +62,7 @@ function Home() {
  * process (sign-in, token requests, local backups, scheduled backups), so the plan is shown in
  * the guided setup once the tenant is known. A setup already in progress skips the welcome.
  */
-function LicenseGate({ children }: { children: ReactNode }) {
+export function LicenseGate({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const { status, error, refresh } = useLicense()
   const tenants = useTenants()
@@ -96,6 +99,8 @@ function BillingDialogs() {
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      {typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__ &&
+        <div className="pointer-events-none fixed bottom-3 right-3 z-[100] rounded-md border bg-card px-3 py-1 text-xs font-medium text-foreground shadow-sm">Lab build</div>}
       <ProxySignInHost />
       <LicenseProvider>
         <WhatsNewProvider>
@@ -114,24 +119,24 @@ export function App() {
                       <Route path="dashboard" element={<DashboardPage />} />
                       <Route path="tenants" element={<TenantsPage />} />
                       <Route path="backup" element={<BackupPage />} />
-                      <Route path="app-backup/:tabId?" element={<AppBackupPage />} />
+                      <Route path="app-backup/:tabId?" element={<IntunePageGuard><AppBackupPage /></IntunePageGuard>} />
                       <Route path="drift" element={<DriftPage />} />
-                      <Route path="sync" element={<SyncPage />} />
+                      <Route path="sync" element={<IntunePageGuard><SyncPage /></IntunePageGuard>} />
                       <Route path="audit" element={<AuditPage />} />
                       <Route path="onboarding" element={<OnboardingPage />} />
                       <Route path="settings" element={<SettingsPage />} />
                       <Route path="overview" element={<OverviewPage />} />
-                      <Route path="frameworks" element={<FrameworksPage />} />
+                      <Route path="frameworks" element={<IntunePageGuard><FrameworksPage /></IntunePageGuard>} />
                       <Route path="frameworks/oib" element={<Navigate to="/portal/oib" replace />} />
-                      <Route path="frameworks/:frameworkId" element={<FrameworksPage />} />
-                      <Route path="baselines" element={<BaselinesPage />} />
-                      <Route path="baselines/:baselineId" element={<BaselinesPage />} />
+                      <Route path="frameworks/:frameworkId" element={<IntunePageGuard><FrameworksPage /></IntunePageGuard>} />
+                      <Route path="baselines" element={<IntunePageGuard><BaselinesPage /></IntunePageGuard>} />
+                      <Route path="baselines/:baselineId" element={<IntunePageGuard><BaselinesPage /></IntunePageGuard>} />
                       {["governance", "changes", "operations", "reports"].map((hub) => (
                         <Route key={hub} path={`${hub}/:tabId?`} element={<HubPage hubId={hub} />} />
                       ))}
                       <Route path="alerts/:tabId?" element={<HubPage hubId="alerts" />} />
-                      <Route path="oib" element={<OibPage />} />
-                      <Route path="oib/:flow" element={<OibPage />} />
+                      <Route path="oib" element={<IntunePageGuard><OibPage /></IntunePageGuard>} />
+                      <Route path="oib/:flow" element={<IntunePageGuard><OibPage /></IntunePageGuard>} />
                     </Route>
                   </Route>
                   <Route path="*" element={<Home />} />

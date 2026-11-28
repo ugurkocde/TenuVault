@@ -99,6 +99,21 @@ describe('Drift export', () => {
     expect(lines).toHaveLength(4)
   })
 
+  it('retains coverage notices in CSV and JSON alongside a legacy deletion', () => {
+    const incomplete = { ...result(drifts, NAMES), legacyReadFailure: true, unknownTypes: ['DeviceConfigurations'], largeFolders: ['Users'] }
+    const notice = 'An older backup recorded a read failure without identifying the type.'
+    const csv = driftCsv(incomplete)
+    expect(csv).toContain(notice)
+    expect(csv).toContain('Device Configurations,Not compared')
+    expect(csv).toContain('Users,Not compared')
+    expect(csv).toContain('"Old, removed",Configuration Policy,deleted')
+    expect(JSON.parse(driftJson(incomplete, 'Contoso'))).toMatchObject({
+      legacyReadFailure: true, unknownTypes: ['DeviceConfigurations', 'Users'],
+      coverageNotices: expect.arrayContaining([expect.stringContaining(notice)]),
+      counts: { deleted: 1 },
+    })
+  })
+
   it('nests the same settings under their items in JSON', () => {
     const json = JSON.parse(driftJson(result(drifts, NAMES), 'Contoso', '2026-10-08T00:00:00Z'))
     expect(json.counts).toEqual({ added: 0, modified: 1, deleted: 1 })

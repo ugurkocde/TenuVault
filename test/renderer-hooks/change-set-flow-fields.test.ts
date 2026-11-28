@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
 vi.mock("../../src/renderer/lib/plan-dialog", () => ({ showFeaturePlanError: () => false }))
 
+vi.mock("@desktop/lib/bridge", () => ({ bridge: {} }))
 import { ChangeSetFlow } from "../../src/renderer/features/shared/ChangeSetFlow"
 import type { ChangeSet, ChangeSetActions } from "../../src/renderer/features/shared/change-set"
 

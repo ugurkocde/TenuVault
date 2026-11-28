@@ -1,0 +1,23 @@
+{
+  "folder": "ApiConnectors",
+  "path": "identity/apiConnectors",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "app-only",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "skipped",
+  "cause": "license",
+  "responses": {
+    "/v1.0/identity/apiConnectors": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AADB2C99039",
+          "message": "The feature self service sign up is not enabled for the tenant 'tenant-9c2b3f4c43a1.example.test'"
+        }
+      }
+    }
+  }
+}

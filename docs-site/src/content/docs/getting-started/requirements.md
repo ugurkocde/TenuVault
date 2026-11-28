@@ -31,10 +31,11 @@ If you do not have one of these roles yourself, select **Someone else is the adm
 
 ## Admins who use TenuVault
 
-TenuVault uses delegated permissions only. Every request runs as the signed-in admin, so the app can never do more than that admin can do in Intune.
+Interactive backups and restores use delegated permissions and run within the signed-in admin’s roles. Scheduled backups can use the optional read-only [Backup Reader](/backups/backup-reader/).
 
 | You want to | You need |
 | --- | --- |
+| Back up or restore supported Entra ID configuration | The Entra role required for the area, including [Conditional Access roles](/backups/conditional-access/#permissions) where applicable. Review [Entra ID restore](/restore/identity/) before adding write access. |
 | Back up, compare and restore Intune configuration | An Intune role, for example **Intune Administrator**. Read access is enough for backups; restores write to Intune and need write access to the objects you restore. |
 | Store backups in your own Azure storage account | **Storage Blob Data Contributor** on the storage account, and a role that can read the storage account in Azure (for example **Reader**) so it appears in the storage picker. |
 | Store backups on your computer | Nothing extra. |
@@ -45,7 +46,7 @@ Azure storage is available on the Pro and MSP plans. Community keeps backups on 
 
 ### Conditional Access
 
-MFA and Conditional Access apply to TenuVault the same way they apply to the Intune admin center.
+MFA and Conditional Access apply to TenuVault to the Microsoft sign-in used by the app.
 
 TenuVault signs in through your default browser on Windows and macOS, so you can use a separate admin account. Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
 
@@ -56,7 +57,7 @@ TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP
 | Destination | Used for | Required |
 | --- | --- | --- |
 | `login.microsoftonline.com` | Microsoft sign-in and tokens | Yes |
-| `graph.microsoft.com` | Reading and writing Intune configuration | Yes |
+| `graph.microsoft.com` | Reading configuration for Entra ID and Intune, and writing supported restores | Yes |
 | `www.tenuvault.com` | License checks, and the capture check before an [App Backup](/apps/app-backup/) installer capture | Yes |
 | `management.azure.com` | Listing your subscriptions and storage accounts in the storage picker | Only for Azure storage |
 | `<account>.blob.core.windows.net` | Reading and writing backups in your storage account | Only for Azure storage |

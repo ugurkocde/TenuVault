@@ -1,18 +1,23 @@
-import { withBackupServerTime } from "./helpers"
-import { mkdtempSync } from "node:fs"
-import { disabledFolders } from "../src/shared/services/modules"
+import { AuthError } from "@azure/msal-node"
+import { TENUVAULT_CLIENT_ID } from "../src/shared/tenant-connection"
+import { mkdtempSync, rmSync } from "node:fs"
+import { DEFAULT_SELECTION, disabledFolders } from "../src/shared/services/modules"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
-import { BackupEngine, CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit, safeFileName, verifyStorageAccess } from "../src/main/backup/engine"
+import { BackupEngine, type BackupJob, CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit, safeFileName, verifyStorageAccess } from "../src/main/backup/engine"
 import { scheduledResult } from "../src/main/backup/scheduler"
+import { FailedAttemptLog } from "../src/main/backup/failed-attempts"
+import { firstBackupEvent } from "../src/main/setup-diagnostics/hooks"
 import { backupRoutes, jobStatus, surfaceTokenErrors } from "../src/main/api/desktop-routes"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
+import { manifestCoverage } from "../src/shared/backup-outcomes"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
+import { memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -47,7 +52,10 @@ function fakeGraph(overrides: Record<string, Response | (() => Response)> = {}) 
     if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
     if (url.pathname.endsWith("/assignments")) return Response.json({ value: [] })
     const id = url.pathname.split("/").pop()
-    return Response.json({ "@odata.context": "ctx", id, detail: true })
+    const expansion = url.searchParams.get("$expand")
+    const collections = expansion === "settings" ? { settings: [] } : expansion?.startsWith("scheduledActionsForRule")
+      ? { assignments: [], scheduledActionsForRule: [] } : expansion === "assignments" ? { assignments: [] } : {}
+    return Response.json({ "@odata.context": "ctx", ...collections, id, detail: true })
   }
 }
 
@@ -71,6 +79,194 @@ async function finished(engine: BackupEngine, id: string) {
 }
 
 describe("BackupEngine", () => {
+  it.each([["TenuVault app", TENUVAULT_CLIENT_ID], ["own registration", CLIENT]])(
+    "keeps a silent sign-in failure out of backup logs and history with %s",
+    async (_method, clientId) => {
+      const username = "private-admin@example.test"
+      const history = new FailedAttemptLog(memoryStore())
+      const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-engine-")), [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const engine = new BackupEngine({
+        fetch: (input, init) => handleLocalBlobRequest(store, new Request(input, init)),
+        // An OAuth error can reach the token consumer without a SignInRequiredError wrapper.
+        getToken: async () => { throw new AuthError("interaction_required", "", `Sign in again as ${username} (AADSTS50076).`) },
+        onFinished: (job, request) => history.finished(job, request),
+      })
+      const job = await finished(engine, engine.start({ tenantId: TENANT, clientId, storageAccountName: account }).id)
+      const attempts = history.list(TENANT)
+      expect(job.status).toBe("Failed")
+      expect(JSON.stringify({ job, attempts })).not.toContain(username)
+      expect(job.log.join("\n")).toContain("AADSTS50076")
+      expect(attempts).toMatchObject([{ runId: job.id, message: expect.stringContaining("Sign in again") }])
+    },
+  )
+
+  it.each([
+    [400, "InvalidHeaderValue", "Check that the backup storage is available and retry."],
+    [403, "AuthenticationFailed", "Sign in again to this tenant."],
+    [404, "BlobNotFound", "Check the configured container or backup location."],
+    [403, "AuthorizationFailure", "Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows."],
+  ])("reports Azure Blob HTTP %i %s in the job and history with relevant guidance", async (status, code, guidance) => {
+    const identifier = "private-admin@example.test"
+    const history = new FailedAttemptLog(memoryStore())
+    const engine = new BackupEngine({
+      fetch: async () => new Response(`<Error><Code>${code}</Code><Message>Could not use ${identifier}.</Message></Error>`, { status }),
+      getToken: async () => "token",
+      onFinished: (job, request) => history.finished(job, request),
+    })
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: "example" }).id)
+    const attempts = history.list(TENANT)
+    expect(job.status).toBe("Failed")
+    expect(JSON.stringify({ job, attempts })).not.toContain(identifier)
+    const detail = `HTTP ${status}, ${code}`
+    expect(job.log.join("\n")).toContain(detail)
+    expect(job.log.join("\n")).toContain(guidance)
+    expect(attempts).toMatchObject([{ runId: job.id, message: expect.stringContaining(detail) }])
+    expect(attempts[0]?.message).toContain(code === "AuthorizationFailure" ? "Allow this computer's public IP address" : guidance)
+    expect(firstBackupEvent(job)).toEqual({ name: "first_backup", props: { result: "failed", errorClass: status === 403 ? "permission" : "storage" } })
+  })
+
+  it.each([
+    [404, "Microsoft Graph request failed (HTTP 404)."],
+    [429, "Microsoft Graph throttled the request (HTTP 429)."],
+  ])("keeps Graph HTTP %i guidance for an unreadable type", async (status, guidance) => {
+    const graph = fakeGraph({
+      "/beta/deviceManagement/deviceCompliancePolicies": () => new Response("", { status, headers: { "retry-after": "0.001" } }),
+    })
+    const { engine, store, account } = setup(graph)
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(job.log.join("\n")).toContain(guidance)
+    expect(metadata.Outcomes).toContainEqual(expect.objectContaining({ Folder: "CompliancePolicies", Outcome: "failed", Error: guidance, Status: status }))
+  })
+
+  it.each(["", null, false])("marks the type unread when a later list page has a continuation of %j", async (nextLink) => {
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations?page=2": Response.json({ value: [], "@odata.nextLink": nextLink }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Coverage: "Incomplete" })
+    expect(metadata.Outcomes).toContainEqual({
+      Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Error: "Graph returned an invalid continuation link",
+    })
+  })
+
+  it.each([429, 503])("marks a later page unread after HTTP %i retries run out", async (status) => {
+    const retry = vi.fn(() => new Response("", { status, headers: { "retry-after": "0.001" } }))
+    const { engine, store, account } = setup(fakeGraph({ "/beta/deviceManagement/deviceConfigurations?page=2": retry }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(retry).toHaveBeenCalledTimes(3)
+    expect(metadata).toMatchObject({ Coverage: "Incomplete", FailedTypes: ["DeviceConfigurations"] })
+    expect(metadata.Outcomes).toContainEqual(expect.objectContaining({ Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Status: status }))
+  })
+
+  it("leaves the type unread when a later page is cancelled", async () => {
+    let job!: ReturnType<BackupEngine["start"]>
+    const { engine, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations?page=2": () => {
+        engine.cancel(job.id)
+        return Response.json({ value: [] })
+      },
+    }))
+    job = engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account })
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Cancelled")
+    expect(job.outcomes).toMatchObject({ coverage: "incomplete" })
+    expect(job.outcomes?.types).toContainEqual(expect.objectContaining({ folder: "DeviceConfigurations", outcome: "failed", saved: 0 }))
+  })
+
+  it("keeps policy names recognizable while masking account identifiers in item failures", async () => {
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: "BitLocker (admin+lab@example.test, guest_example.test#EXT#@tenant.onmicrosoft.com)" }] }),
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({ error: { code: "BadRequest" } }, { status: 400 }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const masked = "BitLocker ([redacted], [redacted])"
+    expect(job.log.join("\n")).toContain(`Could not back up "${masked}"`)
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    expect(errors).toEqual([expect.stringContaining(`${masked}:`)])
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const { notReadReasons } = manifestCoverage(metadata)
+    expect(notReadReasons?.DeviceConfigurations).toContain(`${masked}:`)
+    expect(JSON.stringify({ log: job.log, errors, notReadReasons })).not.toMatch(/admin\+lab@|guest_example\.test#EXT#@/i)
+  })
+
+  it("keeps a personal policy name out of failed assignment recovery diagnostics", async () => {
+    const name = "Private Ada Lovelace"
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: name }] }),
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({ id: "dc1", displayName: name }),
+      "/beta/deviceManagement/deviceConfigurations/dc1/assignments": Response.json({}, { status: 400 }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    const reason = manifestCoverage(metadata).notReadReasons?.DeviceConfigurations
+    expect.soft(job.log.join("\n")).toContain("Could not back up device configuration profiles:")
+    expect.soft(reason).toContain("device configuration profiles:")
+    expect(JSON.stringify({ log: job.log, errors, reason, outcomes: metadata.Outcomes })).not.toContain(name)
+  })
+
+  it("keeps a personal policy name out of invalid detail diagnostics", async () => {
+    const name = "Ada Lovelace"
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({ value: [{ id: "dc1", displayName: name }] }),
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({ id: "wrong-id", displayName: name, assignments: [] }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    const reason = "device configuration profiles: Microsoft Graph returned a policy without the requested id"
+    expect.soft(job.log.join("\n")).toContain(`Could not back up ${reason}`)
+    expect.soft(errors).toEqual([reason])
+    expect.soft(manifestCoverage(metadata).notReadReasons?.DeviceConfigurations).toContain(reason)
+    expect(JSON.stringify({ log: job.log, errors, metadata })).not.toContain(name)
+  })
+
+  it("keeps encoded account identifiers from rejected detail continuations out of backup diagnostics", async () => {
+    const accountPath = encodeURIComponent("private-admin+backup@example.test")
+    const graph = fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments": Response.json({
+        id: "dc1", assignments: [],
+        "assignments@odata.nextLink": `https://graph.microsoft.com/beta/users/${accountPath}?page=2`,
+      }),
+    })
+    const { engine, store, account } = setup(graph)
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    expect(job.log.join("\n")).toContain("Invalid Graph continuation link (it moves to another collection)")
+    expect(JSON.stringify({ log: job.log, errors, outcomes: metadata.Outcomes })).not.toContain(accountPath)
+  })
+
+  it.each([
+    ["invalid expanded collection", { assignments: null }, "Graph returned an invalid policy collection"],
+    ["missing assignment ID", { assignments: [{}] }, "Microsoft Graph returned a collection entry without id"],
+    ["invalid continuation link", { assignments: [], "assignments@odata.nextLink": null }, "Graph returned an invalid continuation link"],
+    ["continuation to another collection", { assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/users?page=2" }, "Invalid Graph continuation link (it moves to another collection)"],
+    ["invalid continuation body", { assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/dc1/assignments?page=2" }, "Graph returned an invalid policy collection"],
+    ["invalid JSON", {}, "Microsoft Graph returned invalid JSON."],
+    ["continuation HTTP error", { assignments: [], "assignments@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/dc1/assignments?page=2" }, "Microsoft Graph request failed (HTTP 400)."],
+  ])("keeps a personal policy name out of policy read diagnostics for %s", async (failure, page, message) => {
+    const name = "Private Ada Lovelace"
+    const configs = "/beta/deviceManagement/deviceConfigurations"
+    const { engine, store, account } = setup(fakeGraph({
+      [configs]: Response.json({ value: [{ id: "dc1", displayName: name }] }),
+      [`${configs}/dc1?$expand=assignments`]: () => failure === "invalid JSON" ? new Response("") : Response.json({ id: "dc1", displayName: name, ...page }),
+      [`${configs}/dc1/assignments?page=2`]: () => failure === "continuation HTTP error" ? new Response(null, { status: 400 }) : Response.json({ value: null }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    const errors = job.results?.types.find(type => type.folder === "DeviceConfigurations")?.errors
+    const reason = `device configuration profiles: ${message}`
+    expect.soft(job.log.join("\n")).toContain(`Could not back up ${reason}`)
+    expect.soft(errors).toEqual([reason])
+    expect.soft(manifestCoverage(metadata).notReadReasons?.DeviceConfigurations).toContain(reason)
+    expect(JSON.stringify({ log: job.log, errors, metadata })).not.toContain(name)
+  })
+
   it("keeps every policy when names and id prefixes repeat", async () => {
     // Intune's default enrollment configurations share a display name and the tenant GUID id prefix.
     const prefix = "7192bb9f-ffa6-4f50-9176-7603cd9450d6"
@@ -157,8 +353,8 @@ describe("BackupEngine", () => {
       (await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString(),
     ) as { ItemCounts: Record<string, number>; Status: string }
     expect(metadata.ItemCounts).toEqual({
-      // Opt-in services (Conditional Access) are not attempted while they are off for the tenant.
-      ...Object.fromEntries(INTUNE_TYPES.filter((type) => !disabledFolders([]).includes(type.folder)).map((type) => [type.folder, 0])),
+      // Services that start off (Conditional Access) are not attempted while they are off for the tenant.
+      ...Object.fromEntries(INTUNE_TYPES.filter((type) => !disabledFolders(DEFAULT_SELECTION).includes(type.folder)).map((type) => [type.folder, 0])),
       DeviceConfigurations: 2,
       CompliancePolicies: 1,
       CompliancePolicySettings: 1,
@@ -167,7 +363,7 @@ describe("BackupEngine", () => {
     })
     expect(metadata.Status).toBe("Success")
     const detail = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/CompliancePolicies/Compliance.json`)).data.toString())
-    expect(detail).toEqual({ id: "cp1", detail: true })
+    expect(detail).toEqual({ id: "cp1", detail: true, assignments: [], scheduledActionsForRule: [] })
     // Only the compliance settings are kept from the tenant-wide settings, under a fixed ID.
     const settings = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/CompliancePolicySettings/Compliance policy settings.json`)).data.toString())
     expect(settings).toEqual({ id: "CompliancePolicySettings", secureByDefault: false, deviceComplianceCheckinThresholdDays: 0, isScheduledActionEnabled: true, enhancedJailBreak: false })
@@ -179,7 +375,7 @@ describe("BackupEngine", () => {
     let throttled = 0
     const graph = fakeGraph({
       "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": () =>
-        throttled++ === 0 ? new Response("", { status: 429, headers: { "retry-after": "0.001" } }) : Response.json({ id: "cp1" }),
+        throttled++ === 0 ? new Response("", { status: 429, headers: { "retry-after": "0.001" } }) : Response.json({ id: "cp1", assignments: [], scheduledActionsForRule: [] }),
       "/beta/deviceManagement/configurationPolicies/sc1?$expand=settings": () =>
         Response.json({ error: { message: "SyntheticGraphErrorCanary" } }, { status: 403 }),
     })
@@ -300,19 +496,332 @@ describe("surfaceTokenErrors", () => {
 })
 
 describe("retention", () => {
+  async function clockFixture(test: (fixture: {
+    run: () => Promise<BackupJob>
+    clocks: (wall: string, server?: string | "offline" | "missing") => void
+    has: (folder: string) => Promise<boolean>
+  }) => Promise<void>, old: string) {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-clock-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const container = "intune-backups"
+      await store.createContainer(account, container)
+      await store.put(account, container, `${old}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT })), "application/json")
+      let wall: Date
+      let server: Date | "offline" | "missing"
+      const graph = fakeGraph()
+      // Prior versions kept a clock reading across restarts. Supply those dependencies so restoring
+      // the old guard reproduces its behavior across runs with the same uptime after boot.
+      const priorClock = { retentionClock: memoryStore(), uptime: () => 3600 }
+      const run = () => {
+        const engine = new BackupEngine({
+          fetch: async (input, init) => {
+            const request = new Request(input, init)
+            const url = new URL(request.url)
+            if (localAccountFromUrl(url)) return withServerDate(await handleLocalBlobRequest(store, request), wall)
+            if (server === "offline") throw new TypeError("fetch failed", { cause: { code: "ENETUNREACH" } })
+            return server === "missing" ? graph(url) : withServerDate(graph(url), server)
+          },
+          getToken: async () => "token", retentionDays: () => 30,
+          now: () => wall,
+          ...priorClock,
+        })
+        return finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account,
+          scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) } }).id)
+      }
+      await test({
+        run,
+        clocks: (device, source = device) => { wall = new Date(device); server = source === "offline" || source === "missing" ? source : new Date(source) },
+        has: async folder => (await store.list(account, container, `${folder}/`)).length > 0,
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  it("keeps backups on the first upgraded run with the device clock ahead", async () => {
+    const recent = "backup-2026-09-20-120000"
+    await clockFixture(async ({ clocks, run, has }) => {
+      clocks("2026-10-29T12:00:00Z", "2026-09-24T12:00:00Z")
+      const job = await run()
+      expect(job.status).toBe("Completed")
+      expect(await has(recent)).toBe(true)
+      expect(job.log.join("\n")).toContain("differs from Microsoft's time by about 840.0 hours")
+    }, recent)
+  })
+
+  it("resumes retention with a correct clock after a weekend off", async () => {
+    const old = "backup-2026-09-01-120000"
+    await clockFixture(async ({ clocks, run, has }) => {
+      clocks("2026-09-30T12:00:00Z")
+      await run()
+      expect(await has(old)).toBe(true)
+      clocks("2026-10-03T12:00:00Z")
+      expect((await run()).log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+      expect(await has(old)).toBe(false)
+    }, old)
+  })
+
+  it.each(["offline", "missing"] as const)("keeps backups when Microsoft's time is %s", async source => {
+    const expired = "backup-2026-08-01-120000"
+    await clockFixture(async ({ clocks, run, has }) => {
+      clocks("2026-08-30T12:00:00Z")
+      await run()
+      expect(await has(expired)).toBe(true)
+      clocks("2026-09-24T12:00:00Z", source)
+      expect((await run()).log.join("\n")).toContain("could not verify the time with Microsoft")
+      expect(await has(expired)).toBe(true)
+    }, expired)
+  })
+
+  it("ignores and keeps a future-dated local backup until server time passes its date, then applies normal retention", async () => {
+    const old = "backup-2026-08-01-120000"
+    await clockFixture(async ({ clocks, run, has }) => {
+      clocks("2026-10-29T12:00:00Z", "2026-09-24T12:00:00Z")
+      const jumped = await run()
+      expect(jumped.status).toBe("Completed")
+      expect(await has(old)).toBe(true)
+      const future = jumped.backupFolder!
+
+      clocks("2026-09-24T13:00:00Z")
+      const corrected = await run()
+      expect(corrected.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+      expect(await has(old)).toBe(false)
+      expect(await has(future)).toBe(true)
+
+      clocks("2026-12-01T12:00:00Z")
+      const expired = await run()
+      expect(expired.log.join("\n")).toContain("Removed 2 backups older than 30 days.")
+      expect(await has(future)).toBe(false)
+    }, old)
+  })
+
+  it("uses the most recent time observation by monotonic tick instead of the maximum Date", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-tick-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const container = "intune-backups"
+      const old = "backup-2026-08-01-120000"
+      await store.createContainer(account, container)
+      await store.put(account, container, `${old}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT })), "application/json")
+      const graph = fakeGraph()
+      let tick = 1000
+      const spy = vi.spyOn(performance, "now").mockImplementation(() => { tick += 100; return tick })
+      let graphCalls = 0
+      try {
+        const engine = new BackupEngine({
+          fetch: async (input, init) => {
+            const request = new Request(input, init)
+            const url = new URL(request.url)
+            if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+            graphCalls++
+            // First response carries a larger Date three hours ahead; later responses carry the real time.
+            const observed = graphCalls === 1 ? new Date("2026-09-24T15:00:00Z") : new Date("2026-09-24T12:00:00Z")
+            return withServerDate(graph(url), observed)
+          },
+          getToken: async () => "token",
+          retentionDays: () => 30,
+          now: () => new Date("2026-09-24T12:00:00Z"),
+        })
+        const job = await finished(engine, engine.start({
+          tenantId: TENANT, clientId: CLIENT, storageAccountName: account,
+          scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) },
+        }).id)
+        expect(graphCalls).toBeGreaterThan(1)
+        expect(job.status).toBe("Completed")
+        expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+        expect(await store.list(account, container, `${old}/`)).toHaveLength(0)
+      } finally {
+        spy.mockRestore()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("extrapolates the most recent time observation to now using the monotonic tick", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-extrapolate-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const container = "intune-backups"
+      // Not expired at 12:00:00Z, expired once extrapolated 20 minutes forward to 12:20:00Z.
+      const borderline = "backup-2026-08-25-121000"
+      await store.createContainer(account, container)
+      await store.put(account, container, `${borderline}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT })), "application/json")
+      const graph = fakeGraph()
+      let tick = 10_000
+      let wall = new Date("2026-09-24T12:00:00Z")
+      const spy = vi.spyOn(performance, "now").mockImplementation(() => tick)
+      try {
+        const engine = new BackupEngine({
+          fetch: async (input, init) => {
+            const request = new Request(input, init)
+            const url = new URL(request.url)
+            if (localAccountFromUrl(url)) {
+              const response = await handleLocalBlobRequest(store, request)
+              if (request.method === "PUT" && url.pathname.endsWith("/metadata.json")) {
+                tick += 20 * 60_000
+                wall = new Date("2026-09-24T12:20:00Z")
+              }
+              return response
+            }
+            tick += 10
+            return withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
+          },
+          getToken: async () => "token",
+          retentionDays: () => 30,
+          now: () => wall,
+        })
+        const job = await finished(engine, engine.start({
+          tenantId: TENANT, clientId: CLIENT, storageAccountName: account,
+          scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) },
+        }).id)
+        expect(job.status).toBe("Completed")
+        expect(job.log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+        expect(await store.list(account, container, `${borderline}/`)).toHaveLength(0)
+      } finally {
+        spy.mockRestore()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each(["429", "age", "redirected", "cross-origin"] as const)(
+    "ignores Graph response Date when condition fails: %s",
+    async condition => {
+      const root = mkdtempSync(join(tmpdir(), "tv-retention-obs-"))
+      try {
+        const store = new LocalBlobStore(root, [randomBytes(32)])
+        const account = localStorageAccountName(TENANT)
+        const container = "intune-backups"
+        const old = "backup-2026-08-01-120000"
+        await store.createContainer(account, container)
+        await store.put(account, container, `${old}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT })), "application/json")
+        const graph = fakeGraph()
+        const wall = new Date("2026-09-24T12:00:00Z")
+        let throttled = false
+        const engine = new BackupEngine({
+          fetch: async (input, init) => {
+            const request = new Request(input, init)
+            const url = new URL(request.url)
+            if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+            if (condition === "redirected") {
+              if (init?.redirect === "error") throw new TypeError("Unexpected redirect: error")
+              const response = withServerDate(graph(url), wall)
+              Object.defineProperty(response, "redirected", { value: true })
+              Object.defineProperty(response, "url", { value: url.href })
+              return response
+            }
+            if (condition === "429") {
+              if (!throttled) {
+                throttled = true
+                return withServerDate(new Response("", { status: 429, headers: { "retry-after": "0.001" } }), wall)
+              }
+              return graph(url)
+            }
+            if (condition === "age") {
+              const response = withServerDate(graph(url), wall)
+              response.headers.set("age", "30")
+              return response
+            }
+            const response = withServerDate(graph(url), wall)
+            Object.defineProperty(response, "url", { value: `https://other.example${url.pathname}` })
+            return response
+          },
+          getToken: async () => "token",
+          retentionDays: () => 30,
+          now: () => wall,
+        })
+        const job = await finished(engine, engine.start({
+          tenantId: TENANT, clientId: CLIENT, storageAccountName: account,
+          scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "CompliancePolicies").map(type => type.folder) },
+        }).id)
+        expect(job.status, job.log.join("\n")).toBe("Completed")
+        expect(job.log.join("\n")).toContain("could not verify the time with Microsoft")
+        expect(await store.list(account, container, `${old}/`)).toHaveLength(1)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it("keeps retention in UTC when DST ends and the device changes time zone", async () => {
+    const old = "backup-2026-10-02-065000"
+    const original = process.env.TZ
+    try {
+      await clockFixture(async ({ clocks, run, has }) => {
+        process.env.TZ = "America/New_York"
+        clocks("2026-10-30T05:45:00Z")
+        await run()
+        expect(await has(old)).toBe(true)
+        clocks("2026-11-01T05:45:00Z")
+        expect((await run()).backupFolder).toBe("backup-2026-11-01-054500")
+        expect(await has(old)).toBe(true)
+        clocks("2026-11-01T06:15:00Z")
+        expect((await run()).backupFolder).toBe("backup-2026-11-01-061500")
+        expect(await has(old)).toBe(true)
+        process.env.TZ = "Pacific/Auckland"
+        clocks("2026-11-01T06:30:00Z")
+        await run()
+        expect(await has(old)).toBe(true)
+        clocks("2026-11-01T07:00:00Z")
+        expect((await run()).log.join("\n")).toContain("Removed 1 backup older than 30 days.")
+        expect(await has(old)).toBe(false)
+      }, old)
+    } finally {
+      if (original === undefined) delete process.env.TZ
+      else process.env.TZ = original
+    }
+  })
+
+  it("keeps older backups when a local encrypted policy disagrees with its manifest", async () => {
+    const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-retention-")), [randomBytes(32)])
+    const account = localStorageAccountName(TENANT)
+    const container = "intune-backups"
+    const old = "backup-2026-08-01-020000"
+    const current = "backup-2026-09-24-120000"
+    await store.createContainer(account, container)
+    await store.put(account, container, `${old}/metadata.json`, Buffer.from("{}"), "application/json")
+    await store.put(account, container, `${old}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
+    const graph = fakeGraph()
+    let replaced = false
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (!localAccountFromUrl(url)) return withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
+      const response = await handleLocalBlobRequest(store, request)
+      if (request.method === "PUT" && url.pathname.endsWith(`${current}/metadata.json`) && response.ok) {
+        const manifest = JSON.parse((await store.get(account, container, `${current}/metadata.json`)).data.toString())
+        const [key, entry] = Object.entries<{ file: string }>(manifest.Items)[0]!
+        await store.put(account, container, `${current}/${key.split("/")[0]}/${entry.file}`, Buffer.from('{"id":"different"}'), "application/json")
+        replaced = true
+      }
+      return response
+    }
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(replaced).toBe(true)
+    expect(job.log.join("\n")).toContain("does not match its manifest")
+    expect(await store.list(account, container, `${old}/`)).toHaveLength(2)
+  })
+
   it("deletes backups older than the retention period after a backup, keeping newer ones", async () => {
     const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-retention-")), [randomBytes(32)])
     const account = localStorageAccountName(TENANT)
     await store.createContainer(account, "intune-backups")
     for (const folder of ["backup-2026-08-01-020000", "backup-2026-09-20-020000"]) {
-      await store.put(account, "intune-backups", `${folder}/metadata.json`, Buffer.from(JSON.stringify({ Items: { "CompliancePolicies/a": { file: "A.json" } } })), "application/json")
-      await store.put(account, "intune-backups", `${folder}/CompliancePolicies/A.json`, Buffer.from('{"id":"a"}'), "application/json")
+      await store.put(account, "intune-backups", `${folder}/metadata.json`, Buffer.from("{}"), "application/json")
+      await store.put(account, "intune-backups", `${folder}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
     }
     const graph = fakeGraph()
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({
       fetch: fetchImpl,
@@ -334,9 +843,9 @@ describe("retention and storage protection", () => {
     const account = localStorageAccountName(TENANT)
     await store.createContainer(account, "intune-backups")
     const old = "backup-2026-08-01-020000"
-    await store.put(account, "intune-backups", `${old}/metadata.json`, Buffer.from(JSON.stringify({ Status: "Success", TenantId: TENANT, Items: { "CompliancePolicies/a": { file: "A.json" }, "DeviceConfigurations/b": { file: "B.json" } } })), "application/json")
-    await store.put(account, "intune-backups", `${old}/CompliancePolicies/A.json`, Buffer.from('{"id":"a"}'), "application/json")
-    await store.put(account, "intune-backups", `${old}/DeviceConfigurations/B.json`, Buffer.from('{"id":"b"}'), "application/json")
+    await store.put(account, "intune-backups", `${old}/metadata.json`, Buffer.from(JSON.stringify({ Status: "Success", TenantId: TENANT })), "application/json")
+    await store.put(account, "intune-backups", `${old}/CompliancePolicies/A.json`, Buffer.from("{}"), "application/json")
+    await store.put(account, "intune-backups", `${old}/DeviceConfigurations/B.json`, Buffer.from("{}"), "application/json")
     const graph = fakeGraph()
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
@@ -344,7 +853,7 @@ describe("retention and storage protection", () => {
       if (request.method === "DELETE" && decodeURIComponent(url.pathname).endsWith(`${old}/${protectedName}`)) {
         return new Response("<Error><Code>BlobImmutableDueToPolicy</Code></Error>", { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })
       }
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
@@ -354,13 +863,13 @@ describe("retention and storage protection", () => {
 
   it("touches no policy file when the metadata of an old backup is protected", async () => {
     const { job, left, old } = await run("metadata.json")
-    expect(job.log.join("\n")).toContain("storage immutability or a legal hold refused deletion")
+    expect(job.log.join("\n")).toContain("Kept 1 older backup protected")
     expect(left).toEqual([`${old}/CompliancePolicies/A.json`, `${old}/DeviceConfigurations/B.json`, `${old}/metadata.json`])
   })
 
   it("removes the metadata first, so a partly deleted backup is not reported as complete", async () => {
     const { job, left, old } = await run("DeviceConfigurations/B.json")
-    expect(job.log.join("\n")).toContain("Kept the remaining files in backup")
+    expect(job.log.join("\n")).toContain("Retention partly removed")
     expect(left).toEqual([`${old}/DeviceConfigurations/B.json`])
   })
 })
@@ -375,7 +884,7 @@ describe("retention after incomplete backups", () => {
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
@@ -422,14 +931,16 @@ describe("retention after incomplete backups", () => {
   })
 
   it("skips a newly supported type the app registration has no permission for, without blocking retention", async () => {
-    const graph = fakeGraph({ "/beta/deviceManagement/deviceManagementScripts": () => Response.json({ error: { message: "Forbidden" } }, { status: 403 }) })
+    const graph = fakeGraph({ "/beta/deviceManagement/deviceManagementScripts": () => Response.json({ error: { code: "Forbidden" } }, { status: 403 }) })
     const { engine, store, account } = setup(graph)
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
     expect(job.progressMessage).toBe("Backup completed successfully")
-    expect(job.log.join("\n")).toMatch(/Skipped Windows PowerShell scripts: access was denied/)
+    expect(job.log.join("\n")).toContain("Skipped Windows PowerShell scripts (HTTP 403, Forbidden): access was denied.")
     expect(job.results!.types.find((type) => type.folder === "PowerShellScripts")).toMatchObject({ state: "skipped", reason: expect.stringMatching(/^Access was denied\./) })
     const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
     expect(metadata).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: ["PowerShellScripts"] })
+    expect(metadata.Outcomes).toContainEqual(expect.objectContaining({ Folder: "PowerShellScripts", Outcome: "skipped", Status: 403, Code: "Forbidden" }))
+    expect(manifestCoverage(metadata).notReadReasons?.PowerShellScripts).toContain("(HTTP 403, Forbidden) Access was denied.")
   })
 
   it("backs up administrative templates with paged assignments, definitions and presentation values", async () => {

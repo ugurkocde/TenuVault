@@ -54,6 +54,15 @@ export class ProxyAuthRequiredError extends Error {
   }
 }
 
+/** Only an explicit proxy HTTP response proves the request never reached the destination. */
+export function isProxyAuthResponse(error: unknown): boolean {
+  const seen = new Set<unknown>()
+  while (error instanceof NetworkUnreachableError && !seen.has(error)) {
+    seen.add(error); error = error.cause
+  }
+  return error instanceof ProxyAuthRequiredError
+}
+
 /** Chromium's codes for a proxy that asked for credentials it did not get or did not accept. */
 const PROXY_AUTH_CODE = /PROXY_AUTH|UNEXPECTED_PROXY_AUTH/
 

@@ -43,6 +43,11 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       if (body.assignments === true) features.push("restoreAssignments")
       return features
     }
+    case "/api/restore-configuration":
+      return body.operation === "update" ? ["replaceRestore"] : []
+    case "/api/restore-directory":
+      // Saved-page cancellation, read-only reconciliation and local discard remain available after a plan ends.
+      return body.action === "cancel" || body.action === "discard" || body.action === "reconcile" ? [] : ["directoryRestore"]
     case "/api/restore-validate":
       return ["fullRestore"]
     case "/api/revert-policy":
@@ -74,8 +79,8 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       return features
     }
     case "/api/sync": {
-      // A Sync run to more than one target is an MSP action on every tenant it names. One
-      // target outside the Pro license pair is refused by the route, which knows the licenses.
+      // A Sync run to more than one target is an MSP action on every tenant it names. For one
+      // target, the route checks that both tenants have an active Pro or MSP entitlement.
       const features = typeof body.action === "string" ? featureRouteFeatures(pathname, body.action) : []
       if (features.length && Array.isArray(body.targetTenants) && body.targetTenants.length > 1) features.push("bulkActions")
       return features
@@ -135,11 +140,12 @@ export function planGuard(planOf: (tenantId: string) => Promise<Plan | null>) {
     // here and is never left to the request; saved results stay readable and exportable.
     const newCisAssessment = pathname === "/api/frameworks" && (body.action === "assess" || body.action === "assess-start") && typeof body.frameworkId === "string" && CIS_FRAMEWORKS.has(body.frameworkId)
     const metadataWrite = pathname === "/api/tenant-metadata/save" || pathname === "/api/tenant-metadata/delete"
+    const directoryRestore = pathname === "/api/restore-directory"
     for (const tenantId of [body.tenantId, ...targets]) {
       const plan = await planOf(tenantId)
       // Single tenant calls leave an unusable tenant to the request itself. A bulk run must be
       // refused as a whole before any work starts, so an unusable tenant refuses it here.
-      if (tenantId === body.tenantId && !plan && !newCisAssessment && !metadataWrite && !((pathname === "/api/backup/start" || pathname === "/api/detect-drifts") && isBulk(body))) return null
+      if (tenantId === body.tenantId && !plan && !newCisAssessment && !metadataWrite && !directoryRestore && !((pathname === "/api/backup/start" || pathname === "/api/detect-drifts") && isBulk(body))) return null
       const missing = features.find((feature) => !plan || !allows(plan, feature))
       if (missing) return Response.json({ error: upgradeMessage(missing), upgrade: missing }, { status: 402 })
     }

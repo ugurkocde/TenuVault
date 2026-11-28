@@ -1,0 +1,1916 @@
+{
+  "folder": "PimGroupAssignmentSchedules",
+  "path": "identityGovernance/privilegedAccess/group/assignmentSchedules",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 62,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/groups?$select=id&$top=999&$count=true&$filter=(securityEnabled%20eq%20true%20or%20groupTypes%2Fany(c%3Ac%20eq%20%27Unified%27))%20and%20onPremisesSyncEnabled%20ne%20true%20and%20not%20groupTypes%2Fany(c%3Ac%20eq%20%27DynamicMembership%27)": {
+      "status": 200,
+      "body": {
+        "@odata.count": 63,
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-608cd6db456b"
+          },
+          {
+            "id": "00000000-0000-4000-8000-f610d5be08ee"
+          },
+          {
+            "id": "00000000-0000-4000-8000-847c9f4d47f8"
+          },
+          {
+            "id": "00000000-0000-4000-8000-acb1333deddc"
+          },
+          {
+            "id": "00000000-0000-4000-8000-abffe5b0ac08"
+          },
+          {
+            "id": "00000000-0000-4000-8000-b25fab98f098"
+          },
+          {
+            "id": "00000000-0000-4000-8000-bd96c6237863"
+          },
+          {
+            "id": "00000000-0000-4000-8000-cf3e1690026e"
+          },
+          {
+            "id": "00000000-0000-4000-8000-96fb0fd6064a"
+          },
+          {
+            "id": "00000000-0000-4000-8000-dd6cfcca2304"
+          },
+          {
+            "id": "00000000-0000-4000-8000-eea2a5d11f68"
+          },
+          {
+            "id": "00000000-0000-4000-8000-5b3f04c12fee"
+          },
+          {
+            "id": "00000000-0000-4000-8000-1448944d8d8d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-3697479425dd"
+          },
+          {
+            "id": "00000000-0000-4000-8000-51bd0a40d7b9"
+          },
+          {
+            "id": "00000000-0000-4000-8000-a6bbc362d62f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-9704235ad501"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7ff4b62a1263"
+          },
+          {
+            "id": "00000000-0000-4000-8000-cf3b171f395f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-c50cd51772bf"
+          },
+          {
+            "id": "00000000-0000-4000-8000-58d081dd95b5"
+          },
+          {
+            "id": "00000000-0000-4000-8000-68503c79c5c9"
+          },
+          {
+            "id": "00000000-0000-4000-8000-e3ae54f1defe"
+          },
+          {
+            "id": "00000000-0000-4000-8000-e1739b0352d1"
+          },
+          {
+            "id": "00000000-0000-4000-8000-8685983ecfad"
+          },
+          {
+            "id": "00000000-0000-4000-8000-af3c4cb78a2d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-9d18f4ea595d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-8e201bc15282"
+          },
+          {
+            "id": "00000000-0000-4000-8000-8699638fb82d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-6fbb69682a27"
+          },
+          {
+            "id": "00000000-0000-4000-8000-d0e587a7d421"
+          },
+          {
+            "id": "00000000-0000-4000-8000-84b43833e51f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-e5de8bef1732"
+          },
+          {
+            "id": "00000000-0000-4000-8000-24d9c4ac2102"
+          },
+          {
+            "id": "00000000-0000-4000-8000-763e1c4fc951"
+          },
+          {
+            "id": "00000000-0000-4000-8000-43e07e325b91"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7aaec7cdf428"
+          },
+          {
+            "id": "00000000-0000-4000-8000-9227e7ac0046"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7c4bb335534f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-d209a9c4aa59"
+          },
+          {
+            "id": "00000000-0000-4000-8000-47cbe6db293f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-3b95f7c87355"
+          },
+          {
+            "id": "00000000-0000-4000-8000-c78f34d92bb6"
+          },
+          {
+            "id": "00000000-0000-4000-8000-47010d7616a3"
+          },
+          {
+            "id": "00000000-0000-4000-8000-1821753c4266"
+          },
+          {
+            "id": "00000000-0000-4000-8000-0a3e66bd699a"
+          },
+          {
+            "id": "00000000-0000-4000-8000-ad8abcb315ed"
+          },
+          {
+            "id": "00000000-0000-4000-8000-025481d09e85"
+          },
+          {
+            "id": "00000000-0000-4000-8000-ad12bb07d90d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7cfbe79a1eb2"
+          },
+          {
+            "id": "00000000-0000-4000-8000-3a2a1ff284bf"
+          },
+          {
+            "id": "00000000-0000-4000-8000-f9660973a155"
+          },
+          {
+            "id": "00000000-0000-4000-8000-548aa095e25e"
+          },
+          {
+            "id": "00000000-0000-4000-8000-cd1b72fca497"
+          },
+          {
+            "id": "00000000-0000-4000-8000-ca9b5165e074"
+          },
+          {
+            "id": "00000000-0000-4000-8000-077a5e269590"
+          },
+          {
+            "id": "00000000-0000-4000-8000-94046128ce32"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7091e81da2a9"
+          },
+          {
+            "id": "00000000-0000-4000-8000-f3f9ff683dbd"
+          },
+          {
+            "id": "00000000-0000-4000-8000-13ab29f1f606"
+          },
+          {
+            "id": "00000000-0000-4000-8000-c5dc2b2111b6"
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54"
+          },
+          {
+            "id": "00000000-0000-4000-8000-432f241af06a"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-608cd6db456b%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-608cd6db456b_member_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-608cd6db456b",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:05:34.1465949Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-608cd6db456b_member_00000000-0000-4000-8000-8e3ead324ef9",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-8e3ead324ef9",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-608cd6db456b",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:05:34.1465949Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-f610d5be08ee%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-f610d5be08ee_member_00000000-0000-4000-8000-7b5734ee2f3a",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-7b5734ee2f3a",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-f610d5be08ee",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:05:34.7396303Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-847c9f4d47f8%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-847c9f4d47f8_member_00000000-0000-4000-8000-00d96666493f",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-00d96666493f",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-847c9f4d47f8",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:05:35.3847181Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-acb1333deddc%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-abffe5b0ac08%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-b25fab98f098%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-bd96c6237863%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-cf3e1690026e%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-96fb0fd6064a%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-dd6cfcca2304%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-eea2a5d11f68%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-eea2a5d11f68_member_00000000-0000-4000-8000-9f3afd74688b",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-9f3afd74688b",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-eea2a5d11f68",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:05:42.3039399Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-5b3f04c12fee%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-1448944d8d8d%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-1448944d8d8d_member_00000000-0000-4000-8000-2bfa8e4b6fac",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-2bfa8e4b6fac",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-1448944d8d8d",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:05:45.778733Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-3697479425dd%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-51bd0a40d7b9%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-a6bbc362d62f%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-9704235ad501%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7ff4b62a1263%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-cf3b171f395f%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-cf3b171f395f_member_00000000-0000-4000-8000-9cc3afa34428",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-9cc3afa34428",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-cf3b171f395f",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:01.5744112Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-c50cd51772bf%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-58d081dd95b5%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-58d081dd95b5_member_00000000-0000-4000-8000-00d96666493f",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-00d96666493f",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-58d081dd95b5",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:02.878103Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-68503c79c5c9%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-68503c79c5c9_member_00000000-0000-4000-8000-9cc3afa34428",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-9cc3afa34428",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-68503c79c5c9",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:03.5148811Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-e3ae54f1defe%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-e3ae54f1defe_owner_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "owner",
+            "groupId": "00000000-0000-4000-8000-e3ae54f1defe",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:04.2377796Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-e3ae54f1defe_member_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-e3ae54f1defe",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:04.2377796Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-e1739b0352d1%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-e1739b0352d1_member_00000000-0000-4000-8000-7b5734ee2f3a",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-7b5734ee2f3a",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-e1739b0352d1",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:04.9209781Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-8685983ecfad%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-af3c4cb78a2d%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-af3c4cb78a2d_member_00000000-0000-4000-8000-2b3bd74c0dea",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-2b3bd74c0dea",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-af3c4cb78a2d",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:06.350012Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-9d18f4ea595d%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-8e201bc15282%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-8e201bc15282_member_00000000-0000-4000-8000-8314b0225880",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-8314b0225880",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-8e201bc15282",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:07.842361Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-8699638fb82d%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-6fbb69682a27%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-d0e587a7d421%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-84b43833e51f%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-84b43833e51f_owner_00000000-0000-4000-8000-2fec139f6195",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "accessId": "owner",
+            "groupId": "00000000-0000-4000-8000-84b43833e51f",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:10.469598Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-84b43833e51f_member_00000000-0000-4000-8000-2fec139f6195",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-84b43833e51f",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:10.469598Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-e5de8bef1732%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-24d9c4ac2102%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-24d9c4ac2102_member_00000000-0000-4000-8000-00d96666493f",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-00d96666493f",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-24d9c4ac2102",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:11.6513969Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-763e1c4fc951%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-43e07e325b91%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7aaec7cdf428%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-9227e7ac0046%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-9227e7ac0046_member_00000000-0000-4000-8000-ce2bebbfe73f",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-ce2bebbfe73f",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-9227e7ac0046",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:14.4738092Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7c4bb335534f%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-7c4bb335534f_member_00000000-0000-4000-8000-fb3ffcd422c1",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-fb3ffcd422c1",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-7c4bb335534f",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:15.3014747Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-d209a9c4aa59%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-47cbe6db293f%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-47cbe6db293f_member_00000000-0000-4000-8000-fea68b1b26e3",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-fea68b1b26e3",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-47cbe6db293f",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:16.6766282Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-3b95f7c87355%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-3b95f7c87355_member_00000000-0000-4000-8000-5126df13c4d8",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-5126df13c4d8",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-3b95f7c87355",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:17.3662473Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-c78f34d92bb6%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-c78f34d92bb6_member_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-c78f34d92bb6",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:18.2859215Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-c78f34d92bb6_member_00000000-0000-4000-8000-0fc48f533c5a",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-0fc48f533c5a",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-c78f34d92bb6",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:18.2859215Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-47010d7616a3%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-47010d7616a3_member_00000000-0000-4000-8000-a40305c3c7b9",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-a40305c3c7b9",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-47010d7616a3",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:18.9820163Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-47010d7616a3_member_00000000-0000-4000-8000-91efeb7b7966",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-91efeb7b7966",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-47010d7616a3",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:18.9820163Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-47010d7616a3_member_00000000-0000-4000-8000-defa8c21e159",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-defa8c21e159",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-47010d7616a3",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:18.9820163Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-1821753c4266%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-0a3e66bd699a%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-ad8abcb315ed%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-025481d09e85%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-ad12bb07d90d%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-ad12bb07d90d_member_00000000-0000-4000-8000-8f92bea692d1",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-8f92bea692d1",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-ad12bb07d90d",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:23.434342Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7cfbe79a1eb2%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-3a2a1ff284bf%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-f9660973a155%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-548aa095e25e%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-548aa095e25e_member_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-548aa095e25e",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:26.1915282Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-548aa095e25e_member_00000000-0000-4000-8000-0fc48f533c5a",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-0fc48f533c5a",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-548aa095e25e",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:26.1915282Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-cd1b72fca497%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-ca9b5165e074%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-ca9b5165e074_member_00000000-0000-4000-8000-65ca3e3c4605",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-65ca3e3c4605",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-ca9b5165e074",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:27.3480331Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-ca9b5165e074_member_00000000-0000-4000-8000-2b3bd74c0dea",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-2b3bd74c0dea",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-ca9b5165e074",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:27.3480331Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-077a5e269590%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-94046128ce32%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7091e81da2a9%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-f3f9ff683dbd%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-13ab29f1f606%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-13ab29f1f606_member_00000000-0000-4000-8000-86c5e94cfbf1",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-86c5e94cfbf1",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-13ab29f1f606",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:30.5468145Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-c5dc2b2111b6%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-273d53b2fb54%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_owner_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "owner",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_owner_00000000-0000-4000-8000-2fec139f6195",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "accessId": "owner",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-4e7cc6cc1830",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-4e7cc6cc1830",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-df968989e5ec",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-df968989e5ec",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-02d2ee367c67",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-02d2ee367c67",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-b8bdc6d2968c",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-b8bdc6d2968c",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-8e3ead324ef9",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-8e3ead324ef9",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-355663c10f16",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-355663c10f16",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-d44c60f415fb",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-d44c60f415fb",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-0c080200271c",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-0c080200271c",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-bbd8b318d3b5",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-bbd8b318d3b5",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-7adfe310ffa3",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-7adfe310ffa3",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-b9c5be102f43",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-b9c5be102f43",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-9739878f545b",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-9739878f545b",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-63536fd0c9b5",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-63536fd0c9b5",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-a685de07e566",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-a685de07e566",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-e9a41289b5ca",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-e9a41289b5ca",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-0fc48f533c5a",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-0fc48f533c5a",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-2bfa8e4b6fac",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-2bfa8e4b6fac",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-5126df13c4d8",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-5126df13c4d8",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-8f92bea692d1",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-8f92bea692d1",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-72d796dde786",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-72d796dde786",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-4de6d02bceff",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-4de6d02bceff",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-2fec139f6195",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-ee3f09a45d40",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-ee3f09a45d40",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-33aa0463ce1d",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-33aa0463ce1d",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54_member_00000000-0000-4000-8000-63d07196061e",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-63d07196061e",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-273d53b2fb54",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.0087139Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-432f241af06a%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-432f241af06a_member_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-432f241af06a",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.8328627Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-432f241af06a_member_00000000-0000-4000-8000-0fc48f533c5a",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-0fc48f533c5a",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-432f241af06a",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:06:32.8328627Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

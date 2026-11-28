@@ -46,6 +46,10 @@ async function signInWith(browserName, playwright, secrets) {
     app = await launch(appPath, profile, shotsDir)
     assert(await app.waitForText("Welcome to TenuVault", 60_000), "The welcome screen did not appear.")
     await app.click("Connect your tenant")
+    // Older nightlies have no service-choice step; verify either version's real setup route.
+    const services = `[...document.querySelectorAll("button")].find(button => button.textContent.trim() === "Continue with Intune")`
+    assert(await app.waitFor(`Boolean(${services}) || document.body.textContent.includes("I already have an app registration")`), "The service choice or tenant connection step did not open.")
+    if (await app.evaluate(`Boolean(${services})`)) await app.click("Continue with Intune")
     assert(await app.waitForText("I already have an app registration"), "The tenant setup did not open.")
     await app.click("I already have an app registration")
     assert(await app.waitFor(`Boolean(document.querySelector("input#tenant"))`), "The sign-in step did not open.")

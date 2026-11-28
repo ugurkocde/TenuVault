@@ -15,7 +15,6 @@ import { LegacySealedBackupsNotice } from "../../src/renderer/components/LegacyS
 import { UnreadableBackupsNotice } from "../../src/renderer/components/UnreadableBackupsNotice"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
-const CARD = "space-y-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
 const settings: BackupSettings = { localFolder: "/backups", keyFingerprint: "BBBB", recoveryExported: true, hasLocalBackups: true }
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
@@ -80,7 +79,7 @@ async function importKey(container: HTMLElement) {
 }
 
 const IMPACT = "New backups are still saved. Older backups are not deleted until this is fixed."
-const paragraphs = (container: HTMLElement) => [...container.querySelectorAll("[role=status] > div > div > p")].map((p) => p.textContent)
+const paragraphs = (container: HTMLElement) => [...container.querySelectorAll("[data-notice-tone] .max-h-56 > p")].map((p) => p.textContent)
 
 describe("damaged backup files notice", () => {
   it("shows nothing when every file can be read", () => {
@@ -90,11 +89,10 @@ describe("damaged backup files notice", () => {
   it("is a status card with a title and no file names until they are shown", () => {
     const { container } = render({ count: 129, kinds: kinds({ key: 129 }) })
     const card = container.querySelector("[role=status]")!
-    expect(card.className).toBe(`${CARD} mb-4`)
+    expect(card.closest("[data-notice-tone]")?.getAttribute("data-notice-tone")).toBe("neutral")
     expect(container.querySelector("[role=alert]")).toBeNull()
-    expect(card.querySelector("p.font-medium")?.textContent).toBe("Some backups may be missing from this list")
-    expect(container.textContent).not.toMatch(/[0-9a-f]{40}\.tvb/)
-    expect(container.textContent).not.toContain("These are the encrypted names on disk")
+    expect(card.textContent).toBe("129 backup files need attention.")
+    expect(container.querySelector<HTMLElement>(".max-h-56")?.hidden).toBe(true)
   })
 
   it.each([
@@ -106,15 +104,15 @@ describe("damaged backup files notice", () => {
     ["duplicate", { duplicate: 1 }, [], "1 file in this tenant's backup folder holds a backup item that another file also holds. Keep one copy of each, then select Refresh."],
     ["damaged", { damaged: 3 }, [], "TenuVault cannot read 3 files in this tenant's backup folder because they are damaged or incomplete. Restore them from a copy, then select Refresh."],
     ["damaged", { damaged: 1 }, [], "TenuVault cannot read 1 file in this tenant's backup folder because it is damaged or incomplete. Restore it from a copy, then select Refresh."],
-    ["mixed with key", { key: 120, os: 9 }, ["EACCES"], "TenuVault cannot read 129 files in this tenant's backup folder for different reasons, such as another device's recovery key. Show file names lists them by reason."],
-    ["mixed without key", { os: 2, damaged: 3 }, ["EIO"], "TenuVault cannot read 5 files in this tenant's backup folder for different reasons. Show file names lists them by reason."],
+    ["mixed with key", { key: 120, os: 9 }, ["EACCES"], "TenuVault cannot read 129 files in this tenant's backup folder for different reasons, such as another device's recovery key. Details lists them by reason."],
+    ["mixed without key", { os: 2, damaged: 3 }, ["EIO"], "TenuVault cannot read 5 files in this tenant's backup folder for different reasons. Details lists them by reason."],
   ] as const)("words the body for %s files", (_kind, counts, codes, body) => {
     const count = Object.values(counts).reduce((sum: number, value) => sum + (value ?? 0), 0)
     const { container } = render({ count, kinds: kinds(counts, [...codes]) })
     expect(paragraphs(container)).toEqual([body, IMPACT])
     expect(labels(container).includes("Import recovery key")).toBe(("key" in counts ? counts.key : 0) > 0)
     expect(labels(container)).toContain("Open backup folder")
-    expect(labels(container)).toContain(`Show file names (${count})`)
+    expect(labels(container)).toContain("Details")
     expect(labels(container)).not.toContain("Choose another folder")
   })
 
@@ -135,7 +133,7 @@ describe("damaged backup files notice", () => {
     const { container } = render({ count: 2, kinds: given as DamagedFileKinds | null, names: [hex(1), hex(2)] })
     expect(paragraphs(container)[0]).toBe("TenuVault cannot read 2 files in this tenant's backup folder. They may have been made with another recovery key, or they may be damaged.")
     expect(labels(container)).toContain("Import recovery key")
-    await click(container, "Show file names (2)")
+    await click(container, "Details")
     expect([...container.querySelectorAll(".max-h-40 li")].map((item) => item.textContent)).toEqual([hex(1), hex(2)])
     expect(container.querySelector(".max-h-40 p.font-medium")).toBeNull()
   })
@@ -147,13 +145,13 @@ describe("damaged backup files notice", () => {
 
   it("shows the file names behind a disclosure that is a button with aria-expanded and aria-controls", async () => {
     const { container } = render({ count: 129, kinds: kinds({ key: 129 }) })
-    const toggle = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Show file names"))!
+    const toggle = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Details")!
     expect(toggle.getAttribute("aria-expanded")).toBe("false")
-    expect(document.getElementById(toggle.getAttribute("aria-controls")!)).toBeNull()
-    expect(toggle.className).toContain("focus-visible:ring-[3px]")
+    expect(document.getElementById(toggle.getAttribute("aria-controls")!)?.hidden).toBe(true)
+    expect(toggle.className).toContain("focus-visible:outline-2")
     await act(async () => toggle.click())
     expect(toggle.getAttribute("aria-expanded")).toBe("true")
-    expect(toggle.textContent?.trim()).toBe("Hide file names")
+    expect(toggle.textContent?.trim()).toBe("Details")
     const panel = document.getElementById(toggle.getAttribute("aria-controls")!)!
     expect(panel).not.toBeNull()
     expect(panel.textContent).toContain("These are the encrypted names on disk, so you can find the files. They do not match backup or policy names.")
@@ -161,15 +159,15 @@ describe("damaged backup files notice", () => {
     expect([...list.querySelectorAll("li")].map((item) => item.textContent)).toEqual(Array.from({ length: 10 }, (_, index) => hex(index)))
     expect(list.querySelector("ul")!.className).toContain("font-mono text-xs break-all")
     expect(list.textContent).toContain("and 119 more")
-    expect(panel.lastElementChild?.textContent).toBe("If you have no copy and no recovery key, you can remove these files from the folder yourself. TenuVault never removes them for you.")
+    expect(panel.textContent).toContain("If you have no copy and no recovery key, you can remove these files from the folder yourself. TenuVault never removes them for you.")
     await act(async () => toggle.click())
-    expect(panel.isConnected).toBe(false)
+    expect(panel.hidden).toBe(true)
     expect(toggle.getAttribute("aria-expanded")).toBe("false")
   })
 
   it("lists mixed files by reason, each with its count", async () => {
     const { container } = render({ count: 129, kinds: kinds({ key: 120, os: 9 }, ["EACCES"]) })
-    await click(container, "Show file names (129)")
+    await click(container, "Details")
     const groups = [...container.querySelectorAll(".max-h-40 > div")].map((group) => group.querySelector("p")?.textContent)
     expect(groups).toEqual(["120 made with another key or damaged", "9 could not be opened (EACCES)"])
     expect(container.textContent).toContain("and 110 more")
@@ -332,25 +330,21 @@ describe("backup notices on the shared card", () => {
     return container
   }
 
-  it("keeps the legacy sealed notice's role, classes, wording and action", () => {
+  it("keeps older encrypted backups neutral and offers one recovery action", () => {
     const container = mount(createElement(LegacySealedBackupsNotice, { count: 2, onImported: async () => undefined }))
-    const card = container.querySelector("[role=status]")!
-    expect(card.className).toBe(`${CARD} mb-4`)
-    expect(card.querySelector("p.font-medium")?.textContent).toBe("2 older Azure backups need a recovery key")
-    expect(card.querySelector(".mt-1 > p")?.textContent).toContain("These backups were encrypted by an earlier TenuVault version")
-    const button = card.querySelector("button")!
-    expect(button.textContent?.trim()).toBe("Import recovery key")
-    expect(button.className).toContain("bg-white")
+    const card = container.querySelector('[data-notice-tone="neutral"]')!
+    expect(card.querySelector('[role="status"]')?.textContent).toBe("2 older Azure backups need a recovery key")
+    expect(card.querySelector("[hidden]")?.textContent).toContain("These backups were encrypted by an earlier TenuVault version")
+    expect(labels(container)).toEqual(["Details", "Import recovery key"])
   })
 
-  it("keeps the unreadable folder notice an alert with both actions", () => {
+  it("offers recovery first and moves the alternate folder choice into Details", () => {
     const container = mount(createElement(UnreadableBackupsNotice, { settings, affected: true, checking: false, onChange: () => undefined }))
-    const card = container.querySelector("[role=alert]")!
-    expect(card.className).toBe(CARD)
-    expect(container.querySelector("[role=status]")).toBeNull()
-    expect(card.querySelector("p.font-medium")?.textContent).toBe("This folder has backups this device cannot read")
-    expect(card.querySelector(".mt-1 > p")?.textContent).toContain("were made with a different recovery key")
-    expect(card.querySelector(".mt-1 .font-mono")?.textContent).toBe("/backups")
-    expect([...card.querySelectorAll(".flex.flex-wrap.gap-2 > button")].map((button) => button.textContent?.trim())).toEqual(["Import recovery key", "Choose another folder"])
+    const card = container.querySelector('[data-notice-tone="neutral"]')!
+    expect(card.querySelector('[role="status"]')?.textContent).toBe("This folder has backups this device cannot read")
+    expect(card.querySelector("[hidden]")?.textContent).toContain("were made with a different recovery key")
+    expect(card.querySelector("[hidden] .font-mono")?.textContent).toBe("/backups")
+    expect(card.querySelector("[hidden] button")?.textContent).toBe("Choose another folder")
+    expect([...card.querySelectorAll("button")].filter(button => !button.closest("[hidden]")).map(button => button.textContent?.trim())).toEqual(["Details", "Import recovery key"])
   })
 })

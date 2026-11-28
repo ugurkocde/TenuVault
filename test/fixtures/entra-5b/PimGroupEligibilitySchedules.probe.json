@@ -1,0 +1,13 @@
+{
+  "folder": "PimGroupEligibilitySchedules",
+  "source": "Live diagnostic: first directory group, not discovered as a PIM resource; no coverage claim",
+  "objectCount": 0,
+  "responses": {
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-608cd6db456b%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

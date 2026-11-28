@@ -1,3 +1,4 @@
+import { ServiceBackupNotice } from "../components/ServiceBackupNotice"
 import { useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { AlertCircle, ArrowUpRight, BadgeCheck, CalendarClock, CheckCircle2, Database, KeyRound, Play, Plus } from "lucide-react"
@@ -125,6 +126,7 @@ export default function OverviewPage() {
                   <RoundIconButton icon={ArrowUpRight} label={`Open the dashboard of ${tenant.name}`} onClick={() => open(tenant)} />
                 </div>
               </div>
+              <ServiceBackupNotice tenantId={tenantId} />
               <dl className="mt-6 grid flex-1 grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                 <Fact label="Account">
                   <span className="flex items-center gap-2">

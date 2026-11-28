@@ -75,14 +75,15 @@ If several admins in one tenant use TenuVault, the key holder can share the lice
 2. In the **Tenants** card, find the tenant.
 3. Select **Let other admins in this tenant use this license**.
 
-Anyone who then signs in to this tenant with the same TenuVault app registration is licensed automatically. The key stays on the key holder's machine. Clear the checkbox to stop sharing.
+Anyone who then signs in to this tenant with the same TenuVault app or app registration is licensed automatically. The key stays on the key holder's machine. Clear the checkbox to stop sharing.
 
 Things to know:
 
 * Sharing is on by default for Pro licenses and off by default for MSP licenses, since an MSP's customer tenants are usually not its own.
 * Only the machine that holds the key can change sharing.
+* To share a key with a tenant for the first time, sign in using your own app registration in **Settings > Sign-in**.
 * To turn sharing on, TenuVault needs a recent sign-in to the tenant as proof. If it shows **Sign in to this tenant again to share the license with it.**, sign in to the tenant again and retry.
-* Only admins who sign in through the app registration you shared from are licensed. To control who that is, restrict sign-in to a group. See [App registration and delegated permissions](/security/permissions/#restrict-sign-in-to-a-group).
+* A different app registration does not inherit the share. To control who can use the registration you shared from, restrict sign-in to a group. See [App registration and delegated permissions](/security/permissions/#restrict-sign-in-to-a-group).
 * Each admin's machine counts as one of the tenant's 5 installations.
 
 ### For admins licensed through their organization
@@ -93,7 +94,7 @@ TenuVault proves your sign-in to the licensing service with a fresh Microsoft ID
 
 ### Community although the tenant has an organization license
 
-An organization license is tied to the app registration it was shared from. If you sign in to the tenant through another app registration, for example a second one that was created in the same tenant, the licensing service treats that sign-in as unlicensed, and it cannot start a trial either, because the tenant has a license. The tenant then shows **Community (free)** and TenuVault explains:
+An organization license is tied to the sign-in app it was shared from. If you sign in to the tenant through another app registration, for example a second one that was created in the same tenant, the licensing service treats that sign-in as unlicensed, and it cannot start a trial either, because the tenant has a license. The tenant then shows **Community (free)** and TenuVault explains:
 
 > This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.
 
@@ -129,7 +130,7 @@ To use a different key while one is active, click **Use a different key** next t
 
 ## Tenant trials
 
-When enabled, a new connection starts a Pro trial without a card or email. Existing Community tenants can opt in on the License page. Joining from another installation keeps the tenant's original end date. In **Set up TenuVault**, the **Storage** step shows the trial in one row with its end date and the optional email; there is nothing to choose. After the first backup, the setup links to the Pro features to try. A trial that starts outside the setup shows a welcome card, which you can close. Days remaining and the end date appear on the License page.
+When tenant trials are available, connecting an eligible tenant starts a 14-day Pro trial without a card or email. Existing Community tenants can opt in on the Dashboard or License page. Joining from another installation keeps the tenant's original end date. During setup, open **Plan details** on **Storage** to see the newly started trial's end date and optional email form. The Dashboard shows a dismissible **Pro trial** line with the days remaining. Select **What's included** for features and what happens at the end, or **Get trial reminders** to open the optional email form. The end date also appears on the License page.
 
 Choose **Need more time? Extend your trial** during the last five days or within fourteen days after expiry. You can extend once. To end the trial early, click **Use Community instead** on the License page. Only the installation that started the trial offers it. TenuVault asks you to confirm first, and the tenant then moves to Community right away. Until the trial's original end date, the same installation can switch back with **Resume Pro trial** on the License page or where a Pro feature is locked. Resuming adds no time. After that date the trial cannot be started again for that tenant.
 

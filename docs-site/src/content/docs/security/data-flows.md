@@ -12,7 +12,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | Destination | Purpose | Carries tenant data? |
 | --- | --- | --- |
 | `login.microsoftonline.com` | Microsoft sign-in and tokens | Your sign-in only. With the optional Backup Reader, also its certificate sign-in for scheduled backups (no tenant data) |
-| `graph.microsoft.com` | Read and write your Intune configuration | Yes, between your machine and Microsoft |
+| `graph.microsoft.com` | Read Entra ID and Intune configuration and write supported changes | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, backups in your account, over HTTPS |
 | Hosts under `manage.microsoft.com`: one that the Intune agent on the PC discovered, one that Intune returns | [App Backup](#app-backup), only when you capture an installer on an enrolled Windows PC: Intune's device content service and the installer download | Yes, between your PC and Microsoft. The selected app's ID, version and name and this PC's Intune device identity go out, the encrypted installer comes back |
@@ -25,7 +25,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | No |
 | A webhook URL you configure (optional) | Health review notifications | Counts, severities, finding keys and timestamps only |
 
-TenuVault contains no analytics or crash reporting. Apart from the destinations above, it sends nothing. Feedback goes to tenuvault.com only when you click **Send feedback**. Setup diagnostics are sent only when a new install chooses **Share setup diagnostics**, and only for 30 days after that.
+TenuVault contains no analytics or crash reporting. Apart from the destinations above, it sends nothing. Feedback goes to tenuvault.com only when you click **Send feedback**. Setup diagnostics are sent only when a new install chooses **Share** after the first backup or enables sharing in Settings, and only for 30 days after that.
 
 ## Microsoft
 
@@ -37,14 +37,16 @@ TenuVault signs you in with the Microsoft Authentication Library (MSAL) as a pub
 * **Received:** an access token for the requested resource, a refresh token and an ID token for your account.
 * **Stored:** tokens are kept in an encrypted token cache on your machine, protected by Windows DPAPI or the macOS Keychain.
 
-With the optional [Backup Reader](/backups/backup-reader/), scheduled backups sign in differently, to the same host: TenuVault requests an app-only token for the separate Backup Reader app registration and proves the app's identity with a short-lived assertion signed on your machine with the reader's certificate private key. No browser opens, no person signs in, and Microsoft returns only an access token (no refresh token and no ID token). The private key itself is never sent; it stays in the same encrypted store. Only scheduled backups use these tokens, for the Graph and Azure Storage calls below. Each token is checked for the right tenant, app, audience and app-only type before use. On top of that, Graph tokens must carry exactly the reader's verified read permissions; storage tokens carry no Graph roles, and Azure instead authorizes them through the container-scoped **TenuVault Backup Writer** role. No new destination is added, so the firewall allow list below does not change.
+TenuVault also asks Microsoft for a new token to check a tenant's connection: once when the app starts, for the tenant you have open, after you sign in, and when a backup of the tenant starts and ends. A check uses the sign-in that is already stored and never opens your browser. Each one shows as a non-interactive sign-in of your account in the Entra sign-in logs. What a check found stays in the encrypted store on your machine: the permission names in the token, or Microsoft's error code when the request was refused, and the time.
 
-### Intune: `graph.microsoft.com`
+With the optional [Backup Reader](/backups/backup-reader/), scheduled backups sign in differently, to the same host: TenuVault requests an app-only token for the separate Backup Reader app registration and proves the app's identity with a short-lived assertion signed on your machine with the reader's certificate private key. No browser opens, no person signs in, and Microsoft returns only an access token (no refresh token and no ID token). The private key itself is never sent; it stays in the same encrypted store. Only scheduled backups use these tokens, for the Graph and Azure Storage calls below. A connection check also asks for a reader token, before a scheduled backup that runs with the reader and when you ask TenuVault to check the connection again; that token is only checked and is never used for a request. Each token is checked for the right tenant, app, audience and app-only type before use. On top of that, Graph tokens must carry exactly the reader's verified read permissions; storage tokens carry no Graph roles, and Azure instead authorizes them through the container-scoped **TenuVault Backup Writer** role. No new destination is added, so the firewall allow list below does not change.
 
-All Intune work goes directly from your machine to Microsoft Graph with your delegated token. The one exception is a scheduled backup of a tenant with a [Backup Reader](/backups/backup-reader/): it reads with the reader's app-only token instead, from the same machine to the same host. Writes never use it.
+### Microsoft Graph: `graph.microsoft.com`
 
-* Backups read your Intune configuration, including assignments.
-* Restores, drift reverts, the OpenIntuneBaseline section and Framework coverage write the objects you choose to your tenant.
+The app sends tenant requests for Entra ID and Intune directly from your machine to Microsoft Graph with your delegated token. The one exception is a scheduled backup of a tenant with a [Backup Reader](/backups/backup-reader/): it reads with the reader's app-only token instead, from the same machine to the same host. Writes never use it.
+
+* Backups read the configuration and inventories you enable. Conditional Access is an Entra ID backup area, and Intune policies keep assignment references where supported.
+* Supported restores and drift reverts write the objects you choose to your tenant. OpenIntuneBaseline and Framework coverage are Intune workflows.
 * The tenant overview reads your organization's name and verified domains, policy counts, and your managed device count and compliance rate.
 * [App Backup](#app-backup) reads the tenant's Win32 apps with their settings, scripts and assignments, and the tenant's Intune account ID. **Assignment check for this PC** also reads the groups this PC's Entra device belongs to, the names and visibility of the assigned groups, and the assignment filters. **Restore to tenant** creates a new Win32 app in the tenant you choose.
 
@@ -60,6 +62,7 @@ Used only when you store backups in your own Azure storage account. TenuVault us
 
 | Container | Contents | Encrypted by TenuVault |
 | --- | --- | --- |
+| `intune-backups-large` | Large backup claims and manifests under `backup-large-.../`; snapshots, indexes and relationships under `payload/backup-large-.../` | No. Plain JSON with Azure encryption at rest and your role assignments, like ordinary backups. |
 | `intune-backups` | Your backups | No. Stored as plain JSON, protected by Azure encryption at rest and your role assignments. Backups made by earlier TenuVault versions stay encrypted with the device key that made them. |
 | `audit-logs` | The TenuVault audit log for the tenant, including which admin started each action | No. Protected by your storage account's own encryption and access control. |
 | `tenant-metadata` | Tenant profile information TenuVault keeps for the tenant | No. Protected by your storage account's own encryption and access control. |
@@ -68,9 +71,13 @@ See [Encryption and recovery key](/security/encryption/) for how backups are pro
 
 When backups are stored on **This device, encrypted**, TenuVault makes no storage connection at all. Backups, the audit log and tenant metadata are all written encrypted to the folder you choose.
 
+Large-inventory preparation uses encrypted temporary merge files for sorted object indexes and sub-collections. Each sort has a random AES-256-GCM key held only in memory. The files are removed when the sort ends; after a process crash, any remaining ciphertext cannot be reopened because its key was not stored. Large captures use the separate `intune-backups-large` container on the same chosen storage account, or the same encrypted local store. History lists only its claim and manifest prefix, so opening history never enumerates large snapshots. This adds no outbound destination. Directory inventories remain off until their areas are enabled. A large backup export is an unencrypted tar archive in the destination you choose, written under a temporary `.partial` name until verification finishes. Protect exported archives like the configuration itself. See [Large tenants](/backups/storage/#large-tenants).
+
 ## tenuvault.com: license checks and CIS Benchmarks content
 
-The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used to activate, refresh and release licenses, the trial service at `https://www.tenuvault.com/api/desktop-trial`, used only when you start the free trial, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
+The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used for license activation, refresh, release and tenant trials, the trial key service at `https://www.tenuvault.com/api/desktop-trial`, used when you request a trial key by email, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
+
+The TenuVault app sign-in option checks availability at `https://www.tenuvault.com/api/desktop-license/health`. This request carries no tenant details or Microsoft tokens. The desktop app can reuse a successful availability result for up to two minutes.
 
 When you open the pricing page or the checkout (`https://www.tenuvault.com/api/desktop-checkout`) from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
@@ -87,17 +94,19 @@ The link to the free setup call page (`https://www.tenuvault.com/setup-call`) wo
 
 | Request | Fields sent |
 | --- | --- |
-| Activate a license key for a tenant | License key, installation ID, tenant ID, operating system, app version. When you are signed in to the tenant: the app registration's client ID and, when one can be obtained without prompting you, a Microsoft ID token. |
-| Refresh a license key activation | License key, activation ID, installation ID, tenant ID, app version. When sharing is on or not yet decided: the client ID and, when available, a Microsoft ID token. Your sharing choice, once one is set. |
+| Activate a license key for a tenant | License key, installation ID, tenant ID or its hash, operating system and app version. When the tenant has a valid app registration client ID, that client ID and, if available without a prompt, a Microsoft ID token. |
+| Refresh a license key activation | License key, activation ID, installation ID, tenant ID or its hash and app version. A Microsoft ID token is included when available for sharing or when the service supports tenant hashes. The sharing choice is included once set. |
 | Organization license (a license shared with your tenant) | Microsoft ID token, installation ID, operating system, app version, the action (activate, refresh or release) and, for refresh and release, the activation ID and the license's ID. The license key is not sent and never reaches your machine. |
 | Release (remove a tenant or deactivate the machine) | License key and activation ID. For an organization license, the fields in the row above. |
-| Start the free trial | The email address you enter and the screen you started it from, such as `app-license-page`. Nothing else, and only when you click **Start free trial**. The service emails the trial key to that address and keeps a record of the request (see the [privacy policy](https://tenuvault.com/privacy#free-trial)). |
+| Start a tenant trial | Microsoft ID token, installation ID, operating system, app version, action (`start_trial`) and source (`auto` for an automatic start or `opt-in` when you choose to start it). |
+| Update the optional tenant trial contact | Microsoft ID token, installation ID, operating system, app version, action (`trial_contact`) and trial activation ID. The email address is included only when you tap **Email me setup tips and a reminder before the trial ends**. Removing the address sends the same action without an email address. |
+| Request a trial key by email | The email address you enter and, when provided, the screen you started it from, such as `app-license-page`. Nothing else, and only when you click **Start free trial**. The service emails the trial key to that address and keeps a record of the request (see the [privacy policy](https://tenuvault.com/privacy#free-trial)). |
 
 What each field is:
 
 * **License key:** the key from your purchase email. Community sends no key.
 * **Installation ID:** a random identifier generated on your machine and kept in its encrypted store. It identifies this installation, not you or your device.
-* **Tenant ID:** the ID of the tenant being licensed. Licenses are counted per tenant.
+* **Tenant ID:** key activation and refresh send a SHA-256 hash of the tenant ID when the service advertises tenant hash support and the request includes a recent Microsoft ID token as proof. If the service does not advertise support or the request has no proof, the app sends the original tenant ID as a separate field. Organization license and trial requests use the tenant claim in the ID token and can include the same hash. The ID token still contains the original tenant ID. Licenses are counted per tenant.
 * **Client ID:** the application (client) ID of your app registration. When you share a license with your tenant, only admins who sign in through this app registration are licensed by it.
 * **Operating system and app version:** `win32` or `darwin`, and the TenuVault version number.
 * **Microsoft ID token:** proof of which tenant and app registration you signed in to. It contains identity claims, such as your name and user principal name. The app only sends a token issued within the last few minutes, and never sends access tokens or refresh tokens.
@@ -142,16 +151,15 @@ On Pro and MSP, the [CIS Benchmarks](/baselines/cis-benchmarks/) page downloads 
 
 ## Setup diagnostics
 
-A new install asks once, on the welcome screen, whether it may tell TenuVault which setup steps worked and which Microsoft error codes stopped them. This is how we find out where setups fail, for example on a Conditional Access policy or a blocked Microsoft app, and fix the guidance for setups like yours.
+After the first successful backup in guided setup, a new install asks whether it may tell TenuVault which setup steps worked and which Microsoft error codes stopped them. This is how we find out where setups fail, for example on a Conditional Access policy or a blocked Microsoft app, and fix the guidance for setups like yours.
 
 **When it is asked**
 
 * Only on a new install: the first launch of a version with setup diagnostics, with no saved TenuVault data on the device. Installs that existed before are never asked and send nothing.
-* On the welcome screen, below **Connect your tenant**, with two equal buttons: **Share setup diagnostics** and **Don't share**. Nothing is preselected and the setup works without an answer.
-* If you have not answered, the app may ask next to a setup error, at most once each time the app runs, and never again after you answer. This covers the setup sign-in, the app registration, an app registration without the admin consent TenuVault needs, and the first sign-in to your tenant, not a sign-in you cancelled. **Share** there sends that error and the steps after it, nothing from before.
-* **Don't share** is final: you are not asked again. You can still turn it on, or off, in **Settings** > **About** > **Share setup diagnostics**.
+* Choose **Share** or **No thanks** below the first-backup result. Both options leave the dashboard available.
+* **No thanks** dismisses the question. You can still turn sharing on or off in **Settings** > **About** > **Share setup diagnostics**.
 
-**Nothing before you agree.** Until you choose **Share setup diagnostics**, TenuVault stores only whether you answered. It stores no date and no ID, keeps no queue of events and sends nothing. While you have not answered, the last setup error is held in memory only, so the reminder next to it can offer to send it; it is never written to disk and is dropped when you answer or quit. The 30 days start when you agree.
+**Nothing before you agree.** Until you enable sharing, TenuVault stores only whether you answered. It stores no date or ID, keeps no queue of events and sends nothing. The 30 days start when you agree.
 
 **Sent to** `POST https://www.tenuvault.com/api/desktop-events`, in batches of up to 50 events, a few seconds after a step and at start. Every request carries:
 
@@ -334,3 +342,318 @@ Capturing an installer also needs the [capture check](#capture-check) at `https:
 * [Encryption and recovery key](/security/encryption/)
 * [App Backup: Intune installers](/apps/app-backup/)
 * [Requirements](/getting-started/requirements/)
+
+## Directory property allowlists
+
+The opt-in Groups and Devices areas store group properties, member and owner IDs, and device inventory in your chosen backup storage. [Directory inventory coverage](/backups/entra/#opt-in-directory-inventories) explains what is stored.
+
+Each list below is closed at every depth. Dotted names describe allowed nested fields, and arrays use the same schema for every entry. No other Graph property is stored. Empty and null values are preserved, and unordered arrays are sorted. Password and key credentials retain metadata only. Public certificate bytes, private keys, secretText, passwords, authentication methods and sign-in activity are excluded.
+
+### Users
+
+```text
+id
+displayName
+userPrincipalName
+givenName
+surname
+mail
+otherMails
+proxyAddresses
+userType
+accountEnabled
+createdDateTime
+creationType
+jobTitle
+department
+companyName
+employeeId
+employeeType
+employeeHireDate
+officeLocation
+usageLocation
+businessPhones
+mobilePhone
+streetAddress
+city
+state
+postalCode
+country
+preferredLanguage
+onPremisesImmutableId
+onPremisesSyncEnabled
+onPremisesSamAccountName
+onPremisesDomainName
+onPremisesSecurityIdentifier
+identities.signInType
+identities.issuer
+identities.issuerAssignedId
+assignedLicenses.skuId
+assignedLicenses.disabledPlans
+assignedPlans.assignedDateTime
+assignedPlans.capabilityStatus
+assignedPlans.service
+assignedPlans.servicePlanId
+licenseAssignmentStates.skuId
+licenseAssignmentStates.disabledPlans
+licenseAssignmentStates.assignedByGroup
+licenseAssignmentStates.state
+licenseAssignmentStates.error
+licenseAssignmentStates.lastUpdatedDateTime
+manager.id
+```
+
+### Groups
+
+```text
+id
+displayName
+description
+mail
+mailNickname
+mailEnabled
+securityEnabled
+groupTypes
+visibility
+membershipRule
+membershipRuleProcessingState
+isAssignableToRole
+createdDateTime
+classification
+preferredDataLocation
+onPremisesSyncEnabled
+proxyAddresses
+assignedLicenses.skuId
+assignedLicenses.disabledPlans
+```
+
+### Applications
+
+```text
+id
+appId
+displayName
+description
+signInAudience
+identifierUris
+groupMembershipClaims
+isFallbackPublicClient
+tags
+notes
+createdDateTime
+publisherDomain
+web.homePageUrl
+web.logoutUrl
+web.redirectUris
+web.implicitGrantSettings.enableAccessTokenIssuance
+web.implicitGrantSettings.enableIdTokenIssuance
+web.redirectUriSettings.uri
+web.redirectUriSettings.index
+spa.redirectUris
+publicClient.redirectUris
+api.acceptMappedClaims
+api.requestedAccessTokenVersion
+api.knownClientApplications
+api.oauth2PermissionScopes.id
+api.oauth2PermissionScopes.adminConsentDescription
+api.oauth2PermissionScopes.adminConsentDisplayName
+api.oauth2PermissionScopes.isEnabled
+api.oauth2PermissionScopes.type
+api.oauth2PermissionScopes.userConsentDescription
+api.oauth2PermissionScopes.userConsentDisplayName
+api.oauth2PermissionScopes.value
+api.preAuthorizedApplications.appId
+api.preAuthorizedApplications.delegatedPermissionIds
+appRoles.id
+appRoles.allowedMemberTypes
+appRoles.description
+appRoles.displayName
+appRoles.isEnabled
+appRoles.origin
+appRoles.value
+requiredResourceAccess.resourceAppId
+requiredResourceAccess.resourceAccess.id
+requiredResourceAccess.resourceAccess.type
+optionalClaims.idToken.name
+optionalClaims.idToken.source
+optionalClaims.idToken.essential
+optionalClaims.idToken.additionalProperties
+optionalClaims.accessToken.name
+optionalClaims.accessToken.source
+optionalClaims.accessToken.essential
+optionalClaims.accessToken.additionalProperties
+optionalClaims.saml2Token.name
+optionalClaims.saml2Token.source
+optionalClaims.saml2Token.essential
+optionalClaims.saml2Token.additionalProperties
+verifiedPublisher.displayName
+verifiedPublisher.verifiedPublisherId
+verifiedPublisher.addedDateTime
+passwordCredentials.hint
+passwordCredentials.keyId
+passwordCredentials.displayName
+passwordCredentials.startDateTime
+passwordCredentials.endDateTime
+keyCredentials.customKeyIdentifier
+keyCredentials.keyId
+keyCredentials.displayName
+keyCredentials.startDateTime
+keyCredentials.endDateTime
+keyCredentials.type
+keyCredentials.usage
+```
+
+### ServicePrincipals
+
+```text
+id
+appId
+displayName
+description
+accountEnabled
+servicePrincipalType
+appOwnerOrganizationId
+appRoleAssignmentRequired
+servicePrincipalNames
+replyUrls
+homepage
+loginUrl
+logoutUrl
+preferredSingleSignOnMode
+tags
+notes
+notificationEmailAddresses
+samlSingleSignOnSettings.relayState
+appRoles.id
+appRoles.allowedMemberTypes
+appRoles.description
+appRoles.displayName
+appRoles.isEnabled
+appRoles.origin
+appRoles.value
+oauth2PermissionScopes.id
+oauth2PermissionScopes.adminConsentDescription
+oauth2PermissionScopes.adminConsentDisplayName
+oauth2PermissionScopes.isEnabled
+oauth2PermissionScopes.type
+oauth2PermissionScopes.userConsentDescription
+oauth2PermissionScopes.userConsentDisplayName
+oauth2PermissionScopes.value
+passwordCredentials.hint
+passwordCredentials.keyId
+passwordCredentials.displayName
+passwordCredentials.startDateTime
+passwordCredentials.endDateTime
+keyCredentials.customKeyIdentifier
+keyCredentials.keyId
+keyCredentials.displayName
+keyCredentials.startDateTime
+keyCredentials.endDateTime
+keyCredentials.type
+keyCredentials.usage
+```
+
+### OAuth2PermissionGrants
+
+```text
+id
+clientId
+consentType
+principalId
+resourceId
+scope
+```
+
+### EntraDevices
+
+```text
+id
+deviceId
+displayName
+accountEnabled
+operatingSystem
+operatingSystemVersion
+trustType
+profileType
+isManaged
+isCompliant
+deviceOwnership
+enrollmentType
+registrationDateTime
+onPremisesSyncEnabled
+```
+
+### OrgContacts
+
+```text
+id
+displayName
+givenName
+surname
+mail
+mailNickname
+companyName
+department
+jobTitle
+proxyAddresses
+onPremisesSyncEnabled
+phones.number
+phones.type
+addresses.city
+addresses.countryOrRegion
+addresses.officeLocation
+addresses.postalCode
+addresses.state
+addresses.street
+```
+
+### settings
+
+```text
+id
+displayName
+templateId
+values.name
+values.value
+```
+
+### federatedIdentityCredentials
+
+```text
+id
+name
+issuer
+subject
+audiences
+description
+```
+
+### extensionProperties
+
+```text
+id
+name
+dataType
+isSyncedFromOnPremises
+targetObjects
+```
+
+### appRoleAssignments
+
+```text
+id
+appRoleId
+principalId
+resourceId
+```
+
+### appRoleAssignedTo
+
+```text
+id
+appRoleId
+principalId
+resourceId
+```
+
+Users also store the manager object ID, or null when no manager is configured, with a completeness marker. Group members and owners, application owners, enterprise app owners and assigned policy references are sorted ID shards. Group settings, federated identity credential definitions, extension property definitions, appRoleAssignments and appRoleAssignedTo use sorted definition shards with only the fields above. Shard references contain format, count, shard count, a completeness marker and a fingerprint. A refused relationship stores only `complete: false`, never a partial ID list presented as complete.

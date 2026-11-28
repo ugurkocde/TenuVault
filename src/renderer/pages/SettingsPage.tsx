@@ -1,3 +1,6 @@
+import { TenantConnectionSettings } from "../components/TenantConnectionSettings"
+import { isTenuVaultApp } from "../../shared/tenant-connection"
+import { IdentityRestoreSafety } from "../components/IdentityRestoreSafety"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react"
@@ -13,6 +16,7 @@ import type { AppInfo, AppPreferences, ProxyCredentialSummary, SignedInAccount, 
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
+import { restoreAdminCenter } from "../../shared/services/presentation"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
 import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
@@ -55,6 +59,7 @@ function RestoreWrites({ active }: { active: boolean }) {
           {tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
         </select>
       </label>
+      <IdentityRestoreSafety key={`identity-${tenantId}`} tenantId={tenantId} />
       <TenantRestoreWrites key={tenantId} tenantId={tenantId} active={active} />
     </div>
   )
@@ -67,9 +72,10 @@ function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord
   const [objectId, setObjectId] = useState(record.state === "reconciled" ? record.objectId ?? "" : "")
   const [error, setError] = useState("")
   const [saving, setSaving] = useState(false)
+  const center = restoreAdminCenter(record.path)
   const description = record.state === "reconciled"
-    ? "After checking the original policy name and tenant in Intune, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes."
-    : "After checking Intune, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write."
+    ? `After checking the original object name and tenant in ${center}, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes.`
+    : `After checking ${center}, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write.`
 
   useEffect(() => {
     if (saving) inputContainer.current?.focus()
@@ -169,7 +175,7 @@ function TenantRestoreWrites({ tenantId, active }: { tenantId: string; active: b
       <CardHeader>
         <CardTitle>Restore write history</CardTitle>
         <Button ref={refreshButton} variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
-        <CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in Intune before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription>
+        <CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in the admin center for the affected service before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription>
       </CardHeader>
       <CardContent>
         {error && <p role="alert" className="text-red-700">{error}</p>}
@@ -199,7 +205,7 @@ function TenantRestoreWrites({ tenantId, active }: { tenantId: string; active: b
                   setEditing(record.key)
                 }}>Confirm applied</Button>
                 <Button variant="outline" onClick={async () => {
-                  if (await confirm({ title: "Allow another attempt?", description: "I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?", confirmLabel: "Allow another attempt" })) {
+                  if (await confirm({ title: "Allow another attempt?", description: `I checked the target tenant in ${restoreAdminCenter(record.path)} and confirmed this request was not applied. Allow another attempt?`, confirmLabel: "Allow another attempt" })) {
                     void request({ action: "not-applied", key: record.key, confirmed: true }).catch(e => setError(String(e)))
                   }
                 }}>Confirm not applied</Button>
@@ -278,7 +284,7 @@ function BackupsOnDevice() {
             setSettings(await bridge.backups.settings())
             toast(`Imported ${result.backupId}. Select this device as storage for tenant ${result.tenantId} to preview and restore it.`, "success")
           }
-        })}><Upload className="mr-2 h-4 w-4" /> Import backup ZIP</Button>
+        })}><Upload className="mr-2 h-4 w-4" /> Import backup archive</Button>
         <UnreadableBackupsNotice settings={settings} affected={inventory.affected.length > 0} checking={inventory.checking} onChange={setSettings} />
         <div className="space-y-2">
           <p className="text-xs font-medium text-gray-500">Folder</p>
@@ -291,6 +297,19 @@ function BackupsOnDevice() {
               Open folder
             </Button>
           </div>
+          {typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__ && settings?.labFolderReadOnly && (
+            <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900" role="status">
+              <p>TenuVault Lab can browse this folder. It needs a separate folder to save backups and run retention.</p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={() => void run(async () => setSettings(await bridge.backups.useLabFolder(false)))}>
+                  Use the TenuVault Lab Backups folder
+                </Button>
+                {settings.canCopyLabBackups && <Button variant="outline" size="sm" onClick={() => void run(async () => setSettings(await bridge.backups.useLabFolder(true)))}>
+                  Copy verified Lab backups
+                </Button>}
+              </div>
+            </div>
+          )}
           <p className="text-xs text-gray-500">
             Changing the folder does not move existing backups. Move the folder's contents yourself to keep them visible.
             A network share works, since the files are encrypted.
@@ -406,7 +425,9 @@ export function ProxySignInSettings() {
   )
 }
 
-function TenantSettings({ active }: { active: boolean }) {
+export function TenantSettings({ active }: { active: boolean }) {
+  const { hash } = useLocation()
+  const [params] = useSearchParams()
   const { confirm, confirmDialog } = useConfirm()
   const tenants = useTenants()
   const { updateTenant } = useTenantOperations()
@@ -422,10 +443,17 @@ function TenantSettings({ active }: { active: boolean }) {
 
   const signIn = async (tenant: Tenant) => {
     const { tenantId, appId } = tenant.credentials!
+    if (!appId) return
     setBusy(tenantId)
     try {
-      const account = await bridge.auth.reauthenticate(tenantId, appId)
-      toast(`Signed in as ${account.username}.`, "success")
+      if (isTenuVaultApp(appId)) {
+        const outcome = await bridge.auth.switchConnection(tenantId, { method: "tenuvaultApp" })
+        if ("error" in outcome) throw new Error(outcome.error.message)
+        toast("TenuVault app permissions verified.", "success")
+      } else {
+        const account = await bridge.auth.reauthenticate(tenantId, appId)
+        toast(`Signed in as ${account.username}.`, "success")
+      }
       refresh()
     } catch (error) {
       toast(error instanceof Error ? error.message : "Sign-in failed.", "error")
@@ -462,18 +490,29 @@ function TenantSettings({ active }: { active: boolean }) {
             {tenants.map((tenant) => {
               const tenantId = tenant.credentials?.tenantId ?? ""
               const account = accounts.find((a) => a.tenantId === tenantId.toLowerCase())
+              const hasClientId = Boolean(tenant.credentials?.appId)
               return (
-                <div key={tenant.id} className="flex items-center gap-3 py-4 first:pt-1 last:pb-0">
+                <div key={tenant.id} id={`sign-in-${tenantId.toLowerCase()}`} className="flex scroll-mt-4 items-start gap-3 py-4 first:pt-1 last:pb-0">
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-gray-900">{tenant.name}</p>
                     <p className="truncate text-xs text-gray-500">
-                      {account ? `Signed in as ${account.username}` : "Not signed in"} · Backups: {storageLabel(tenant.resources?.storageAccountName)}
+                      {!hasClientId ? "Sign-in method required" : account ? `Signed in as ${account.username}` : "Not signed in"} · Backups: {storageLabel(tenant.resources?.storageAccountName)}
                     </p>
+                    {tenant.credentials && <TenantConnectionSettings
+                      key={tenantId}
+                      tenantId={tenantId}
+                      clientId={tenant.credentials.appId}
+                      initialPack={active && hash === `#sign-in-${tenantId.toLowerCase()}` ? params.get("pack") ?? undefined : undefined}
+                      onChanged={appId => {
+                        updateTenant(tenant.id, { credentials: { ...tenant.credentials!, appId } })
+                        refresh()
+                      }}
+                    />}
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
+                  {hasClientId && <Button variant="outline" size="sm" onClick={() => void signIn(tenant)} disabled={busy === tenantId || !tenant.credentials}>
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     {account ? "Sign in again" : "Sign in"}
-                  </Button>
+                  </Button>}
                   <Button variant="ghost" size="sm" onClick={() => { setChoice(null); setStorageDraft(null); setEditing(tenant) }} disabled={!tenant.credentials}>
                     Change storage
                   </Button>
@@ -906,6 +945,10 @@ export default function SettingsPage() {
   // loaded state survive switching sections. Start each section at the top,
   // except when a deep link targets a control inside the storage section.
   useEffect(() => {
+    if (hash.startsWith("#sign-in-") && isGuid(hash.slice("#sign-in-".length))) {
+      const frame = requestAnimationFrame(() => document.getElementById(hash.slice(1))?.scrollIntoView?.({ block: "nearest" }))
+      return () => cancelAnimationFrame(frame)
+    }
     if (hash !== "#recovery-key") window.scrollTo({ top: 0 })
   }, [section, hash])
 
@@ -968,7 +1011,7 @@ export default function SettingsPage() {
         <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
           {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
-          {panel("services", <ServicesSettings />)}
+          {panel("services", <ServicesSettings active={section === "services"} />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {/* Only the preferences card loads again after an import, so a Backup Reader draft stays. */}
           {panel("background", <div className="space-y-6"><BackgroundAndRetention key={reloads.background ?? 0} /><BackupReaderSettings /></div>)}

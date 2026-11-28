@@ -1,4 +1,4 @@
-import { coveredFolders, type ScopeMetadata } from "./scope"
+import { comparisonCoverage, type BackupReadMetadata } from "./backup-read-coverage"
 import { stoppedEarly } from "./backup-status"
 
 /** Per item fingerprints a backup's metadata.json holds, keyed by "<type folder>/<Intune ID>". */
@@ -11,14 +11,15 @@ export type BackupItems = Record<string, {
    * with `assignments: []`, as those versions recorded it.
    */
   hashWithEmptyAssignments?: string
+  /** The hash of an Intune role with assignment arrays written as in the 0.5 cloud runbook. */
+  hashWithLegacyRoleAssignments?: string
   /** For objects with encrypted values: the hash with every encrypted value masked (****). */
   hashWithMaskedSecrets?: string
   /** The encrypted values could not be read in plain text, so the file holds ****. */
   secretsMasked?: true
 }>
 
-export interface BackupFingerprint extends ScopeMetadata {
-  Status?: unknown
+export interface BackupFingerprint extends BackupReadMetadata {
   Items?: unknown
 }
 
@@ -57,8 +58,7 @@ export function compareBackups(older: BackupFingerprint, newer: BackupFingerprin
   const before = itemsOf(older)
   const after = itemsOf(newer)
   if (!before || !after) return []
-  const olderFolders = coveredFolders(older)
-  const shared = new Set([...coveredFolders(newer)].filter((folder) => olderFolders.has(folder)))
+  const { shared } = comparisonCoverage(older, newer)
   const inScope = (key: string) => shared.has(key.slice(0, key.indexOf("/")))
   const split = (key: string) => ({ folder: key.slice(0, key.indexOf("/")), id: key.slice(key.indexOf("/") + 1) })
 
@@ -83,6 +83,10 @@ export function compareBackups(older: BackupFingerprint, newer: BackupFingerprin
  */
 export function sameItem(previous: BackupItems[string], item: BackupItems[string]): boolean {
   if (previous.hash === item.hash) return true
+  const previousLegacyRole = previous.hashWithLegacyRoleAssignments
+  const legacyRole = item.hashWithLegacyRoleAssignments
+  if (previousLegacyRole === undefined && legacyRole !== undefined && legacyRole === previous.hash) return true
+  if (legacyRole === undefined && previousLegacyRole !== undefined && previousLegacyRole === item.hash) return true
   // A backup that could not decrypt a value is compared with the value masked on both sides.
   if ((previous.secretsMasked || item.secretsMasked) && previous.hashWithMaskedSecrets !== undefined) return previous.hashWithMaskedSecrets === item.hashWithMaskedSecrets
   return previous.hashWithEmptyAssignments === undefined && item.hashWithEmptyAssignments !== undefined && previous.hash === item.hashWithEmptyAssignments

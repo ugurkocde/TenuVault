@@ -17,6 +17,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "~/compone
 import { cn } from "~/lib/utils"
 import { LinkedMessage } from "~/components/linked-message"
 
+import { adminCenterLink } from "../../../shared/intune/admin-links"
+
 interface RevertProgressModalProps {
   isOpen: boolean
   onClose: () => void
@@ -28,7 +30,7 @@ interface RevertProgressModalProps {
   isSuccess?: boolean
   onComplete?: (success: boolean) => void
   newPolicyId?: string
-  policyType?: string
+  folder?: string
 }
 
 interface ProgressStep {
@@ -49,8 +51,9 @@ export function RevertProgressModal({
   isSuccess = false,
   onComplete,
   newPolicyId,
-  policyType
+  folder
 }: RevertProgressModalProps) {
+  const adminLink = isSuccess && folder && newPolicyId ? adminCenterLink(folder, newPolicyId, { displayName: policyName }) : undefined
 
   const steps: ProgressStep[] = [
     {
@@ -67,7 +70,7 @@ export function RevertProgressModal({
     },
     {
       id: "apply",
-      label: action === "revert" ? "Applying changes to Intune" : "Creating new policy in Intune",
+      label: action === "revert" ? "Applying changes to the tenant" : "Creating a policy in the tenant",
       status: "pending",
       icon: <Upload className="h-5 w-5" />
     },
@@ -201,47 +204,9 @@ export function RevertProgressModal({
         <div className="flex gap-3">
           {isComplete ? (
             <>
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => {
-                  // Open Intune portal with direct link to the policy if available
-                  if (newPolicyId && policyType) {
-                    // Construct the direct URL based on policy type
-                    let intuneUrl = "https://endpoint.microsoft.com/#view/Microsoft_Intune_DeviceSettings/";
-                    
-                    // Map policy types to Intune URL paths
-                    switch (policyType) {
-                      case "Device Configuration":
-                      case "deviceConfigurations":
-                        intuneUrl += `ConfigurationProfileMenuBlade/~/overview/configurationId/${newPolicyId}`;
-                        break;
-                      case "Compliance Policy":
-                      case "compliancePolicies":
-                        intuneUrl += `CompliancePolicyOverviewBlade/~/overview/policyId/${newPolicyId}`;
-                        break;
-                      case "App Configuration":
-                      case "appConfiguration":
-                        intuneUrl += `AppConfigurationPolicyMenuBlade/~/overview/policyId/${newPolicyId}`;
-                        break;
-                      case "App Protection":
-                      case "appProtection":
-                        intuneUrl += `AppProtectionPolicyMenuBlade/~/overview/policyId/${newPolicyId}`;
-                        break;
-                      default:
-                        // If we can't determine the exact URL, at least go to the policies list
-                        intuneUrl = "https://endpoint.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/policyList";
-                    }
-                    
-                    window.open(intuneUrl, "_blank")
-                  } else {
-                    // Fallback to general Intune portal
-                    window.open("https://endpoint.microsoft.com", "_blank")
-                  }
-                }}
-              >
-                View in Intune
-              </Button>
+              {adminLink && <Button variant="outline" className="flex-1" asChild>
+                <a href={adminLink.url} target="_blank" rel="noopener noreferrer">View in {adminLink.center}</a>
+              </Button>}
               <Button
                 className="flex-1 bg-coral-600 text-white hover:bg-coral-700"
                 onClick={() => {

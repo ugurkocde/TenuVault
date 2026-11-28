@@ -36,6 +36,12 @@ describe("notification envelope", () => {
     expect(backupEvent({ ...base, status: "Success" })).toMatchObject({ type: "backup.succeeded", severity: "info" })
   })
 
+  it("reports incomplete coverage separately from the finished backup run", () => {
+    const event = backupEvent({ tenantId: TENANT, occurredAt: "2026-10-17T01:00:00Z", status: "Success", coverage: "incomplete", source: "desktop" })
+    expect(event.title).toBe("Backup finished with incomplete coverage: your tenant")
+    expect(event.details).toEqual(expect.arrayContaining([{ label: "Run status", value: "Finished" }, { label: "Coverage", value: "Incomplete" }]))
+  })
+
   it("bounds and cleans fields", () => {
     const envelope = buildEnvelope({
       type: "test", severity: "info", tenantId: TENANT, occurredAt: "2026-10-17T00:00:00Z", naturalKey: "k",

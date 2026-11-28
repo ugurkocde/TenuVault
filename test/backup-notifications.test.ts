@@ -8,7 +8,7 @@ import { NetworkUnreachableError } from "../src/main/api/network-error"
 import { BackupEngine, type BackupJob } from "../src/main/backup/engine"
 import { backupTenantLabel, notifyBackupFailure } from "../src/main/backup/notifications"
 import { RefusalLog, refuseUnlicensedBackup } from "../src/main/backup/refusals"
-import { BackupScheduler, reportsResult, runUnattended, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
+import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { isLocalAccount } from "../src/main/storage/blob-emulator"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { BackupRefusal } from "../src/shared/ipc"
@@ -37,13 +37,13 @@ type Profile = { name: string; clientId: string; storageAccountName: string }
 
 function tenantProfileFixture(metadata: { name?: string; domain?: string }) {
   const source = index.slice(index.indexOf("const tenantProfile ="), index.indexOf("const connectedTenantIds ="))
-  const store = { get: () => JSON.stringify([{
+  const connections = { activeProfiles: () => JSON.stringify([{
     ...metadata,
     credentials: { tenantId: tenant.tenantId, appId: "app" },
     resources: { storageAccountName: localStorageAccountName(tenant.tenantId) },
   }]) }
-  return new Function("appStore", "RENDERER_STORAGE_PREFIX", "backupTenantLabel", transformSync(source, { loader: "ts" }).code + "\nreturn tenantProfile;")(
-    store, "", backupTenantLabel,
+  return new Function("connections", "backupTenantLabel", transformSync(source, { loader: "ts" }).code + "\nreturn tenantProfile;")(
+    connections, backupTenantLabel,
   ) as (tenantId: string) => Profile
 }
 
@@ -79,6 +79,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     },
     engine,
     scheduledResult,
+    notifiedStatus,
     runUnattended,
     reportsResult,
     scopes: { get: () => ({ scope: { excluded: [] } }) },
@@ -89,6 +90,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     notifyFailure: (tenantId: string, name: string, message: string, trigger: Trigger) => notifyBackupFailure({ tenantId, name }, message, trigger, () => null),
     // Notification channel events are covered by the notifications suites; here they are inert.
     emitBackupOutcome: vi.fn(async () => ({ created: 0, localCreated: false })),
+    connections: { needsSignInMethod: () => false },
     featureDeps: {},
   }
   const run = new Function(...Object.keys(dependencies), transformSync(source, { loader: "ts" }).code + "\nreturn runScheduledBackup;")(

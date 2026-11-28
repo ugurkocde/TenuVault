@@ -1,3 +1,4 @@
+import { backupTypeUse } from "../../../shared/services/backup-use"
 import { HYGIENE_GROUP_READ_HINT } from "../../../shared/group-access"
 import { mapLimit } from "../../../shared/map-limit"
 import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
@@ -85,14 +86,14 @@ export async function collectFromBackup(deps: FeatureDeps, tenantId: string, bac
   const covered: string[] = []
   // Inventory such as Autopilot devices is not configuration, so hygiene neither reads nor reports it.
   for (const type of INTUNE_TYPES) {
-    if (type.inventory) continue
+    if (!backupTypeUse(type).hygiene) continue
     const reason = excluded.has(type.folder) ? "excluded" : skipped.has(type.folder) ? "skipped" : failed.has(type.folder) ? "failed" : null
     if (reason) notCollected.push({ folder: type.folder, label: type.label, reason })
     else covered.push(type.folder)
   }
 
   const paths = (content.groups ?? [])
-    .filter((group) => !(typeof group.folder === "string" && typeForFolder(group.folder)?.inventory))
+    .filter(group => { const type = typeForFolder(group.folder ?? ""); return type && backupTypeUse(type).hygiene })
     .flatMap((group) => (group.policies ?? []).map((policy) => policy.path).filter((path): path is string => typeof path === "string"))
   const items: InventoryItem[] = []
   const unreadableFolders = new Set<string>()
@@ -101,7 +102,7 @@ export async function collectFromBackup(deps: FeatureDeps, tenantId: string, bac
     const preview = await json(await deps.api("/api/restore-preview", tenantId, { backupId: chosen.id, paths: paths.slice(start, start + PREVIEW_CHUNK) }), "Reading the backup")
     for (const entry of (Array.isArray(preview.items) ? preview.items : []) as Array<{ folder?: string; snapshot?: Item; error?: string }>) {
       const type = typeof entry.folder === "string" ? typeForFolder(entry.folder) : undefined
-      if (!type) continue
+      if (!type || !backupTypeUse(type).hygiene) continue
       const snapshot = entry.snapshot
       if (!snapshot || typeof snapshot.id !== "string" || entry.error) {
         unreadable++
@@ -145,9 +146,8 @@ export interface GroupResolution {
 
 /**
  * Checks whether referenced groups exist with GET groups/{id}?$select=id (read only).
- * 200 means it exists, 404 that it does not. The TenuVault app only requests
- * GroupMember.Read.All, so a 401 or 403 stops
- * the checks and leaves every group unknown; any other failure leaves that group unknown.
+ * 200 means it exists, and 404 means it does not. A 401 or 403 stops all checks and leaves
+ * every group unknown. Other failures leave that group unknown.
  * Unknown is never reported as missing or as fine.
  */
 export async function resolveGroups(deps: FeatureDeps, tenantId: string, items: InventoryItem[]): Promise<GroupResolution> {

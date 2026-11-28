@@ -12,6 +12,10 @@ on:
         description: Build a signed Windows verification package without publishing a release
         type: boolean
         default: false
+      signed_macos:
+        description: Build signed and notarized macOS verification installers without publishing a release
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -74,6 +78,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Install zsh for the remediation command tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zsh
+
       - name: Unit tests
         if: github.event_name == 'pull_request'
         run: npm test
@@ -81,6 +90,11 @@ jobs:
       - name: Unit tests with coverage
         if: github.event_name != 'pull_request'
         run: npm run test:coverage
+
+      - name: Test stable and expanded Entra scope offline
+        run: |
+          TENUVAULT_LAB_EXPANDED_ENTRA=0 npm run test:e2e -- test/final-scope.e2e.test.ts
+          TENUVAULT_LAB_EXPANDED_ENTRA=1 npm run test:e2e -- test/final-scope.e2e.test.ts
 
       - name: Upload coverage
         if: always() && github.event_name != 'pull_request'
@@ -93,6 +107,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Test release bundle guard
+        run: |
+          npm run build:lab
+          npm run test:release-bundle
+
       - name: Smoke test
         timeout-minutes: 5
         run: xvfb-run -a npm run smoke -- out/smoke
@@ -104,6 +123,12 @@ jobs:
           name: smoke-screenshots-linux
           path: out/smoke
           if-no-files-found: ignore
+
+      - name: Check historical backup payloads on Linux
+        timeout-minutes: 3
+        env:
+          TENUVAULT_SMOKE_SECTION: backup-upgrade
+        run: xvfb-run -a node scripts/smoke.mjs out/smoke-upgrade
 
       # A complete first sign-in in every browser engine, in the packaged Linux app, against a
       # local stand-in for login.microsoftonline.com and the licensing service that the runner's
@@ -205,12 +230,15 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build installers
-        if: runner.os != 'Windows' || github.event_name != 'workflow_dispatch' || !inputs.signed_windows
+        if: >-
+          github.event_name != 'workflow_dispatch' ||
+          (runner.os == 'Windows' && !inputs.signed_windows) ||
+          (runner.os == 'macOS' && !inputs.signed_macos)
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
-          npx electron-vite build
+          npm run build
           npx electron-builder --config electron-builder.config.cjs ${{ matrix.target }} --publish never
 
       # Signing credentials are never made available to a pull-request build.
@@ -231,7 +259,7 @@ jobs:
             if [ -z "${!name:-}" ]; then echo "::error::Signed verification needs the $name signing secret"; exit 1; fi
           done
           test "$TENUVAULT_RELEASE_BUILD" = 1
-          npx electron-vite build
+          npm run build
           npx electron-builder --config electron-builder.config.cjs --win -c.forceCodeSigning=true --publish never
 
       - name: Verify Windows app and capture helper signatures
@@ -246,6 +274,53 @@ jobs:
             ./scripts/check-capture-signatures.ps1 -AppDirectory $folder.FullName -ExpectedPublisher $env:EXPECTED_PUBLISHER
           }
           Compress-Archive -Path dist/win-unpacked/* -DestinationPath dist/TenuVault-signed-verification-x64.zip
+
+      - name: Build signed and notarized macOS verification installers
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.signed_macos
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name:-}" ]; then echo "::error::Signed verification needs the $name signing configuration (see RELEASING.md)"; exit 1; fi
+          done
+          test "$TENUVAULT_RELEASE_BUILD" = 1
+          # Match release signing: electron-builder's temporary keychain cannot be unlocked on hosted runners.
+          printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/apple-api-key.p8"
+          export APPLE_API_KEY="$RUNNER_TEMP/apple-api-key.p8"
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          rm -f "$RUNNER_TEMP/signing.p12"
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"Developer ID Application: \([^"]*\)".*/\1/p' | head -1)"
+          if [ -z "$identity" ]; then echo "::error::No Developer ID Application identity in MAC_CSC_LINK"; exit 1; fi
+          export CSC_NAME="$identity"
+          unset CSC_LINK CSC_KEY_PASSWORD
+          npm run build
+          TENUVAULT_INSTALLERS_ONLY=1 npx electron-builder --config electron-builder.config.cjs --mac -c.forceCodeSigning=true --publish never
+
+      - name: Remove macOS signing key files
+        if: always() && runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.signed_macos
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/apple-api-key.p8" "$RUNNER_TEMP/signing.p12"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+
+      - name: Verify macOS installer signatures and notarization
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.signed_macos
+        shell: bash
+        run: scripts/nightly-verification/install-macos.sh dist "$RUNNER_TEMP/verified-app" --require-all
 
       - name: Test Windows capture helper
         if: runner.os == 'Windows'
@@ -265,6 +340,19 @@ jobs:
         env:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
         run: npm run smoke -- out/smoke
+
+      - name: Smoke test a packaged upgrade from 0.5.x with DPAPI
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        shell: bash
+        env:
+          TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
+          TENUVAULT_SMOKE_SECTION: backup-upgrade
+        run: node scripts/smoke.mjs out/smoke-upgrade
+
+      - name: Check frozen 0.5.x backups and keyring
+        if: runner.os == 'macOS'
+        run: npm exec vitest run test/backup-upgrade.test.ts
 
       # The same steps as the Release workflow's: the test is checked out from the workflow's own
       # commit and installed on its own, so every pull request proves the release gate's setup.
@@ -296,6 +384,7 @@ jobs:
         run: node .sign-in-test/scripts/sign-in-e2e/runner.mjs cleanup
 
       - name: Upload installers
+        if: runner.os != 'macOS' || github.event_name != 'workflow_dispatch' || !inputs.signed_macos
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tenuvault-desktop-${{ matrix.name }}
@@ -306,6 +395,16 @@ jobs:
             dist/*.zip
             dist/*.blockmap
             dist/latest*.yml
+          if-no-files-found: error
+
+      - name: Upload verified macOS installers
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.signed_macos
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tenuvault-desktop-macOS-signed
+          path: |
+            dist/*-mac-*.dmg
+            dist/*-mac-*.zip
           if-no-files-found: error
 
       - name: Upload screenshots

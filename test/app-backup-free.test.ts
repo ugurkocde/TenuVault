@@ -37,7 +37,10 @@ describe("free App Backup account read", () => {
     const start = main.indexOf("    restore: (store, source, snapshot")
     const execution = main.slice(start, main.indexOf("    ensureKeys:", start))
     expect(execution).toContain("restoreAppWithAudit(store, source, snapshot, target, name,")
-    expect(execution).toContain("auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)")
+    expect(main).toContain("restoreAuthorization: (source, target) => capabilities.appRestoreAuthorization(source, target)")
+    expect(execution).toContain("getGraphToken: () => appRestoreToken(auth, target, signedInClient(target), authorizeRestore)")
+    expect(execution).toContain("authorizeDispatch: authorizeRestore")
+    expect(execution).toContain("authorizeUpload: authorizeRestore")
   })
   it("keeps App Backup independent of billing without exempting other routes or privileged API access", async () => {
     for (const path of ["/portal/app-backup", "/portal/app-backup/versions"]) expect(isAppBackupPath(path)).toBe(true)

@@ -1,0 +1,77 @@
+{
+  "verified": "2026-11-17",
+  "liveCount": 69,
+  "samples": {
+    "object": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "displayName": "Example",
+      "description": null,
+      "mail": null,
+      "mailNickname": "Example",
+      "mailEnabled": false,
+      "securityEnabled": true,
+      "groupTypes": [],
+      "visibility": null,
+      "membershipRule": null,
+      "membershipRuleProcessingState": null,
+      "isAssignableToRole": null,
+      "createdDateTime": "Example",
+      "classification": null,
+      "preferredDataLocation": null,
+      "onPremisesSyncEnabled": null,
+      "proxyAddresses": [],
+      "assignedLicenses": []
+    },
+    "members": {
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "owners": {
+      "id": "00000000-0000-4000-8000-000000000001"
+    }
+  },
+  "shapes": {
+    "object": {
+      "pages": 1,
+      "entries": 69,
+      "keys": [
+        "id",
+        "displayName",
+        "description",
+        "mail",
+        "mailNickname",
+        "mailEnabled",
+        "securityEnabled",
+        "groupTypes",
+        "visibility",
+        "membershipRule",
+        "membershipRuleProcessingState",
+        "isAssignableToRole",
+        "createdDateTime",
+        "classification",
+        "preferredDataLocation",
+        "onPremisesSyncEnabled",
+        "proxyAddresses",
+        "assignedLicenses"
+      ]
+    },
+    "members": {
+      "pages": 69,
+      "entries": 168,
+      "keys": [
+        "id"
+      ]
+    },
+    "owners": {
+      "pages": 69,
+      "entries": 4,
+      "keys": [
+        "id"
+      ]
+    },
+    "settings": {
+      "pages": 69,
+      "entries": 0,
+      "keys": []
+    }
+  }
+}

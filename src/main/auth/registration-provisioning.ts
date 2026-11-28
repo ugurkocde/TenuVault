@@ -1,5 +1,6 @@
-import { CONSENT_ROLES_TEXT, DESKTOP_APP_PERMISSIONS } from "../../shared/app-registration"
-import { OPTIONAL_PERMISSIONS } from "../../shared/services/optional-permissions"
+import { randomUUID } from "node:crypto"
+import { CONSENT_ROLES_TEXT, DELEGATED_GRANT_DATES } from "../../shared/app-registration"
+import { DEFAULT_SETUP_CHOICE, GRAPH_APP_ID, knownPermissions, requestedPermissions, showsApproval, type ApiPermissions, type PermissionChoice } from "../../shared/services/manifest"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 
 interface Application {
@@ -31,11 +32,11 @@ export interface ProvisioningOptions {
   progress: (progress: SetupProgress) => void
   signal?: AbortSignal
   sleep?: (ms: number) => Promise<void>
+  /** The services, areas and access levels to ask permissions for. When left out, what a setup has always asked for. */
+  choice?: PermissionChoice
 }
-// The stable Graph version, as the setup script uses it. The first real setups ran against it.
-const ROOT = "https://graph.microsoft.com/v1.0"
+const ROOT = "https://graph.microsoft.com/beta"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
-const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
 const APPLICATION_FIELDS = "id,appId,displayName,notes,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,createdDateTime"
 
 /**
@@ -76,7 +77,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // failed, so a stalled connection cannot keep the setup, and the token it holds, alive.
   async function graph<T>(method: string, path: string, body?: object, replication = false, cleanup = false): Promise<T> {
     const url = new URL(path.startsWith("https:") ? path : `${ROOT}${path}`)
-    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/v1.0/")) throw new Error("Unexpected Graph paging address.")
+    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/beta/")) throw new Error("Unexpected Graph paging address.")
     const attempts = replication ? 12 : 4
     // A write that may have been carried out is never sent twice: only a throttled request (which
     // was not carried out) and a replication delay repeat a POST.
@@ -133,35 +134,39 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // made. Checking it here would start licensing for a tenant that is not signed in yet.
   checkCancelled()
   progress({ phase: "registration" })
-  const principalFields = "$select=id,appId,accountEnabled,oauth2PermissionScopes"
+  const principalFields = "$select=id,appId,accountEnabled,publishedPermissionScopes"
   // Microsoft's own enterprise applications for the APIs TenuVault uses. One the tenant has not
   // used yet is only added when a registration is created: while an existing one is used, the
   // setup writes nothing at all.
-  const resources: ((typeof DESKTOP_APP_PERMISSIONS)[number] & { principal?: Principal })[] = []
-  for (const resource of DESKTOP_APP_PERMISSIONS) {
+  const resources: (ApiPermissions & { principal?: Principal })[] = []
+  for (const resource of requestedPermissions(options.choice ?? DEFAULT_SETUP_CHOICE, "delegated")) {
     resources.push({ ...resource, principal: (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}&${principalFields}`))[0] })
   }
   // An existing registration is used only when an administrator has already given it tenant-wide
-  // consent for TenuVault's Intune permissions. Any member of a tenant may create app
+  // consent for TenuVault's work: for one of the Intune permissions a setup asks for by default,
+  // for most of what backing up Entra ID asks for, or for everything a setup for
+  // Conditional Access alone asks for (see showsApproval). One permission that many apps are
+  // given, or the ones every sign-in has, say nothing alone. Any member of a tenant may create app
   // registrations, with any name and note, and remains their owner. Granting consent to such a
   // registration would hand its owner an app that administrators sign in through. Tenant-wide
   // consent can only come from an administrator, so it is the proof that one trusted it before.
   // Even then the setup writes nothing to it: it only ever gives consent to the one it creates.
   const graphResource = resources.find(resource => resource.appId === GRAPH_APP_ID)!
   const graphPrincipalId = graphResource.principal?.id
-  const intune = new Set(graphResource.permissions.filter(permission => permission.startsWith("DeviceManagement")))
-  // For choosing among several, only permissions TenuVault knows count: the default set and the
-  // ones its switches add. Consent for anything else says nothing about which one the admins use.
-  const known = new Map(resources.flatMap(resource => resource.principal ? [[resource.principal.id, new Set<string>(
-    resource.appId === GRAPH_APP_ID ? [...resource.permissions, ...OPTIONAL_PERMISSIONS.flatMap(entry => entry.permissions), "Policy.ReadWrite.ConditionalAccess"] : resource.permissions,
-  )] as const] : []))
+  // For choosing among several, only permissions TenuVault knows count: everything the permission
+  // manifest names. Consent for anything else says nothing about which one the admins use.
+  const known = new Map(knownPermissions("delegated").flatMap(api => {
+    const principal = resources.find(resource => resource.appId === api.appId)?.principal
+    return principal ? [[principal.id, new Set(api.permissions)] as const] : []
+  }))
   const candidates = []
-  for (const candidate of (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=${APPLICATION_FIELDS}`)).filter(looksLikeTenuVault)) {
+  const fixtureName = typeof __TV_LAB_BUILD__ !== "undefined" && __TV_LAB_BUILD__ ? `${__TV_LAB_REGISTRATION__}-${randomUUID()}` : ""
+  for (const candidate of fixtureName ? [] : (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=${APPLICATION_FIELDS}`)).filter(looksLikeTenuVault)) {
     const principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${candidate.appId}'`)}&${principalFields}`))[0]
     if (!principal) continue
     const grants = await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
     const tenantWide = grants.filter(grant => grant.consentType === "AllPrincipals")
-    if (!tenantWide.some(grant => grant.resourceId === graphPrincipalId && grant.scope.split(/\s+/).some(scope => intune.has(scope)))) continue
+    if (!showsApproval(new Set(tenantWide.filter(grant => grant.resourceId === graphPrincipalId).flatMap(grant => grant.scope.split(/\s+/))))) continue
     const score = new Set(tenantWide.flatMap(grant => grant.scope.split(/\s+/).filter(scope => known.get(grant.resourceId)?.has(scope)).map(scope => `${grant.resourceId}:${scope}`))).size
     candidates.push({ app: candidate, principal, grants, disabled: principal.accountEnabled === false, score })
   }
@@ -177,7 +182,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   }
   let created: Application | undefined
   let app = existing
-  /** Default permissions the reused registration has no tenant-wide consent for. */
+  /** Permissions of the choice the reused registration has no tenant-wide consent for. */
   const missingConsent: string[] = []
   progress({ phase: "registration", reused: Boolean(existing) })
   try {
@@ -187,8 +192,8 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
         // A Microsoft API the tenant has not used yet is added to it, as the setup script does.
         // These are Microsoft's own enterprise applications and stay when a later step fails.
         resource.principal ??= await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
-        // Graph v1.0 calls them oauth2PermissionScopes; the beta name is accepted as well.
-        const scopes = resource.principal.oauth2PermissionScopes ?? resource.principal.publishedPermissionScopes ?? []
+        // Beta calls these publishedPermissionScopes. Accept the alternate field when Graph includes it.
+        const scopes = resource.principal.publishedPermissionScopes ?? resource.principal.oauth2PermissionScopes ?? []
         requiredResourceAccess.push({ resourceAppId: resource.appId, resourceAccess: resource.permissions.map(value => {
           const scope = scopes.find(scope => scope.value === value && scope.isEnabled !== false)
           if (!scope) throw new Error(`Delegated permission ${value} was not found on ${resource.api}.`)
@@ -196,7 +201,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
         }) })
       }
       created = await graph<Application>("POST", "/applications", {
-        displayName: "TenuVault Desktop", signInAudience: "AzureADMyOrg", notes: NOTES,
+        displayName: fixtureName || "TenuVault Desktop", signInAudience: "AzureADMyOrg", notes: NOTES,
         publicClient: { redirectUris: ["http://localhost"] }, requiredResourceAccess,
       })
       app = created
@@ -214,17 +219,17 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       if (existing) { missingConsent.push(...lacking.map(scope => resource.appId === GRAPH_APP_ID ? scope : `${scope} (${resource.api})`)); continue }
       resource.permissions.forEach(scope => scopes.add(scope))
       if (grant && lacking.length) await graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope: [...scopes].join(" ") }, true)
-      if (!grant) await graph("POST", "/oauth2PermissionGrants", { clientId: principal.id, consentType: "AllPrincipals", resourceId: resource.principal!.id, scope: [...scopes].join(" ") }, true)
+      if (!grant) await graph("POST", "/oauth2PermissionGrants", { clientId: principal.id, consentType: "AllPrincipals", resourceId: resource.principal!.id, scope: [...scopes].join(" "), ...DELEGATED_GRANT_DATES }, true)
     }
     checkCancelled()
   } catch (error) {
     if (!created) throw error
     let removed = false
     try { await graph("DELETE", `/applications/${created.id}`, undefined, true, true); removed = true } catch { /* Best effort cleanup. */ }
-    throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration TenuVault Desktop (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+    throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration ${created.displayName} (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
   // From here on the registration is complete. A cancel keeps it, and says so when this run made it.
-  const kept = () => new Error(existing ? "Sign-in cancelled." : `Setup was cancelled. The app registration "${app!.displayName}" (client id ${app!.appId}) stays in your tenant, and the next setup uses it.`)
+  const kept = () => new Error(existing ? "Sign-in cancelled." : `Setup was cancelled. The app registration "${app!.displayName}" (client id ${app!.appId}) stays in your tenant${fixtureName ? "" : ", and the next setup uses it"}.`)
   const checkKept = () => { if (signal?.aborted) throw kept() }
   checkKept()
   progress({ phase: "publishing", reused: Boolean(existing) })

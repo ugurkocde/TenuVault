@@ -1,0 +1,19 @@
+{
+  "folder": "HardwareOathDevices",
+  "path": "directory/authenticationMethodDevices/hardwareOathDevices",
+  "apiVersion": "beta",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/beta/directory/authenticationMethodDevices/hardwareOathDevices": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

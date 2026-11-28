@@ -121,6 +121,25 @@ start a development build with `TENUVAULT_LICENSE_API_BASE=<preview origin>` and
 Never replace the key pair in one step: every installed app trusts only the keys it was built
 with, so it would reject every token the service issues from then on. Follow the runbook below.
 
+### Building the 0.6 lab app
+
+Use `npm run build:lab` to compile the lab app in `out-lab`. Use `npm run dist:lab`
+to rebuild and create the unpacked app for the current platform in `dist-lab`.
+Set these variables before building.
+
+- Set `TENUVAULT_LAB_LICENSE_ORIGIN` to the local license service origin, such as `http://127.0.0.1:3000`.
+- Set `TENUVAULT_LAB_LICENSE_PUBLIC_KEY` to the Ed25519 public verification key matching that service.
+- Optionally set `TENUVAULT_LAB_RUN` to a run name of up to 40 letters, digits or hyphens. Guided app setup adds unique IDs to the `TV06-TEST-` registration name.
+
+The separate lab profile enables the TenuVault app independently of the
+server's availability flags. The app shows **Lab build** and has no update feed. Without
+a lab key, the placeholder supports UI testing only.
+
+`npm run build` checks the normal bundle for lab markers. Run
+`npm run test:release-bundle` after building both bundles to confirm the check accepts
+`out` and rejects `out-lab`. Release packaging repeats the bundle check and verifies the
+production origin and pinned license key when `TENUVAULT_RELEASE_BUILD=1`.
+
 ### Rotating the license signing key
 
 Rotate only when the private key may be exposed, or on a planned schedule. Each step waits for the

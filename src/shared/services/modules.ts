@@ -1,8 +1,7 @@
 /**
  * The services TenuVault backs up and restores, each with the Microsoft Graph permissions it needs.
  *
- * A module groups registry folders under one service (Intune, Entra Conditional Access, and later
- * Exchange, Teams or Outlook). Backup and restore have separate permission sets, so an app
+ * A module groups registry folders under one service (Intune, Entra Conditional Access and Entra ID). Backup and restore have separate permission sets, so an app
  * registration can be consented for reading a service without being able to change it. The
  * permission check compares these requirements with the permissions in the token TenuVault already
  * holds; it never asks for consent or calls Graph itself.
@@ -10,21 +9,21 @@
  * Pure, so the main process, the API routes and tests evaluate the same rules.
  */
 
-export type ModuleId = "intune" | "conditionalAccess"
+import { area, part, type FolderPermissions, type Need, type PermissionArea, type Requirement, type SignInMode } from "./areas"
+import { expandedEntraScope } from "../intune/entra-scope"
+import { ENTRA_AREAS } from "./entra"
+import { isTenuVaultApp } from "../tenant-connection"
 
-/** At least one of these permissions satisfies the requirement. ReadWrite always also covers Read. */
-export type AnyOf = readonly string[]
+export type { AnyOf, FolderPermissions, Need, PermissionArea, Requirement, SignInMode } from "./areas"
 
-/** Every group must be satisfied; within a group any one permission does. */
-export type Requirement = readonly AnyOf[]
+export type ModuleId = "intune" | "conditionalAccess" | "entra"
 
-/** A part of a module that needs its own permission, such as Intune apps or scripts. */
-export interface PermissionArea {
-  label: string
-  folders: readonly string[]
-  backup: Requirement
-  restore: Requirement
-}
+/**
+ * What TenuVault asks for when a service is set up for a tenant: read access for backups, or read and
+ * write access so it can also restore. It only shapes the permissions requested at setup. It never
+ * decides whether a backup or a restore runs: the permissions in the token do.
+ */
+export type AccessLevel = "backup" | "restore"
 
 /**
  * The app registration a module uses. Every tenant has one today ("default", the app the admin signs
@@ -37,11 +36,29 @@ export interface ServiceModule {
   id: ModuleId
   label: string
   description: string
+  /** The admin can turn the service on or off for a tenant. */
+  switchable: boolean
   /**
-   * Off until the admin turns it on for the tenant. Modules that were always backed up (Intune)
-   * are on; new services start off so an update never adds a service to backups unasked.
+   * On for a tenant that has made no choice. Intune is, as it always was backed up; the other services
+   * start off, so an update never adds a service to backups unasked.
    */
-  optIn: boolean
+  defaultOn: boolean
+  /**
+   * The permissions in the token are checked before a folder of the service is read or written, so a
+   * missing permission is named up front. Intune has no service-wide pre-check. Individual parts
+   * can opt into their own checks.
+   */
+  precheck: boolean
+  /**
+   * A read Microsoft refuses or throttles ends the type it belongs to, and the backup goes on. The
+   * endpoints of Entra ID refuse on their own: for a product the tenant has no license
+   * for, a role the account lacks, or a setting only a signed-in admin can read. Off for Intune and
+   * Conditional Access, whose refusals keep ending a backup as they always have: there a refused
+   * read means the sign-in or its role is gone, which fails every read after it.
+   */
+  isolated: boolean
+  /** The access level a tenant has for the service until the admin chooses another. */
+  defaultAccess: AccessLevel
   areas: readonly PermissionArea[]
   /** Admin roles that can use the module. Shown as guidance: tokens do not reliably list roles. */
   roles: string
@@ -52,124 +69,163 @@ export interface ServiceModule {
    * a new app registration, so an existing one is changed in Entra or with the Azure CLI instead.
    */
   restoreAccess?: { permissions: ReadonlyArray<{ name: string; id: string }>; newSetupSwitch: string }
-  /** Backup Reader (app-only) application permission that lets scheduled backups read the module. */
-  readerRole?: string
+  /**
+   * A Microsoft Graph beta path of one small read that only an account with access to the service can
+   * make. Restore history opens after it succeeds, so a stored sign-in alone does not show it.
+   */
+  accessProbe?: string
+  /**
+   * A Microsoft Graph beta path of one small read that shows a Backup Reader's token works for the
+   * service, with the application permission the read needs.
+   */
+  readerProbe?: { path: string; role: string }
 }
 
-const rw = (name: string): Requirement => [[`${name}.ReadWrite.All`]]
-const readOrWrite = (name: string): Requirement => [[`${name}.Read.All`, `${name}.ReadWrite.All`]]
+/**
+ * Folders of Intune that one permission family covers: Read.All or ReadWrite.All backs them up,
+ * ReadWrite.All restores them, and the Backup Reader gets Read.All.
+ */
+const intune = (family: string, folders: readonly string[], options: Parameters<typeof part>[4] = {}) =>
+  part(folders, [[`${family}.Read.All`, `${family}.ReadWrite.All`]], [[`${family}.Read.All`]], [[`${family}.ReadWrite.All`]], options)
 
 export const MODULES: readonly ServiceModule[] = [
   {
     id: "intune",
     label: "Intune",
     description: "Device configuration, compliance, endpoint security, apps, scripts, enrollment and tenant administration.",
-    optIn: false,
+    switchable: true,
+    defaultOn: true,
+    precheck: false,
+    isolated: false,
+    defaultAccess: "restore",
     roles: "Intune Administrator, or an Intune role that covers the policies you back up and restore.",
+    accessProbe: "deviceManagement/deviceCategories?$top=1&$select=id",
+    readerProbe: { path: "deviceManagement/deviceCompliancePolicies?$top=1&$select=id", role: "DeviceManagementConfiguration.Read.All" },
     areas: [
-      {
-        label: "Configuration and compliance",
-        folders: [
+      area({ id: "configuration", label: "Configuration and compliance" }, [
+        intune("DeviceManagementConfiguration", [
           "DeviceConfigurations", "ConfigurationPolicies", "GroupPolicyConfigurations", "ReusablePolicySettings", "HardwareConfigurations",
           "CompliancePolicies", "ComplianceSettingsPolicies", "CompliancePolicySettings", "EndpointSecurityIntents",
           "FeatureUpdateProfiles", "QualityUpdateProfiles", "QualityUpdatePolicies", "DriverUpdateProfiles",
           "AssignmentFilters", "NotificationTemplates",
-        ],
-        backup: readOrWrite("DeviceManagementConfiguration"),
-        restore: rw("DeviceManagementConfiguration"),
-      },
-      {
-        label: "Apps and app protection",
-        folders: ["AppCategories", "Apps", "AppConfigurationPolicies", "ManagedAppConfigurations", "AppProtectionIOS", "AppProtectionAndroid", "AppProtectionWindows", "PolicySets"],
-        backup: readOrWrite("DeviceManagementApps"),
-        restore: rw("DeviceManagementApps"),
-      },
-      {
-        label: "Enrollment and branding",
-        folders: ["EnrollmentConfigurations", "AutopilotProfiles", "AutopilotDevices", "AppleEnrollmentProfiles", "AppleAutomatedEnrollment", "AndroidEnrollmentProfiles", "TermsAndConditions", "Branding"],
-        backup: readOrWrite("DeviceManagementServiceConfig"),
-        restore: rw("DeviceManagementServiceConfig"),
-      },
-      {
-        label: "Scripts and remediations",
-        folders: ["PowerShellScripts", "ShellScripts", "CustomAttributeScripts", "Remediations", "ComplianceScripts"],
-        backup: readOrWrite("DeviceManagementScripts"),
-        restore: rw("DeviceManagementScripts"),
-      },
-      {
-        label: "Roles and scope tags",
-        folders: ["ScopeTags", "RoleDefinitions", "MultiAdminApprovalPolicies"],
-        backup: readOrWrite("DeviceManagementRBAC"),
-        restore: rw("DeviceManagementRBAC"),
-      },
-      {
-        label: "Device categories and clean-up rules",
-        folders: ["DeviceCategories", "DeviceCleanupRules"],
-        backup: readOrWrite("DeviceManagementManagedDevices"),
-        restore: rw("DeviceManagementManagedDevices"),
-      },
+        ]),
+      ]),
+      area({ id: "apps", label: "Apps and app protection" }, [
+        intune("DeviceManagementApps", ["AppCategories", "Apps", "AppConfigurationPolicies", "ManagedAppConfigurations", "AppProtectionIOS", "AppProtectionAndroid", "AppProtectionWindows"]),
+        intune("DeviceManagementConfiguration", ["PolicySets"], { backupPrecheck: true, restorePrecheck: true }),
+      ]),
+      area({ id: "enrollment", label: "Enrollment and branding" }, [
+        intune("DeviceManagementServiceConfig", ["EnrollmentConfigurations", "AutopilotProfiles", "AutopilotDevices", "AppleEnrollmentProfiles", "AppleAutomatedEnrollment", "AndroidEnrollmentProfiles", "TermsAndConditions", "Branding"]),
+      ]),
+      area({ id: "scripts", label: "Scripts and remediations" }, [
+        intune("DeviceManagementScripts", ["PowerShellScripts", "ShellScripts", "CustomAttributeScripts", "Remediations", "ComplianceScripts"]),
+      ]),
+      area({ id: "roles", label: "Roles and scope tags" }, [
+        intune("DeviceManagementRBAC", ["ScopeTags", "RoleDefinitions", "MultiAdminApprovalPolicies"]),
+      ]),
+      // DeviceManagementManagedDevices.ReadWrite.All can also wipe and retire devices, so setup only ever asks to read.
+      // The application permission shows the managed device inventory, so the Backup Reader gets it only on request.
+      area({ id: "devices", label: "Device categories and clean-up rules", appOnlyOptIn: true }, [
+        intune("DeviceManagementManagedDevices", ["DeviceCategories", "DeviceCleanupRules"], { restoreNotRequested: true }),
+      ]),
     ],
   },
   {
     id: "conditionalAccess",
     label: "Entra Conditional Access",
     description: "Conditional Access policies, named locations and authentication strengths. Restored policies start in report-only mode.",
-    optIn: true,
+    switchable: true,
+    defaultOn: false,
+    precheck: true,
+    isolated: false,
+    defaultAccess: "backup",
     roles: "Security Reader or Global Reader to back up; Conditional Access Administrator or Security Administrator to restore.",
     restoreAccess: { permissions: [{ name: "Policy.ReadWrite.ConditionalAccess", id: "ad902697-1014-4ef5-81ef-2b4301988e8c" }], newSetupSwitch: "-IncludeConditionalAccessRestore" },
-    readerRole: "Policy.Read.All",
+    accessProbe: "identity/conditionalAccess/policies?$top=1&$select=id",
+    readerProbe: { path: "identity/conditionalAccess/policies?$top=1&$select=id", role: "Policy.Read.All" },
     // Writes also need Policy.Read.All (a documented Microsoft Graph requirement for POST and PATCH of policies).
     areas: [
-      {
-        label: "Named locations",
-        folders: ["NamedLocations"],
-        backup: [["Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"]],
-        restore: [["Policy.Read.All"], ["Policy.ReadWrite.ConditionalAccess"]],
-      },
-      {
-        label: "Authentication strengths",
-        folders: ["AuthenticationStrengths"],
-        backup: [["Policy.Read.All", "Policy.Read.AuthenticationMethod", "Policy.ReadWrite.AuthenticationMethod", "Policy.ReadWrite.ConditionalAccess"]],
-        restore: [["Policy.ReadWrite.ConditionalAccess", "Policy.ReadWrite.AuthenticationMethod"]],
-      },
-      {
-        label: "Policies",
-        folders: ["ConditionalAccessPolicies"],
-        backup: [["Policy.Read.All"]],
-        restore: [["Policy.Read.All"], ["Policy.ReadWrite.ConditionalAccess"]],
-      },
+      area({ id: "namedLocations", label: "Named locations" }, [
+        part(["NamedLocations"], [["Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"]], [["Policy.Read.All"]], [["Policy.Read.All"], ["Policy.ReadWrite.ConditionalAccess"]]),
+      ]),
+      area({ id: "authenticationStrengths", label: "Authentication strengths" }, [
+        part(
+          ["AuthenticationStrengths"],
+          [["Policy.Read.All", "Policy.Read.AuthenticationMethod", "Policy.ReadWrite.AuthenticationMethod", "Policy.ReadWrite.ConditionalAccess"]],
+          [["Policy.Read.All"]],
+          [["Policy.ReadWrite.ConditionalAccess", "Policy.ReadWrite.AuthenticationMethod"]],
+        ),
+      ]),
+      area({ id: "policies", label: "Policies" }, [
+        part(["ConditionalAccessPolicies"], [["Policy.Read.All"]], [["Policy.Read.All"]], [["Policy.Read.All"], ["Policy.ReadWrite.ConditionalAccess"]]),
+      ]),
     ],
+  },
+  {
+    id: "entra",
+    label: "Entra ID",
+    description: expandedEntraScope
+      ? "Tenant settings, authentication, external identities, roles and governance. Groups, users, devices and applications are opt-in."
+      : "Device registration and enrollment, authentication methods and contexts, and terms of use. Groups and device inventory are opt-in.",
+    switchable: true,
+    defaultOn: false,
+    precheck: true,
+    isolated: true,
+    defaultAccess: "backup",
+    roles: "Global Reader to back up; to restore, the administrator role of the setting, such as Security Administrator or Privileged Role Administrator.",
+    readerProbe: { path: "policies/authenticationMethodsPolicy", role: "Policy.Read.All" },
+    areas: ENTRA_AREAS,
   },
 ]
 
 export const MODULE_BY_ID = new Map(MODULES.map((module) => [module.id, module]))
 
-const MODULE_BY_FOLDER = new Map(MODULES.flatMap((module) => module.areas.flatMap((area) => area.folders.map((folder) => [folder.toLowerCase(), { module, area }] as const))))
+const MODULE_BY_FOLDER = new Map(
+  MODULES.flatMap((module) => module.areas.flatMap((area) => area.parts.flatMap((part) => part.folders.map((folder) => [folder.toLowerCase(), { module, area, part }] as const)))),
+)
 
-export function moduleForFolder(folder: string): { module: ServiceModule; area: PermissionArea } | undefined {
+/** The service and area a folder belongs to, with the part of the area that names its permissions. */
+export function moduleForFolder(folder: string): { module: ServiceModule; area: PermissionArea; part: FolderPermissions } | undefined {
   return MODULE_BY_FOLDER.get(folder.toLowerCase())
 }
 
-/** Folders of modules that are off until the admin turns them on. */
-export function optInFolders(): string[] {
-  return MODULES.filter((module) => module.optIn).flatMap((module) => module.areas.flatMap((area) => area.folders))
+/** What a tenant backs up: the services that are on and, for each, its opt-in areas that are on. */
+export interface ServiceSelection {
+  services: readonly ModuleId[]
+  areas?: Partial<Record<ModuleId, readonly string[]>>
 }
 
-/**
- * Folders a backup leaves out because their module is off for the tenant. `enabled` lists the
- * opt-in modules the admin turned on.
- */
-export function disabledFolders(enabled: readonly ModuleId[]): string[] {
-  return MODULES.filter((module) => module.optIn && !enabled.includes(module.id)).flatMap((module) => module.areas.flatMap((area) => area.folders))
+/** The selection of a tenant that has made no choice: the services that are on by default, without opt-in areas. */
+export const DEFAULT_SELECTION: ServiceSelection = { services: MODULES.filter((module) => module.defaultOn).map((module) => module.id) }
+
+/** Folders a backup leaves out because their service, or their opt-in area, is off for the tenant. */
+export function disabledFolders(selection: ServiceSelection): string[] {
+  return MODULES.flatMap((module) =>
+    module.areas
+      .filter((area) => !selection.services.includes(module.id) || (area.optIn && !selection.areas?.[module.id]?.includes(area.id)))
+      .flatMap((area) => area.folders),
+  )
 }
 
 /** The permissions a token grants: delegated scopes (scp) and application roles (roles). */
 export interface GrantedPermissions {
-  kind: "delegated" | "application"
+  kind: SignInMode
   permissions: ReadonlySet<string>
 }
 
 const satisfied = (needed: Requirement, granted: ReadonlySet<string>) => needed.every((group) => group.some((permission) => granted.has(permission)))
+
+/** Whether the granted permissions meet a need; never when no permission lets the sign-in mode do it. */
+export const meets = (needed: Need, granted: ReadonlySet<string>) => needed !== "unsupported" && satisfied(needed, granted)
+
+/**
+ * What an area needs as a whole for the sign-in mode: every group of every part the mode can use.
+ * Parts the mode cannot use at all are left out, because no permission would change that.
+ */
+export function areaNeed(area: PermissionArea, access: "backup" | "restore", mode: SignInMode): Requirement {
+  const groups = area.parts.flatMap((part) => (part[access][mode] === "unsupported" ? [] : part[access][mode]))
+  return [...new Map(groups.map((group) => [group.join("|"), group])).values()]
+}
 
 export type Readiness = "ready" | "partial" | "missing"
 
@@ -201,15 +257,16 @@ export const describeRequirement = (needed: Requirement, granted: ReadonlySet<st
 export function checkModules(granted: GrantedPermissions, modules: readonly ServiceModule[] = MODULES): ModuleCheck[] {
   return modules.map((module) => {
     const areas = module.areas.map((area): AreaCheck => {
-      const backup = satisfied(area.backup, granted.permissions)
-      const restore = satisfied(area.restore, granted.permissions)
+      const needed = { backup: areaNeed(area, "backup", granted.kind), restore: areaNeed(area, "restore", granted.kind) }
+      const backup = satisfied(needed.backup, granted.permissions)
+      const restore = area.parts.some(part => part.restore[granted.kind] !== "unsupported") && satisfied(needed.restore, granted.permissions)
       return {
         label: area.label,
         folders: area.folders,
         backup,
         restore,
-        ...(backup ? {} : { missingBackup: missingGroups(area.backup, granted.permissions) }),
-        ...(restore ? {} : { missingRestore: missingGroups(area.restore, granted.permissions) }),
+        ...(backup ? {} : { missingBackup: missingGroups(needed.backup, granted.permissions) }),
+        ...(restore ? {} : { missingRestore: missingGroups(needed.restore, granted.permissions) }),
       }
     })
     const readiness = (key: "backup" | "restore"): Readiness => (areas.every((area) => area[key]) ? "ready" : areas.some((area) => area[key]) ? "partial" : "missing")
@@ -217,25 +274,49 @@ export function checkModules(granted: GrantedPermissions, modules: readonly Serv
   })
 }
 
-/**
- * Why the granted permissions cannot write this folder, or undefined when they can. Restore asks before
- * the first write, so a missing permission is reported up front instead of as a refusal halfway through.
- *
- * Only opt-in modules are gated. Intune restores keep relying on Graph to refuse a write, so a folder
- * mapped to the wrong permission here can never block a restore that works; for Intune the mapping
- * only informs the permission check in Settings.
- */
-export function restorePermissionBlocker(folder: string, granted: GrantedPermissions | undefined): string | undefined {
+function restorePermissionEntry(folder: string) {
   const entry = moduleForFolder(folder)
-  if (!entry || !granted || !entry.module.optIn) return undefined
-  if (satisfied(entry.area.restore, granted.permissions)) return undefined
-  return `Restoring ${entry.module.label} ${entry.area.label.toLowerCase()} needs the ${describeRequirement(entry.area.restore, granted.permissions)} permission, which the TenuVault app registration does not have. ${SERVICES_PAGE} shows how to add it.`
+  return entry?.module.precheck || entry?.part.restorePrecheck ? entry : undefined
+}
+
+export function checksRestorePermission(folder: string): boolean {
+  return restorePermissionEntry(folder) !== undefined
+}
+
+export function restoreAccessGuidance(clientId?: string): string {
+  if (isTenuVaultApp(clientId)) return "Review the restore permissions for this service in Settings > Sign-in."
+  if (!clientId) return `Review the restore permissions for this service. ${SERVICES_PAGE} shows how to add them.`
+  return `Add it to your app registration. ${SERVICES_PAGE} shows how to add it.`
+}
+
+/** Why the current permissions cannot restore a folder that checks its token before writing. */
+export function restorePermissionBlocker(folder: string, granted: GrantedPermissions | undefined, clientId?: string): string | undefined {
+  const entry = restorePermissionEntry(folder)
+  if (!entry || !granted) return undefined
+  const needed = entry.part.restore[granted.kind]
+  const what = folder === "PolicySets" ? "Intune policy sets" : `${entry.module.label} ${entry.area.label.toLowerCase()}`
+  if (needed === "unsupported") return `${what} ${granted.kind === "application" ? "can only be restored by a signed-in admin" : "cannot be restored through Microsoft Graph"}.`
+  if (satisfied(needed, granted.permissions)) return undefined
+  return `Restoring ${what} needs the ${describeRequirement(needed, granted.permissions)} permission. ${restoreAccessGuidance(clientId)}`
+}
+
+/**
+ * What the sign-in mode needs to read this folder: "unsupported" when only the other mode can read
+ * it, and undefined for a folder that belongs to no module.
+ */
+export function backupNeed(folder: string, mode: SignInMode): Need | undefined {
+  return moduleForFolder(folder)?.part.backup[mode]
 }
 
 /** Whether the granted permissions can read this folder; true for folders that belong to no module. */
 export function canBackUp(folder: string, granted: GrantedPermissions): boolean {
-  const entry = moduleForFolder(folder)
-  return !entry || satisfied(entry.area.backup, granted.permissions)
+  const needed = backupNeed(folder, granted.kind)
+  return needed === undefined || meets(needed, granted.permissions)
+}
+
+/** Whether Microsoft Graph lets only a signed-in admin read this folder, so no Backup Reader can. */
+export function signedInOnly(folder: string): boolean {
+  return backupNeed(folder, "application") === "unsupported"
 }
 
 /**
@@ -264,8 +345,8 @@ export function restoreAccessCommands(module: Pick<ServiceModule, "restoreAccess
 }
 
 /** The app registration's API permissions page in the Entra admin center. */
-export function entraApiPermissionsUrl(clientId: string): string {
-  return `https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/${encodeURIComponent(clientId)}/isMSAApp~/false`
+export function entraApiPermissionsUrl(clientId: string, tenantId?: string): string {
+  return `https://entra.microsoft.com/${tenantId ? encodeURIComponent(tenantId) : ""}#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/${encodeURIComponent(clientId)}/isMSAApp~/false`
 }
 
 /**

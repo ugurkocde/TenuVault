@@ -5,6 +5,7 @@ import { INTERNAL_API_ORIGIN } from "../../shared/constants"
 import { record, type RecordJson } from "../../shared/frameworks/policies"
 import { normalizeBackupStatus } from "../../portal/lib/backup-health"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../../shared/intune/registry"
+import { writeBlocker } from "../../shared/intune/restore-plan"
 import { normalizeScope } from "../../shared/intune/scope"
 import { VALIDATED_FOLDERS, validatePolicy } from "../../shared/oib/compare"
 import { extractOibId } from "../../shared/oib/manifest"
@@ -602,7 +603,7 @@ const REPLACE_APP_PROTECTION = "Replace is not available for app protection poli
 /** The registry type of a pack policy, when its assignments can be written with /assign. */
 function assignableType(folder: string) {
   const type = typeForFolder(folder)
-  return type && type.assign && type.assign !== "post" ? { ...type, assign: type.assign } : undefined
+  return type && type.assign && type.assign !== "post" && !writeBlocker(type, "assign") ? { ...type, assign: type.assign } : undefined
 }
 
 /** The current direct assignments of deployed policies, with group and filter names where they can be read. */
@@ -832,8 +833,10 @@ async function undo(body: RecordJson): Promise<UndoResult> {
       for (const item of run.created) {
         report({ stage: `Deleting ${item.name}`, done: results.length, total })
         const type = typeForFolder(item.folder)
-        if (!type || !OBJECT_ID.test(item.id)) {
-          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: "The recorded object cannot be removed automatically. Delete it in Intune." })
+        // Deleting is a write like any other: a type without that restore capability is left to the admin.
+        const refused = type ? writeBlocker(type, "delete") : undefined
+        if (!type || refused || !OBJECT_ID.test(item.id)) {
+          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: refused ?? "The recorded object cannot be removed automatically. Delete it in Intune." })
           created.push(item)
           continue
         }

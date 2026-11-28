@@ -1,4 +1,4 @@
-import { generateKeyPairSync, sign } from "node:crypto"
+import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { LicenseService } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
@@ -47,7 +47,7 @@ async function connect(license: LicenseService, tenant = A) {
 }
 async function flush() { await new Promise(resolve => setImmediate(resolve)) }
 const trialRecord = (tenant = A) => JSON.parse(store.get("license.tenantTrials") ?? "{}")[tenant]
-beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(NOW); store = memoryStore(); store.set("license.installId", INSTALL); connected = []; calls = []; enabled = true; healthOk = true; ends = { [A]: NOW + 14 * DAY, [B]: NOW + 14 * DAY }; limit = 2; answer = undefined; vi.spyOn(console, "warn").mockImplementation(() => {}) })
+beforeEach(() => { vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] }); vi.setSystemTime(NOW); store = memoryStore(); store.set("license.installId", INSTALL); connected = []; calls = []; enabled = true; healthOk = true; ends = { [A]: NOW + 14 * DAY, [B]: NOW + 14 * DAY }; limit = 2; answer = undefined; vi.spyOn(console, "warn").mockImplementation(() => {}) })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 describe("trial review regressions", () => {
   it("preserves another tenant's trial across a paid key replacement", async () => {
@@ -84,11 +84,69 @@ describe("trial review regressions", () => {
     let finish!: (response: Response) => void
     answer = path => path === "health" ? new Promise<Response>(resolve => { finish = resolve }) : undefined
     const license = service(); connected.push(A)
-    let settled = false
-    const check = license.checkNewTenant(A).then(() => { settled = true })
-    await flush(); const immediate = settled
-    finish(Response.json({ tenantTrials: { enabled: false, ok: true } })); await check
-    expect(immediate).toBe(true)
+    let plan: string | undefined
+    const check = license.checkNewTenant(A).then(value => { plan = value })
+    await vi.advanceTimersByTimeAsync(250)
+    expect(plan).toBe("community")
+    finish(Response.json({ tenantTrials: { enabled: false, ok: true } }))
+    await check
+  })
+  it("sends the tenant hash when in-flight health reports support quickly", async () => {
+    answer = (path, body) => {
+      if (path === "health") return new Promise<Response>(resolve => {
+        setTimeout(() => resolve(Response.json({
+          tenantTrials: { enabled: false, ok: true },
+          organizationLicenses: { tenantIdHashes: true },
+        })), 50)
+      })
+      if (body.action === "activate") return granted(A, "tenant")
+    }
+    const license = service()
+    connected.push(A)
+    const check = license.checkNewTenant(A)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(calls.filter(call => call.path === "health")).toHaveLength(1)
+    expect(calls.find(call => call.path === "tenant")?.body).toMatchObject({
+      action: "activate",
+      idToken: A,
+      tenantIdHash: createHash("sha256").update(A).digest("hex"),
+    })
+    await expect(check).resolves.toBe("pro")
+  })
+  it("sends the legacy tenant proof within the budget when refreshed health hangs", async () => {
+    answer = path => path === "health" ? Response.json({
+      tenantTrials: { enabled: false, ok: true },
+      organizationLicenses: { tenantIdHashes: true },
+    }) : undefined
+    const license = service()
+    await license.checkTrialHealth()
+    vi.setSystemTime(NOW + 120_001)
+    answer = (path, body) => {
+      if (path === "health") return new Promise<Response>(() => {})
+      if (body.action === "activate") return granted(A, "tenant")
+    }
+    connected.push(A)
+    let plan: string | undefined
+    const check = license.checkNewTenant(A).then(value => { plan = value })
+    await vi.advanceTimersByTimeAsync(250)
+    expect(plan).toBe("pro")
+    expect(calls.filter(call => call.path === "health")).toHaveLength(2)
+    const proof = calls.find(call => call.path === "tenant")?.body
+    expect(proof).toMatchObject({ action: "activate", idToken: A })
+    expect(proof).not.toHaveProperty("tenantIdHash")
+    await check
+  })
+  it("sends the legacy tenant proof when health errors", async () => {
+    answer = (path, body) => {
+      if (path === "health") throw new TypeError("fetch failed")
+      if (body.action === "activate") return granted(A, "tenant")
+    }
+    const license = service()
+    connected.push(A)
+    await expect(license.checkNewTenant(A)).resolves.toBe("pro")
+    const proof = calls.find(call => call.path === "tenant")?.body
+    expect(proof).toMatchObject({ action: "activate", idToken: A })
+    expect(proof).not.toHaveProperty("tenantIdHash")
   })
   it("retries failed health with backoff and coalesces requests", async () => {
     let fail = true

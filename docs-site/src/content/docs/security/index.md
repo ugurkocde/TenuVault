@@ -3,7 +3,7 @@ title: "Security and privacy"
 description: How TenuVault accesses your tenant, where your data goes, and what TenuVault the company can and cannot see.
 ---
 
-TenuVault is built so that your Intune configuration, your backups and your Microsoft tokens stay between your machine, Microsoft and the storage you choose. This page explains the design; the pages below it go into the details.
+TenuVault is built so that your Entra ID and Intune configuration, your backups and your Microsoft tokens stay between your machine, Microsoft and the storage you choose. This page explains the design; the pages below it go into the details.
 
 ## At a glance
 
@@ -13,7 +13,7 @@ TenuVault is built so that your Intune configuration, your backups and your Micr
 | What kind of permissions? | Delegated permissions. Only if you set up the optional [Backup Reader](/backups/backup-reader/) for scheduled backups, a separate app registration adds read-only application permissions. |
 | Is there a client secret or certificate? | Never a secret. The app registration you sign in with is a public client with no credentials. The optional Backup Reader uses a certificate whose private key never leaves your computer. |
 | Who does TenuVault act as? | You, the signed-in admin. It can never do more than your own roles allow. Only scheduled backups of a tenant with a Backup Reader read as that read-only app. |
-| Do MFA and Conditional Access apply? | Yes, exactly as they do when you sign in to the Intune admin center. The Backup Reader is an application, so Conditional Access for workload identities applies to it instead. See [Conditional Access and TenuVault](/security/conditional-access/). |
+| Do MFA and Conditional Access apply? | Yes. The signed-in admin’s policies apply. The Backup Reader is an application, so Conditional Access for workload identities applies to it instead. See [Conditional Access and TenuVault](/security/conditional-access/). |
 | Where do backups go? | Encrypted on your device, or into your own Azure storage account, where Azure encrypts them at rest and your role assignments decide who reads them. |
 | Does tenant data reach TenuVault servers? | No, with one opt-in exception: feedback you choose to send with **Share feedback**. It contains the text you write and, only if you tick it, a screenshot of the window that may show tenant, policy or user names. Otherwise tenuvault.com receives license checks, the App Backup capture check and, where they apply, setup diagnostics and CIS Benchmarks downloads. None of them carry tenant configuration, backups or Microsoft access tokens. |
 | Is TenuVault data shared with anyone? | Only with the service providers that run TenuVault's services, and never sold or shared for their own marketing. Each license activation (installation ID, tenant ID, operating system and app version) is recorded with your license key in Polar, the merchant of record. Licenses shared with a tenant are stored with the tenant ID and client ID in TenuVault's database at Supabase, and Vercel hosts the services and keeps request logs. Feedback you choose to send is stored up to 12 months; the email copy to support is kept as support correspondence. See [Service providers](https://www.tenuvault.com/privacy#processors) in the privacy policy. |
@@ -43,6 +43,7 @@ TenuVault keeps its working data in an encrypted store in your user profile, pro
 * Your license key and license activations.
 * The encryption keys for your backups.
 * The Backup Reader's private key, when you set one up. It is never shown or exported.
+* What TenuVault observed about each tenant's connection, so it can tell you when something changed: the permission names in your last token, Microsoft's error code when a sign-in was refused, which policy types each of your last backups could read, and for each policy type when a backup last read it and which backups were refused it since, including whether those backups' own tokens held the required read permission when that is known. It holds no tokens, names or error messages; the account that signed in is kept as its ID. For an access loss you have acknowledged, it keeps the connection, policy type and first refused backup, so a later loss of that type or another connection can be reported again.
 
 If the operating system cannot provide this protection, the packaged app refuses to start rather than store this data in plain text.
 
@@ -55,7 +56,7 @@ TenuVault talks to its own server, tenuvault.com, to check your license, to ask 
 | TenuVault can see | When |
 | --- | --- |
 | Your license key | When this machine activates, refreshes or releases a key. Community sends no key. |
-| Your tenant ID | Each time a tenant is activated or refreshed. |
+| Your tenant ID or its SHA-256 hash | Key activation and refresh send the hash when the license service advertises hash support and a recent Microsoft ID token is available as proof. Otherwise the request sends the original tenant ID. The ID token itself contains the original tenant ID. |
 | The client ID of your app registration | When a license key is activated or refreshed for a tenant you are signed in to, so the license can be shared with that tenant's other admins. |
 | A random installation ID | Each activation and refresh. It is generated on your machine and identifies this installation, not you. |
 | Your operating system (Windows or macOS) and the TenuVault version | When a tenant is activated, and with organization license checks. The App Backup capture check also names them, in its standard `User-Agent` header. |
@@ -72,7 +73,7 @@ Apart from what you write in feedback and a feedback screenshot you choose to at
 
 | TenuVault never sees | |
 | --- | --- |
-| Your Intune configuration | Policies, profiles, apps, scripts and assignments are read and written between your machine and Microsoft Graph only. A feedback screenshot you tick may show policy names on screen. |
+| Your tenant configuration | Entra ID and Intune configuration is read, and supported restores are written between your machine and Microsoft Graph only. A feedback screenshot you tick may show policy names on screen. |
 | Your backups | Stored on your device or in your Azure storage account, never uploaded to TenuVault. |
 | Access tokens and refresh tokens | They stay in the encrypted token cache on your machine. |
 | Your backup recovery key | It is created on your machine and only leaves it when you save it to a file yourself. |

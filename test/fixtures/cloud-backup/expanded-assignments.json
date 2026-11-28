@@ -1,0 +1,26 @@
+{
+  "assignments": [
+    { "id": "assignment-1", "target": { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } },
+    { "id": "assignment-2", "target": { "@odata.type": "#microsoft.graph.groupAssignmentTarget", "groupId": "group-1" } }
+  ],
+  "cases": [
+    { "name": "detail collection envelope", "detail": { "value": [] }, "unread": true },
+    { "name": "detail collection envelope with a matching ID", "detail": { "id": "cfg-1", "value": [], "@odata.count": 0, "assignments": [] }, "unread": true },
+    { "name": "detail missing the policy ID", "detail": { "assignments": [] }, "unread": true },
+    { "name": "detail for a different policy", "detail": { "id": "cfg-2", "assignments": [] }, "unread": true },
+    { "name": "detail root array", "detail": [{ "id": "cfg-1", "assignments": [] }], "unread": true },
+    { "name": "valid detail for the requested policy", "detail": { "id": "cfg-1", "displayName": "Baseline Wi-Fi", "assignments": [] }, "unread": false, "removed": ["assignment-1", "assignment-2"] },
+    { "name": "documented object envelope for the requested policy", "detail": { "value": { "id": "cfg-1", "displayName": "Baseline Wi-Fi", "assignments": [] } }, "unread": false, "removed": ["assignment-1", "assignment-2"] },
+    { "name": "documented object envelope for a different policy", "detail": { "id": "cfg-1", "value": { "id": "cfg-2", "assignments": [] } }, "unread": true },
+    { "name": "documented object envelope with a continuation", "detail": { "value": { "id": "cfg-1", "assignments": [] }, "@odata.nextLink": null }, "unread": true },
+    { "name": "null assignment", "assignments": [null], "unread": true },
+    { "name": "assignment without an ID", "assignments": [{ "target": { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget" } }], "unread": true },
+    { "name": "null policy ID", "list": [{ "id": null, "displayName": "Baseline Wi-Fi" }], "unread": true },
+    { "name": "empty assignments", "assignments": [], "unread": false, "removed": ["assignment-1", "assignment-2"] },
+    { "name": "populated assignments", "unread": false },
+    { "name": "omitted assignments recovered across two pages", "relationshipPages": [[0], [1]], "unread": false },
+    { "name": "omitted assignments recovered with a real removal", "relationshipPages": [[0]], "unread": false, "removed": ["assignment-2"] },
+    { "name": "omitted assignments with a refused relationship read", "relationshipStatus": 400, "unread": true },
+    { "name": "omitted assignments with a malformed relationship page", "relationshipPages": [[0], [null]], "unread": true }
+  ]
+}

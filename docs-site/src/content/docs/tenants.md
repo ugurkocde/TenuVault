@@ -1,9 +1,9 @@
 ---
 title: "Manage tenants"
-description: Add, switch, monitor, rename, tag and remove the Intune tenants TenuVault works with.
+description: Add, switch, monitor, rename, tag and remove the Microsoft tenants connected to TenuVault.
 ---
 
-A tenant in TenuVault is one Microsoft Intune tenant you have signed in to, together with the place its backups are stored. This page covers how you add tenants, switch between them, read the dashboards and remove a tenant you no longer need.
+A tenant in TenuVault is one Microsoft tenant you have signed in to, together with the place its backups are stored. This page covers how you add tenants, switch between them, read the dashboards and remove a tenant you no longer need.
 
 ## Where you work with tenants
 
@@ -13,10 +13,15 @@ A tenant in TenuVault is one Microsoft Intune tenant you have signed in to, toge
 | **Dashboard** | Sidebar | Backup overview of the selected tenant |
 | **All tenants** | Sidebar, when two or more tenants are connected | Status of every connected tenant at a glance |
 | **Tenants** | Sidebar | The **Tenant Management** page: rename, tag, refresh, back up and remove tenants |
+| **Services** | Below **Tenants** in the sidebar | **Entra ID** and **Intune** shortcuts to filtered backup contents for the selected tenant |
 | **Settings** | Sidebar | Sign in again and change where a tenant's backups are stored |
 | **License** | Sidebar | License state of each tenant and license sharing |
 
-Below **Dashboard** and **Tenants**, the sidebar groups its pages under **Protect** (backups, App Backup, drift, Copy to Tenants and alerts), **Baselines** (OpenIntuneBaseline, CIS Benchmarks and frameworks) and **Oversight** (reports, audit log, governance, changes and operations). Select a group's heading to fold it away; TenuVault remembers folded groups on this computer, and a dot next to a folded heading shows that the open page is inside it. The arrow next to **Frameworks** folds its list of frameworks the same way, with the same dot. **Help** at the bottom of the sidebar opens **What's new**, **Share feedback** and **Support**.
+Below **Dashboard** and **Tenants**, the sidebar lists **Services** followed by **Protect** (backups, App Backup, drift, Copy to Tenants and alerts), **Baselines** (OpenIntuneBaseline, CIS Benchmarks and frameworks) and **Oversight** (reports, audit log, governance, changes and operations). Select a group's heading to fold it away; TenuVault remembers folded groups on this computer, and a dot next to a folded heading shows that the open page is inside it. The arrow next to **Frameworks** folds its list of frameworks the same way, with the same dot. **Help** at the bottom of the sidebar opens **What's new**, **Share feedback** and **Support**.
+
+The **Services** group below **Dashboard** and **Tenants** lists Entra ID and Intune. **Protect** follows with Backup & Restore, App Backup, Drift Detection, Copy to Tenants and Alerts. A service marked **Off** opens **Settings > Services and permissions**, where you can turn it on. The badges follow the selected tenant and update when a service changes. An enabled service opens **Backup & Restore** with that service selected; its sidebar entry stays highlighted until you choose **All** in the page's **Service** filter.
+
+![Services above Protect, alongside the backup timeline](/images/sidebar/services-group-light.png)
 
 ## Switch between tenants
 
@@ -26,6 +31,8 @@ The Dashboard, Backup & Restore, Drift Detection and Audit Log pages work on one
 2. Under **Tenants**, select the tenant you want. A check mark shows the current one.
 
 Each tenant shows its initials. Tenants your license does not cover right now have amber initials and **Not licensed** under their name, in the menu and under the selected tenant. A tenant in a trial shows **Pro trial** under its name in the menu. The menu also has **All tenants** (when two or more tenants are connected) and, at the bottom, **Connect a tenant**.
+
+Notification links wait for saved tenants to load, then select the tenant the work belongs to before opening its workflow. If that tenant is no longer connected or is unknown on this computer, TenuVault shows **The linked tenant is not connected** with **Open Tenants**. Connect or choose a tenant there to continue. If the linked tenant is removed while its page is open, the workflow closes and the same notice appears.
 
 The **Backup & Restore** page has its own **Select tenant** list. Choosing a tenant there changes the same selection.
 
@@ -37,7 +44,7 @@ Every button that adds a tenant opens the guided setup:
 
 * **Connect a tenant** in the tenant switcher or on the **All tenants** page.
 * **Connect tenant** on the **Tenants** page or in the dashboard's **Quick Actions**.
-* **Set up TenuVault** on the dashboard when no tenant is connected. The dashboard then shows **Protect your Intune policies** with this one button.
+* **Set up TenuVault** on the dashboard when no tenant is connected. The dashboard then shows **Protect your tenant configuration** with this one button.
 
 The setup walks you through the app registration, signing in, choosing storage and running a first backup. Select **Back to dashboard** to leave it. See [Sign in to your tenant](/getting-started/connect-tenant/).
 
@@ -45,18 +52,32 @@ TenuVault checks the license when you sign in and again before it saves the tena
 
 After the tenant is added, TenuVault reads its organization name, primary domain and policy counts from Microsoft Graph. If you connected the same tenant before with the same storage location, the custom name and tags you gave it are restored from that storage.
 
+## Backup coverage on the Tenants page
+
+Each tenant shows **X of Z** backup types for the services it has enabled. Expand **Coverage details** to see whether a permission was not granted, your role could not read a type, or coverage is unknown. The count reflects the current sign-in and selected service areas. Open **Backup Details** to see what a particular backup read.
+
+| Service | Coverage on Tenants |
+| --- | --- |
+| Entra ID | Shows the count for selected Entra ID configuration types, including Conditional Access when enabled. |
+| Intune | Shows the count for selected Intune configuration types. |
+
+* **TenuVault app** opens **Services and permissions** to approve missing permission packs for that tenant. If the service needs a license or setup, check the service in Microsoft 365.
+* **Your own app registration** opens **Services and permissions** for that tenant to review and repair missing permissions.
+
+For a role refusal, ask your administrator to check your access to the affected service. For unknown coverage, use **Check again** in **Settings > Services and permissions** and run a backup to verify the read.
+
 ## The tenant dashboard
 
-The **Dashboard** shows the backup state of the tenant selected in the switcher. Its header shows the tenant name and "Backup overview for" the tenant's domain.
+The **Dashboard** shows the backup state of the tenant selected in the switcher. After the first successful backup, **Your first backup is done** shows the policies and services backed up. Choose **Turn on daily backups** (**Set up automatic backups** on Community) to open Schedule or **View backup** to inspect the backup. If a schedule is already enabled, **View backup** is the main action. The card goes away when you dismiss it or after the second successful backup.
 
 Use the **Reporting period** list to choose **Last 24 hours**, **Last 7 days** (the default) or **Last 30 days**. The period applies to **Success Rate** and to the **Successful backups** tile with its **Failed** and **Running** counts. The number of backups in storage on **Last backup** covers all time. The dashboard reloads every 30 seconds; the refresh button reloads it right away, and **Last updated** shows when it last did. When the record of which tenant a backup belongs to could not be read, for example in a storage account several tenants share, the Dashboard leaves that backup out of every tile and says "N backups could not be read. Select Refresh to try again." A failed run whose backup is left out still counts once as **Failed**.
 
 | Tile | What it shows |
 | --- | --- |
-| **Last backup** | How long ago the newest backup ran, its date and item count, and its state: **Running**, **Completed**, **Completed with warnings**, **Incomplete**, **Failed**, **Cancelled** or **Status unknown**. Also shows **Tenant Health** (see below), the number of backups in storage of any status and age, including cancelled ones (for example "7 backups in storage"), and the buttons **Run Backup** (or **Sign in** when you are not signed in) and **Restore policies**. |
-| **Success Rate** | Successful backups as a share of finished backups in the period, against a 95% target, for example "1 of 3 backups succeeded". Finished backups are the **Successful backups** and **Failed** counts of the period together. Shows **No data** when no backup finished in the period. A backup you cancelled is not a result, so it does not count as finished. |
-| **Next Backup** | Time until the next automatic backup, the schedule and the result of the last automatic backup. If the last attempt failed and no backup is stored, it also says "Automatic backup failed before a backup was saved." A cancelled attempt shows **Last automatic backup cancelled** in a neutral tone. **Set up automatic backups** or **Edit schedule** opens the schedule. See [Schedule backups](/backups/schedules/). |
-| **Policies protected** | The number of items in the newest complete backup, with a breakdown for settings catalog, device configurations, compliance policies and app protection policies. |
+| **Last backup** | How long ago the newest backup ran, its date and item count, and its state: **Running**, **Completed**, **Completed with warnings**, **Incomplete**, **Failed**, **Cancelled** or **Status unknown**. Also shows **Coverage incomplete** when selected types could not be read, **Tenant Health** (see below), the number of backups in storage of any status and age, including cancelled ones (for example "7 backups in storage"), and the buttons **Run Backup** (or **Sign in** when you are not signed in) and **Restore policies**. |
+| **Success Rate** | Successful backups as a share of finished backups in the period, against a 95% target, for example "1 of 3 backups succeeded". Finished backups are the **Successful backups** and **Failed** counts of the period together. Shows **Not enough data yet** until the tenant has three finished backups or seven days have passed since its first finished backup. After that, **No data** means no backup finished in the selected period. A backup you cancelled is not a result, so it does not count as finished. |
+| **Next Backup** | Time until the next automatic backup, the schedule and the result of the last automatic backup. If the last attempt failed and no backup is stored, it also says "Automatic backup failed before a backup was saved." A cancelled attempt shows **Last automatic backup cancelled** in a neutral tone. **No schedule yet** means automatic backups are off. **Turn on daily backups**, **Set up automatic backups** on Community, or **Edit schedule** opens the schedule. See [Schedule backups](/backups/schedules/). |
+| **Policies protected** | The number of items in the newest successful backup, with a breakdown for settings catalog, device configurations, compliance policies and app protection policies. |
 | **Successful backups** | Backups in storage that completed successfully in the period. **Failed** counts backups in the period that failed, completed with warnings or are incomplete, plus backup attempts that failed without saving a backup, such as a sign-in that failed, a license or plan refusal or another backup that was already running. Manual, scheduled and tray attempts count, on every plan. The Dashboard counts runs: each backup run counts once, by its backup when storage holds one for it, otherwise by its attempt. The one exception: when a scheduled backup keeps failing because Microsoft or the storage could not be reached, its retries for one slot that saved nothing count once. Any other retry counts on its own, so two retries that each saved a failed backup count as two. TenuVault keeps these attempts on this device, up to 200 per tenant and for 60 days, so they still count after a restart. **Running** counts backups that have not finished yet, whatever started them, once each. A backup without a summary counts as **Failed** when its run failed. Otherwise it is running while TenuVault runs it, or for six hours after it started, because another device may be running it or TenuVault restarted during it. After that it is incomplete. **Last backup** shows **Running** whenever this count is above zero. A backup you cancelled counts in neither **Successful backups** nor **Failed**. **Scheduled** counts enabled schedules. |
 | **Drift** | When backups of this tenant were last compared, and whether the comparison worked. **Check drift** opens [Drift detection](/drift/). |
 | **License** | **Licensed**, **Free plan**, **Not licensed** or **Not checked**, the plan name and how the tenant is licensed. **Manage license** or **Check license** opens the License page. |
@@ -64,13 +85,14 @@ Use the **Reporting period** list to choose **Last 24 hours**, **Last 7 days** (
 | **Recent Activity** | The five newest events for the tenant from backups and the audit log. **View All Activity** opens the [Audit log](/audit-log/). |
 | **Quick Actions** | Shortcuts to **Run Backup**, **Restore policies**, **Connect tenant** and **Settings**. |
 
-**Tenant Health** is based on the newest complete, successful backup:
+**Tenant Health** is based on the newest successful backup. A backup that saved everything it could read and only skipped types for missing access counts as successful. Coverage is reported separately.
 
 | Health | When |
 | --- | --- |
-| **Healthy** | The newest complete backup is less than 24 hours old |
-| **Warning** | The newest complete backup is 24 to 48 hours old, there is no complete backup and none failed (for example only cancelled ones), or the backups cannot be read |
-| **Critical** | The newest complete backup is more than 48 hours old, or there is no complete backup and at least one backup failed or was incomplete |
+| **Healthy** | The newest successful backup is less than 24 hours old and has no missing access |
+| **Needs access** | The newest successful backup is less than 24 hours old and left out types for missing permissions or roles |
+| **Warning** | The newest successful backup is 24 to 48 hours old, there is no successful backup and none failed (for example only cancelled ones), or the backups cannot be read |
+| **Critical** | The newest successful backup is at least 48 hours old, or there is no successful backup and at least one backup failed or was incomplete |
 
 :::note
 The Drift tile and the audit part of Recent Activity come from the audit log. The audit log is part of Pro and MSP, so on Community these show only backup activity.
@@ -121,7 +143,7 @@ Click a tenant's name, or its arrow button, to select it and open its dashboard.
 
 Open **Tenants** in the sidebar. Use the search box to filter by name or domain, and the grid and list buttons to switch views.
 
-In the grid view, each tenant card shows the tenant's initials, name, domain, tags, live counts of **Compliance Policies** and **Configuration Profiles** read from Intune, the **Backup storage**, when data was last refreshed (**Last sync**) and the next automatic backup. **Backup Now** opens the backup dialog.
+In either view, select Entra ID or Intune beside a tenant to open its filtered backup contents. In the grid view, each tenant card also shows the tenant's initials, name, domain, tags, live counts of **Compliance Policies** and **Configuration Profiles** read from Intune, the **Backup storage**, when data was last refreshed (**Last sync**) and the next automatic backup. **Backup Now** opens the backup dialog.
 
 The list view shows the same tenants as a table with the columns **Tenant**, **Status**, **Region**, **Policies**, **Tags**, **Last Backup**, **Plan**, **Drift** and **Actions**.
 
@@ -154,7 +176,7 @@ Select tenants with **Select tenant** on each card, or with the check boxes in t
 * **Tag Selected** sets the tags you choose on every selected tenant, replacing their current tags.
 * **Backup Selected** backs up every selected tenant after you confirm. The backups run one at a time in the order shown: a tenant waiting its turn shows as queued, and its card shows the live progress once its backup runs. Each tenant uses its saved backup choice (see [Choose what to back up](/backups/#choose-what-to-back-up)). This needs the MSP plan on every selected tenant. If any selected tenant is not on MSP, the whole backup is refused and no backup starts. Without MSP, while nothing is selected, the selection bar's help text names this with an **MSP** badge. With a selection, the **Backup Selected** button carries its own **MSP** badge. Selecting and tagging tenants stays available on every plan.
 
-In the list view, **Check all** in the **Drift** column compares each tenant's two newest backups and shows **No drift**, the number of changes and critical changes, **Not available** (hover for the reason) or **Not checked**. This needs the MSP plan on every tenant it checks. If any checked tenant is not on MSP, the whole check is refused. See [Drift detection](/drift/).
+In the list view, **Check all** in the **Drift** column compares each tenant's two newest backups and shows **No drift**, the number of changes and critical changes, **Not available** (hover for the reason) or **Not checked**. The change count also shows how many types could not be compared and whether an older backup recorded a read failure without identifying the type. These warnings stay visible even when the count is zero. This needs the MSP plan on every tenant it checks. If any checked tenant is not on MSP, the whole check is refused. See [Drift detection](/drift/).
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/tenant-management.webp" aria-label="Open full-size screenshot: tenant management">
@@ -190,7 +212,7 @@ Existing backups are kept in their storage location, and nothing in the tenant i
 
 ## Share your license with other admins
 
-If a tenant is licensed with your license key, the **Tenants** card on the **License** page shows **Let other admins in this tenant use this license** for it. When it is on, anyone who signs in to that tenant with the same app registration is licensed automatically, and your key stays on your machine. If TenuVault asks you to, sign in to the tenant again so it can share the license. See [Activate and manage your license](/licensing/manage/).
+If a tenant is licensed with your license key, the **Tenants** card on the **License** page shows **Let other admins in this tenant use this license** for it. When it is on, anyone who signs in to that tenant with the same TenuVault app or app registration is licensed automatically, and your key stays on your machine. If TenuVault asks you to, sign in to the tenant again so it can share the license. See [Activate and manage your license](/licensing/manage/).
 
 ## Plan requirements
 
@@ -208,3 +230,9 @@ See [Plans and features](/licensing/) for the full comparison.
 * [Many Intune tenants, one at a time or side by side](https://www.tenuvault.com/compare/manage-intune-tenants-one-by-one-vs-cross-tenant): working tenant by tenant in the Intune admin center compared with TenuVault MSP, on the product site
 * [Restore to another tenant](/restore/cross-tenant/)
 * [Plans and features](/licensing/)
+
+## Tenant sign-in method
+
+Tenants connected with the original setup keep their own app registration and existing backup choices. If **Change app registration** appears for a tenant under **Settings > Sign-in**, you can sign in with a different app registration for the same tenant. TenuVault checks the tenant ID and permissions before saving the change. Your backups, history, schedules, settings and trial remain with the tenant. If you use an organization license, ask the key holder to share it from the new app registration. TenuVault keeps the cached license usable until it expires and checks for sharing during license checks. The license service must support the shared sign-in client for your tenant before you can renew through that client.
+
+Before downgrading to 0.5.x, switch to your own app registration in 0.6 if the tenant uses the TenuVault app. If you already downgraded, return to 0.6 to recover the connection. Removing the tenant in 0.5.x deletes its backup schedule.

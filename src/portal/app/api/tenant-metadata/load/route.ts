@@ -1,3 +1,5 @@
+import { isBearerToken } from "../../../../../shared/security"
+import { signInLogCode } from "../../../../../shared/sign-in-errors"
 import { isGuid } from "../../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 import type { TenantMetadata } from "~/types/tenant-metadata"
@@ -43,15 +45,19 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text()
-      console.error("Azure auth error:", errorData)
+      console.error("Azure auth error:", signInLogCode(errorData) ?? "token_request_failed")
       return NextResponse.json(
         { error: "Failed to authenticate with Azure" },
         { status: 401 }
       )
     }
 
-    const tokenData = await tokenResponse.json()
-    const accessToken = tokenData.access_token
+    const tokenData = await tokenResponse.json().catch(() => null)
+    const accessToken = tokenData?.access_token
+    if (!isBearerToken(accessToken)) {
+      console.error("Azure auth error:", "token_invalid_response")
+      return NextResponse.json({ error: "Microsoft returned an invalid sign-in response. Try again." }, { status: 502 })
+    }
 
     // Try to load metadata from blob
     const blobUrl = `https://${storageAccountName}.blob.core.windows.net/${METADATA_CONTAINER}/${encodeURIComponent(tenantId)}/metadata.json`
@@ -75,10 +81,8 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      const errorText = await metadataResponse.text()
-      console.error("Failed to load metadata:", errorText)
-      console.error("Storage account:", storageAccountName)
-      console.error("Blob URL:", blobUrl)
+      console.error("blob_request_failed", "metadata load", metadataResponse.status)
+      const errorText = await metadataResponse.text().catch(() => "")
       
       // If authorization error, provide helpful message
       if (errorText.includes("AuthorizationPermissionMismatch")) {
@@ -89,12 +93,16 @@ export async function POST(request: NextRequest) {
       }
       
       return NextResponse.json(
-        { error: "Failed to load metadata", details: errorText },
+        { error: "Failed to load metadata" },
         { status: 500 }
       )
     }
 
-    const metadata: TenantMetadata = await metadataResponse.json()
+    const metadata: TenantMetadata | null = await metadataResponse.json().catch(() => null)
+    if (!metadata) {
+      console.error("blob_invalid_response", "metadata load", metadataResponse.status)
+      return NextResponse.json({ error: "Failed to load metadata" }, { status: 500 })
+    }
 
     console.log(`Successfully loaded metadata for tenant ${tenantId}`)
     console.log("Metadata contains Azure resources:", !!metadata.azureResources)

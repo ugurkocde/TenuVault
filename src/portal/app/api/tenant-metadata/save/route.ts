@@ -1,3 +1,5 @@
+import { isBearerToken } from "../../../../../shared/security"
+import { signInLogCode } from "../../../../../shared/sign-in-errors"
 import { isGuid } from "../../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 import type { TenantMetadata } from "~/types/tenant-metadata"
@@ -44,15 +46,19 @@ export async function POST(request: NextRequest) {
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text()
-      console.error("Azure auth error:", errorData)
+      console.error("Azure auth error:", signInLogCode(errorData) ?? "token_request_failed")
       return NextResponse.json(
         { error: "Failed to authenticate with Azure" },
         { status: 401 }
       )
     }
 
-    const tokenData = await tokenResponse.json()
-    const accessToken = tokenData.access_token
+    const tokenData = await tokenResponse.json().catch(() => null)
+    const accessToken = tokenData?.access_token
+    if (!isBearerToken(accessToken)) {
+      console.error("Azure auth error:", "token_invalid_response")
+      return NextResponse.json({ error: "Microsoft returned an invalid sign-in response. Try again." }, { status: 502 })
+    }
 
     // Ensure container exists
     const containerUrl = `https://${storageAccountName}.blob.core.windows.net/${METADATA_CONTAINER}?restype=container`
@@ -69,8 +75,7 @@ export async function POST(request: NextRequest) {
 
     // Check if container creation failed (ignore 409 Conflict which means it already exists)
     if (!createContainerResponse.ok && createContainerResponse.status !== 409) {
-      const errorText = await createContainerResponse.text()
-      console.error("Failed to create container:", errorText)
+      console.error("blob_request_failed", "metadata container creation", createContainerResponse.status)
       // Continue anyway - the container might exist but we don't have permissions to create it
     }
 
@@ -105,8 +110,8 @@ export async function POST(request: NextRequest) {
     })
 
     if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text()
-      console.error("Failed to save metadata:", errorText)
+      console.error("blob_request_failed", "metadata upload", uploadResponse.status)
+      const errorText = await uploadResponse.text().catch(() => "")
       
       // If container doesn't exist, provide helpful message
       if (errorText.includes("ContainerNotFound")) {
@@ -125,7 +130,7 @@ export async function POST(request: NextRequest) {
       }
       
       return NextResponse.json(
-        { error: "Failed to save metadata", details: errorText },
+        { error: "Failed to save metadata" },
         { status: 500 }
       )
     }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import type { Plan } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
+import { NoticeCard } from "./NoticeCard"
 import { firstBackupNote } from "../lib/plan-notes"
 
 // Several manual backups can finish together; only one completion shows this machine's note.
@@ -54,5 +55,5 @@ export function FirstBackupNote({ plan }: { plan: Plan | null }) {
   }, [shown])
 
   const message = shown ? firstBackupNote(plan, false) : null
-  return message ? <p className="text-sm text-gray-500">{message}</p> : null
+  return message ? <NoticeCard summary="This backup is stored on this device." details={message} /> : null
 }

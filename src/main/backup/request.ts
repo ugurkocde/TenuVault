@@ -1,4 +1,7 @@
+import type { GrantedPermissions } from "../../shared/services/modules"
+import { LARGE_STORAGE_UNAVAILABLE } from "../../shared/backup-storage"
 import { FetchApplicationError, NetworkUnreachableError } from "../api/network-error"
+import { isLocalAccount } from "../storage/blob-emulator"
 
 export const GRAPH = "https://graph.microsoft.com"
 /** Far above any real listing; stops a storage service that keeps returning continuation markers. */
@@ -28,9 +31,20 @@ export function isImmutabilityRefusal(status: number, code: string): boolean {
 /** Sign-in or license problems affect every request, so they stop the backup instead of becoming per-policy warnings. */
 export class TokenError extends Error {}
 
-/** A Graph error with its status, so an expired sign-in (401) stops the backup while a missing permission for one type does not. */
+/** The error code and message of a refused Microsoft Graph request, as far as its body gives them. */
+export interface GraphAnswer {
+  code?: string
+  message?: string
+}
+
+/**
+ * A Graph error with its status, so an expired sign-in (401) stops the backup while a missing permission for one type does not.
+ * `answer` keeps what Graph said, for telling a missing permission from a missing license or a setting that was never made.
+ */
 export class GraphError extends Error {
-  constructor(message: string, readonly status: number) {
+  continuationPage?: true
+
+  constructor(message: string, readonly status: number, readonly answer: GraphAnswer = {}, readonly grant?: GrantedPermissions) {
     super(message)
   }
 }
@@ -38,7 +52,29 @@ export class GraphError extends Error {
 /** Another reader extended the shared pause while this reader acquired its token. */
 export class GraphPauseError extends Error {}
 
+/**
+ * A request of a service that isolates its failures got no answer from Microsoft Graph in any of
+ * its attempts, or was not sent because the service had stopped answering. It ends the type it
+ * belongs to, never the backup; `cause` is the connection failure.
+ */
+export class GraphUnansweredError extends Error {}
+
 export class StorageError extends Error {}
+class StorageResponseError extends StorageError {
+  constructor(message: string, readonly code: string | undefined) { super(message) }
+}
+/** A write that an immutability policy or legal hold refused, with the provider's error code. */
+export class ImmutableBlobError extends StorageError {
+  constructor(readonly code: string, message: string) { super(message) }
+}
+export class LargeStorageError extends StorageError {
+  constructor(readonly status?: number, options?: ErrorOptions) {
+    const cause = options?.cause
+    const hasSpecificGuidance = cause instanceof StorageResponseError &&
+      ((status === 403 && cause.code === "AuthenticationFailed") || (status === 404 && cause.code === "BlobNotFound"))
+    super(hasSpecificGuidance ? cause.message : `${LARGE_STORAGE_UNAVAILABLE}${status ? ` Storage returned ${status}.` : ""}`, options)
+  }
+}
 /**
  * Local storage refused because files in the backup folder are damaged: a backup that is
  * unavailable, or a delete while damage is present. The message says what and how to recover.
@@ -54,9 +90,9 @@ export class InventoryDamagedError extends StorageError {
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
 export async function storageFailure(response: Response, account: string): Promise<StorageError> {
   const code = response.headers.get("x-ms-error-code")
-  if (code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined"
+  if (isLocalAccount(account) && (code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined"
     || code === "LeaseAlreadyPresent" || code === "LeaseUnavailable" || code === "RetentionHardLinksUnsupported" || code === "RetentionLockLost"
-    || code === "RetentionLockManualIntervention" || code === "BackupProtectedByRetention") {
+    || code === "RetentionLockManualIntervention" || code === "BackupProtectedByRetention")) {
     const text = await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
     if (message || code === "InventoryIncomplete" || code === "BackupUnavailable" || code === "BlobQuarantined") {
@@ -66,9 +102,9 @@ export async function storageFailure(response: Response, account: string): Promi
         ? new InventoryDamagedError(decoded, recoveryConflict ? { recoveryConflict: true } : undefined)
         : new StorageError(decoded)
     }
-    return new StorageError(await storageError(new Response(text, { status: response.status, headers: response.headers }), account))
+    return storageError(new Response(text, { status: response.status, headers: response.headers }), account)
   }
-  return new StorageError(await storageError(response, account))
+  return storageError(response, account)
 }
 /** The create-only claim for a backup folder found the marker already there. */
 export class BlobClaimError extends StorageError {}
@@ -133,28 +169,71 @@ export async function withAbort<T>(request: () => Promise<T>, signal: AbortSigna
   }
 }
 
-export async function graphError(response: Response): Promise<string> {
-  // Finish the bounded response read so body transport failures still count toward the circuit.
-  await response.text()
-  const status = response.status
+/** A fixed message by status. Graph's own error text stays out of messages and logs; graphAnswer keeps it for classification. */
+function graphErrorMessage(status: number): string {
   if (status === 403) return "Access denied by Microsoft Graph (HTTP 403). Check that your account has an Intune role and the app registration has the Intune permissions."
   if (status === 401) return "Microsoft Graph authentication failed (HTTP 401)."
   if (status === 429) return "Microsoft Graph throttled the request (HTTP 429)."
   return `Microsoft Graph request failed (HTTP ${status}).`
 }
 
-/** The message for a failed storage response. A network error response rejects with a StorageUnreachableError instead. */
-export async function storageError(response: Response, account: string): Promise<string> {
+/**
+ * What a refused request's body says. Most of Graph answers `{ error: { code, message } }`; the role
+ * management endpoints answer `{ errorCode, message }`; some answer an HTML page or nothing at all,
+ * which reads as no code and no message.
+ */
+export function graphAnswer(text: string): GraphAnswer {
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return {}
+  }
+  if (!body || typeof body !== "object") return {}
+  const { error, errorCode, message } = body as { error?: unknown; errorCode?: unknown; message?: unknown }
+  const source = error && typeof error === "object" ? (error as { code?: unknown; message?: unknown }) : { code: errorCode, message }
+  return {
+    ...(typeof source.code === "string" && source.code ? { code: source.code } : {}),
+    ...(typeof source.message === "string" && source.message ? { message: source.message } : {}),
+  }
+}
+
+/** The error of a failed Graph response, with its message as before and what Graph answered. */
+export async function graphFailure(response: Response, grant?: GrantedPermissions, grantUnknown = false): Promise<GraphError> {
+  const text = await response.text()
+  const message = response.status === 403 && grantUnknown
+    ? "Microsoft Graph refused this read (HTTP 403). TenuVault could not verify the permissions for this request."
+    : graphErrorMessage(response.status)
+  return new GraphError(message, response.status, graphAnswer(text), grant)
+}
+
+/** Provider code fields can contain free text too. Keep only short error identifiers. */
+export function providerErrorCode(code: string | undefined): string | undefined {
+  return code && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(code) ? code : undefined
+}
+
+export function providerStatus(status: number, code: string | undefined): string {
+  return `HTTP ${status}${code ? `, ${code}` : ""}`
+}
+
+/** A failed storage response. A network error response rejects with a StorageUnreachableError instead. */
+export async function storageError(response: Response, account: string): Promise<StorageError> {
   if (response.status === 0 || response.type === "error") throw new StorageUnreachableError(`Storage account ${account} could not be reached.`)
   const text = await response.text()
-  const code = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? response.headers.get("x-ms-error-code") ?? ""
+  const code = providerErrorCode(/<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? response.headers.get("x-ms-error-code") ?? undefined)
+  const detail = providerStatus(response.status, code)
+  if (response.status === 403 && code === "AuthenticationFailed") {
+    return new StorageResponseError(`Storage account ${account} refused authentication (${detail}). Sign in again to this tenant.`, code)
+  }
+  if (response.status === 404 && code === "BlobNotFound") {
+    return new StorageResponseError(`Storage account ${account} could not find the backup blob (${detail}). Check the configured container or backup location.`, code)
+  }
   // AuthorizationFailure is the storage firewall or network rules rejecting this computer, not a missing role.
   if (code === "AuthorizationFailure") {
-    return `Storage account ${account} rejected the request from this network. Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.`
+    return new StorageResponseError(`Storage account ${account} rejected the request from this network (${detail}). Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.`, code)
   }
-  if (response.status === 403 || code.startsWith("Authorization")) {
-    return `You do not have write access to storage account ${account}. Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`
+  if (response.status === 403 || code?.startsWith("Authorization")) {
+    return new StorageResponseError(`You do not have write access to storage account ${account} (${detail}). Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`, code)
   }
-  const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
-  return `Storage account ${account} returned ${response.status}${code ? ` (${code})` : ""}${message ? `: ${message.split("\n")[0]}` : ""}`
+  return new StorageResponseError(`Storage account ${account} rejected the backup request (${detail}). Check that the backup storage is available and retry.`, code)
 }

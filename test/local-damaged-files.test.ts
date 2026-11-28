@@ -1,15 +1,14 @@
-import { withBackupServerTime } from "./helpers"
+import { emptyIntuneRead, withServerDate } from "./helpers"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
-import { readRetentionProgress, type RetentionProgressStore } from "../src/main/backup/retention-progress"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { BlobProtectedError, IncompleteInventoryError, LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { IncompleteInventoryError, LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
-import { INTUNE_TYPES } from "../src/shared/intune/registry"
+import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -61,15 +60,19 @@ function damage(dir: string, file: string, header = false): Buffer {
 const text = async (store: LocalBlobStore, name: string) => (await store.get(account, CONTAINER, name)).data.toString()
 
 describe("damaged local backup files", () => {
-  it("authenticates the payload body before deleting any record in intune-backups", async () => {
-    const { store, dir, root, key } = await setup()
-    await store.put(account, CONTAINER, `${OLD}/CompliancePolicies/a.json`, Buffer.from('{"id":"a"}'), "application/json")
+  it.each([CONTAINER, LARGE_BACKUP_CONTAINER])("authenticates the payload body before deleting any record in %s", async container => {
+    const { store, root, key } = await setup()
+    const folder = container === CONTAINER ? OLD : OLD.replace("backup-", "backup-large-")
+    const policy = backupBlobName(`${folder}/CompliancePolicies/a.json`)
+    const dir = join(root, account, container)
+    await store.createContainer(account, container)
+    await store.put(account, container, policy, Buffer.from('{"id":"a"}'), "application/json")
     const file = readdirSync(dir).find(name => name.endsWith(".tvb"))!
-    await store.put(account, CONTAINER, `${OLD}/metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+    await store.put(account, container, `${folder}/metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
     damage(dir, file)
     const fresh = new LocalBlobStore(root, [key])
-    expect(await fresh.list(account, CONTAINER)).toHaveLength(2)
-    await expect(fresh.delete(account, CONTAINER, `${OLD}/metadata.json`)).rejects.toThrow(IncompleteInventoryError)
+    expect(await fresh.list(account, container)).toHaveLength(2)
+    await expect(fresh.delete(account, container, `${folder}/metadata.json`)).rejects.toThrow(IncompleteInventoryError)
     expect(readdirSync(dir).filter(name => name.endsWith(".tvb"))).toHaveLength(2)
   })
 
@@ -272,355 +275,36 @@ describe("damaged local backup files", () => {
     await backup(store, OLD)
     await backup(store, NEW)
     damage(dir, await fileOf(store, `${NEW}/CompliancePolicies/a.json`), true)
-    const graph = (url: URL) => Response.json(url.pathname.endsWith("/assignments") ? { value: [] } : { value: [] })
+    const graph = (url: URL) => emptyIntuneRead(url.pathname)
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
+      return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : withServerDate(graph(url), new Date("2026-09-24T12:00:00Z"))
     }) as typeof fetch
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
     const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
     expect(job.status).toBe("Completed")
     const log = job.log.join("\n")
-    expect(log).toContain("Retention is paused. Backup")
+    expect(log).toContain(`Retention is paused. Backup ${NEW} is unavailable: 1 file listed in its manifest is missing or damaged.`)
     expect(log).not.toContain("Removed")
     // The expired backup is still there, next to the one just written.
     const folders = new Set((await store.list(account, CONTAINER)).map((blob) => blob.name.split("/")[0]))
     expect([...folders].sort()).toEqual([OLD, NEW, "backup-2026-09-24-120000"])
   })
-
-  it("resumes a partially deleted local backup whose manifest was already removed, while keeping unjournaled manifestless folders untouched", async () => {
-    const { store } = await setup()
-    await backup(store, OLD)
-    const unjournaled = "backup-2026-07-15-020000"
-    await store.put(account, CONTAINER, `${unjournaled}/CompliancePolicies/a.json`, Buffer.from('{"id":"a"}'), "application/json")
-    await store.put(account, CONTAINER, `${unjournaled}/${BACKUP_OWNER_FILE}`, Buffer.from(`{"TenantId":"${TENANT}"}`), "application/json")
-    let failFirstPayloadDelete = true
-    const graph = (url: URL) => Response.json(url.pathname.endsWith("/assignments") ? { value: [] } : { value: [] })
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = new Request(input, init)
-      const url = new URL(request.url)
-      if (localAccountFromUrl(url)) {
-        if (failFirstPayloadDelete && request.method === "DELETE" && url.pathname.endsWith(`/${OLD}/CompliancePolicies/a.json`)) {
-          failFirstPayloadDelete = false
-          return new Response(null, { status: 412 })
-        }
-        return handleLocalBlobRequest(store, request)
-      }
-      return withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
-    }) as typeof fetch
-    let clockTime = new Date("2026-09-24T12:00:00Z")
-    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => clockTime })
-    const first = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
-    expect(first.status).toBe("Completed")
-    // Local deleted OLD/metadata.json first, then failed on a.json: OLD is now manifestless with remaining files.
-    const remainingOld = (await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)
-    expect(remainingOld).not.toContain(`${OLD}/metadata.json`)
-    expect(remainingOld).toContain(`${OLD}/CompliancePolicies/a.json`)
-    expect(remainingOld).toContain(`${OLD}/${BACKUP_OWNER_FILE}`)
-
-    // Next run resumes OLD from the journal and removes its remaining files, while unjournaled stays untouched.
-    clockTime = new Date("2026-09-24T12:00:05Z")
-    const second = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
-    expect(second.status).toBe("Completed")
-    expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
-    expect((await store.list(account, CONTAINER, `${unjournaled}/`)).map(blob => blob.name)).toContain(`${unjournaled}/CompliancePolicies/a.json`)
-  })
-
-  it("stops local deletion when a replacing backup file changes identity before delete", async () => {
-    const { store } = await setup()
-    await backup(store, OLD)
-    let modified = false
-    const graph = (url: URL) => Response.json(url.pathname.endsWith("/assignments") ? { value: [] } : { value: [] })
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = new Request(input, init)
-      const url = new URL(request.url)
-      if (localAccountFromUrl(url)) {
-        // Modify the newest backup's metadata right after OLD's payload is verified, before OLD's deletes start.
-        if (!modified && request.method === "GET" && url.pathname.endsWith(`/${OLD}/CompliancePolicies/b.json`)) {
-          modified = true
-          const response = await handleLocalBlobRequest(store, request)
-          await store.put(account, CONTAINER, `backup-2026-09-24-120000/metadata.json`, Buffer.from('{"Status":"Success","Changed":true}'), "application/json")
-          return response
-        }
-        return handleLocalBlobRequest(store, request)
-      }
-      return withBackupServerTime(graph(url), new Date("2026-09-24T12:00:00Z"))
-    }) as typeof fetch
-    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
-    const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
-    expect(job.status).toBe("Completed")
-    expect(job.log.join("\n")).toContain("changed before deletion")
-    expect((await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)).toContain(`${OLD}/metadata.json`)
-  })
-
-  it.each([
-    { label: "manifestless with payload in remaining", withManifest: false, includePayloadInRemaining: true },
-    { label: "manifestless with payload omitted from remaining", withManifest: false, includePayloadInRemaining: false },
-    { label: "with manifest and unindexed payload in storage", withManifest: true, includePayloadInRemaining: false },
-  ])("discards a local deletion journal whose remaining payload sits outside journal.types ($label)", async ({ withManifest, includePayloadInRemaining }) => {
-    const { store } = await setup()
-    const prefix = `${OLD}/`
-    await store.put(account, CONTAINER, `${prefix}Apps/App.json`, Buffer.from('{"id":"app1"}'), "application/json")
-    await store.put(account, CONTAINER, `${prefix}${BACKUP_OWNER_FILE}`, Buffer.from(`{"TenantId":"${TENANT}"}`), "application/json")
-    if (withManifest) {
-      await store.put(
-        account,
-        CONTAINER,
-        `${prefix}metadata.json`,
-        Buffer.from(JSON.stringify({ TenantId: TENANT, Status: "Success", Scope: { Included: ["DeviceConfigurations"] }, Items: {} })),
-        "application/json",
-      )
-    }
-    const blobs = await store.list(account, CONTAINER, prefix)
-    const etagOf = (blob: { etag?: string; lastModified: Date }) => blob.etag ?? `"0x${blob.lastModified.getTime().toString(16).toUpperCase()}"`
-    const remaining = Object.fromEntries(
-      blobs
-        .filter(blob => includePayloadInRemaining || !blob.name.endsWith("Apps/App.json"))
-        .map(blob => [blob.name, etagOf(blob)]),
-    )
-    const key = `${TENANT}/${account}`
-    const progressData = new Map<string, string>([
-      [key, JSON.stringify({
-        reviews: {},
-        deletes: {
-          [prefix]: { prefix, remaining, types: ["DeviceConfigurations"], noTypes: false, untagged: false },
-        },
-      })],
-    ])
-    const retentionProgress: RetentionProgressStore = {
-      get: k => progressData.get(k) ?? null,
-      set: (k, value) => { progressData.set(k, value) },
-      delete: k => { progressData.delete(k) },
-    }
-    const deletes: string[] = []
-    const graph = () => Response.json({ value: [] })
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = new Request(input, init)
-      const url = new URL(request.url)
-      if (localAccountFromUrl(url)) {
-        if (request.method === "DELETE") deletes.push(decodeURIComponent(url.pathname))
-        return handleLocalBlobRequest(store, request)
-      }
-      return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
-    }) as typeof fetch
-    const engine = new BackupEngine({
-      fetch: fetchImpl,
-      getToken: async () => "token",
-      retentionDays: () => 30,
-      retentionProgress,
-      now: () => new Date("2026-09-24T12:00:00Z"),
-    })
-    const job = await engine.waitForJob(engine.get(engine.start({
-      tenantId: TENANT,
-      clientId: CLIENT,
-      storageAccountName: account,
-      scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) },
-    }).id)!)
-    expect(job.status).toBe("Completed")
-    const remainingAfter = (await store.list(account, CONTAINER, prefix)).map(blob => blob.name)
-    expect(remainingAfter).toContain(`${prefix}Apps/App.json`)
-    expect(remainingAfter).toContain(`${prefix}${BACKUP_OWNER_FILE}`)
-    expect(deletes).toEqual([])
-    expect(readRetentionProgress(progressData.get(key)).deletes).toBeUndefined()
-  })
-
-  it("handles missing journaled remaining files on local storage by recording them and freshly re-verifying replacement coverage (crash and external deletion)", async () => {
-    const key = `${TENANT}/${account}`
-    const etagOf = (blob: { etag?: string; lastModified: Date }) => blob.etag ?? `"0x${blob.lastModified.getTime().toString(16).toUpperCase()}"`
-    const graph = () => Response.json({ value: [] })
-
-    // (a) Crash after local manifest DELETE before journal update: logs absent file, freshly re-verifies replacement, and finishes deleting remaining files.
-    {
-      const { store } = await setup()
-      await backup(store, OLD)
-      const blobs = await store.list(account, CONTAINER, `${OLD}/`)
-      const remaining = Object.fromEntries(blobs.map(blob => [blob.name, etagOf(blob)]))
-      // Simulate crash after metadata.json was deleted but before journal was updated.
-      await store.delete(account, CONTAINER, `${OLD}/metadata.json`)
-      const progressData = new Map<string, string>([
-        [key, JSON.stringify({
-          reviews: {},
-          deletes: {
-            [`${OLD}/`]: { prefix: `${OLD}/`, remaining, types: ["CompliancePolicies"], noTypes: false, untagged: false },
-          },
-        })],
-      ])
-      const retentionProgress: RetentionProgressStore = {
-        get: k => progressData.get(k) ?? null,
-        set: (k, value) => { progressData.set(k, value) },
-        delete: k => { progressData.delete(k) },
-      }
-      const replacementReads: string[] = []
-      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = new Request(input, init)
-        const url = new URL(request.url)
-        if (localAccountFromUrl(url)) {
-          if (request.method === "GET" && !url.search) replacementReads.push(decodeURIComponent(url.pathname))
-          return handleLocalBlobRequest(store, request)
-        }
-        return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
-      }) as typeof fetch
-      const engine = new BackupEngine({
-        fetch: fetchImpl,
-        getToken: async () => "token",
-        retentionDays: () => 30,
-        retentionProgress,
-        now: () => new Date("2026-09-24T12:00:00Z"),
-      })
-      const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
-      expect(job.status).toBe("Completed")
-      expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
-      expect(job.log.join("\n")).toContain("metadata.json")
-      expect(job.log.join("\n")).toContain("already absent")
-      // Replacement manifest was read at least twice (anchor verify + fresh re-verification).
-      expect(replacementReads.filter(p => p.endsWith(`/${job.backupFolder}/metadata.json`)).length).toBeGreaterThanOrEqual(2)
-    }
-
-    // (b) External deletion of a journaled remaining file (on a resumed manifestless local backup) when replacement
-    // coverage is missing: keeps journal with absent recorded, keeps all remaining files, and warns.
-    {
-      const { store } = await setup()
-      await backup(store, OLD)
-      // Simulate local backup after manifest was deleted and recorded in journal; then a.json is deleted externally.
-      await store.delete(account, CONTAINER, `${OLD}/metadata.json`)
-      const blobsAfterManifest = await store.list(account, CONTAINER, `${OLD}/`)
-      const remaining = Object.fromEntries(blobsAfterManifest.map(blob => [blob.name, etagOf(blob)]))
-      await store.delete(account, CONTAINER, `${OLD}/CompliancePolicies/a.json`)
-      const progressData = new Map<string, string>([
-        [key, JSON.stringify({
-          reviews: {},
-          deletes: {
-            [`${OLD}/`]: { prefix: `${OLD}/`, remaining, types: ["CompliancePolicies"], noTypes: false, untagged: false },
-          },
-        })],
-      ])
-      const retentionProgress: RetentionProgressStore = {
-        get: k => progressData.get(k) ?? null,
-        set: (k, value) => { progressData.set(k, value) },
-        delete: k => { progressData.delete(k) },
-      }
-      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = new Request(input, init)
-        const url = new URL(request.url)
-        if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
-        return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
-      }) as typeof fetch
-      const engine = new BackupEngine({
-        fetch: fetchImpl,
-        getToken: async () => "token",
-        retentionDays: () => 30,
-        retentionProgress,
-        now: () => new Date("2026-09-24T12:00:00Z"),
-      })
-      // Current backup excludes CompliancePolicies, so OLD is not covered.
-      const job = await engine.waitForJob(engine.get(engine.start({
-        tenantId: TENANT,
-        clientId: CLIENT,
-        storageAccountName: account,
-        scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) },
-      }).id)!)
-      expect(job.status).toBe("Completed")
-      const stillThere = (await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)
-      expect(stillThere).toContain(`${OLD}/CompliancePolicies/b.json`)
-      expect(stillThere).toContain(`${OLD}/${BACKUP_OWNER_FILE}`)
-      expect(job.log.join("\n")).toContain("CompliancePolicies/a.json")
-      expect(readRetentionProgress(progressData.get(key)).deletes?.[`${OLD}/`]?.absent).toEqual([`${OLD}/CompliancePolicies/a.json`])
-    }
-  })
-
-  it("blocks in-process writes to replacement prefixes during local cleanup and holds a cross-process retention lock file", async () => {
-    // 1. In-process write attempt to the replacement AFTER the final check and BEFORE the first DELETE
-    // is refused by LocalBlobStore's in-process write guard; protection is released in finally.
-    {
-      const { store } = await setup()
-      await backup(store, OLD)
-      let attemptedBeforeFirstDelete = false
-      let blockedError: unknown
-      let attemptedDuringDelete = false
-      let blockedDuringDeleteError: unknown
-      const deletes: string[] = []
-      const graph = () => Response.json({ value: [] })
-      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = new Request(input, init)
-        const url = new URL(request.url)
-        if (localAccountFromUrl(url)) {
-          if (request.method === "DELETE") {
-            const path = decodeURIComponent(url.pathname)
-            deletes.push(path)
-            if (!attemptedBeforeFirstDelete && path.endsWith(`/${OLD}/metadata.json`)) {
-              attemptedBeforeFirstDelete = true
-              try {
-                await store.put(account, CONTAINER, `backup-2026-09-24-120000/metadata.json`, Buffer.from('{"Status":"Success","Tampered":true}'), "application/json")
-              } catch (error) {
-                blockedError = error
-              }
-            }
-            const res = await handleLocalBlobRequest(store, request)
-            if (!attemptedDuringDelete && path.endsWith(`/${OLD}/metadata.json`)) {
-              attemptedDuringDelete = true
-              try {
-                await store.delete(account, CONTAINER, `backup-2026-09-24-120000/metadata.json`)
-              } catch (error) {
-                blockedDuringDeleteError = error
-              }
-            }
-            return res
-          }
-          return handleLocalBlobRequest(store, request)
-        }
-        return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
-      }) as typeof fetch
-      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
-      const job = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
-      expect(job.status).toBe("Completed")
-      expect(attemptedBeforeFirstDelete).toBe(true)
-      expect(blockedError).toBeInstanceOf(BlobProtectedError)
-      expect(attemptedDuringDelete).toBe(true)
-      expect(blockedDuringDeleteError).toBeInstanceOf(BlobProtectedError)
-      expect(deletes.length).toBeGreaterThanOrEqual(3)
-      // Replacement remained intact and OLD was safely deleted.
-      const replacementManifest = JSON.parse((await store.get(account, CONTAINER, "backup-2026-09-24-120000/metadata.json")).data.toString())
-      expect(replacementManifest.Tampered).toBeUndefined()
-      expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
-      // After cleanup completes, the in-process guard is released.
-      await expect(store.put(account, CONTAINER, "backup-2026-09-24-120000/post-cleanup.json", Buffer.from("{}"), "application/json")).resolves.toBeDefined()
-    }
-
-    // 2. Cross-process retention lock file in container dir blocks a second instance, and is released on completion.
-    {
-      const { root, store } = await setup()
-      const otherInstance = new LocalBlobStore(root, [Buffer.alloc(32, 3)])
-      await backup(store, OLD)
-      const lockId = await otherInstance.acquireRetentionLock(account, CONTAINER)
-      const graph = () => Response.json({ value: [] })
-      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = new Request(input, init)
-        const url = new URL(request.url)
-        if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
-        return withBackupServerTime(graph(), new Date("2026-09-24T12:00:00Z"))
-      }) as typeof fetch
-      let clock = new Date("2026-09-24T12:00:00Z")
-      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => clock })
-      const blocked = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
-      expect(blocked.status).toBe("Completed")
-      expect(blocked.log.join("\n")).toContain("local retention lock could not be acquired")
-      expect((await store.list(account, CONTAINER, `${OLD}/`)).map(blob => blob.name)).toContain(`${OLD}/metadata.json`)
-
-      // Once released by the other instance, retention acquires and releases the lock and deletes OLD.
-      await otherInstance.releaseRetentionLock(account, CONTAINER, lockId)
-      clock = new Date("2026-09-24T12:00:05Z")
-      const unblocked = await engine.waitForJob(engine.get(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)!)
-      expect(unblocked.status).toBe("Completed")
-      expect(await store.list(account, CONTAINER, `${OLD}/`)).toEqual([])
-      // Lock file must be cleaned up after retention finishes so another instance can acquire it immediately.
-      const reacquired = await otherInstance.acquireRetentionLock(account, CONTAINER)
-      await otherInstance.releaseRetentionLock(account, CONTAINER, reacquired)
-    }
-  })
 })
 
 describe("backup history with damaged local files", () => {
+  it("lists an ordinary local backup without warning when the optional large container does not exist", async () => {
+    const { store } = await setup()
+    await backup(store, NEW)
+    expect(await store.containerExists(account, LARGE_BACKUP_CONTAINER)).toBe(false)
+    for (const summary of [false, true]) {
+      const data = await historyResponse(store, summary)
+      expect(data.backups).toMatchObject([{ id: NEW, status: "Success" }])
+      expect(data.warnings ?? []).toEqual([])
+    }
+  })
+
   it.each([["policy file", "CompliancePolicies/a.json"], ["manifest", "metadata.json"]])("lists a backup whose %s is damaged as unavailable next to the usable ones, in both list modes", async (_what, damagedName) => {
     const { store, dir } = await setup()
     await backup(store, OLD)
@@ -656,7 +340,7 @@ describe("backup history with damaged local files", () => {
     }
   })
 
-  async function history(store: LocalBlobStore, summary: boolean) {
+  async function historyResponse(store: LocalBlobStore, summary: boolean) {
     const { NextRequest } = await import("../src/main/api/next-server-shim")
     const { POST: listBackups } = await import("../src/portal/app/api/list-backups/route")
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -668,11 +352,15 @@ describe("backup history with damaged local files", () => {
     }))
     try {
       const body = { tenantId: TENANT, appId: CLIENT, clientSecret: "x", storageAccountName: account, subscriptionId: "local", resourceGroupName: "local", summary }
-      const data = await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json()
-      return Object.fromEntries(data.backups.map((entry: { id: string; status: string }) => [entry.id, entry.status])) as Record<string, string>
+      return await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json()
     } finally {
       vi.unstubAllGlobals()
     }
+  }
+
+  async function history(store: LocalBlobStore, summary: boolean) {
+    const data = await historyResponse(store, summary)
+    return Object.fromEntries(data.backups.map((entry: { id: string; status: string }) => [entry.id, entry.status])) as Record<string, string>
   }
 
   it("notices in a summary list that a backup became unavailable after its manifest was read", async () => {

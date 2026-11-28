@@ -1,0 +1,415 @@
+{
+  "schemaVersion": 1,
+  "tenantId": "8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14",
+  "tenantName": "Contoso <Müller> & Co",
+  "generatedAt": "2026-11-06T02:14:00.000Z",
+  "trigger": "scheduled",
+  "from": {
+    "id": "backup-2026-11-05-020000",
+    "timestamp": "2026-11-05T02:00:00.000Z",
+    "trigger": "scheduled",
+    "status": "Success"
+  },
+  "to": {
+    "id": "backup-2026-11-06-020000",
+    "timestamp": "2026-11-06T02:00:00.000Z",
+    "trigger": "scheduled",
+    "status": "Success"
+  },
+  "summary": {
+    "added": 2,
+    "modified": 8,
+    "deleted": 1,
+    "critical": 2,
+    "attributed": 4
+  },
+  "items": [
+    {
+      "change": "deleted",
+      "type": "Device Configuration",
+      "name": "macOS - FileVault",
+      "id": "d-filevault",
+      "severity": "warning",
+      "settings": [
+        {
+          "name": "File vault enabled",
+          "path": "fileVaultEnabled",
+          "before": "true",
+          "after": null
+        },
+        {
+          "name": "File vault number of times user can ignore",
+          "path": "fileVaultNumberOfTimesUserCanIgnore",
+          "before": "3",
+          "after": null
+        },
+        {
+          "name": "File vault recovery key escrow location description",
+          "path": "fileVaultRecoveryKeyEscrowLocationDescription",
+          "before": "[redacted]",
+          "after": null
+        },
+        {
+          "name": "Assignments (item 1)",
+          "path": "assignments[0]",
+          "before": "Excluded group g-2",
+          "after": null
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [
+        {
+          "at": "2026-11-05T15:52:00.000Z",
+          "change": "deleted",
+          "who": "alex@contoso.example",
+          "activity": "Delete DeviceConfiguration",
+          "source": "Intune"
+        }
+      ],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "modified",
+      "type": "Compliance policy settings",
+      "name": "Compliance policy settings",
+      "id": "CompliancePolicySettings",
+      "severity": "critical",
+      "settings": [
+        {
+          "name": "Mark devices with no compliance policy assigned as",
+          "path": "secureByDefault",
+          "before": "Compliant",
+          "after": "Not compliant"
+        },
+        {
+          "name": "Compliance status validity period (days)",
+          "path": "deviceComplianceCheckinThresholdDays",
+          "before": "30",
+          "after": "Not set (Intune uses 30)"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "modified",
+      "type": "Conditional Access policies",
+      "name": "CA001 - Require MFA",
+      "id": "ca-1",
+      "severity": "critical",
+      "settings": [
+        {
+          "name": "State",
+          "path": "state",
+          "before": "enabled",
+          "after": "enabledForReportingButNotEnforced"
+        },
+        {
+          "name": "Exclude users: u-break-glass",
+          "path": "conditions.users.excludeUsers[\"u-break-glass\"]",
+          "before": "Not set",
+          "after": "u-break-glass"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "modified",
+      "type": "Compliance Policy",
+      "name": "Windows 11 - Compliance",
+      "previousName": "Win11 Compliance",
+      "id": "c-win",
+      "severity": "warning",
+      "settings": [
+        {
+          "name": "Display name",
+          "path": "displayName",
+          "before": "Win11 Compliance",
+          "after": "Windows 11 - Compliance"
+        },
+        {
+          "name": "Password minimum length",
+          "path": "passwordMinimumLength",
+          "before": "12",
+          "after": "8"
+        },
+        {
+          "name": "OS minimum version",
+          "path": "osMinimumVersion",
+          "before": "10.0.22000",
+          "after": "10.0.22631"
+        },
+        {
+          "name": "Assignments (item 2)",
+          "path": "assignments[1]",
+          "before": "Not set",
+          "after": "Excluded group g-4"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [
+        {
+          "at": "2026-11-05T11:05:00.000Z",
+          "change": "updated",
+          "who": "Graph Explorer",
+          "activity": "Patch DeviceCompliancePolicy",
+          "source": "Intune"
+        },
+        {
+          "at": "2026-11-05T11:06:00.000Z",
+          "change": "assigned",
+          "who": "megan@contoso.example",
+          "activity": "Assign DeviceCompliancePolicy",
+          "source": "Intune"
+        }
+      ],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "modified",
+      "type": "Device Configuration",
+      "name": "Wi-Fi",
+      "id": "d-wifi",
+      "severity": "warning",
+      "settings": [
+        {
+          "name": "SSID",
+          "path": "ssid",
+          "before": "corp",
+          "after": "corp-2"
+        },
+        {
+          "name": "Plain",
+          "path": "omaSettings[Plain].value",
+          "before": "1",
+          "after": "2"
+        },
+        {
+          "name": "Secret values",
+          "path": "secretValues",
+          "before": "[redacted]",
+          "after": "[redacted]"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "modified",
+      "type": "Android app protection policies",
+      "name": "APP - Android",
+      "id": "m-android",
+      "severity": "info",
+      "settings": [
+        {
+          "name": "Allowed data storage locations: box",
+          "path": "allowedDataStorageLocations[\"box\"]",
+          "before": "Not set",
+          "after": "box"
+        },
+        {
+          "name": "Apps: com.microsoft.teams",
+          "path": "apps[com.microsoft.teams]",
+          "before": "com.microsoft.teams",
+          "after": "Not set"
+        },
+        {
+          "name": "Apps: com.microsoft.emmx",
+          "path": "apps[com.microsoft.emmx]",
+          "before": "Not set",
+          "after": "com.microsoft.emmx"
+        },
+        {
+          "name": "Assignments (item 1)",
+          "path": "assignments[0]",
+          "before": "Not set",
+          "after": "Excluded group bbbbbbbb-2222-4222-8222-222222222222"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [
+        {
+          "at": "2026-11-05T13:40:00.000Z",
+          "change": "updated",
+          "who": "sam@contoso.example",
+          "activity": "Patch AndroidManagedAppProtection",
+          "source": "Intune"
+        }
+      ],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "modified",
+      "type": "Configuration Policy",
+      "name": "Unread assignments",
+      "id": "p-unread",
+      "severity": "info",
+      "settings": [
+        {
+          "name": "Platforms",
+          "path": "platforms",
+          "before": "windows10",
+          "after": "macOS"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "modified",
+      "type": "Configuration Policy",
+      "name": "WIN - Defender",
+      "id": "p-defender",
+      "severity": "info",
+      "settings": [
+        {
+          "name": "Role scope tag IDs: 12",
+          "path": "roleScopeTagIds[\"12\"]",
+          "before": "Not set",
+          "after": "12"
+        },
+        {
+          "name": "Allow Cloud Protection",
+          "path": "settings[device_vendor_msft_policy_config_defender_allowcloudprotection].settingInstance.choiceSettingValue.value",
+          "before": "Allowed. Turns on Cloud Protection.",
+          "after": "Not allowed. Turns off Cloud Protection."
+        },
+        {
+          "name": "Defender: Avgcpuloadfactor",
+          "path": "settings[device_vendor_msft_policy_config_defender_avgcpuloadfactor].settingInstance.simpleSettingValue.value",
+          "before": "50",
+          "after": "1.5"
+        },
+        {
+          "name": "Restrictions",
+          "path": "settings[com.apple.applicationaccess_com.apple.applicationaccess]",
+          "before": "Restrictions",
+          "after": "Not set"
+        },
+        {
+          "name": "Cloud Block Level",
+          "path": "settings[device_vendor_msft_policy_config_defender_cloudblocklevel]",
+          "before": "Not set",
+          "after": "High"
+        },
+        {
+          "name": "Assignments (item 2)",
+          "path": "assignments[1]",
+          "before": "Not set",
+          "after": "All users (filter exclude f-9)"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [
+        {
+          "at": "2026-11-05T09:14:00.000Z",
+          "change": "updated",
+          "who": "megan@contoso.example",
+          "activity": "Patch DeviceManagementConfigurationPolicy",
+          "source": "Intune"
+        }
+      ],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "modified",
+      "type": "IOS app protection policies",
+      "name": "APP - iOS",
+      "id": "m-ios",
+      "severity": "info",
+      "settings": [
+        {
+          "name": "PIN required",
+          "path": "pinRequired",
+          "before": "false",
+          "after": "true"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [],
+      "restoreFrom": "backup-2026-11-05-020000"
+    },
+    {
+      "change": "added",
+      "type": "Configuration Policy",
+      "name": "[Restored] Kiosk",
+      "id": "p-copy",
+      "severity": "info",
+      "settings": [
+        {
+          "name": "Platforms",
+          "path": "platforms",
+          "before": null,
+          "after": "windows10"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": [],
+      "likelyRestoredCopy": true
+    },
+    {
+      "change": "added",
+      "type": "Configuration Policy",
+      "name": "WIN - Edge </td><script>alert(1)</script>",
+      "id": "p-edge",
+      "severity": "info",
+      "settings": [
+        {
+          "name": "Platforms",
+          "path": "platforms",
+          "before": null,
+          "after": "windows10"
+        },
+        {
+          "name": "Technologies",
+          "path": "technologies",
+          "before": null,
+          "after": "mdm"
+        },
+        {
+          "name": "Edge: Passwordmanagerenabled",
+          "path": "settings[device_vendor_msft_policy_config_microsoft_edge~policy~microsoft_edge_passwordmanagerenabled]",
+          "before": null,
+          "after": "0"
+        },
+        {
+          "name": "Wi-Fi: Key",
+          "path": "settings[vendor_msft_wifi_key]",
+          "before": null,
+          "after": "[redacted]"
+        },
+        {
+          "name": "Assignments (item 1)",
+          "path": "assignments[0]",
+          "before": null,
+          "after": "Included group g-3 (filter include f-1)"
+        }
+      ],
+      "moreSettings": 0,
+      "activity": []
+    }
+  ],
+  "otherActivity": [
+    {
+      "at": "2026-11-05T16:20:00.000Z",
+      "change": "updated",
+      "who": "lidia|<x>@contoso.example",
+      "activity": "Patch DeviceConfiguration",
+      "source": "Intune",
+      "target": "Kiosk | settings"
+    }
+  ],
+  "moreActivity": 0,
+  "audit": {
+    "status": "included",
+    "note": null,
+    "actors": true
+  },
+  "values": true,
+  "warnings": []
+}

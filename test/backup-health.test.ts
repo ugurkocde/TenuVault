@@ -9,7 +9,7 @@ it('requires an explicit completed status and counts only terminal results in su
   expect(normalizeBackupStatus({ status: 'CompletedWithWarnings' })).toBe('partial')
   expect(normalizeBackupStatus({ status: 'new-server-state' })).toBe('unknown')
   expect(backupSummary(['running', 'incomplete', 'unknown', 'failed', 'partial', 'success'].map((status) => ({ status: normalizeBackupStatus({ status }), timestamp: now })), [], { since: now }))
-    .toEqual({ stored: 6, successful: 1, failed: 3, finished: 4, inProgress: 1, successRate: 25, latestStatus: 'running' })
+    .toEqual({ stored: 6, successful: 1, failed: 3, finished: 4, firstFinishedAt: now.getTime(), inProgress: 1, successRate: 25, latestStatus: 'running' })
 })
 it('derives every dashboard count from the same backups and failed attempts', () => {
   const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 3_600_000)
@@ -59,7 +59,7 @@ it('reads a folder without a manifest as failed, running or incomplete, with the
   expect(backupSummary([{ status: 'unknown', timestamp: now, runId: null }], [{ timestamp: now, runId: 'run-b' }], { since, live: [] })).toMatchObject({ stored: 1, failed: 1, finished: 1, latestStatus: 'unknown' })
 })
 it('has no success rate without a finished backup and counts each running run once', () => {
-  expect(backupSummary([], [], { since: now })).toEqual({ stored: 0, successful: 0, failed: 0, finished: 0, inProgress: 0, successRate: null, latestStatus: null })
+  expect(backupSummary([], [], { since: now })).toEqual({ stored: 0, successful: 0, failed: 0, finished: 0, firstFinishedAt: Infinity, inProgress: 0, successRate: null, latestStatus: null })
   const running = [{ status: 'running' as const, timestamp: now, runId: 'run-a' }, { status: 'running' as const, timestamp: now }, { status: 'unknown' as const, timestamp: now }]
   expect(backupSummary(running, [], { since: now })).toMatchObject({ stored: 3, finished: 0, inProgress: 2, successRate: null })
   expect(backupSummary(running, [], { since: now, live: ['run-a', 'run-a', 'run-b'] }).inProgress).toBe(3)
@@ -96,4 +96,16 @@ it('keeps a known failed run failed after its folder without a manifest turns in
   expect(backupSummary(folders, [{ timestamp: now, runId: 'run-failed' }], { since, live: ['run-live'] }))
     .toMatchObject({ failed: 1, inProgress: 1, latestStatus: 'running' })
   expect(backupSummary(folders.slice(0, 1), [{ timestamp: now, runId: 'run-failed' }], { since })).toMatchObject({ failed: 1, latestStatus: 'failed' })
+})
+
+
+it("counts resolved history rows independently of copied run IDs", () => {
+  const ordinary = { status: "success" as const, timestamp: now, runId: "mixed", tenantId: 1 }
+  expect(backupSummary([ordinary, { ...ordinary, status: "incomplete" }], [], { since: now }))
+    .toMatchObject({ stored: 2, successful: 1, failed: 1, finished: 2, successRate: 50 })
+})
+it("scopes failed attempts and live runs by tenant", () => {
+  const folders = [{ status: "success" as const, timestamp: now, runId: "same", tenantId: 1 }, { status: "running" as const, timestamp: now, runId: "same", tenantId: 2 }]
+  expect(backupSummary(folders, [{ timestamp: now, runId: "same", tenantId: 3 }], { since: now, live: [{ tenantId: 2, runId: "same" }] }))
+    .toMatchObject({ successful: 1, failed: 1, inProgress: 1 })
 })

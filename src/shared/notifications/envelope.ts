@@ -1,3 +1,5 @@
+import { comparisonReadDetails, type ComparisonCoverageNotice } from "../intune/backup-read-coverage"
+
 /**
  * The one notification event model shared by the desktop app and the Azure watcher
  * runbook. Producers build envelopes; channels only render them. The PowerShell watcher
@@ -170,6 +172,7 @@ export interface BackupEventInput {
   tenantId: string
   tenantName?: string | null
   status: "Success" | "CompletedWithWarnings" | "Failed"
+  coverage?: "complete" | "incomplete"
   /** The backup folder, when the run got far enough to claim one. */
   backupFolder?: string | null
   /**
@@ -188,10 +191,12 @@ export interface BackupEventInput {
 
 export function backupEvent(input: BackupEventInput): NotificationEnvelope {
   const type: NotificationEventType = input.status === "Failed" ? "backup.failed" : input.status === "CompletedWithWarnings" ? "backup.warning" : "backup.succeeded"
+  const incomplete = input.coverage === "incomplete" && type !== "backup.failed"
   const details: Array<{ label: string; value: string }> = [
     ...(input.backupFolder ? [{ label: "Backup", value: input.backupFolder }] : []),
-    { label: "Result", value: input.status },
+    incomplete ? { label: "Run status", value: "Finished" } : { label: "Result", value: input.status },
   ]
+  if (incomplete) details.push({ label: "Coverage", value: "Incomplete" })
   if (input.totalPolicies !== null && input.totalPolicies !== undefined) details.push({ label: "Policies saved", value: String(input.totalPolicies) })
   if (input.failures) details.push({ label: "Item failures", value: String(input.failures) })
   if (input.failedTypes?.length) details.push({ label: "Failed types", value: input.failedTypes.slice(0, 10).join(", ") })
@@ -204,8 +209,8 @@ export function backupEvent(input: BackupEventInput): NotificationEnvelope {
     tenantName: input.tenantName,
     occurredAt: input.occurredAt,
     naturalKey: input.naturalKey || input.backupFolder || `${input.trigger ?? "backup"}:${input.occurredAt}`,
-    title: type === "backup.failed" ? `Backup failed: ${tenantLabel}` : type === "backup.warning" ? `Backup completed with warnings: ${tenantLabel}` : `Backup succeeded: ${tenantLabel}`,
-    summary: input.message || (type === "backup.succeeded" ? "The backup completed successfully." : "Open TenuVault to see what could not be saved."),
+    title: type === "backup.failed" ? `Backup failed: ${tenantLabel}` : incomplete ? `Backup finished with incomplete coverage: ${tenantLabel}` : type === "backup.warning" ? `Backup completed with warnings: ${tenantLabel}` : `Backup succeeded: ${tenantLabel}`,
+    summary: input.message || (incomplete ? "Open TenuVault to see which types could not be read in full." : type === "backup.succeeded" ? "The backup completed successfully." : "Open TenuVault to see what could not be saved."),
     details,
     source: input.source,
   })
@@ -230,7 +235,7 @@ export function missedBackupEvent(input: { tenantId: string; tenantName?: string
   })
 }
 
-export interface DriftEventInput {
+export interface DriftEventInput extends ComparisonCoverageNotice {
   tenantId: string
   tenantName?: string | null
   occurredAt: string
@@ -245,19 +250,21 @@ export interface DriftEventInput {
 export function driftEvent(input: DriftEventInput): NotificationEnvelope {
   const total = input.added + input.modified + input.deleted
   const tenantLabel = input.tenantName ?? "your tenant"
+  const coverage = comparisonReadDetails(input)
   return buildEnvelope({
     type: "drift.detected",
-    severity: input.deleted > 0 ? "warning" : "info",
+    severity: input.deleted > 0 || coverage.length ? "warning" : "info",
     tenantId: input.tenantId,
     tenantName: input.tenantName,
     occurredAt: input.occurredAt,
     naturalKey: input.jobId,
-    title: `Drift detected: ${tenantLabel}`,
+    title: total === 0 && coverage.length ? `Incomplete drift comparison: ${tenantLabel}` : `Drift detected: ${tenantLabel}`,
     summary: `${total} ${total === 1 ? "change" : "changes"} between the compared backups (${input.added} added, ${input.modified} modified, ${input.deleted} deleted).`,
     details: [
       { label: "Added", value: String(input.added) },
       { label: "Modified", value: String(input.modified) },
       { label: "Deleted", value: String(input.deleted) },
+      ...coverage,
     ],
     items: input.items,
     moreCount: Math.max(0, total - (input.items?.length ?? 0)),

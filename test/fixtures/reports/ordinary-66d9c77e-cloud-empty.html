@@ -1,0 +1,66 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:"><title>Changes in Contoso &lt;Müller&gt; &amp; Co, 5 Nov 2026 to 6 Nov 2026</title><style>:root { --primary: rgb(22 21 20); --strong: rgb(22 21 20); --primary-tint: rgb(238 236 233); --accent: rgb(228 103 75); --accent-text: rgb(201 75 48); --accent-wash: rgb(253 244 241); --accent-border: rgb(247 203 190); --on-band: rgb(255 255 255); --band-muted: rgb(210 206 201); --band-accent: rgb(241 167 146); --band-rule: rgb(62 61 60); --ring-soft: rgb(51 32 28); --ring-strong: rgb(109 55 43); --door: rgb(244 243 241); --ink: rgb(43 41 39); --body: rgb(69 66 62); --muted: rgb(118 113 107); --faint: rgb(163 158 152); --rule: rgb(228 225 221); --border: rgb(218 214 209); --panel: rgb(244 243 241); --zebra: rgb(249 248 247); --tint: rgb(238 236 233); --track: rgb(228 225 221); --dashed: rgb(210 206 201); --white: rgb(255 255 255); --good-text: rgb(24 104 64); --good-fill: rgb(231 242 236); --warn-text: rgb(143 79 16); --warn-fill: rgb(250 239 227); --bad-text: rgb(173 62 38); --bad-fill: rgb(252 236 231); --neutral-text: rgb(71 85 105); --neutral-fill: rgb(238 240 243); --info-text: rgb(22 21 20); --info-fill: rgb(238 236 233); --conflict-text: rgb(185 28 28); --conflict-fill: rgb(251 233 233); }
+@page { size: A4; margin: 21mm 15mm 21mm; }
+* { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+html, body { margin: 0; padding: 0; }
+body { font-family: "Segoe UI Variable", "Segoe UI", -apple-system, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans CJK JP", "Hiragino Sans", "Microsoft YaHei", sans-serif; color: var(--ink); font-size: 7.6pt; line-height: 1.4; }
+h1, h2, h3, p { margin: 0; }
+.band { padding: 7mm 7mm 6mm; border-radius: 2.5mm; background: var(--primary); color: var(--on-band); margin-bottom: 6mm; }
+.brand { display: flex; align-items: center; gap: 2.4mm; height: 7mm; }
+.brand-name { font-size: 10pt; font-weight: 700; }
+.logo { display: block; max-width: 40mm; max-height: 10mm; }
+.logo.plate { background: var(--white); border-radius: 1.5mm; padding: 1.5mm 2mm; }
+.eyebrow { margin-top: 6mm; font-size: 7pt; font-weight: 700; letter-spacing: 0.25mm; text-transform: uppercase; color: var(--band-accent); }
+h1 { margin-top: 1.4mm; font-size: 19pt; line-height: 1.15; overflow-wrap: anywhere; }
+.period { margin-top: 2mm; font-size: 9pt; color: var(--band-muted); }
+.facts { display: flex; flex-wrap: wrap; gap: 1.2mm 8mm; margin-top: 4mm; padding-top: 3mm; border-top: 0.25mm solid var(--band-rule); font-size: 7.6pt; }
+.facts span { color: var(--band-muted); margin-right: 1.4mm; }
+.tiles { display: flex; gap: 3mm; margin-bottom: 4mm; }
+.tile { flex: 1 1 0; min-width: 0; padding: 3.4mm 3.6mm; border: 0.25mm solid var(--border); border-radius: 2mm; }
+.tile .key { font-size: 5.8pt; font-weight: 700; letter-spacing: 0.1mm; text-transform: uppercase; color: var(--muted); }
+.tile .value { margin-top: 1.2mm; font-size: 18pt; font-weight: 700; line-height: 1; color: var(--strong); }
+.lead { margin-bottom: 5mm; font-size: 8.8pt; color: var(--body); }
+.callout { padding: 3.4mm 4.4mm; margin-bottom: 5mm; border: 0.25mm solid var(--accent-border); border-radius: 2mm; background: var(--accent-wash); font-size: 8pt; }
+.callout b { color: var(--accent-text); }
+h2 { margin: 7mm 0 3mm; padding-bottom: 1.4mm; border-bottom: 0.4mm solid var(--strong); font-size: 12pt; color: var(--strong); break-after: avoid; }
+.item { margin-bottom: 5mm; break-inside: auto; }
+.keep { break-inside: avoid; break-after: avoid; }
+.item-head { break-inside: avoid; break-after: avoid; }
+h3 { font-size: 10pt; color: var(--strong); overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 1.2mm; margin: 1.2mm 0 1.6mm; }
+.pill { display: inline-block; padding: 0.5mm 2.2mm; border-radius: 2mm; font-size: 6.4pt; font-weight: 700; }
+.tone-good { color: var(--good-text); background: var(--good-fill); }
+.tone-warn { color: var(--warn-text); background: var(--warn-fill); }
+.tone-bad { color: var(--bad-text); background: var(--bad-fill); }
+.tone-neutral { color: var(--neutral-text); background: var(--neutral-fill); }
+.meta { font-size: 7.2pt; color: var(--muted); overflow-wrap: anywhere; }
+.activity { margin: 1mm 0 2mm; padding: 0; list-style: none; font-size: 7.4pt; color: var(--body); }
+.activity li { padding: 0.4mm 0; overflow-wrap: anywhere; }
+.activity li::before { content: ""; display: inline-block; width: 1.4mm; height: 1.4mm; margin-right: 1.6mm; border-radius: 50%; background: var(--accent); vertical-align: 0.2mm; }
+.unknown { font-style: italic; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 1mm; }
+thead { display: table-header-group; }
+th { padding: 0 1.5mm 1.2mm; text-align: left; font-size: 5.8pt; font-weight: 700; letter-spacing: 0.2mm; text-transform: uppercase; color: var(--muted); border-bottom: 0.3mm solid var(--strong); }
+td { padding: 1.6mm 1.5mm; vertical-align: top; border-bottom: 0.2mm solid var(--rule); overflow-wrap: anywhere; font-size: 7.3pt; }
+tbody tr:nth-child(even) td { background: var(--zebra); }
+tr { break-inside: avoid; }
+td.before { color: var(--bad-text); }
+td.after { color: var(--good-text); }
+td.empty { color: var(--faint); font-style: italic; }
+.more { margin-top: 1.2mm; font-size: 7pt; color: var(--muted); }
+.none { font-size: 8pt; font-style: italic; color: var(--muted); }
+.provenance { margin-top: 8mm; padding-top: 3mm; border-top: 0.2mm solid var(--rule); font-size: 7pt; color: var(--muted); break-inside: avoid; }
+@media screen { body { max-width: 210mm; margin: 0 auto; padding: 10mm 12mm; background: var(--white); } }
+@page {
+  @top-left { content: "Changes in Contoso \3c M\fc ller\3e  \26  Co, 5 Nov 2026 to 6 Nov 2026"; font-family: "Segoe UI Variable", "Segoe UI", -apple-system, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans CJK JP", "Hiragino Sans", "Microsoft YaHei", sans-serif; font-size: 6.5pt; color: var(--muted); vertical-align: bottom; padding-bottom: 1.6mm; border-bottom: 0.2mm solid var(--rule); width: 130mm; font-weight: 700; color: var(--strong); }
+  @top-right { content: "Contoso \3c M\fc ller\3e  \26  Co"; font-family: "Segoe UI Variable", "Segoe UI", -apple-system, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans CJK JP", "Hiragino Sans", "Microsoft YaHei", sans-serif; font-size: 6.5pt; color: var(--muted); vertical-align: bottom; padding-bottom: 1.6mm; border-bottom: 0.2mm solid var(--rule); width: 50mm; text-align: right; }
+  @bottom-left { content: "TenuVault | Change report"; font-family: "Segoe UI Variable", "Segoe UI", -apple-system, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans CJK JP", "Hiragino Sans", "Microsoft YaHei", sans-serif; font-size: 6.5pt; color: var(--muted); vertical-align: top; padding-top: 2.4mm; border-top: 0.2mm solid var(--rule); width: 130mm; }
+  @bottom-right { content: "Page " counter(page) " of " counter(pages); font-family: "Segoe UI Variable", "Segoe UI", -apple-system, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans CJK JP", "Hiragino Sans", "Microsoft YaHei", sans-serif; font-size: 6.5pt; color: var(--muted); vertical-align: top; padding-top: 2.4mm; border-top: 0.2mm solid var(--rule); width: 50mm; text-align: right; }
+}</style></head><body>
+<header class="band"><div class="brand"><span class="brand-name">TenuVault</span></div>
+<p class="eyebrow">Change report</p><h1>Changes in Contoso &lt;Müller&gt; &amp; Co, 5 Nov 2026 to 6 Nov 2026</h1>
+<p class="period">From backup backup-2026-11-05-020000 (5 Nov 2026, 02:00 UTC) to backup-2026-11-06-020000 (6 Nov 2026, 02:00 UTC)</p>
+<div class="facts"><div><span>Tenant</span><b>Contoso &lt;Müller&gt; &amp; Co</b></div><div><span>Tenant ID</span><b>8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14</b></div><div><span>Generated</span><b>6 Nov 2026, 02:14 UTC</b></div></div></header>
+<div class="tiles"><div class="tile"><div class="key">Changed</div><div class="value">0</div></div><div class="tile"><div class="key">Added</div><div class="value">0</div></div><div class="tile"><div class="key">Deleted</div><div class="value">0</div></div><div class="tile"><div class="key">Critical</div><div class="value">0</div></div><div class="tile"><div class="key">With audit events</div><div class="value">0</div></div></div>
+<p class="lead">No changes between the two backups.</p>
+<p class="none">No items were added, changed or deleted between the two backups.</p><p class="provenance">Generated by TenuVault from the backups backup-2026-11-05-020000 and backup-2026-11-06-020000 of tenant 8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14. Values are shown as the backups recorded them; secret values are never shown. Who made a change comes from the Intune and Entra audit logs and is shown only when an audit event names the item.</p>
+</body></html>

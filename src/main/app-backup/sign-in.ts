@@ -1,5 +1,16 @@
 import { isGuid } from "../../shared/security"
+import { RESOURCE_SCOPES } from "../../shared/constants"
 import { sourceTenant } from "../app-sources/store"
+import type { AuthManager } from "../auth/msal"
+
+export async function appRestoreToken(
+  auth: AuthManager,
+  tenant: string,
+  client: string,
+  authorizeRestore: () => Promise<void>,
+): Promise<string> {
+  return (await auth.getAccessToken(tenant, client, RESOURCE_SCOPES.graph, false, authorizeRestore)).accessToken
+}
 
 /** App Backup needs the configured registration, independently of backup storage. */
 export function appBackupClientId(tenant: string, serialized: string | null | undefined): string {

@@ -57,8 +57,9 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
 }))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, app: { openExternal: async (url: string) => { opened.push(url) } } } }))
-vi.mock("../../src/renderer/features/notifications/optional-permissions", () => ({
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { packConsentPlan: async () => ({ packs: [] }) }, license: { open: vi.fn() }, app: { openExternal: async (url: string) => { opened.push(url) } } } }))
+vi.mock("../../src/renderer/features/notifications/optional-permissions", async (original) => ({
+  ...(await original<typeof import("../../src/renderer/features/notifications/optional-permissions")>()),
   useOptionalPermission: (_tenant: Tenant, id: OptionalPermissionId) => permissionState.scopes
     ? optionalPermissionStatus({ kind: "delegated", permissions: new Set(permissionState.scopes) }).find((entry) => entry.id === id)
     : null,

@@ -64,7 +64,7 @@ param(
     [switch]$ReplayOlderAudit
 )
 
-$script:RunbookVersion = "1.5.0"
+$script:RunbookVersion = "1.6.1"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
@@ -106,6 +106,8 @@ function Remove-TvProp {
 function Get-TvSafeError {
     param([object]$Value)
     $text = [string]$Value -replace "https?://\S+", "[url]"
+    # Use the desktop account identifier mask for email addresses and UPNs.
+    $text = $text -creplace '(?<![\p{L}\p{N}._%+!#$&*=^`{|}~-])(?<![\p{L}\p{N}]'')[\p{L}\p{N}_%+!#$&*=^`{|}~-]+(?:[.''][\p{L}\p{N}_%+!#$&*=^`{|}~-]+)*@[\p{L}\p{N}]+(?:[.-][\p{L}\p{N}]+)*', "[redacted]"
     $text = $text -replace "[\x00-\x1F\x7F]+", " "
     $text = ($text -replace "\s+", " ").Trim()
     if ($text.Length -gt 500) { $text = $text.Substring(0, 500) }
@@ -232,6 +234,32 @@ function Copy-TvDeep {
     return ConvertFrom-TvJson ($Value | ConvertTo-Json -Depth 100)
 }
 
+# Match the 0.5 cloud runbook's null and singleton strings to today's assignment arrays.
+function Get-TvRoleAssignmentSnapshot {
+    param([AllowNull()][object]$Snapshot, [switch]$Legacy)
+    if ($Snapshot -isnot [System.Collections.IDictionary] -or -not (Test-TvJsArray $Snapshot["roleAssignments"])) { return , $Snapshot }
+    $copy = $Snapshot
+    for ($i = 0; $i -lt $Snapshot["roleAssignments"].Count; $i++) {
+        $assignment = $Snapshot["roleAssignments"][$i]
+        if ($assignment -isnot [System.Collections.IDictionary]) { continue }
+        foreach ($key in @("members", "resourceScopes", "scopeMembers", "roleScopeTagIds")) {
+            if (-not $assignment.Contains($key)) { continue }
+            $value = $assignment[$key]
+            if ($Legacy) {
+                if (-not (Test-TvJsArray $value)) { continue }
+                if ($value.Count -eq 0) { $next = $null }
+                elseif ($value.Count -eq 1 -and $value[0] -is [string]) { $next = $value[0] }
+                else { continue }
+            } elseif ($null -eq $value) { $next = @() }
+            elseif ($value -is [string]) { $next = @($value) }
+            else { continue }
+            if ([object]::ReferenceEquals($copy, $Snapshot)) { $copy = Copy-TvDeep $Snapshot }
+            $copy["roleAssignments"][$i][$key] = $next
+        }
+    }
+    return , $copy
+}
+
 # ---------------------------------------------------------------------------
 # JSON parsing without PowerShell's date conversion. ConvertFrom-Json in the
 # Automation 7.2 runtime turns ISO strings into [DateTime] values, which both
@@ -270,7 +298,7 @@ function ConvertFrom-TvJsonElement {
 function ConvertFrom-TvJson {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
     $document = [System.Text.Json.JsonDocument]::Parse($Text)
-    try { return ConvertFrom-TvJsonElement $document.RootElement } finally { $document.Dispose() }
+    try { return ,(ConvertFrom-TvJsonElement $document.RootElement) } finally { $document.Dispose() }
 }
 
 # The property names of a parsed object, in document order.
@@ -1182,7 +1210,7 @@ function Complete-TvAuditRun {
 
 function Get-TvGraphUrl {
     param([Parameter(Mandatory)][string]$Path)
-    if ($Path.StartsWith("https://")) {
+    if ($Path.StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
         if (-not ([uri]$Path).Host.Equals("graph.microsoft.com")) { throw "Invalid Graph continuation link" }
         return $Path
     }
@@ -1192,21 +1220,123 @@ function Get-TvGraphUrl {
 function Invoke-TvGraphGet {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token)
     $result = Invoke-TvHttp -Uri (Get-TvGraphUrl $Path) -Token $Token -Method "Get" -Headers @{ Accept = "application/json" }
-    return ConvertFrom-TvJson $result.Text
+    # Preserve a root array so the collection validator can reject it as an invalid envelope.
+    return ,(ConvertFrom-TvJson $result.Text)
+}
+
+function Invoke-TvGraphDetail {
+    param([string]$Path, [string]$Token, [string]$Id, [switch]$ValueObject)
+    $detail = Invoke-TvGraphGet $Path $Token
+    if ($detail -isnot [System.Collections.IDictionary] -or $detail.psbase.Keys -ccontains "@odata.nextLink") {
+        throw "Microsoft Graph did not return a single policy object"
+    }
+    $matchesId = $Id -and $detail.psbase.Keys -ccontains "id" -and $detail["id"] -is [string] -and $detail["id"] -ceq $Id
+    $value = $detail["value"]
+    if ($ValueObject -and $value -is [System.Collections.IDictionary] -and (-not $matchesId -or $value.psbase.Keys -ccontains "id")) {
+        $detail = $value
+        $matchesId = $Id -and $detail.psbase.Keys -ccontains "id" -and $detail["id"] -is [string] -and $detail["id"] -ceq $Id
+    }
+    if ($detail.psbase.Keys -ccontains "@odata.nextLink" -or
+        ($detail["value"] -is [array] -and (-not $matchesId -or $detail.psbase.Keys -ccontains "@odata.count"))) {
+        throw "Microsoft Graph did not return a single policy object"
+    }
+    if ($Id -and -not $matchesId) {
+        throw "Microsoft Graph returned a policy without the requested id"
+    }
+    return $detail
+}
+
+function Get-TvGraphReadError {
+    param([Exception]$Exception)
+    if ($Exception -is [TvHttpError] -and $Exception.Status) { return "HTTP $($Exception.Status)" }
+    return Get-TvSafeError $Exception.Message
+}
+
+function Test-TvGraphListPage {
+    param([object]$Page, [uri]$Start, [System.Collections.Generic.HashSet[string]]$Seen)
+    if ($Page -isnot [System.Collections.IDictionary] -or $Page.psbase.Keys -cnotcontains "value" -or $Page["value"] -isnot [array]) {
+        throw "Graph returned an invalid policy collection"
+    }
+    foreach ($item in $Page["value"]) {
+        if ($item -isnot [System.Collections.IDictionary] -or $item.psbase.Keys -cnotcontains "id" -or
+            $item["id"] -isnot [string] -or [string]::IsNullOrWhiteSpace($item["id"])) {
+            throw "Microsoft Graph returned a collection entry without id"
+        }
+    }
+    if ($Page.psbase.Keys -cnotcontains "@odata.nextLink") { return }
+    $next = $Page["@odata.nextLink"]
+    $parsed = $null
+    if ($next -isnot [string] -or $next -notmatch '^https://[^/]' -or $next -cne $next.Trim() -or
+        ($next -split '\?', 2)[0] -match '[\s\\#]' -or $next -match '[\t\r\n\\#]' -or
+        -not [uri]::TryCreate($next, [UriKind]::Absolute, [ref]$parsed) -or
+        $parsed.Scheme -ne "https" -or $parsed.Authority -ne $Start.Authority -or $parsed.UserInfo -or
+        -not $parsed.AbsolutePath.Equals($Start.AbsolutePath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Graph returned an invalid continuation link"
+    }
+    if (-not $Seen.Add($parsed.AbsoluteUri)) { throw "Graph returned a repeated continuation link" }
+    return $next
 }
 
 function Invoke-TvGraphList {
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token)
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Token, [object]$ExpandedPage)
     $items = [System.Collections.Generic.List[object]]::new()
     $next = Get-TvGraphUrl $Path
+    $start = [uri]$next
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    [void]$seen.Add($start.AbsoluteUri)
     $pages = 0
     while ($next) {
-        if (++$pages -gt 1000) { throw "Graph listing did not finish after 1000 pages: $Path" }
-        $page = Invoke-TvGraphGet $next $Token
-        foreach ($item in @(Get-TvProp $page "value")) { if ($null -ne $item) { $items.Add($item) } }
-        $next = Get-TvProp $page "@odata.nextLink"
+        if (++$pages -gt 1000) { throw "Graph listing did not finish after 1000 pages" }
+        $page = if ($pages -eq 1 -and $PSBoundParameters.ContainsKey("ExpandedPage")) { $ExpandedPage }
+            else { ,(Invoke-TvGraphGet $next $Token) }
+        $next = Test-TvGraphListPage $page $start $seen
+        $items.AddRange($page["value"])
     }
     return $items
+}
+
+function Complete-TvGraphExpansion {
+    param([object]$Value, [string]$Path, [string]$Token, [string[]]$Collections, [string[]]$NoExpansionFallback, [string]$Prefix = "")
+    if ($Value -is [array]) {
+        foreach ($entry in $Value) {
+            $id = Get-TvProp $entry "id"
+            $entryPath = if ($Path -and $id -is [string] -and $id) { "$Path/$([uri]::EscapeDataString($id))" } else { "" }
+            Complete-TvGraphExpansion $entry $entryPath $Token $Collections $NoExpansionFallback $Prefix
+        }
+        return
+    }
+    if ($Value -isnot [System.Collections.IDictionary]) { return }
+    $suffix = "@odata.nextLink"
+    $keys = @(Get-TvKeys $Value)
+    $expanded = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($property in $Collections) {
+        if (-not $property.Contains(".")) { [void]$expanded.Add($property) }
+    }
+    foreach ($key in $keys) {
+        if ($key.EndsWith($suffix, [StringComparison]::Ordinal)) { [void]$expanded.Add($key.Substring(0, $key.Length - $suffix.Length)) }
+    }
+    # Every collection requested through Expand in the registry returns entities keyed by id.
+    foreach ($property in $expanded) {
+        if (-not $Path) { throw "Graph returned an invalid expanded collection" }
+        $key = "$property$suffix"
+        if ($Collections -ccontains $property -and $keys -cnotcontains $property) {
+            if ($NoExpansionFallback -ccontains "$Prefix$property") { throw "Microsoft Graph did not return the expanded collection $Prefix$property" }
+            $Value[$property] = @(Invoke-TvGraphList "$Path/$property" $Token)
+        } else {
+            $page = [ordered]@{ value = $Value[$property] }
+            if ($keys -ccontains $key) { $page[$suffix] = $Value[$key] }
+            $Value[$property] = @(Invoke-TvGraphList "$Path/$property" $Token -ExpandedPage $page)
+        }
+        $Value.Remove($key)
+    }
+    foreach ($key in @(Get-TvKeys $Value)) {
+        $childPath = if ($Path) { "$Path/$key" } else { "" }
+        $prefixKey = "$key."
+        $nested = @(foreach ($property in $Collections) {
+            if ($property.StartsWith($prefixKey, [StringComparison]::Ordinal)) { $property.Substring($prefixKey.Length) }
+        })
+        Complete-TvGraphExpansion $Value[$key] $childPath $Token $nested $NoExpansionFallback "$Prefix$prefixKey"
+    }
 }
 
 function Get-TvDetailPath {
@@ -1258,7 +1388,9 @@ function Read-TvObject {
         [Parameter(Mandatory)][string]$Token,
         [Parameter(Mandatory)][hashtable]$Outcome
     )
-    $detail = Invoke-TvGraphGet (Get-TvDetailPath $Type $Id) $Token
+    $path = Get-TvDetailPath $Type $Id
+    $detail = if ($Type.Singleton) { Invoke-TvGraphDetail $path $Token -ValueObject:($Type.DetailValueObject -eq $true) }
+        else { Invoke-TvGraphDetail $path $Token $Id -ValueObject:($Type.DetailValueObject -eq $true) }
     if ($Type.Keep) { return Get-TvKeptSnapshot $Type $detail }
     if ($Type.Singleton) {
         $snapshot = [ordered]@{ id = $Type.Singleton.Id }
@@ -1269,34 +1401,30 @@ function Read-TvObject {
         }
         return $snapshot
     }
-    # Large expanded collections page like lists.
-    foreach ($key in @(Get-TvKeys $detail)) {
-        $value = Get-TvProp $detail $key
-        if ($key.EndsWith("@odata.nextLink") -and $value -is [string]) {
-            $property = $key.Substring(0, $key.Length - "@odata.nextLink".Length)
-            $existing = @(Get-TvProp $detail $property)
-            $more = Invoke-TvGraphList $value $Token
-            Set-TvProp $detail $property @($existing + $more)
-            Remove-TvProp $detail $key
-        }
-    }
+    $collections = if ($Type.ExpandedCollections) { $Type.ExpandedCollections } elseif ($Type.Expand) { $Type.Expand -split ',' }
+    Complete-TvGraphExpansion $detail ($path -split '\?', 2)[0] $Token $collections $Type.NoExpansionFallback
     $encodedId = [uri]::EscapeDataString($Id)
     foreach ($extra in $Type.Extras) {
         $extraPath = ([string]$extra.Template).Replace("{id}", $encodedId)
         if ($extra.Single) {
-            $one = Invoke-TvGraphGet $extraPath $Token
+            $one = Invoke-TvGraphDetail $extraPath $Token $Id -ValueObject:($Type.DetailValueObject -eq $true)
             Set-TvProp $detail $extra.Property (Get-TvProp $one $extra.Property)
             continue
         }
-        $entries = Invoke-TvGraphList $extraPath $Token
+        $entries = @(Invoke-TvGraphList $extraPath $Token)
+        Complete-TvGraphExpansion $entries ($extraPath -split '\?', 2)[0] $Token $extra.ExpandedCollections $extra.NoExpansionFallback
         if ($extra.Each) {
             foreach ($entry in $entries) {
-                $entryPath = ([string]$extra.Each.Template).Replace("{id}", $encodedId).Replace("{entryId}", [uri]::EscapeDataString([string](Get-TvProp $entry "id")))
+                $entryId = [string](Get-TvProp $entry "id")
+                $entryPath = ([string]$extra.Each.Template).Replace("{id}", $encodedId).Replace("{entryId}", [uri]::EscapeDataString($entryId))
                 if ($extra.Each.Property) {
-                    Set-TvProp $entry $extra.Each.Property @(Invoke-TvGraphList $entryPath $Token)
+                    $nested = @(Invoke-TvGraphList $entryPath $Token)
+                    Complete-TvGraphExpansion $nested ($entryPath -split '\?', 2)[0] $Token
+                    Set-TvProp $entry $extra.Each.Property $nested
                 } else {
-                    $full = Invoke-TvGraphGet $entryPath $Token
-                    foreach ($k in @(Get-TvKeys $full)) { if ($k -ne "@odata.context") { Set-TvProp $entry $k (Get-TvProp $full $k) } }
+                    $full = Invoke-TvGraphDetail $entryPath $Token $entryId -ValueObject:($Type.DetailValueObject -eq $true)
+                    Complete-TvGraphExpansion $full ($entryPath -split '\?', 2)[0] $Token
+                    foreach ($k in $full.psbase.Keys) { if ($k -cne "@odata.context") { Set-TvProp $entry $k $full[$k] } }
                 }
             }
         }
@@ -1307,7 +1435,7 @@ function Read-TvObject {
             $reference = ([string](Get-TvProp $setting "secretReferenceValueId")).Replace("'", "''")
             $secretPath = "deviceManagement/deviceConfigurations/$encodedId/getOmaSettingPlainTextValue(secretReferenceValueId='$([uri]::EscapeDataString($reference))')"
             try {
-                $plain = Invoke-TvGraphGet $secretPath $Token
+                $plain = Invoke-TvGraphDetail $secretPath $Token
                 $value = Get-TvProp $plain "value"
                 if ($value -isnot [string]) { throw "Microsoft Graph did not return an encrypted setting's value" }
                 Set-TvProp $setting "value" $value
@@ -1361,47 +1489,47 @@ function Get-TvItemName {
 
 function Get-TvTypes {
     return @(
-    @{ Folder = 'DeviceConfigurations'; Label = 'device configuration profiles'; Path = 'deviceManagement/deviceConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $true; Singleton = $null; Extras = @() }
-    @{ Folder = 'ConfigurationPolicies'; Label = 'settings catalog and endpoint security policies'; Path = 'deviceManagement/configurationPolicies'; NameKey = 'name'; Expand = 'settings'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $true; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/configurationPolicies/{id}/assignments'; Each = $null }) }
-    @{ Folder = 'GroupPolicyConfigurations'; Label = 'administrative templates'; Path = 'deviceManagement/groupPolicyConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'definitionValues'; Single = $false; Template = 'deviceManagement/groupPolicyConfigurations/{id}/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath)'; Each = @{ Property = 'presentationValues'; Template = 'deviceManagement/groupPolicyConfigurations/{id}/definitionValues/{entryId}/presentationValues?$expand=presentation($select=id,label)' } }) }
-    @{ Folder = 'ReusablePolicySettings'; Label = 'reusable settings'; Path = 'deviceManagement/reusablePolicySettings'; NameKey = 'displayName'; Expand = $null; Select = 'id,displayName,description,settingDefinitionId,settingInstance,createdDateTime,lastModifiedDateTime,version,referencingConfigurationPolicyCount'; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'HardwareConfigurations'; Label = 'BIOS configurations'; Path = 'deviceManagement/hardwareConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'CompliancePolicies'; Label = 'compliance policies'; Path = 'deviceManagement/deviceCompliancePolicies'; NameKey = 'displayName'; Expand = 'scheduledActionsForRule($expand=scheduledActionConfigurations),assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'ComplianceSettingsPolicies'; Label = 'settings catalog compliance policies'; Path = 'deviceManagement/compliancePolicies'; NameKey = 'name'; Expand = 'settings'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $true; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'scheduledActionsForRule'; Single = $false; Template = 'deviceManagement/compliancePolicies/{id}/scheduledActionsForRule?$expand=scheduledActionConfigurations'; Each = $null }; @{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/compliancePolicies/{id}/assignments'; Each = $null }) }
-    @{ Folder = 'ComplianceScripts'; Label = 'compliance scripts'; Path = 'deviceManagement/deviceComplianceScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'DeviceConfigurations'; DetailValueObject = $true; Label = 'device configuration profiles'; Path = 'deviceManagement/deviceConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $true; Singleton = $null; Extras = @() }
+    @{ Folder = 'ConfigurationPolicies'; DetailValueObject = $true; Label = 'settings catalog and endpoint security policies'; Path = 'deviceManagement/configurationPolicies'; NameKey = 'name'; Expand = 'settings'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $true; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/configurationPolicies/{id}/assignments'; Each = $null }) }
+    @{ Folder = 'GroupPolicyConfigurations'; DetailValueObject = $true; Label = 'administrative templates'; Path = 'deviceManagement/groupPolicyConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'definitionValues'; Single = $false; Template = 'deviceManagement/groupPolicyConfigurations/{id}/definitionValues?$expand=definition($select=id,displayName,classType,categoryPath)'; Each = @{ Property = 'presentationValues'; Template = 'deviceManagement/groupPolicyConfigurations/{id}/definitionValues/{entryId}/presentationValues?$expand=presentation($select=id,label)' } }) }
+    @{ Folder = 'ReusablePolicySettings'; DetailValueObject = $true; Label = 'reusable settings'; Path = 'deviceManagement/reusablePolicySettings'; NameKey = 'displayName'; Expand = $null; Select = 'id,displayName,description,settingDefinitionId,settingInstance,createdDateTime,lastModifiedDateTime,version,referencingConfigurationPolicyCount'; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'HardwareConfigurations'; DetailValueObject = $true; Label = 'BIOS configurations'; Path = 'deviceManagement/hardwareConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'CompliancePolicies'; DetailValueObject = $true; Label = 'compliance policies'; Path = 'deviceManagement/deviceCompliancePolicies'; NameKey = 'displayName'; Expand = 'scheduledActionsForRule($expand=scheduledActionConfigurations),assignments'; ExpandedCollections = @('scheduledActionsForRule','scheduledActionsForRule.scheduledActionConfigurations','assignments'); NoExpansionFallback = @('scheduledActionsForRule','scheduledActionsForRule.scheduledActionConfigurations'); Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'ComplianceSettingsPolicies'; DetailValueObject = $true; Label = 'settings catalog compliance policies'; Path = 'deviceManagement/compliancePolicies'; NameKey = 'name'; Expand = 'settings'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $true; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'scheduledActionsForRule'; Single = $false; Template = 'deviceManagement/compliancePolicies/{id}/scheduledActionsForRule?$expand=scheduledActionConfigurations'; ExpandedCollections = @('scheduledActionConfigurations'); NoExpansionFallback = @('scheduledActionConfigurations'); Each = $null }; @{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/compliancePolicies/{id}/assignments'; Each = $null }) }
+    @{ Folder = 'ComplianceScripts'; DetailValueObject = $true; Label = 'compliance scripts'; Path = 'deviceManagement/deviceComplianceScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'CompliancePolicySettings'; Label = 'compliance policy settings'; Path = 'deviceManagement/settings'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = @{ Id = 'CompliancePolicySettings'; Name = 'Compliance policy settings'; Properties = @('secureByDefault','deviceComplianceCheckinThresholdDays','isScheduledActionEnabled','enhancedJailBreak') }; Extras = @() }
-    @{ Folder = 'EndpointSecurityIntents'; Label = 'security baselines and template profiles'; Path = 'deviceManagement/intents'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'settings'; Single = $false; Template = 'deviceManagement/intents/{id}/settings'; Each = $null }; @{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/intents/{id}/assignments'; Each = $null }) }
-    @{ Folder = 'PowerShellScripts'; Label = 'Windows PowerShell scripts'; Path = 'deviceManagement/deviceManagementScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'ShellScripts'; Label = 'macOS shell scripts'; Path = 'deviceManagement/deviceShellScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'CustomAttributeScripts'; Label = 'macOS custom attributes'; Path = 'deviceManagement/deviceCustomAttributeShellScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'Remediations'; Label = 'remediations'; Path = 'deviceManagement/deviceHealthScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'FeatureUpdateProfiles'; Label = 'feature update profiles'; Path = 'deviceManagement/windowsFeatureUpdateProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'QualityUpdateProfiles'; Label = 'expedited quality update profiles'; Path = 'deviceManagement/windowsQualityUpdateProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'QualityUpdatePolicies'; Label = 'hotpatch quality update policies'; Path = 'deviceManagement/windowsQualityUpdatePolicies'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'DriverUpdateProfiles'; Label = 'driver update profiles'; Path = 'deviceManagement/windowsDriverUpdateProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'AppCategories'; Label = 'app categories'; Path = 'deviceAppManagement/mobileAppCategories'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'Apps'; Label = 'apps'; Path = 'deviceAppManagement/mobileApps'; NameKey = 'displayName'; Expand = 'assignments,categories'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'relationships'; Single = $false; Template = 'deviceAppManagement/mobileApps/{id}/relationships'; Each = $null }) }
-    @{ Folder = 'AppConfigurationPolicies'; Label = 'app configuration policies for managed devices'; Path = 'deviceAppManagement/mobileAppConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'ManagedAppConfigurations'; Label = 'app configuration policies for managed apps'; Path = 'deviceAppManagement/targetedManagedAppConfigurations'; NameKey = 'displayName'; Expand = 'apps,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'AppProtectionIOS'; Label = 'iOS app protection policies'; Path = 'deviceAppManagement/iosManagedAppProtections'; NameKey = 'displayName'; Expand = 'apps,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'AppProtectionAndroid'; Label = 'Android app protection policies'; Path = 'deviceAppManagement/androidManagedAppProtections'; NameKey = 'displayName'; Expand = 'apps,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'AppProtectionWindows'; Label = 'Windows app protection policies'; Path = 'deviceAppManagement/windowsManagedAppProtections'; NameKey = 'displayName'; Expand = 'apps,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'PolicySets'; Label = 'policy sets'; Path = 'deviceAppManagement/policySets'; NameKey = 'displayName'; Expand = 'items,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'EnrollmentConfigurations'; Label = 'enrollment configurations'; Path = 'deviceManagement/deviceEnrollmentConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'AutopilotProfiles'; Label = 'Windows Autopilot deployment profiles'; Path = 'deviceManagement/windowsAutopilotDeploymentProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'EndpointSecurityIntents'; DetailValueObject = $true; Label = 'security baselines and template profiles'; Path = 'deviceManagement/intents'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'settings'; Single = $false; Template = 'deviceManagement/intents/{id}/settings'; Each = $null }; @{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/intents/{id}/assignments'; Each = $null }) }
+    @{ Folder = 'PowerShellScripts'; DetailValueObject = $true; Label = 'Windows PowerShell scripts'; Path = 'deviceManagement/deviceManagementScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'ShellScripts'; DetailValueObject = $true; Label = 'macOS shell scripts'; Path = 'deviceManagement/deviceShellScripts'; NameKey = 'displayName'; Expand = 'assignments'; NoExpansionFallback = @('assignments'); Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'CustomAttributeScripts'; DetailValueObject = $true; Label = 'macOS custom attributes'; Path = 'deviceManagement/deviceCustomAttributeShellScripts'; NameKey = 'displayName'; Expand = 'assignments'; NoExpansionFallback = @('assignments'); Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'Remediations'; DetailValueObject = $true; Label = 'remediations'; Path = 'deviceManagement/deviceHealthScripts'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'FeatureUpdateProfiles'; DetailValueObject = $true; Label = 'feature update profiles'; Path = 'deviceManagement/windowsFeatureUpdateProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'QualityUpdateProfiles'; DetailValueObject = $true; Label = 'expedited quality update profiles'; Path = 'deviceManagement/windowsQualityUpdateProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'QualityUpdatePolicies'; DetailValueObject = $true; Label = 'hotpatch quality update policies'; Path = 'deviceManagement/windowsQualityUpdatePolicies'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'DriverUpdateProfiles'; DetailValueObject = $true; Label = 'driver update profiles'; Path = 'deviceManagement/windowsDriverUpdateProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AppCategories'; DetailValueObject = $true; Label = 'app categories'; Path = 'deviceAppManagement/mobileAppCategories'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'Apps'; DetailValueObject = $true; Label = 'apps'; Path = 'deviceAppManagement/mobileApps'; NameKey = 'displayName'; Expand = 'assignments,categories'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'relationships'; Single = $false; Template = 'deviceAppManagement/mobileApps/{id}/relationships'; Each = $null }) }
+    @{ Folder = 'AppConfigurationPolicies'; DetailValueObject = $true; Label = 'app configuration policies for managed devices'; Path = 'deviceAppManagement/mobileAppConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'ManagedAppConfigurations'; DetailValueObject = $true; Label = 'app configuration policies for managed apps'; Path = 'deviceAppManagement/targetedManagedAppConfigurations'; NameKey = 'displayName'; Expand = 'apps,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AppProtectionIOS'; DetailValueObject = $true; Label = 'iOS app protection policies'; Path = 'deviceAppManagement/iosManagedAppProtections'; NameKey = 'displayName'; Expand = 'apps,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AppProtectionAndroid'; DetailValueObject = $true; Label = 'Android app protection policies'; Path = 'deviceAppManagement/androidManagedAppProtections'; NameKey = 'displayName'; Expand = 'apps,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AppProtectionWindows'; DetailValueObject = $true; Label = 'Windows app protection policies'; Path = 'deviceAppManagement/windowsManagedAppProtections'; NameKey = 'displayName'; Expand = 'apps,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'PolicySets'; DetailValueObject = $true; Label = 'policy sets'; Path = 'deviceAppManagement/policySets'; NameKey = 'displayName'; Expand = 'items,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'EnrollmentConfigurations'; DetailValueObject = $true; Label = 'enrollment configurations'; Path = 'deviceManagement/deviceEnrollmentConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AutopilotProfiles'; DetailValueObject = $true; Label = 'Windows Autopilot deployment profiles'; Path = 'deviceManagement/windowsAutopilotDeploymentProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'AutopilotDevices'; Label = 'Windows Autopilot devices'; Path = 'deviceManagement/windowsAutopilotDeviceIdentities'; NameKey = 'serialNumber'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(); ListOnly = $true; Inventory = $true; Keep = @('serialNumber','manufacturer','model','systemFamily','skuNumber','groupTag','purchaseOrderIdentifier','userPrincipalName','addressableUserName','displayName','resourceName','deviceAccountUpn','deviceFriendlyName') }
-    @{ Folder = 'AppleEnrollmentProfiles'; Label = 'Apple user enrollment profiles'; Path = 'deviceManagement/appleUserInitiatedEnrollmentProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'AppleAutomatedEnrollment'; Label = 'Apple automated device enrollment tokens and profiles'; Path = 'deviceManagement/depOnboardingSettings'; NameKey = 'tokenName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'enrollmentProfiles'; Single = $false; Template = 'deviceManagement/depOnboardingSettings/{id}/enrollmentProfiles'; Each = $null }) }
-    @{ Folder = 'AndroidEnrollmentProfiles'; Label = 'Android Enterprise enrollment profiles'; Path = 'deviceManagement/androidDeviceOwnerEnrollmentProfiles'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'DeviceCategories'; Label = 'device categories'; Path = 'deviceManagement/deviceCategories'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'TermsAndConditions'; Label = 'terms and conditions'; Path = 'deviceManagement/termsAndConditions'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/termsAndConditions/{id}/assignments'; Each = $null }) }
-    @{ Folder = 'AssignmentFilters'; Label = 'assignment filters'; Path = 'deviceManagement/assignmentFilters'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'ScopeTags'; Label = 'scope tags'; Path = 'deviceManagement/roleScopeTags'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/roleScopeTags/{id}/assignments'; Each = $null }) }
-    @{ Folder = 'RoleDefinitions'; Label = 'Intune roles'; Path = 'deviceManagement/roleDefinitions'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'roleAssignments'; Single = $false; Template = 'deviceManagement/roleDefinitions/{id}/roleAssignments'; Each = @{ Property = $null; Template = 'deviceManagement/roleAssignments/{entryId}' } }) }
-    @{ Folder = 'NotificationTemplates'; Label = 'compliance notification templates'; Path = 'deviceManagement/notificationMessageTemplates'; NameKey = 'displayName'; Expand = 'localizedNotificationMessages'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'Branding'; Label = 'Company Portal branding'; Path = 'deviceManagement/intuneBrandingProfiles'; NameKey = 'profileName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'themeColorLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=themeColorLogo'; Each = $null }; @{ Property = 'lightBackgroundLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=lightBackgroundLogo'; Each = $null }; @{ Property = 'landingPageCustomizedImage'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=landingPageCustomizedImage'; Each = $null }) }
-    @{ Folder = 'DeviceCleanupRules'; Label = 'device clean-up rules'; Path = 'deviceManagement/managedDeviceCleanupRules'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
-    @{ Folder = 'MultiAdminApprovalPolicies'; Label = 'multi admin approval policies'; Path = 'deviceManagement/operationApprovalPolicies'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AppleEnrollmentProfiles'; DetailValueObject = $true; Label = 'Apple user enrollment profiles'; Path = 'deviceManagement/appleUserInitiatedEnrollmentProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AppleAutomatedEnrollment'; DetailValueObject = $true; Label = 'Apple automated device enrollment tokens and profiles'; Path = 'deviceManagement/depOnboardingSettings'; NameKey = 'tokenName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'enrollmentProfiles'; Single = $false; Template = 'deviceManagement/depOnboardingSettings/{id}/enrollmentProfiles'; Each = $null }) }
+    @{ Folder = 'AndroidEnrollmentProfiles'; DetailValueObject = $true; Label = 'Android Enterprise enrollment profiles'; Path = 'deviceManagement/androidDeviceOwnerEnrollmentProfiles'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'DeviceCategories'; DetailValueObject = $true; Label = 'device categories'; Path = 'deviceManagement/deviceCategories'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'TermsAndConditions'; DetailValueObject = $true; Label = 'terms and conditions'; Path = 'deviceManagement/termsAndConditions'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/termsAndConditions/{id}/assignments'; Each = $null }) }
+    @{ Folder = 'AssignmentFilters'; DetailValueObject = $true; Label = 'assignment filters'; Path = 'deviceManagement/assignmentFilters'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'ScopeTags'; DetailValueObject = $true; Label = 'scope tags'; Path = 'deviceManagement/roleScopeTags'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'assignments'; Single = $false; Template = 'deviceManagement/roleScopeTags/{id}/assignments'; Each = $null }) }
+    @{ Folder = 'RoleDefinitions'; DetailValueObject = $true; Label = 'Intune roles'; Path = 'deviceManagement/roleDefinitions'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'roleAssignments'; Single = $false; Template = 'deviceManagement/roleDefinitions/{id}/roleAssignments'; Each = @{ Property = $null; Template = 'deviceManagement/roleAssignments/{entryId}' } }) }
+    @{ Folder = 'NotificationTemplates'; DetailValueObject = $true; Label = 'compliance notification templates'; Path = 'deviceManagement/notificationMessageTemplates'; NameKey = 'displayName'; Expand = 'localizedNotificationMessages'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'Branding'; DetailValueObject = $true; Label = 'Company Portal branding'; Path = 'deviceManagement/intuneBrandingProfiles'; NameKey = 'profileName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'themeColorLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=id,themeColorLogo'; Each = $null }; @{ Property = 'lightBackgroundLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=id,lightBackgroundLogo'; Each = $null }; @{ Property = 'landingPageCustomizedImage'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=id,landingPageCustomizedImage'; Each = $null }) }
+    @{ Folder = 'DeviceCleanupRules'; DetailValueObject = $true; Label = 'device clean-up rules'; Path = 'deviceManagement/managedDeviceCleanupRules'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'MultiAdminApprovalPolicies'; DetailValueObject = $true; Label = 'multi admin approval policies'; Path = 'deviceManagement/operationApprovalPolicies'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'NamedLocations'; Label = 'named locations'; Path = 'identity/conditionalAccess/namedLocations'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'AuthenticationStrengths'; Label = 'authentication strengths'; Path = 'identity/conditionalAccess/authenticationStrength/policies'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'ConditionalAccessPolicies'; Label = 'Conditional Access policies'; Path = 'identity/conditionalAccess/policies'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
@@ -1759,8 +1887,8 @@ function Get-TvEmptyLike {
 # Every setting of an added or deleted item, as changes from or to "not set".
 function Get-TvDocumentedRows {
     param([AllowNull()][object]$Content, [ValidateSet("added", "deleted")][string]$Change)
-    $redacted = Get-TvReportSafe $Content
-    $empty = Get-TvEmptyLike $redacted
+    $redacted = Get-TvReportSafe (Get-TvRoleAssignmentSnapshot $Content)
+    $empty = Get-TvRoleAssignmentSnapshot (Get-TvEmptyLike $redacted)
     $rows = [System.Collections.Generic.List[object]]::new()
     if ($Change -eq "added") { Compare-TvObjects $empty $redacted "" $null $rows } else { Compare-TvObjects $redacted $empty "" $null $rows }
     return , $rows
@@ -1769,6 +1897,8 @@ function Get-TvDocumentedRows {
 # The changes of a modified item with secrets redacted, plus one Secret values row when a secret changed.
 function Get-TvRedactedChangeRows {
     param([AllowNull()][object]$Older, [AllowNull()][object]$Newer)
+    $Older = Get-TvRoleAssignmentSnapshot $Older
+    $Newer = Get-TvRoleAssignmentSnapshot $Newer
     $rows = [System.Collections.Generic.List[object]]::new()
     Compare-TvObjects (Get-TvReportSafe $Older) (Get-TvReportSafe $Newer) "" $null $rows
     $shown = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -2162,22 +2292,60 @@ $script:LegacyFolders = @(
 $script:LegacyLabels = @{ DeviceConfigurations = "Device Configuration"; CompliancePolicies = "Compliance Policy"; DeviceCompliancePolicies = "Compliance Policy"; ConfigurationPolicies = "Configuration Policy" }
 $script:ConditionalAccessLabels = @("Conditional Access policies", "Named locations", "Authentication strengths")
 
-function Get-TvCoveredFolders {
-    param([AllowNull()][object]$Metadata, [Parameter(Mandatory)][string[]]$Known)
+# Mirror backupReadCoverage. Keep the 0.5.3 scope rule when the manifest only has a failure count.
+function Get-TvBackupReadCoverage {
+    param([Parameter(Mandatory)][object]$Metadata, [Parameter(Mandatory)][string[]]$Known)
     $scope = Get-TvProp $Metadata "Scope"
-    $recorded = Get-TvProp $scope "Included"
+    $recorded = Get-TvMember $scope "Included"
+    $outcomes = Get-TvMember $Metadata "Outcomes"
     $attempted = if (Test-TvJsArray $recorded) { @($recorded | Where-Object { $_ -is [string] }) } else { $script:LegacyFolders }
-    $missing = @()
-    foreach ($field in @("Excluded", "SkippedTypes", "FailedTypes", "AppOnlyExcludedTypes")) {
-        $source = if ($field -eq "Excluded") { Get-TvProp $scope "Excluded" } else { Get-TvProp $Metadata $field }
+    $excluded = Get-TvMember $scope "Excluded"
+    $excluded = if (Test-TvJsArray $excluded) { @($excluded | Where-Object { $_ -is [string] }) } else { @() }
+    $byFolder = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    if (Test-TvJsArray $outcomes) {
+        foreach ($outcome in $outcomes) {
+            $folder = Get-TvProp $outcome "Folder"
+            if ($folder -isnot [string]) { continue }
+            $byFolder[$folder] = if ($byFolder.ContainsKey($folder)) { $null } else { Get-TvProp $outcome "Outcome" }
+        }
+    }
+    $selectedSources = if ((Test-TvJsArray $outcomes) -and -not (Test-TvJsArray $recorded)) { @($byFolder.Keys) } else { @($attempted) + @($byFolder.Keys) }
+    $selected = @($selectedSources | Where-Object { $excluded -cnotcontains $_ } | Select-Object -Unique)
+    $status = Get-TvProp $Metadata "Status"
+    if ($null -eq $status) { $status = Get-TvProp $Metadata "status" }
+    $needsOutcomes = -not (Test-TvUndef $outcomes) -or (Get-TvProp $Metadata "Coverage") -ceq "Incomplete"
+    $failed = Get-TvMember $Metadata "FailedTypes"
+    $failed = if (Test-TvJsArray $failed) { @($failed | Where-Object { $_ -is [string] }) } else { @() }
+    $failures = Get-TvProp $Metadata "Failures"
+    $assigned = @($failed | Where-Object { $selected -ccontains $_ } | Select-Object -Unique).Count
+    $legacyReadFailure = -not $needsOutcomes -and (Test-TvJsNumber $failures) -and $failures -gt $assigned
+    $missing = @($excluded) + @($failed)
+    foreach ($field in @("SkippedTypes", "AppOnlyExcludedTypes")) {
+        $source = Get-TvMember $Metadata $field
         if (Test-TvJsArray $source) { $missing += @($source | Where-Object { $_ -is [string] }) }
     }
-    return , @($Known | Where-Object { $attempted -ccontains $_ -and $missing -cnotcontains $_ })
+    $indexes = Get-TvMember $Metadata "LargeItems"
+    $readable = @()
+    if ([string]$status -notmatch 'fail|^\s*cancelled\s*$') {
+        $readable = @($Known | Where-Object {
+            $index = Get-TvProp $indexes $_
+            $selected -ccontains $_ -and $missing -cnotcontains $_ -and
+                (-not $needsOutcomes -or $byFolder[$_] -cin @("saved", "notConfigured")) -and
+                ($null -eq $index -or ($index.complete -is [bool] -and $index.complete))
+        })
+    }
+    # Match desktop registry order for known types and retain the declarations from other services.
+    $ordered = @($Known | Where-Object { $selected -ccontains $_ }) + @($selected | Where-Object { $Known -cnotcontains $_ })
+    return @{ Selected = $ordered; Readable = $readable; LegacyReadFailure = $legacyReadFailure }
 }
 
 function Test-TvSameItem {
     param([Parameter(Mandatory)][object]$Previous, [Parameter(Mandatory)][object]$Item)
     if ((Get-TvProp $Previous "hash") -ceq (Get-TvProp $Item "hash")) { return $true }
+    $previousLegacyRole = Get-TvProp $Previous "hashWithLegacyRoleAssignments"
+    $legacyRole = Get-TvProp $Item "hashWithLegacyRoleAssignments"
+    if ($null -eq $previousLegacyRole -and $null -ne $legacyRole -and $legacyRole -ceq (Get-TvProp $Previous "hash")) { return $true }
+    if ($null -eq $legacyRole -and $null -ne $previousLegacyRole -and $previousLegacyRole -ceq (Get-TvProp $Item "hash")) { return $true }
     $previousMasked = Get-TvProp $Previous "hashWithMaskedSecrets"
     if (((Get-TvProp $Previous "secretsMasked") -eq $true -or (Get-TvProp $Item "secretsMasked") -eq $true) -and $null -ne $previousMasked) { return $previousMasked -ceq (Get-TvProp $Item "hashWithMaskedSecrets") }
     return $null -eq (Get-TvProp $Previous "hashWithEmptyAssignments") -and $null -ne (Get-TvProp $Item "hashWithEmptyAssignments") -and (Get-TvProp $Previous "hash") -ceq (Get-TvProp $Item "hashWithEmptyAssignments")
@@ -2217,14 +2385,17 @@ function Get-TvBackupDrifts {
     foreach ($type in $Types) { $byFolder[$type.Folder] = $type }
     $before = Get-TvProp $Older.Metadata "Items"
     $after = Get-TvProp $Newer.Metadata "Items"
-    $olderCovered = Get-TvCoveredFolders $Older.Metadata $known
-    $shared = @((Get-TvCoveredFolders $Newer.Metadata $known) | Where-Object { $olderCovered -ccontains $_ })
+    $beforeCoverage = Get-TvBackupReadCoverage $Older.Metadata $known
+    $afterCoverage = Get-TvBackupReadCoverage $Newer.Metadata $known
+    $shared = @($afterCoverage.Readable | Where-Object { $beforeCoverage.Readable -ccontains $_ })
+    $unknown = @($beforeCoverage.Selected + $afterCoverage.Selected | Where-Object { $shared -cnotcontains $_ } | Select-Object -Unique)
+    $ordinary = @($shared | Where-Object { $null -eq (Get-TvProp (Get-TvProp $Older.Metadata "LargeItems") $_) -and $null -eq (Get-TvProp (Get-TvProp $Newer.Metadata "LargeItems") $_) })
     $drifts = [System.Collections.Generic.List[object]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
     $tasks = [System.Collections.Generic.List[object]]::new()
     foreach ($key in (Get-TvKeys $after)) {
         $folder = $key.Substring(0, $key.IndexOf("/"))
-        if ($shared -cnotcontains $folder) { continue }
+        if ($ordinary -cnotcontains $folder) { continue }
         $item = $after[$key]
         $previous = Get-TvProp $before $key
         if ($null -eq $previous) { $tasks.Add(@{ Change = "added"; Folder = $folder; Newer = $item }) }
@@ -2232,7 +2403,7 @@ function Get-TvBackupDrifts {
     }
     foreach ($key in (Get-TvKeys $before)) {
         $folder = $key.Substring(0, $key.IndexOf("/"))
-        if ($shared -ccontains $folder -and $null -eq (Get-TvProp $after $key)) { $tasks.Add(@{ Change = "deleted"; Folder = $folder; Older = $before[$key] }) }
+        if ($ordinary -ccontains $folder -and $null -eq (Get-TvProp $after $key)) { $tasks.Add(@{ Change = "deleted"; Folder = $folder; Older = $before[$key] }) }
     }
     foreach ($task in $tasks) {
         $type = $byFolder[$task.Folder]
@@ -2283,7 +2454,7 @@ function Get-TvBackupDrifts {
         }
         $drifts.Add($entry)
     }
-    return @{ Drifts = $drifts; Warnings = $warnings }
+    return @{ Drifts = $drifts; Warnings = $warnings; UnknownTypes = $unknown; LegacyReadFailure = $beforeCoverage.LegacyReadFailure -or $afterCoverage.LegacyReadFailure }
 }
 
 # ---------------------------------------------------------------------------
@@ -2333,11 +2504,34 @@ function Get-TvReportTitle {
     return "Changes in $($Report.tenantName), $range"
 }
 
+function Get-TvReadCoverageLines {
+    param([Parameter(Mandatory)][object]$Report)
+    if ($Report.comparison.legacyReadFailure) { "An older backup recorded a read failure without identifying the type. Some reported deletions may be policies that failed to read." }
+    if ($Report.comparison.unknownTypes.Count) {
+        $names = $Report.comparison.unknownTypes | ForEach-Object { $_ -creplace '([a-z0-9])([A-Z])', '$1 $2' -creplace '([A-Z])([A-Z][a-z])', '$1 $2' }
+        "Types not compared: $($names -join ', ')."
+    }
+}
+
+function Test-TvExportCoverage {
+    param([Parameter(Mandatory)][object]$Report)
+    return [bool]($Report.comparison.inventory.Count -or $Report.comparison.unknownTypes.Count -or $Report.comparison.legacyReadFailure)
+}
+
 function Get-TvSummaryLine {
-    param([Parameter(Mandatory)][object]$Report, [switch]$Reason)
+    param([Parameter(Mandatory)][object]$Report, [switch]$Reason, [switch]$Export)
     $s = $Report.summary
     $total = $s.added + $s.modified + $s.deleted
-    if ($total -eq 0) { return "No changes between the two backups." }
+    $notes = @()
+    if (-not $Report.comparison) { $notes += "Comparison coverage was not recorded." }
+    elseif ($Report.comparison.ordinary -ne "complete") { $notes += "The ordinary comparison was incomplete." }
+    $notes += @(Get-TvReadCoverageLines $Report)
+    foreach ($entry in @($Report.comparison.inventory | Where-Object { $_ })) {
+        if ($entry.status -ne "complete") { $notes += "$($entry.folder): inventory comparison was not performed." }
+    }
+    if ($Export -and $Report.comparison -and -not (Test-TvExportCoverage $Report)) { $notes = @() }
+    $suffix = if ($notes.Count) { " " + ($notes -join " ") } else { "" }
+    if ($total -eq 0) { if ($notes.Count) { return $notes -join " " }; return "No changes between the two backups." }
     $parts = @()
     if ($s.modified) { $parts += "$($s.modified) changed" }
     if ($s.added) { $parts += "$($s.added) added" }
@@ -2345,10 +2539,21 @@ function Get-TvSummaryLine {
     $text = $parts -join ", "
     if ($Report.audit.status -ne "included") {
         $why = if ($Reason) { Get-TvPublicAuditNote $Report.audit.note } else { $null }
-        if ($why) { return "$text. Who made them is unknown. $why" }
-        return "$text. Who made them is unknown: the audit log could not be read."
+        if ($why) { return "$text. Who made them is unknown. $why$suffix" }
+        return "$text. Who made them is unknown: the audit log could not be read.$suffix"
     }
-    return "$text; $($s.attributed) of $total with matching audit events."
+    return "$text; $($s.attributed) of $total with matching audit events.$suffix"
+}
+
+function Get-TvInventoryLines {
+    param([Parameter(Mandatory)][object]$Report)
+    if (-not $Report.comparison) { return ,@("Comparison coverage was not recorded.") }
+    $lines = @(if (-not $Report.comparison.unknownTypes.Count -or $Report.comparison.ordinary -ne "complete") { "Ordinary comparison: $($Report.comparison.ordinary)." })
+    $lines += @(Get-TvReadCoverageLines $Report)
+    foreach ($entry in @($Report.comparison.inventory | Where-Object { $_ })) {
+        $lines += "$($entry.folder) inventory: comparison was not performed; 0 added, 0 changed, 0 deleted, 0 unchanged (0 examined)."
+    }
+    return ,$lines
 }
 
 function Get-TvReportFileName {
@@ -2467,6 +2672,10 @@ function New-TvChangeReport {
             critical = @($reportItems | Where-Object { $_.severity -eq "critical" }).Count
             attributed = @($reportItems | Where-Object { @($_.activity).Count -gt 0 }).Count
         }
+        comparison = [ordered]@{
+            ordinary = if (@($Drift.warnings).Count) { "incomplete" } else { "complete" }
+            inventory = @($Drift.largeFolders | Where-Object { $_ } | ForEach-Object { [ordered]@{ folder = $_; status = "not-performed"; added = 0; modified = 0; deleted = 0; unchanged = 0; examined = 0 } })
+        }
         items = $reportItems
         otherActivity = @($other | Select-Object -Last $script:MaxOtherActivity)
         moreActivity = [Math]::Max(0, $other.Count - $script:MaxOtherActivity)
@@ -2478,6 +2687,8 @@ function New-TvChangeReport {
         values = [bool]$Options.IncludeValues
         warnings = @($Drift.warnings | Select-Object -First 50)
     }
+    if ($Drift.unknownTypes.Count) { $report.comparison.unknownTypes = @($Drift.unknownTypes) }
+    if ($Drift.legacyReadFailure) { $report.comparison.legacyReadFailure = $true }
     return $report
 }
 
@@ -2507,12 +2718,14 @@ function ConvertTo-TvReportMarkdown {
     $lines.Add("- From backup: $($Report.from.id) ($(Get-TvReportTime $Report.from.timestamp))")
     $lines.Add("- To backup: $($Report.to.id) ($(Get-TvReportTime $Report.to.timestamp))")
     $lines.Add("- Generated: $(Get-TvReportTime $Report.generatedAt)$(if ($Report.trigger -eq 'scheduled') { ' after a scheduled backup' })")
-    $lines.Add("- Summary: $(& $md (Get-TvSummaryLine $Report))")
+    $lines.Add("- Summary: $(& $md (Get-TvSummaryLine $Report -Export))")
     $auditNote = Get-TvPublicAuditNote $Report.audit.note
     if ($auditNote) { $lines.Add("- Audit log: $(& $md $auditNote)") }
     if (-not $Report.values) { $lines.Add("- Setting values are left out of this report.") }
     $lines.Add("")
-    if (@($Report.items).Count -eq 0) { $lines.Add("No items were added, changed or deleted between the two backups."); $lines.Add("") }
+    if (Test-TvExportCoverage $Report) {
+        $lines.Add("## Comparison coverage"); $lines.Add(""); foreach ($line in (Get-TvInventoryLines $Report)) { $lines.Add("- $(Get-TvMarkdownText $line)") }; $lines.Add("")
+    } elseif (-not @($Report.items).Count) { $lines.Add("No items were added, changed or deleted between the two backups."); $lines.Add("") }
     foreach ($change in @("deleted", "modified", "added")) {
         $items = @($Report.items | Where-Object { $_.change -eq $change })
         if (-not $items.Count) { continue }
@@ -2715,7 +2928,7 @@ function ConvertTo-TvReportHtml {
         if (-not $items.Count) { continue }
         $sections += "<section><h2>$(Get-TvHtmlText $script:ChangeLabels[$change]) ($($items.Count))</h2>" + (($items | ForEach-Object { ConvertTo-TvReportItemHtml $_ $Report }) -join "") + "</section>"
     }
-    $empty = if (@($Report.items).Count) { "" } else { '<p class="none">No items were added, changed or deleted between the two backups.</p>' }
+    $empty = if (Test-TvExportCoverage $Report) { '<section><h2>Comparison coverage</h2><ul class="activity">' + (((Get-TvInventoryLines $Report) | ForEach-Object { "<li>$(Get-TvHtmlText $_)</li>" }) -join "") + '</ul></section>' } elseif (@($Report.items).Count) { "" } else { '<p class="none">No items were added, changed or deleted between the two backups.</p>' }
     $other = ""
     if (@($Report.otherActivity).Count) {
         $rows = (@($Report.otherActivity) | ForEach-Object {
@@ -2731,7 +2944,7 @@ function ConvertTo-TvReportHtml {
     $margin = { param($box, $content, $extra) "@$box { content: $content; font-family: $($script:ReportFontStack); font-size: 6.5pt; color: var(--muted); $extra }" }
     $pageBoxes = "@page {`n  $(& $margin 'top-left' (Get-TvCssString $title 90) 'vertical-align: bottom; padding-bottom: 1.6mm; border-bottom: 0.2mm solid var(--rule); width: 130mm; font-weight: 700; color: var(--strong);')`n  $(& $margin 'top-right' (Get-TvCssString $Report.tenantName 40) 'vertical-align: bottom; padding-bottom: 1.6mm; border-bottom: 0.2mm solid var(--rule); width: 50mm; text-align: right;')`n  $(& $margin 'bottom-left' (Get-TvCssString $footer 76) 'vertical-align: top; padding-top: 2.4mm; border-top: 0.2mm solid var(--rule); width: 130mm;')`n  $(& $margin 'bottom-right' '"Page " counter(page) " of " counter(pages)' 'vertical-align: top; padding-top: 2.4mm; border-top: 0.2mm solid var(--rule); width: 50mm; text-align: right;')`n}"
     $head = "<!doctype html><html lang=`"en`"><head><meta charset=`"utf-8`"><meta http-equiv=`"Content-Security-Policy`" content=`"default-src 'none'; style-src 'unsafe-inline'; img-src data:`"><title>$(Get-TvHtmlText $title)</title><style>$($script:ReportRootVariables)$($script:ReportStyle)$pageBoxes</style></head><body>"
-    return "$head`n$header`n$tiles`n<p class=`"lead`">$(Get-TvHtmlText (Get-TvSummaryLine $Report))</p>`n$callouts$empty$sections$other$warnings$provenance`n</body></html>"
+    return "$head`n$header`n$tiles`n<p class=`"lead`">$(Get-TvHtmlText (Get-TvSummaryLine $Report -Export))</p>`n$callouts$empty$sections$other$warnings$provenance`n</body></html>"
 }
 
 # The email summary the watcher sends (mirror reportEmail in src/main/features/reports): the
@@ -2766,6 +2979,23 @@ function Get-TvReportEmail {
         if ($first) { $entry.at = $first.at }
         $entry
     })
+    # The summary is capped by the watcher. Keep coverage in bounded facts as well.
+    $coverage = @(
+        if ($Report.comparison.legacyReadFailure) {
+            [ordered]@{ label = "Comparison coverage"; value = @(Get-TvReadCoverageLines $Report)[0] }
+        }
+        $folders = @($Report.comparison.unknownTypes) + @($Report.comparison.inventory | Where-Object { $_.status -ne "complete" } | ForEach-Object { $_.folder })
+        $line = ""
+        foreach ($folder in @($folders | Where-Object { $_ } | Select-Object -Unique)) {
+            $name = $folder -creplace '([a-z0-9])([A-Z])', '$1 $2' -creplace '([A-Z])([A-Z][a-z])', '$1 $2'
+            if ($line -and ($line.Length + $name.Length + 2) -gt 500) {
+                [ordered]@{ label = "Types not compared"; value = $line }
+                $line = ""
+            }
+            $line = if ($line) { "$line, $name" } else { $name }
+        }
+        if ($line) { [ordered]@{ label = "Types not compared"; value = $line } }
+    )
     return [ordered]@{
         severity = if ($s.deleted -gt 0 -or $s.critical -gt 0) { "warning" } else { "info" }
         title = Get-TvEmailText (Get-TvReportTitle $Report) 400
@@ -2779,7 +3009,7 @@ function Get-TvReportEmail {
             [ordered]@{ label = "Changed"; value = [string]$s.modified },
             [ordered]@{ label = "Added"; value = [string]$s.added },
             [ordered]@{ label = "Deleted"; value = [string]$s.deleted }
-        )
+        ) + $coverage
         items = $items
         moreCount = [Math]::Max(0, @($Report.items).Count - 20)
     }
@@ -3035,25 +3265,32 @@ function Read-TvReportAudit {
     $select = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"
     $filter = [uri]::EscapeDataString("activityDateTime gt $From and activityDateTime le $To and activityOperationType ne 'Get' and activityOperationType ne 'Search'")
     $next = "$script:GraphBeta/deviceManagement/auditEvents?`$select=$select&`$filter=$filter&`$top=200"
+    $start = [uri]$next
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    [void]$seen.Add($start.AbsoluteUri)
     $changes = [System.Collections.Generic.List[object]]::new()
     $pages = 0
     try {
         while ($next -and $pages -lt 200 -and $changes.Count -le 2000) {
             $pages++
             $page = Invoke-TvGraphGet $next $GraphToken
-            foreach ($raw in @(Get-TvProp $page "value")) { $change = ConvertFrom-TvAuditEvent $raw; if ($change) { $changes.Add($change) } }
-            $next = Get-TvProp $page "@odata.nextLink"
+            $next = Test-TvGraphListPage $page $start $seen
+            foreach ($raw in $page["value"]) { $change = ConvertFrom-TvAuditEvent $raw; if ($change) { $changes.Add($change) } }
         }
-    } catch [TvHttpError] {
-        if ($_.Exception.Status -eq 403) { return @{ Error = "Microsoft Graph returned 403 for the Intune audit log. The cloud backup identity needs DeviceManagementApps.Read.All." } }
-        if ($_.Exception.Status -eq 429) { return @{ Error = $script:CloudThrottledNote } }
+    } catch {
+        if ($_.Exception -is [TvHttpError]) {
+            if ($_.Exception.Status -eq 403) { return @{ Error = "Microsoft Graph returned 403 for the Intune audit log. The cloud backup identity needs DeviceManagementApps.Read.All." } }
+            if ($_.Exception.Status -eq 429) { return @{ Error = $script:CloudThrottledNote } }
+        }
         return @{ Error = "The Intune audit log could not be read: $(Get-TvSafeError $_.Exception.Message)" }
     }
     $note = $null
     if ($changes.Count -gt 2000) { $note = "More than 2000 Intune audit events in this window; not all of them were read, so some changes may have no actors." }
     elseif ($next) { $note = "The Intune audit log was not read to the end of this window, so some changes may have no actors." }
     # Unordered pages: the oldest events are kept, so the report still names who started the changes.
-    $kept = @($changes | Sort-Object -Property @{ Expression = { [string]$_.at } } -Stable | Select-Object -First 2000)
+    # Use the original index for ties: Sort-Object -Stable is unavailable in Windows PowerShell 5.1.
+    $indexed = for ($i = 0; $i -lt $changes.Count; $i++) { @{ Change = $changes[$i]; Index = $i } }
+    $kept = @($indexed | Sort-Object -Property @{ Expression = { [string]$_.Change.at } }, @{ Expression = { $_.Index } } | Select-Object -First 2000 | ForEach-Object { $_.Change })
     return @{ Changes = $kept; Note = $note }
 }
 
@@ -3064,6 +3301,29 @@ function Get-TvChangeReportLevel {
     $level = ([string](Get-TvAutomationVariable "TenuVaultChangeReport")).Trim().ToLowerInvariant()
     if ($level -in @("names", "full")) { return $level }
     return "off"
+}
+
+# Directory capture stays desktop-only. Declarations survive even when the large companion
+# is missing or unreadable, so an ordinary cloud comparison cannot claim it compared inventory.
+function Get-TvReportLargeFolders {
+    param([Parameter(Mandatory)][object[]]$Manifests)
+    $folders = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($metadata in $Manifests) {
+        $indexes = Get-TvProp $metadata "LargeItems"
+        if ($indexes -is [System.Collections.IDictionary]) {
+            foreach ($folder in $indexes.Keys) { if ($folder) { [void]$folders.Add([string]$folder) } }
+        }
+        foreach ($outcome in @(Get-TvProp $metadata "LargeBackupOutcomes")) {
+            $folder = Get-TvProp $outcome "Folder"
+            if ($folder -is [string] -and $folder) { [void]$folders.Add($folder) }
+        }
+    }
+    if (-not $folders.Count) {
+        foreach ($metadata in $Manifests) {
+            if (Get-TvProp $metadata "CompanionBackup") { [void]$folders.Add("Large inventory") }
+        }
+    }
+    return ,@($folders | Sort-Object)
 }
 
 function Invoke-TvChangeReport {
@@ -3090,7 +3350,7 @@ function Invoke-TvChangeReport {
         $baseline = Get-TvBackupRef $older.Name $older.Metadata
         $comparison = Get-TvBackupRef $newer.Name $newer.Metadata
         $audit = Read-TvReportAudit $baseline.timestamp $comparison.timestamp $GraphToken
-        $drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; settingNames = $names; baseline = $baseline; comparison = $comparison }
+        $drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; unknownTypes = $compared.UnknownTypes; legacyReadFailure = $compared.LegacyReadFailure; settingNames = $names; baseline = $baseline; comparison = $comparison; largeFolders = (Get-TvReportLargeFolders @($older.Metadata, $newer.Metadata)) }
         $tenantName = Get-TvAutomationVariable "TenuVaultTenantName"
         $options = @{
             TenantId = $Context.TenantId; TenantName = $(if ($tenantName) { [string]$tenantName } else { $Context.TenantId })
@@ -3215,6 +3475,10 @@ function Invoke-TvBackup {
     $counts = [ordered]@{}
     foreach ($type in $types) { $counts[$type.Folder] = 0 }
     $lists = @{}
+    $outcomes = [ordered]@{}
+    foreach ($type in $types) {
+        $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "failed"; Saved = 0; Error = "The backup stopped before this type was read in full." }
+    }
     $skippedTypes = [System.Collections.Generic.List[string]]::new()
     $failedTypes = [System.Collections.Generic.List[string]]::new()
     $failures = 0
@@ -3224,7 +3488,7 @@ function Invoke-TvBackup {
             $listPath = [string]$type.Path
             if ($type.ListQuery) { $listPath += "?" + $type.ListQuery }
             $all = if ($type.Singleton) {
-                $one = Invoke-TvGraphGet $listPath $graphToken
+                $one = Invoke-TvGraphDetail $listPath $graphToken -ValueObject:($type.DetailValueObject -eq $true)
                 Set-TvProp $one "id" $type.Singleton.Id
                 @($one)
             } else { @(Invoke-TvGraphList $listPath $graphToken) }
@@ -3242,18 +3506,29 @@ function Invoke-TvBackup {
             $consecutiveAuth = 0
         } catch [TvHttpError] {
             $status = $_.Exception.Status
-            if ($status -eq 401) { throw }
+            $reason = Get-TvGraphReadError $_.Exception
+            if ($status -eq 401) { throw [TvHttpError]::new($status, $reason) }
             if ($status -in @(401, 403)) {
                 if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row ($status). Check the managed identity's Graph application roles." }
             } else { $consecutiveAuth = 0 }
             if ($status -eq 403 -and $script:OriginalFolders -notcontains $type.Folder) {
                 $skippedTypes.Add([string]$type.Folder)
-                Write-Output "Skipped $($type.Label): access was denied. The managed identity may lack the permission or admin consent."
+                $reason = "Access was denied. The managed identity may lack the permission or admin consent."
+                $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "skipped"; Cause = "permission"; Reason = $reason; Status = $status }
+                Write-Output "Skipped $($type.Label): $reason"
             } else {
                 $failures++
                 $failedTypes.Add([string]$type.Folder)
-                Write-Output "Could not read $($type.Label): $(Get-TvSafeError $_.Exception.Message)"
+                $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "failed"; Saved = 0; Error = $reason; Status = $status }
+                Write-Output "Could not read $($type.Label): $reason"
             }
+        } catch {
+            $consecutiveAuth = 0
+            $failures++
+            $failedTypes.Add([string]$type.Folder)
+            $reason = Get-TvSafeError $_.Exception.Message
+            $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "failed"; Saved = 0; Error = $reason }
+            Write-Output "Could not read $($type.Label): $reason"
         }
     }
 
@@ -3294,6 +3569,12 @@ function Invoke-TvBackup {
                     $body = $detail | ConvertTo-Json -Depth 100
                     Set-TvBlob $storageAccount "$backupFolder/$($type.Folder)/$fileName.json" $body $storageToken
                     $record = [ordered]@{ file = "$fileName.json"; hash = Get-TvSnapshotHash $detail }
+                    if ($type.Folder -ceq "RoleDefinitions") {
+                        $legacyRole = Get-TvRoleAssignmentSnapshot $detail -Legacy
+                        if (-not [object]::ReferenceEquals($legacyRole, $detail)) {
+                            $record.hashWithLegacyRoleAssignments = Get-TvSnapshotHash $legacyRole
+                        }
+                    }
                     if ($type.AssignmentsFormerlyExpanded) {
                         $without = Copy-TvDeep $detail
                         Set-TvProp $without "assignments" @()
@@ -3307,17 +3588,26 @@ function Invoke-TvBackup {
                     }
                     $items["$($type.Folder)/$id"] = $record
                     $counts[$type.Folder]++
-                } catch [TvHttpError] {
-                    if ($_.Exception.Status -eq 401) { throw }
-                    if ($_.Exception.Status -in @(401, 403)) {
-                        if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row. Earlier policies in this run were saved; the backup is incomplete." }
-                    } else { $consecutiveAuth = 0 }
-                    $failures++
-                    Write-Output "Could not back up `"$displayName`": $(Get-TvSafeError $_.Exception.Message)"
                 } catch {
                     $failures++
-                    Write-Output "Could not back up `"$displayName`": $(Get-TvSafeError $_.Exception.Message)"
+                    $reason = Get-TvGraphReadError $_.Exception
+                    if (-not $failedTypes.Contains([string]$type.Folder)) {
+                        $failedTypes.Add([string]$type.Folder)
+                        $outcomes[$type.Folder].Error = $reason
+                        if ($_.Exception -is [TvHttpError]) { $outcomes[$type.Folder].Status = $_.Exception.Status }
+                    }
+                    if ($_.Exception -is [TvHttpError]) {
+                        if ($_.Exception.Status -eq 401) { throw [TvHttpError]::new(401, $reason) }
+                        if ($_.Exception.Status -eq 403) {
+                            if (++$consecutiveAuth -ge 5) { throw "Backup stopped: Microsoft Graph refused five reads in a row. Earlier policies in this run were saved; the backup is incomplete." }
+                        } else { $consecutiveAuth = 0 }
+                    }
+                    Write-Output "Could not back up $($type.Label): $reason"
                 }
+                $outcomes[$type.Folder].Saved = $counts[$type.Folder]
+            }
+            if (-not $failedTypes.Contains([string]$type.Folder)) {
+                $outcomes[$type.Folder] = [ordered]@{ Folder = $type.Folder; Outcome = "saved"; Saved = $counts[$type.Folder] }
             }
             if ($list.Items.Count) { Write-Output "Backed up $($counts[$type.Folder]) $($type.Label)." }
         }
@@ -3357,6 +3647,8 @@ function Invoke-TvBackup {
             Failures       = $failures
             SkippedTypes   = @($skippedTypes)
             FailedTypes    = @($failedTypes)
+            Outcomes       = @($outcomes.Values)
+            Coverage       = if ($failedTypes.Count -or $skippedTypes.Count) { "Incomplete" } else { "Complete" }
             AuthMode       = "app-only"
         }
         if ($notReadable.Count) { $metadata.AppOnlyExcludedTypes = $notReadable }
@@ -3367,11 +3659,10 @@ function Invoke-TvBackup {
         Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
-        # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
-        # items a backup with warnings could not read would show up as deleted.
+        # Automatic reports run after a successful backup, like scheduled desktop reports.
         # The report is optional: nothing it does may change the backup's result.
         if ($status -eq "Success") {
-            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $types -GraphToken $graphToken -RunId $runId -RunTrigger $runTrigger }
+            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $allTypes -GraphToken $graphToken -RunId $runId -RunTrigger $runTrigger }
             catch { Write-Output "No change report was made: $(Get-TvSafeError $_.Exception.Message)" }
         } else {
             try { if ((Get-TvChangeReportLevel) -ne "off") { Write-Output "No change report: the backup completed with warnings." } } catch { }
@@ -3398,6 +3689,7 @@ function Invoke-TvBackup {
                 Source = "TenuVault Cloud Backup"; TenantId = $tenantId.ToLowerInvariant(); Trigger = $runTrigger; RunId = $runId
                 Scope = [ordered]@{ Excluded = $excluded; Included = @($types | ForEach-Object { $_.Folder }) }
                 Failures = [Math]::Max(1, $failures); SkippedTypes = @($skippedTypes); FailedTypes = @($failedTypes)
+                Outcomes = @($outcomes.Values); Coverage = "Incomplete"
                 AuthMode = "app-only"; Items = $sortedItems; Error = $reason
             }
             if ($notReadable.Count) { $failed.AppOnlyExcludedTypes = $notReadable }

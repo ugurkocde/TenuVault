@@ -1,4 +1,4 @@
-import { Sparkles } from "lucide-react"
+import { NoticeCard } from "./NoticeCard"
 import { cn } from "~/lib/utils"
 import { FEATURE_PLAN, planLabel, upgradeMessage, type Feature } from "../../shared/plans"
 import { PlanPromptButton } from "./PlanPromptButton"
@@ -10,13 +10,8 @@ import { PlanPromptButton } from "./PlanPromptButton"
  * prompt acts on when it is not the selected tenant, such as a restore destination.
  */
 export function UpgradeNote({ feature, message, className, tenantId }: { feature: Feature; message?: string; className?: string; tenantId?: string | null }) {
-  return (
-    <div className={cn("flex flex-wrap items-center gap-3 rounded-3xl bg-blue-50/60 px-5 py-4 text-sm text-gray-700", className)}>
-      <Sparkles className="h-4 w-4 flex-shrink-0 text-coral-600" aria-hidden="true" />
-      <p className="min-w-0 flex-1">{message ?? upgradeMessage(feature)}</p>
-      <PlanPromptButton plan={FEATURE_PLAN[feature]} source={`note-${feature.toLowerCase()}`} variant="outline" size="sm" tenantId={tenantId} />
-    </div>
-  )
+  return <NoticeCard className={className} summary={message ?? upgradeMessage(feature)}
+    action={<PlanPromptButton plan={FEATURE_PLAN[feature]} source={`note-${feature.toLowerCase()}`} variant="outline" size="sm" tenantId={tenantId} />} />
 }
 
 /**

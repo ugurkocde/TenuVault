@@ -24,10 +24,14 @@ import { kitLevelForPolicy } from "../../shared/frameworks/cis-flow"
 import { MAX_DEFINITIONS } from "../../shared/intune/drift-format"
 import { readSettingNames } from "../../portal/lib/drift/setting-names"
 import { graphCaller } from "../../portal/lib/policies/graph-restore"
+import { typeForFolder } from "../../shared/intune/registry"
+import { writeBlocker } from "../../shared/intune/restore-plan"
 import { CIS_POLICIES_NOT_DELIVERED, isDeliveredSubset, withDeliveredPack } from "./cis-delivered"
 
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
+/** The registry type of the policies this service creates at GRAPH. */
+export const CREATED_FOLDER = "ConfigurationPolicies"
 interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint: string; expires: number; consumed: boolean }
 const runs = new Map<string, Run>()
 const WRITE_LABEL = "Framework policy creation"
@@ -797,6 +801,9 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     return assessment
   }
   if (body.action !== "create") throw new FrameworkError("Unknown framework action.")
+  // This path builds its own requests for one type, so it asks the type's restore capability like every other writer.
+  const refused = writeBlocker(typeForFolder(CREATED_FOLDER)!, "create")
+  if (refused) throw new FrameworkError(refused)
   return withTenantWrite(tenant, WRITE_LABEL, async () => {
     const run = typeof body.runId === "string" ? runs.get(body.runId) : undefined
     if (!run || run.assessment.tenantId !== tenant || run.consumed) throw new FrameworkError("This assessment has expired or was already used. Run comparison again.", 409)

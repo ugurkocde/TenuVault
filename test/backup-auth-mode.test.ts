@@ -1,4 +1,3 @@
-import { withBackupServerTime } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -9,9 +8,10 @@ import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { localStorageAccountName } from "../src/shared/constants"
-import { BackupReaderError } from "../src/main/auth/backup-reader"
+import { BackupReaderError, BackupReaderService } from "../src/main/auth/backup-reader"
+import { SecureStore } from "../src/main/storage/secure-store"
 import { BackupScheduler, scheduledResult } from "../src/main/backup/scheduler"
-import { memoryStore } from "./helpers"
+import { memoryStore, withServerDate } from "./helpers"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -31,11 +31,11 @@ function setup(options: { reader?: boolean; storageAccountName?: string; retenti
     if (url.hostname === "graph.microsoft.com") {
       graphAuth.push(request.headers.get("authorization") ?? "")
       await gate
-      return withBackupServerTime(Response.json({ value: [] }), new Date())
+      return withServerDate(Response.json({ value: [] }), new Date())
     }
     if (url.hostname.endsWith(".blob.core.windows.net")) {
       blobMethods.push(`${request.method} ${url.search}`)
-      return new Response(null, { status: 201 })
+      return withServerDate(new Response(null, { status: 201 }), new Date())
     }
     throw new Error(`unexpected ${url}`)
   }) as unknown as typeof fetch
@@ -174,7 +174,7 @@ describe("Backup Reader credential failures", () => {
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
         if (localAccountFromUrl(new URL(request.url))) return handleLocalBlobRequest(store, request)
-        return withBackupServerTime(Response.json({ value: [] }), new Date())
+        return Response.json({ value: [] })
       }) as typeof fetch,
       getToken: async () => "admin",
       unattendedTokens: () => reader(failure),
@@ -212,5 +212,53 @@ describe("Backup Reader credential failures", () => {
     now = new Date(now.getTime() + 24 * 60 * 60_000)
     await scheduler.tick()
     expect(runs).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("a Backup Reader whose role was removed after it was verified", () => {
+  const READER = "44444444-4444-4444-4444-444444444444"
+  const INTUNE = ["DeviceManagementApps.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceManagementRBAC.Read.All", "DeviceManagementScripts.Read.All", "DeviceManagementServiceConfig.Read.All"]
+  const DEVICE_INVENTORY_ROLE = "DeviceManagementManagedDevices.Read.All"
+  const jwt = (claims: Record<string, unknown>) => `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`
+
+  it("runs the scheduled backup without asking Microsoft Graph for the types that role read, and records them as left out", async () => {
+    let roles = [...INTUNE, DEVICE_INVENTORY_ROLE]
+    const cipher = { encrypt: (value: string) => Buffer.from(value), decrypt: (value: Buffer) => value.toString("utf8") }
+    const reader = new BackupReaderService(new SecureStore(join(mkdtempSync(join(tmpdir(), "tv-reader-roles-")), "store.enc"), cipher), {
+      acquire: async (_app, scope) => ({ accessToken: jwt({ aud: scope.includes("storage") ? "https://storage.azure.com" : "https://graph.microsoft.com", tid: TENANT, appid: READER, idtyp: "app", ...(scope.includes("storage") ? {} : { roles }) }) }),
+      services: () => ({ services: ["intune"] }),
+    })
+    reader.prepare(TENANT, "LAPTOP-1")
+    await reader.verify(TENANT, READER)
+    // An Entra administrator takes the device inventory permission off the app registration.
+    roles = INTUNE
+
+    const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-reader-roles-")), [randomBytes(32)])
+    const graphPaths: string[] = []
+    const engine = new BackupEngine({
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+        graphPaths.push(url.pathname)
+        // Microsoft Graph refuses what the removed permission read.
+        if (/deviceCategories|managedDeviceCleanupRules/.test(url.pathname)) return Response.json({ error: { code: "Forbidden", message: "Forbidden" } }, { status: 403 })
+        return Response.json({ value: [] })
+      }) as typeof fetch,
+      getToken: async () => "admin",
+      unattendedTokens: (request) => reader.tokens(request),
+      services: () => ({ services: ["intune"] }),
+    })
+    const scope = { excluded: INTUNE_TYPES.filter((type) => !["DeviceConfigurations", "DeviceCategories", "DeviceCleanupRules"].includes(type.folder)).map((type) => type.folder) }
+    const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: localStorageAccountName(TENANT), scope, trigger: "scheduled" }))
+
+    expect(job.status).toBe("Completed")
+    expect(job.authMode).toBe("app-only")
+    expect(job.failures).toBe(0)
+    expect(graphPaths).toEqual(["/beta/deviceManagement/deviceConfigurations"])
+    expect(job.results!.types.map((type) => [type.folder, type.state])).toEqual([["DeviceConfigurations", "empty"], ["DeviceCategories", "skipped"], ["DeviceCleanupRules", "skipped"]])
+    expect(job.log.join("\n")).toContain("Leaving out 2 types the Backup Reader has no permission for: DeviceCategories, DeviceCleanupRules. Manual backups include them.")
+    // The removal is on the Backup Reader card, with the types it now leaves out.
+    expect(reader.status(TENANT)).toMatchObject({ roleChange: { added: [], removed: [DEVICE_INVENTORY_ROLE] }, excludedTypes: ["DeviceCategories", "DeviceCleanupRules"] })
   })
 })

@@ -27,10 +27,11 @@ import {
   waitForLocalRetentionGuardRegistration,
   type ProcessInfoReader,
 } from "../src/main/storage/local-blob-store"
+import { LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
-import { withBackupServerTime } from "./helpers"
+import { withServerDate } from "./helpers"
 
 vi.mock("node:fs/promises", async original => {
   const actual = await original<typeof import("node:fs/promises")>()
@@ -86,13 +87,11 @@ describe("local retention lock races and ownership checks", () => {
 
       const liveLock = JSON.stringify({ id: "live-other-id", host: hostname(), pid: process.pid, processStart: "live-start", app: "TenuVault" })
       vi.mocked(fsPromises.rename).mockImplementationOnce(async (from, to) => {
-        // Between observing stale-id and renaming lockPath, another reclaimer replaced lockPath with its live lock.
         writeFileSync(lockPath, liveLock)
         return actual.rename(from, to)
       })
 
       await expect(store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
-      // Live lock was restored via link and aside file was cleaned up.
       expect(readFileSync(lockPath, "utf8")).toBe(liveLock)
       expect(readdirSync(dir).filter(f => f.includes(".stale"))).toEqual([])
     }
@@ -112,12 +111,10 @@ describe("local retention lock races and ownership checks", () => {
       vi.mocked(fsPromises.rename).mockImplementationOnce(async (from, to) => {
         writeFileSync(lockPath, liveLock)
         await actual.rename(from, to)
-        // Third instance occupies lockPath before link(aside, lockPath) runs.
         writeFileSync(lockPath, thirdLock)
       })
 
       await expect(store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toThrow(/kept at .*\.stale/)
-      // Third lock remains intact at lockPath AND live-b's lock is preserved in the aside file (never unlinked).
       expect(readFileSync(lockPath, "utf8")).toBe(thirdLock)
       const staleFiles = readdirSync(dir).filter(f => f.includes(".stale"))
       expect(staleFiles).toHaveLength(1)
@@ -182,7 +179,6 @@ describe("local retention lock races and ownership checks", () => {
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const lockPath = join(dir, ".tenuvault-retention.lock")
 
-    // Direct store.delete refuses when retentionLockId does not match the current lock file.
     const old1 = "backup-2026-08-02-020000/"
     const old2 = "backup-2026-08-01-020000/"
     for (const prefix of [old1, old2]) {
@@ -192,23 +188,19 @@ describe("local retention lock races and ownership checks", () => {
     }
     const blob = (await store.get(ACCOUNT, BACKUP_CONTAINER, `${old1}metadata.json`)).blob
     const heldId = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
-    // Simulate lock replaced by another holder before delete.
     writeFileSync(lockPath, JSON.stringify({ id: "another-holder", host: hostname(), pid: process.pid, processStart: "other", app: "TenuVault" }))
     await expect(store.delete(ACCOUNT, BACKUP_CONTAINER, `${old1}metadata.json`, { ifMatch: blob.etag, retentionLockId: heldId }))
       .rejects.toBeInstanceOf(BlobLeaseConflictError)
-    // Blob was NOT renamed or removed.
     expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old1)).map(b => b.name)).toContain(`${old1}metadata.json`)
     expect(readdirSync(dir).some(f => f.startsWith(".retired-"))).toBe(false)
     rmSync(lockPath, { force: true })
 
-    // End-to-end retention: lock disappears right before the first DELETE of old1 ->
-    // old1 is untouched, outer plan loop exits, and old2 is also untouched.
     let tamperOnce = false
     const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
     const fetchImpl: typeof fetch = async (input, init) => {
       const req = new Request(input, init)
       const url = new URL(req.url)
-      if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), NOW)
+      if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
       if (req.method === "DELETE" && !tamperOnce) {
         tamperOnce = true
         expect(existsSync(lockPath)).toBe(true)
@@ -239,21 +231,18 @@ describe("local retention lock races and ownership checks", () => {
 
     const lockId = await storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [repPrefix])
     try {
-      // Both storeA and a separate LocalBlobStore instance storeB are blocked from mutating the protected prefix.
       await expect(storeA.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json"))
         .rejects.toBeInstanceOf(BlobProtectedError)
       await expect(storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}DeviceConfigurations/new.json`, Buffer.from("{}"), "application/json"))
         .rejects.toBeInstanceOf(BlobProtectedError)
       await expect(storeB.delete(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`))
         .rejects.toBeInstanceOf(BlobProtectedError)
-      // Unprotected prefixes can still be deleted with the lock.
       await expect(storeA.delete(ACCOUNT, BACKUP_CONTAINER, `${otherPrefix}metadata.json`, { retentionLockId: lockId }))
         .resolves.toBeUndefined()
     } finally {
       await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
     }
 
-    // Once released, writes to the previously protected prefix succeed again.
     await expect(storeB.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json"))
       .resolves.toBeDefined()
   })
@@ -276,7 +265,6 @@ async function seedOldLocalBackup(store: LocalBlobStore, prefix: string): Promis
 
 describe("round 4 local retention lock hardening", () => {
   it("P1: reads win32 and darwin process start tokens with explicit kinds, detects PID reuse, and preserves matching live holders", async () => {
-    // Win32 reader via injected execFile (no real PowerShell).
     const winCalls: Array<{ file: string; args: string[]; timeout?: number }> = []
     const winReader = createProcessInfoReader({
       platform: "win32",
@@ -296,16 +284,14 @@ describe("round 4 local retention lock hardening", () => {
     expect(winCalls[0]!.timeout).toBeGreaterThan(0)
 
     const rootWin = mkdtempSync(join(tmpdir(), "tv-lock-win32-")); roots.push(rootWin)
-    const winStore = new LocalBlobStore(rootWin, [MASTER], undefined, winReader)
+    const winStore = new LocalBlobStore(rootWin, [MASTER], undefined, undefined, winReader)
     await winStore.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const winLockPath = join(rootWin, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
 
-    // Holder records wmi: token matching what it reads for others.
     const heldWin = await winStore.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
     expect(JSON.parse(readFileSync(winLockPath, "utf8")).processStart).toBe("wmi:2026-11-27T11:00:00.000Z")
     await winStore.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, heldWin)
 
-    // PID reuse on win32 (same kind wmi:, different timestamp) -> reclaimed.
     writeFileSync(winLockPath, JSON.stringify({
       id: "win-reused", host: hostname(), pid: 4242, processStart: "wmi:2026-11-27T08:00:00.000Z", app: "TenuVault",
     }))
@@ -313,7 +299,6 @@ describe("round 4 local retention lock hardening", () => {
     expect(JSON.parse(readFileSync(winLockPath, "utf8")).id).toBe(reclaimedWin)
     await winStore.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, reclaimedWin)
 
-    // Matching wmi: start -> stays temporary "another instance" conflict with holderId.
     writeFileSync(winLockPath, JSON.stringify({
       id: "win-live", host: hostname(), pid: 4242, processStart: "wmi:2026-11-27T10:00:00.123Z", app: "TenuVault",
     }))
@@ -324,7 +309,6 @@ describe("round 4 local retention lock hardening", () => {
       message: expect.stringContaining("Another TenuVault instance"),
     })
 
-    // Darwin reader via injected execFile (no real ps).
     const darwinCalls: Array<{ file: string; args: string[]; env?: NodeJS.ProcessEnv }> = []
     const darwinReader = createProcessInfoReader({
       platform: "darwin",
@@ -344,11 +328,10 @@ describe("round 4 local retention lock hardening", () => {
     expect(darwinCalls[0]!.env?.LC_ALL).toBe("C")
 
     const rootMac = mkdtempSync(join(tmpdir(), "tv-lock-darwin-")); roots.push(rootMac)
-    const macStore = new LocalBlobStore(rootMac, [MASTER], undefined, darwinReader)
+    const macStore = new LocalBlobStore(rootMac, [MASTER], undefined, undefined, darwinReader)
     await macStore.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const macLockPath = join(rootMac, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
 
-    // PID reuse on darwin -> reclaimed.
     writeFileSync(macLockPath, JSON.stringify({
       id: "mac-reused", host: hostname(), pid: 5151, processStart: "ps:1700000000", app: "TenuVault",
     }))
@@ -358,13 +341,12 @@ describe("round 4 local retention lock hardening", () => {
   })
 
   it("P1 & P3.1: unobservable start or token kind mismatch warns with lockPath, never reclaims, escalates after 3 runs, and leaves backups/restores working", async () => {
-    // (a) Token kind mismatch (recorded wmi:, observed proc:) -> manual warning, NOT stale.
     const rootMismatch = mkdtempSync(join(tmpdir(), "tv-lock-kind-mismatch-")); roots.push(rootMismatch)
     const linuxReader: ProcessInfoReader = {
       isPidAlive: () => true,
       readProcessStart: async () => "proc:boot-1:99999",
     }
-    const mismatchStore = new LocalBlobStore(rootMismatch, [MASTER], undefined, linuxReader)
+    const mismatchStore = new LocalBlobStore(rootMismatch, [MASTER], undefined, undefined, linuxReader)
     await mismatchStore.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const mismatchLockPath = join(rootMismatch, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
     const wmiLock = JSON.stringify({
@@ -378,7 +360,6 @@ describe("round 4 local retention lock hardening", () => {
     })
     expect(readFileSync(mismatchLockPath, "utf8")).toBe(wmiLock)
 
-    // (b) Command failure / timeout (unobservable start) -> manual warning naming lockPath, escalates on 3rd consecutive run.
     const rootUnobs = mkdtempSync(join(tmpdir(), "tv-lock-unobservable-")); roots.push(rootUnobs)
     const failingReader = createProcessInfoReader({
       platform: "win32",
@@ -389,7 +370,7 @@ describe("round 4 local retention lock hardening", () => {
         throw err
       },
     })
-    const store = new LocalBlobStore(rootUnobs, [MASTER], undefined, failingReader)
+    const store = new LocalBlobStore(rootUnobs, [MASTER], undefined, undefined, failingReader)
     await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const oldPrefix = "backup-2026-08-01-020000/"
     await seedOldLocalBackup(store, oldPrefix)
@@ -406,7 +387,7 @@ describe("round 4 local retention lock hardening", () => {
       const req = new Request(input, init)
       const url = new URL(req.url)
       if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, req)
-      return withBackupServerTime(Response.json({ value: [] }), clock)
+      return withServerDate(Response.json({ value: [] }), clock)
     }
     const runOnce = async () => {
       const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress: progress, now: () => clock })
@@ -426,7 +407,6 @@ describe("round 4 local retention lock hardening", () => {
     const run3 = await runOnce()
     expect(run3.log.join("\n")).toContain("3 consecutive runs")
     expect(run3.log.join("\n")).toContain(lockPath)
-    // Lock file was not deleted automatically; backups and restores still work.
     expect(readFileSync(lockPath, "utf8")).toBe(stuckLock)
     const restored = await store.get(ACCOUNT, BACKUP_CONTAINER, `${oldPrefix}metadata.json`)
     expect(restored.data.length).toBeGreaterThan(0)
@@ -438,7 +418,7 @@ describe("round 4 local retention lock hardening", () => {
       isPidAlive: () => true,
       readProcessStart: async () => "proc:boot-live:12345",
     }
-    const store = new LocalBlobStore(root, [MASTER], undefined, liveReader)
+    const store = new LocalBlobStore(root, [MASTER], undefined, undefined, liveReader)
     await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
     await seedOldLocalBackup(store, "backup-2026-08-01-020000/")
     const lockPath = join(root, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
@@ -453,7 +433,7 @@ describe("round 4 local retention lock hardening", () => {
       const req = new Request(input, init)
       const url = new URL(req.url)
       if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, req)
-      return withBackupServerTime(Response.json({ value: [] }), clock)
+      return withServerDate(Response.json({ value: [] }), clock)
     }
     const runOnce = async () => {
       const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, retentionProgress: progress, now: () => clock })
@@ -482,7 +462,6 @@ describe("round 4 local retention lock hardening", () => {
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const lockPath = join(dir, ".tenuvault-retention.lock")
 
-    // (a) Atomic creation: open is never called with "wx" on lockPath directly; link publishes a complete JSON temp file.
     vi.mocked(fsPromises.open).mockClear()
     vi.mocked(fsPromises.link).mockClear()
     let linkedPayload = ""
@@ -497,7 +476,6 @@ describe("round 4 local retention lock hardening", () => {
     expect(readdirSync(dir).filter(f => f.endsWith(".tmp"))).toEqual([])
     await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, atomicId)
 
-    // (b) Unparseable lock re-read once after a short delay: recovers when the lock becomes absent/valid before second read.
     writeFileSync(lockPath, "")
     let readCount = 0
     vi.mocked(fsPromises.readFile).mockImplementation((async (p: Parameters<typeof fsPromises.readFile>[0], options?: Parameters<typeof fsPromises.readFile>[1]) => {
@@ -518,7 +496,6 @@ describe("round 4 local retention lock hardening", () => {
       vi.mocked(fsPromises.readFile).mockImplementation(actual.readFile)
     }
 
-    // Permanently unparseable lock -> re-reads once then warns with lockPath.
     writeFileSync(lockPath, "{broken")
     let brokenReads = 0
     vi.mocked(fsPromises.readFile).mockImplementation((async (p: Parameters<typeof fsPromises.readFile>[0], options?: Parameters<typeof fsPromises.readFile>[1]) => {
@@ -537,7 +514,6 @@ describe("round 4 local retention lock hardening", () => {
     }
     rmSync(lockPath, { force: true })
 
-    // (c) Legacy 0.5.3 lock: expired -> reclaimed via aside-and-verify; unexpired -> warns with lockPath.
     writeFileSync(lockPath, JSON.stringify({ id: "legacy-expired", pid: process.pid, durationMs: 60_000, expiresAt: Date.now() - 10_000 }))
     const reclaimedLegacy = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
     expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(reclaimedLegacy)
@@ -563,7 +539,6 @@ describe("round 4 local retention lock hardening", () => {
     const tvbFile = readdirSync(dir).find(f => f.endsWith(".tvb"))!
     expect(tvbFile).toBeTruthy()
 
-    // Simulate an aged quarantine folder holding a file under repPrefix.
     const retiredDir = join(dir, ".retired-test123")
     mkdirSync(retiredDir)
     renameSync(join(dir, tvbFile), join(retiredDir, tvbFile))
@@ -573,7 +548,6 @@ describe("round 4 local retention lock hardening", () => {
     utimesSync(stampPath, oldTime, oldTime)
     utimesSync(retiredDir, oldTime, oldTime)
 
-    // While repPrefix is protected, listing/recovery must NOT link the retired file back into the live folder.
     const lockId = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [repPrefix])
     try {
       await store.list(ACCOUNT, BACKUP_CONTAINER)
@@ -583,7 +557,6 @@ describe("round 4 local retention lock hardening", () => {
       await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
     }
 
-    // After protection is released, the next listing retries recovery and restores the file.
     const listedAfter = await store.list(ACCOUNT, BACKUP_CONTAINER)
     expect(existsSync(join(dir, tvbFile))).toBe(true)
     expect(existsSync(retiredDir)).toBe(false)
@@ -599,7 +572,6 @@ describe("round 4 local retention lock hardening", () => {
     const repPrefix = "backup-2026-10-12-120000/"
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":1}'), "application/json")
 
-    // (a) First release attempt fails transiently, second succeeds -> lock removed and guard cleared.
     let releaseAttempts = 0
     const retryWriter = new BlobWriter(async (input, init) => {
       const req = new Request(input, init)
@@ -609,16 +581,15 @@ describe("round 4 local retention lock hardening", () => {
       }
       return handleLocalBlobRequest(store, req)
     }, ACCOUNT, async () => "token")
-    const retryLockId = await retryWriter.acquireContainerLease([repPrefix])
+    const retryLockId = await retryWriter.acquireContainerLease(BACKUP_CONTAINER, [repPrefix])
     await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json"))
       .rejects.toBeInstanceOf(BlobProtectedError)
-    await retryWriter.releaseContainerLease(retryLockId)
+    await retryWriter.releaseContainerLease(retryLockId, BACKUP_CONTAINER)
     expect(releaseAttempts).toBe(2)
     expect(existsSync(lockPath)).toBe(false)
     await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":2}'), "application/json"))
       .resolves.toBeDefined()
 
-    // (b) All release attempts fail before store.releaseRetentionLock runs -> in-process guard is STILL cleared in finally.
     let failedReleaseAttempts = 0
     const failingWriter = new BlobWriter(async (input, init) => {
       const req = new Request(input, init)
@@ -628,18 +599,16 @@ describe("round 4 local retention lock hardening", () => {
       }
       return handleLocalBlobRequest(store, req)
     }, ACCOUNT, async () => "token")
-    const leakLockId = await failingWriter.acquireContainerLease([repPrefix])
+    const leakLockId = await failingWriter.acquireContainerLease(BACKUP_CONTAINER, [repPrefix])
     await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":3}'), "application/json"))
       .rejects.toBeInstanceOf(BlobProtectedError)
-    await expect(failingWriter.releaseContainerLease(leakLockId)).rejects.toThrow(/Simulated release timeout/)
+    await expect(failingWriter.releaseContainerLease(leakLockId, BACKUP_CONTAINER)).rejects.toThrow(/Simulated release timeout/)
     expect(failedReleaseAttempts).toBe(2)
-    // Store release never ran, so lock file is still on disk, yet the in-process guard was cleared.
     expect(existsSync(lockPath)).toBe(true)
     await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}metadata.json`, Buffer.from('{"v":3}'), "application/json"))
       .resolves.toBeDefined()
     rmSync(lockPath, { force: true })
 
-    // (c) End-to-end retention: even if storage release fails on both attempts, the replacement prefix is not stuck guarded.
     await seedOldLocalBackup(store, "backup-2026-08-01-020000/")
     let engineReleaseAttempts = 0
     const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
@@ -647,7 +616,7 @@ describe("round 4 local retention lock hardening", () => {
       fetch: async (input, init) => {
         const req = new Request(input, init)
         const url = new URL(req.url)
-        if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), NOW)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
         if (req.headers.get("x-ms-lease-action") === "release") {
           engineReleaseAttempts++
           throw new Error("Release aborted before store")
@@ -706,7 +675,7 @@ describe("round 5 CodeRabbit fixes", () => {
       return pendingEmulator
     }, ACCOUNT, async () => "token", network)
 
-    const acquirePromise = writer.acquireContainerLease([repPrefix])
+    const acquirePromise = writer.acquireContainerLease(BACKUP_CONTAINER, [repPrefix])
     await published
     // Lock file was published on disk, while the store is still paused before registering the write guard.
     expect(existsSync(lockPath)).toBe(true)
@@ -738,7 +707,7 @@ describe("round 5 CodeRabbit fixes", () => {
       isPidAlive: () => alive,
       readProcessStart: async () => observed,
     }
-    const store = new LocalBlobStore(root, [MASTER], undefined, reader)
+    const store = new LocalBlobStore(root, [MASTER], undefined, undefined, reader)
     await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const lockPath = join(root, ACCOUNT, BACKUP_CONTAINER, ".tenuvault-retention.lock")
 
@@ -1005,7 +974,6 @@ describe("round 5 CodeRabbit fixes", () => {
   })
 })
 
-
 describe("round 5b reclaim gate", () => {
   const STALE_PID = 4321
 
@@ -1030,7 +998,7 @@ describe("round 5b reclaim gate", () => {
   it("4721713622 and 4721717681: a delayed reclaimer that judged the old stale lock never moves the new holder's live lock", async () => {
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
     const root = mkdtempSync(join(tmpdir(), "tv-reclaim-gate-")); roots.push(root)
-    const first = new LocalBlobStore(root, [MASTER], undefined, reuseReader())
+    const first = new LocalBlobStore(root, [MASTER], undefined, undefined, reuseReader())
     await first.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const lockPath = join(dir, ".tenuvault-retention.lock")
@@ -1041,7 +1009,7 @@ describe("round 5b reclaim gate", () => {
     const reachedPromise = new Promise<void>(resolve => { reached = resolve })
     let resume!: () => void
     const wait = new Promise<void>(resolve => { resume = resolve })
-    const delayed = new LocalBlobStore(root, [MASTER], undefined, reuseReader({ wait, reached }))
+    const delayed = new LocalBlobStore(root, [MASTER], undefined, undefined, reuseReader({ wait, reached }))
     const delayedAcquire = delayed.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
     // Attach a handler now; asserted below.
     const delayedOutcome = delayedAcquire.then(id => ({ id }), (error: unknown) => ({ error }))
@@ -1070,7 +1038,7 @@ describe("round 5b reclaim gate", () => {
       expect(existsSync(`${lockPath}.reclaim`)).toBe(false)
 
       // A third instance still gets a conflict while N holds the lock.
-      const third = new LocalBlobStore(root, [MASTER], undefined, reuseReader())
+      const third = new LocalBlobStore(root, [MASTER], undefined, undefined, reuseReader())
       await expect(third.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
       expect(lockRenames).toBe(0)
     } finally {
@@ -1082,7 +1050,7 @@ describe("round 5b reclaim gate", () => {
   it("4721740763: a holder past its ownership check keeps the lock while a delayed reclaimer and a third instance are refused", async () => {
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
     const root = mkdtempSync(join(tmpdir(), "tv-reclaim-gate-delete-")); roots.push(root)
-    const holder = new LocalBlobStore(root, [MASTER], undefined, reuseReader())
+    const holder = new LocalBlobStore(root, [MASTER], undefined, undefined, reuseReader())
     await holder.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const lockPath = join(dir, ".tenuvault-retention.lock")
@@ -1097,7 +1065,7 @@ describe("round 5b reclaim gate", () => {
     const reachedPromise = new Promise<void>(resolve => { reached = resolve })
     let resume!: () => void
     const wait = new Promise<void>(resolve => { resume = resolve })
-    const delayed = new LocalBlobStore(root, [MASTER], undefined, reuseReader({ wait, reached }))
+    const delayed = new LocalBlobStore(root, [MASTER], undefined, undefined, reuseReader({ wait, reached }))
     const delayedOutcome = delayed.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
       .then(id => ({ id }), (error: unknown) => ({ error }))
     await reachedPromise
@@ -1132,7 +1100,7 @@ describe("round 5b reclaim gate", () => {
       expect(JSON.parse(readFileSync(lockPath, "utf8")).id).toBe(holderId)
 
       // No third instance can acquire and overlap N's in-flight delete.
-      const third = new LocalBlobStore(root, [MASTER], undefined, reuseReader())
+      const third = new LocalBlobStore(root, [MASTER], undefined, undefined, reuseReader())
       await expect(third.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)).rejects.toBeInstanceOf(BlobLeaseConflictError)
 
       allowRename()
@@ -1228,7 +1196,7 @@ describe("round 5b reclaim gate", () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       const req = new Request(input, init)
       const url = new URL(req.url)
-      if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), NOW)
+      if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
       return handleLocalBlobRequest(store, req)
     }
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => NOW })
@@ -1244,7 +1212,7 @@ describe("round 5b reclaim gate", () => {
     await finished
     expect(job.status).toBe("Completed")
     // The replacement changed before deletion, so the expired candidate is preserved.
-    expect(job.log.join("\n")).toContain("changed before deletion")
+    expect(job.log.join("\n")).toContain("changed before cleanup completed")
     expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old)).map(b => b.name)).toContain(`${old}metadata.json`)
   }, 30_000)
 })
@@ -1266,8 +1234,6 @@ describe("round 6 findings", () => {
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${old}metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
 
     const newestPrefix = "backup-2026-10-12-120000/"
-    // Prepare a modified replacement file in an independent store with the same key and container,
-    // simulating an external process overwriting the replacement's metadata.json on disk.
     await externalStore.put(ACCOUNT, BACKUP_CONTAINER, `${newestPrefix}metadata.json`, Buffer.from('{"Status":"Success","External":"changed"}'), "application/json")
     const repTvbFile = readdirSync(extDir).find(f => f.endsWith(".tvb"))!
     const extTvbBytes = readFileSync(join(extDir, repTvbFile))
@@ -1287,7 +1253,7 @@ describe("round 6 findings", () => {
       const fetchImpl: typeof fetch = async (input, init) => {
         const req = new Request(input, init)
         const url = new URL(req.url)
-        if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), NOW)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
         return handleLocalBlobRequest(store, req)
       }
       const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => NOW })
@@ -1298,9 +1264,8 @@ describe("round 6 findings", () => {
       expect(tampered).toBe(true)
       expect(job.results?.notices).toContainEqual(expect.objectContaining({
         level: "warning",
-        message: expect.stringContaining("changed before deletion"),
+        message: expect.stringContaining("changed before cleanup completed"),
       }))
-      // Every file of the expired candidate must still exist on disk and be restored cleanly.
       const remaining = (await store.list(ACCOUNT, BACKUP_CONTAINER, old)).map(b => b.name)
       expect(remaining).toContain(`${old}metadata.json`)
       expect(remaining).toContain(`${old}DeviceConfigurations/Old.json`)
@@ -1319,7 +1284,7 @@ describe("round 6 findings", () => {
       isPidAlive: pid => pid === process.pid || pid === liveGatePid,
       readProcessStart: async pid => (pid === process.pid ? "ps:own" : pid === liveGatePid ? "ps:live-gate" : "gone"),
     }
-    const store = new LocalBlobStore(root, [MASTER], undefined, reader)
+    const store = new LocalBlobStore(root, [MASTER], undefined, undefined, reader)
     await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const lockPath = join(dir, ".tenuvault-retention.lock")
@@ -1349,7 +1314,7 @@ describe("round 6 findings", () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       const req = new Request(input, init)
       const url = new URL(req.url)
-      if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), NOW)
+      if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
       return handleLocalBlobRequest(store, req)
     }
     const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
@@ -1385,13 +1350,12 @@ describe("round 6 findings", () => {
       isPidAlive: pid => pid === process.pid,
       readProcessStart: async pid => (pid === process.pid ? "ps:own" : "gone"),
     }
-    const store = new LocalBlobStore(root, [MASTER], undefined, reader)
+    const store = new LocalBlobStore(root, [MASTER], undefined, undefined, reader)
     await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
     const dir = join(root, ACCOUNT, BACKUP_CONTAINER)
     const lockPath = join(dir, ".tenuvault-retention.lock")
     const gatePath = `${lockPath}.reclaim`
 
-    // Part A: transient rename error on gate release succeeds on the single retry without warning.
     writeFileSync(lockPath, JSON.stringify({ id: "stale-1", host: hostname(), pid: deadPid, processStart: "ps:dead", app: "TenuVault" }))
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     let gateReleaseRenames = 0
@@ -1409,7 +1373,6 @@ describe("round 6 findings", () => {
       expect(warnSpy).not.toHaveBeenCalled()
       await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, id1)
 
-      // Part B: both gate release attempts fail -> warns and leaves our gate on disk; next acquire reclaims it.
       writeFileSync(lockPath, JSON.stringify({ id: "stale-2", host: hostname(), pid: deadPid, processStart: "ps:dead", app: "TenuVault" }))
       gateReleaseRenames = 0
       vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
@@ -1425,7 +1388,6 @@ describe("round 6 findings", () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(gatePath), expect.any(Error))
       await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, id2)
 
-      // Restore rename and write another stale lock: next acquire in this process reclaims our own leaked gate.
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
       writeFileSync(lockPath, JSON.stringify({ id: "stale-3", host: hostname(), pid: deadPid, processStart: "ps:dead", app: "TenuVault" }))
       const id3 = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
@@ -1453,7 +1415,6 @@ describe("round 6 findings", () => {
 
     vi.mocked(fsPromises.link).mockRejectedValue(Object.assign(new Error("Operation not permitted"), { code: "EPERM" }))
     try {
-      // Case 1: 0-byte file at live -> never overwritten; held kept and conflict names both paths.
       const retiredZero = join(dir, ".retired-zero1")
       const heldZero = join(retiredZero, tvbFile)
       mkdirSync(retiredZero)
@@ -1472,7 +1433,6 @@ describe("round 6 findings", () => {
       expect(readFileSync(livePath).length).toBe(0)
       rmSync(retiredZero, { recursive: true, force: true })
 
-      // Case 2: partial-prefix file at live (e.g. crash or concurrent writer) -> never overwritten; held kept and both paths named.
       const retiredPartial = join(dir, ".retired-part1")
       const heldPartial = join(retiredPartial, tvbFile)
       mkdirSync(retiredPartial)
@@ -1489,7 +1449,6 @@ describe("round 6 findings", () => {
       expect(readFileSync(livePath).equals(partialBytes)).toBe(true)
       rmSync(retiredPartial, { recursive: true, force: true })
 
-      // Case 3: live is a different file -> conflict reported with both paths, live untouched.
       const retiredDiff = join(dir, ".retired-diff2")
       const heldDiff = join(retiredDiff, tvbFile)
       mkdirSync(retiredDiff)
@@ -1504,7 +1463,6 @@ describe("round 6 findings", () => {
       expect(readFileSync(livePath).toString()).toBe("not-a-prefix")
       rmSync(livePath, { force: true })
 
-      // Case 4: live is a symlink to a 0-byte file -> never overwritten, conflict stays reported.
       const linkTarget = join(root, "zero-target")
       writeFileSync(linkTarget, Buffer.alloc(0))
       symlinkSync(linkTarget, livePath)
@@ -1515,8 +1473,61 @@ describe("round 6 findings", () => {
       vi.mocked(fsPromises.link).mockImplementation(actual.link)
     }
   })
-})
 
+  it("P2 4: waits for an in-flight put in LARGE_BACKUP_CONTAINER when acquiring a lock protecting a large companion prefix", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    const root = mkdtempSync(join(tmpdir(), "tv-r6-p2-4-large-")); roots.push(root)
+    const storeA = new LocalBlobStore(root, [MASTER])
+    const storeB = new LocalBlobStore(root, [MASTER])
+    await storeA.createContainer(ACCOUNT, BACKUP_CONTAINER)
+    await storeA.createContainer(ACCOUNT, LARGE_BACKUP_CONTAINER)
+    const regularPrefix = "backup-2026-10-12-120000/"
+    const largePrefix = "backup-large-2026-10-12-120000/"
+    const largePayloadName = `payload/${largePrefix}DeviceConfigurations/Item.json`
+    await storeA.put(ACCOUNT, LARGE_BACKUP_CONTAINER, largePayloadName, Buffer.from('{"v":1}'), "application/json")
+
+    let renameStarted!: () => void
+    const onRenameStart = new Promise<void>(resolve => { renameStarted = resolve })
+    let allowRename!: () => void
+    const waitRename = new Promise<void>(resolve => { allowRename = resolve })
+
+    vi.mocked(fsPromises.rename).mockImplementationOnce(async (from, to) => {
+      renameStarted()
+      await waitRename
+      return actual.rename(from, to)
+    })
+
+    const putPromise = storeB.put(ACCOUNT, LARGE_BACKUP_CONTAINER, largePayloadName, Buffer.from('{"v":2}'), "application/json")
+    await onRenameStart
+
+    let lockId: string | undefined
+    try {
+      const guardRegistered = waitForLocalRetentionGuardRegistration(join(root, ACCOUNT, BACKUP_CONTAINER))
+      let lockResolved = false
+      const lockPromise = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER, undefined, [regularPrefix, largePrefix]).then(id => {
+        lockResolved = true
+        return id
+      })
+
+      await guardRegistered
+      await Promise.resolve()
+      expect(lockResolved).toBe(false)
+      await expect(storeB.put(ACCOUNT, LARGE_BACKUP_CONTAINER, `payload/${largePrefix}DeviceConfigurations/New.json`, Buffer.from("{}"), "application/json"))
+        .rejects.toBeInstanceOf(BlobProtectedError)
+
+      allowRename()
+      await putPromise
+      lockId = await lockPromise
+      const read = await storeA.get(ACCOUNT, LARGE_BACKUP_CONTAINER, largePayloadName)
+      expect(read.data.toString()).toBe('{"v":2}')
+    } finally {
+      allowRename()
+      await putPromise.catch(() => undefined)
+      vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
+      if (lockId) await storeA.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lockId)
+    }
+  })
+})
 
 describe("round 7 findings", () => {
   it("4722421520: with an unstealable gate held, lock check and move complete without interleaving from another reclaimer", async () => {
@@ -1549,7 +1560,6 @@ describe("round 7 findings", () => {
     try {
       acquireA = storeA.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
       await onLockMove
-      // A holds the gate and has checked the lock; B arrives now and must not move the gate or lock.
       const errB = await storeB.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER).then(() => null, (error: unknown) => error)
       expect(errB).toBeInstanceOf(BlobLeaseConflictError)
       expect((errB as BlobLeaseConflictError).code).toBe("LeaseAlreadyPresent")
@@ -1596,9 +1606,8 @@ describe("round 7 findings", () => {
       set: (key, value) => { progressData.set(key, value) },
       delete: key => { progressData.delete(key) },
     }
-    const progressKey = `${TENANT}/${ACCOUNT}`
+    const progressKey = `${TENANT}/${ACCOUNT}/false`
 
-    // Mutate replacement on the 2nd quarantine rename (payload Old.json, after metadata.json was already deleted).
     let quarantineRenames = 0
     vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
       await actual.rename(from, to)
@@ -1616,7 +1625,7 @@ describe("round 7 findings", () => {
       const fetchImpl: typeof fetch = async (input, init) => {
         const req = new Request(input, init)
         const url = new URL(req.url)
-        if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), currentNow)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), currentNow)
         return handleLocalBlobRequest(store, req)
       }
       const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
@@ -1633,23 +1642,20 @@ describe("round 7 findings", () => {
       expect(job1.status).toBe("Completed")
       expect(quarantineRenames).toBe(2)
 
-      // metadata.json is gone, Old.json was restored with a bound ETag,
-      // and the deletion journal recorded that exact bound ETag.
       const savedAfterStop = readRetentionProgress(progressData.get(progressKey))
-      const journal = savedAfterStop.deletes?.[old]
+      const journal = savedAfterStop.deletions?.[old]
       expect(journal).toBeDefined()
       const currentOldEtag = (await store.get(ACCOUNT, BACKUP_CONTAINER, `${old}DeviceConfigurations/Old.json`)).blob.etag
       expect(currentOldEtag).not.toBe(preRestoreEtag)
       expect(journal!.remaining[`${old}DeviceConfigurations/Old.json`]).toBe(currentOldEtag)
 
-      // Next run creates a fresh healthy newest backup -> partial deletion resumes cleanly!
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
       currentNow = new Date(NOW.getTime() + 60_000)
       const job2 = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: ACCOUNT, scope })
       await engine.waitForJob(job2)
       expect(job2.status).toBe("Completed")
       expect(await store.list(ACCOUNT, BACKUP_CONTAINER, old)).toEqual([])
-      expect(readRetentionProgress(progressData.get(progressKey)).deletes?.[old]).toBeUndefined()
+      expect(readRetentionProgress(progressData.get(progressKey)).deletions?.[old]).toBeUndefined()
     } finally {
       vi.mocked(fsPromises.link).mockImplementation(actual.link)
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
@@ -1657,7 +1663,6 @@ describe("round 7 findings", () => {
   })
 
   it("4722421489: releases an accepted lease (Azure and local) when the job deadline expires before request() returns", async () => {
-    // 1. Azure blob lease accepted right as the job deadline elapses -> released before rethrowing.
     let fakeNow = 1_000_000
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => fakeNow)
     try {
@@ -1666,7 +1671,6 @@ describe("round 7 findings", () => {
         const headers = new Headers(init?.headers)
         const action = headers.get("x-ms-lease-action")
         if (action === "acquire") {
-          // Cross the deadline right as storage accepts the lease; signal is still un-aborted inside read().
           fakeNow = 1_000_500
           return new Response(null, { status: 201, headers: { "x-ms-lease-id": "accepted-azure-lease" } })
         }
@@ -1681,7 +1685,6 @@ describe("round 7 findings", () => {
       await expect(azureWriter.acquireLease("backup-2026-10-12-120000/metadata.json", 60)).rejects.toThrow(/timed out|deadline/i)
       expect(released).toEqual([{ action: "release", leaseId: "accepted-azure-lease" }])
 
-      // 2. Local container retention lock accepted right as the job deadline elapses -> lock file and guard are cleaned up.
       const root = mkdtempSync(join(tmpdir(), "tv-r7-deadline-local-")); roots.push(root)
       const store = new LocalBlobStore(root, [MASTER])
       await store.createContainer(ACCOUNT, BACKUP_CONTAINER)
@@ -1698,7 +1701,7 @@ describe("round 7 findings", () => {
       }
       const localNetwork = new NetworkCircuit(3, undefined, 2_000_100)
       const localWriter = new BlobWriter(localFetch, ACCOUNT, async () => "", localNetwork)
-      await expect(localWriter.acquireContainerLease([repPrefix])).rejects.toThrow(/timed out|deadline/i)
+      await expect(localWriter.acquireContainerLease(BACKUP_CONTAINER, [repPrefix])).rejects.toThrow(/timed out|deadline/i)
       expect(existsSync(lockPath)).toBe(false)
       await expect(store.put(ACCOUNT, BACKUP_CONTAINER, `${repPrefix}check.json`, Buffer.from("{}"), "application/json")).resolves.toBeDefined()
     } finally {
@@ -1752,7 +1755,6 @@ describe("round 8 findings", () => {
     writeFileSync(join(retired, ".quarantined"), "")
     utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
     utimesSync(retired, oldTime, oldTime)
-    // Crash left a smaller partial file at livePath.
     writeFileSync(livePath, fullBytes.subarray(0, Math.floor(fullBytes.length / 2)))
 
     try {
@@ -1766,7 +1768,6 @@ describe("round 8 findings", () => {
       await expect(fresh.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedStep)
       await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedStep)
 
-      // Follow the plain instruction: delete the smaller partial live file and rescan.
       rmSync(livePath)
       const afterDelete = new LocalBlobStore(root, [MASTER])
       const resolvedDamage = await afterDelete.damage(ACCOUNT, BACKUP_CONTAINER)
@@ -1803,17 +1804,14 @@ describe("round 8 findings", () => {
       ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
     }
 
-    // 1. Expired backup holding only DeviceConfigurations (covered by the new run).
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/DeviceConfigurations/Old.json`, Buffer.from(JSON.stringify(OLD_ITEM)), "application/json")
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldCovered}/metadata.json`, Buffer.from(JSON.stringify(ONE_ITEM_MANIFEST)), "application/json")
 
-    // 2. Expired backup holding CompliancePolicies (only the conflicted backup newer than it has CompliancePolicies).
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/CompliancePolicies/Comp.json`, Buffer.from(JSON.stringify(complianceItem)), "application/json")
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/metadata.json`, Buffer.from(JSON.stringify(complianceManifest)), "application/json")
 
-    // 3. Newer backup holding CompliancePolicies that suffers an exFAT partial-copy recovery conflict.
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/CompliancePolicies/Comp.json`, Buffer.from(JSON.stringify(complianceItem)), "application/json")
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/${BACKUP_OWNER_FILE}`, Buffer.from(JSON.stringify(OWNER)), "application/json")
     await store.put(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/metadata.json`, Buffer.from(JSON.stringify(complianceManifest)), "application/json")
@@ -1835,27 +1833,21 @@ describe("round 8 findings", () => {
     try {
       const fresh = new LocalBlobStore(root, [MASTER])
 
-      // Direct deletes touching the conflicted backup (either as target or as expected replacement) fail closed with both paths.
       await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${conflicted}/metadata.json`)).rejects.toThrow(IncompleteInventoryError)
       await expect(fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/metadata.json`, {
         expectedReplacements: [{ prefix: `${conflicted}/`, blobs: { [`${conflicted}/metadata.json`]: '"etag"' } }],
       })).rejects.toThrow(livePath)
 
-      // Healthy backups remain readable and new puts/imports work.
       expect((await fresh.get(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/CompliancePolicies/Comp.json`)).data.toString()).toBe(JSON.stringify(complianceItem))
       const imported = "backup-2026-10-01-020000"
       await fresh.put(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
       expect((await fresh.get(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`)).data.toString()).toBe('{"Status":"Success"}')
       await fresh.delete(ACCOUNT, BACKUP_CONTAINER, `${imported}/metadata.json`)
 
-      // End-to-end BackupEngine run covering only DeviceConfigurations:
-      // - oldCovered IS removed (covered by the healthy new backup)
-      // - oldUncovered is KEPT (conflicted backup cannot supply CompliancePolicies coverage)
-      // - conflicted is KEPT with a warning naming both paths and plain steps
       const fetchImpl: typeof fetch = async (input, init) => {
         const req = new Request(input, init)
         const url = new URL(req.url)
-        if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), NOW)
+        if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), NOW)
         return handleLocalBlobRequest(fresh, req)
       }
       const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
@@ -1876,7 +1868,6 @@ describe("round 8 findings", () => {
       expect((await fresh.list(ACCOUNT, BACKUP_CONTAINER, `${oldUncovered}/`)).length).toBe(3)
       expect(existsSync(heldPath)).toBe(true)
 
-      // Mixed damage (conflict + unrelated corrupted file) still blocks all deletes in the folder.
       const otherFile = entries.get(`${oldUncovered}/CompliancePolicies/Comp.json`)!.file
       const damaged = Buffer.from(readFileSync(join(dir, otherFile)))
       damaged[6] = damaged[6]! ^ 0xff
@@ -1902,7 +1893,6 @@ describe("round 8 findings", () => {
     const livePath = join(dir, tvbFile)
     const heldBytes = readFileSync(livePath)
 
-    // Move original file into an aged quarantine so livePath is free for createNew.
     const retired = join(dir, ".retired-race1")
     const heldPath = join(retired, tvbFile)
     const oldTime = (Date.now() - 120_000) / 1000
@@ -1943,36 +1933,29 @@ describe("round 8 findings", () => {
     let putPromise: Promise<unknown> | undefined
     let recoveryPromise: Promise<unknown> | undefined
     try {
-      // Stage the aged quarantine folder outside dir while storeWriter runs entries(),
-      // pause at claimCreated (0-byte livePath exists), then move retired into place and start storeRecovery.
       const stagedRetired = join(root, ".retired-race1")
       renameSync(retired, stagedRetired)
 
       const newPayload = '{"Status":"Success","v":"published-by-createNew"}'
       putPromise = storeWriter.put(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`, Buffer.from(newPayload), "application/json", true)
       await onClaimCreated
-      // Right now createNew has created the 0-byte claim at livePath and has not renamed tmp onto it yet.
       expect(existsSync(livePath)).toBe(true)
       expect(readFileSync(livePath).length).toBe(0)
 
-      // Place the aged quarantine folder in dir and start recovery while livePath is the 0-byte claim.
       renameSync(stagedRetired, retired)
       utimesSync(join(retired, ".quarantined"), oldTime, oldTime)
       utimesSync(retired, oldTime, oldTime)
       recoveryPromise = storeRecovery.damage(ACCOUNT, BACKUP_CONTAINER)
       await onRecoveryHitLive
 
-      // Now the writer publishes its completed file onto livePath, and recovery resumes.
       allowPublish()
       await putPromise
       allowRecoveryContinue()
       const damage = await recoveryPromise as Awaited<ReturnType<LocalBlobStore["damage"]>>
 
-      // Assert: published file is completely untouched, held copy is kept, and conflict names both paths.
       expect(existsSync(heldPath)).toBe(true)
       expect(readFileSync(heldPath).equals(heldBytes)).toBe(true)
       expect(damage.files.some(f => f.file === `.retired-race1/${tvbFile}` && f.reason.includes(heldPath) && f.reason.includes(livePath))).toBe(true)
-      // Remove the held folder to verify livePath holds the exact untouched published blob.
       rmSync(retired, { recursive: true, force: true })
       const verifyStore = new LocalBlobStore(root, [MASTER])
       expect((await verifyStore.get(ACCOUNT, BACKUP_CONTAINER, `${prefix}metadata.json`)).data.toString()).toBe(newPayload)
@@ -1998,6 +1981,147 @@ describe("round 8 findings", () => {
       expect(msg).toContain("Stop any TenuVault process on this computer that uses this backup folder")
       expect(msg).toContain("no other computer is running TenuVault on this backup folder")
     }
+  })
+
+  it("P3.3: treats a missing large companion on a resumed newest backup as unreadable, failing closed with a warning", async () => {
+    const azureAccount = "contosoretention"
+    const anchorId = "backup-2026-10-05-120000"
+    const midId = "backup-2026-10-10-120000"
+    const missingLargeId = "backup-large-2026-10-10-120000"
+    const oldId = "backup-2026-08-01-020000"
+    const blobs = new Map<string, { body: string; etag: string }>()
+    let etagCounter = 1
+    const putBlob = (container: string, name: string, value: unknown) => {
+      blobs.set(`${container}/${name}`, { body: typeof value === "string" ? value : JSON.stringify(value), etag: `"e-${etagCounter++}"` })
+    }
+
+    // Resumed anchor (ordinary backup).
+    putBlob(BACKUP_CONTAINER, `${anchorId}/DeviceConfigurations/Old.json`, OLD_ITEM)
+    putBlob(BACKUP_CONTAINER, `${anchorId}/${BACKUP_OWNER_FILE}`, OWNER)
+    putBlob(BACKUP_CONTAINER, `${anchorId}/metadata.json`, {
+      ...ONE_ITEM_MANIFEST,
+      BackupFolder: anchorId,
+      RunId: "run-anchor",
+    })
+
+    // Resumed newest backup that declares a large companion whose metadata.json is missing.
+    putBlob(BACKUP_CONTAINER, `${midId}/DeviceConfigurations/Old.json`, OLD_ITEM)
+    putBlob(BACKUP_CONTAINER, `${midId}/${BACKUP_OWNER_FILE}`, OWNER)
+    putBlob(BACKUP_CONTAINER, `${midId}/metadata.json`, {
+      ...ONE_ITEM_MANIFEST,
+      BackupFolder: midId,
+      RunId: "run-mid",
+      CompanionBackup: missingLargeId,
+      LargeBackupOutcomes: [{ Folder: "AuthorizationPolicy", Outcome: "saved", Saved: 1 }],
+    })
+
+    // Expired untagged backup so retention runs and `shared = true` protects untagged backups.
+    putBlob(BACKUP_CONTAINER, `${oldId}/DeviceConfigurations/Old.json`, OLD_ITEM)
+    putBlob(BACKUP_CONTAINER, `${oldId}/metadata.json`, {
+      Status: "Success",
+      Failures: 0,
+      Scope: { Included: ["DeviceConfigurations"] },
+      Items: { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash(OLD_ITEM), sha256: sha256(OLD_ITEM) } },
+      ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 },
+    })
+
+    const progressData = new Map<string, string>()
+    const progressKey = `${TENANT}/${azureAccount}/false`
+    progressData.set(progressKey, JSON.stringify({
+      latest: `${anchorId}/`,
+      newest: `${midId}/`,
+      reviews: {
+        [`${anchorId}/`]: { files: { [`${anchorId}/DeviceConfigurations/Old.json`]: blobs.get(`${BACKUP_CONTAINER}/${anchorId}/DeviceConfigurations/Old.json`)!.etag }, attempts: 0 },
+        [`${midId}/`]: { files: { [`${midId}/DeviceConfigurations/Old.json`]: blobs.get(`${BACKUP_CONTAINER}/${midId}/DeviceConfigurations/Old.json`)!.etag }, attempts: 0 },
+      },
+    }))
+    const progress: RetentionProgressStore = {
+      get: key => progressData.get(key) ?? null,
+      set: (key, value) => { progressData.set(key, value) },
+      delete: key => { progressData.delete(key) },
+    }
+
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const req = new Request(input, init)
+      const url = new URL(req.url)
+      if (!url.hostname.startsWith(`${azureAccount}.`)) {
+        return withServerDate(Response.json({ value: [] }), NOW)
+      }
+      const method = req.method.toUpperCase()
+      const [container, ...rest] = url.pathname.replace(/^\//, "").split("/")
+      const blobName = rest.map(decodeURIComponent).join("/")
+      if (url.searchParams.get("restype") === "container") {
+        if (url.searchParams.get("comp") === "list") {
+          const prefix = url.searchParams.get("prefix") ?? ""
+          const delimiter = url.searchParams.get("delimiter") ?? ""
+          const prefixes = new Set<string>()
+          const items: string[] = []
+          for (const [fullKey, entry] of blobs) {
+            if (!fullKey.startsWith(`${container}/`)) continue
+            const name = fullKey.slice(container!.length + 1)
+            if (!name.startsWith(prefix)) continue
+            const tail = name.slice(prefix.length)
+            const cut = delimiter ? tail.indexOf(delimiter) : -1
+            if (cut >= 0) {
+              const folder = prefix + tail.slice(0, cut + delimiter.length)
+              if (!prefixes.has(folder)) {
+                prefixes.add(folder)
+                items.push(`<BlobPrefix><Name>${folder}</Name></BlobPrefix>`)
+              }
+            } else {
+              items.push(`<Blob><Name>${name}</Name><Properties><Etag>${entry.etag}</Etag><Content-Length>${Buffer.byteLength(entry.body)}</Content-Length></Properties></Blob>`)
+            }
+          }
+          return withServerDate(new Response(`<?xml version="1.0" encoding="utf-8"?><EnumerationResults><Blobs>${items.join("")}</Blobs><NextMarker /></EnumerationResults>`, { status: 200, headers: { "content-type": "application/xml" } }), NOW)
+        }
+        return withServerDate(new Response(null, { status: 200 }), NOW)
+      }
+      if (method === "PUT" && url.searchParams.get("comp") === "lease") {
+        const action = req.headers.get("x-ms-lease-action")
+        if (action === "acquire") return withServerDate(new Response(null, { status: 201, headers: { "x-ms-lease-id": "lease-1" } }), NOW)
+        return withServerDate(new Response(null, { status: 200 }), NOW)
+      }
+      const key = `${container}/${blobName}`
+      if (method === "PUT") {
+        const body = await req.text()
+        const etag = `"e-${etagCounter++}"`
+        blobs.set(key, { body, etag })
+        return withServerDate(new Response(null, { status: 201, headers: { etag } }), NOW)
+      }
+      if (method === "GET" || method === "HEAD") {
+        const entry = blobs.get(key)
+        if (!entry) return withServerDate(new Response("<Error><Code>BlobNotFound</Code></Error>", { status: 404, headers: { "x-ms-error-code": "BlobNotFound" } }), NOW)
+        return withServerDate(new Response(method === "HEAD" ? null : entry.body, { status: 200, headers: { etag: entry.etag, "content-type": "application/json" } }), NOW)
+      }
+      if (method === "DELETE") {
+        blobs.delete(key)
+        return withServerDate(new Response(null, { status: 202 }), NOW)
+      }
+      return withServerDate(new Response(null, { status: 400 }), NOW)
+    }
+
+    const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceConfigurations").map(type => type.folder) }
+    const engine = new BackupEngine({
+      fetch: fetchImpl,
+      getToken: async () => "token",
+      retentionDays: () => 30,
+      retentionProgress: progress,
+      retentionLimits: { candidates: 10, requests: 200, bytes: 10_000_000 },
+      now: () => NOW,
+    })
+    const job = engine.start({ tenantId: TENANT, clientId: "client", storageAccountName: azureAccount, scope })
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Completed")
+    const log = job.log.join("\n")
+    expect(log).toContain(`${midId}/`)
+    expect(log).toContain(`${missingLargeId}/`)
+    expect(log).toContain("missing")
+    expect(job.results?.warnings ?? 0).toBeGreaterThan(0)
+    // Failed closed for midId: cleared from resumed newest state and untagged oldId was kept.
+    const saved = readRetentionProgress(progressData.get(progressKey))
+    expect(saved.newest).not.toBe(`${midId}/`)
+    expect(blobs.has(`${BACKUP_CONTAINER}/${oldId}/metadata.json`)).toBe(true)
+    expect(LARGE_BACKUP_CONTAINER).toBe("intune-backups-large")
   })
 })
 
@@ -2043,8 +2167,6 @@ describe("round 9 findings", () => {
       await expect(fresh.put(ACCOUNT, BACKUP_CONTAINER, `${backupId}/DeviceConfigurations/Old.json`, Buffer.from("{}"), "application/json")).rejects.toThrow(expectedKeepBoth)
 
       // Immediate delete-time conflict: smaller non-prefix file appears at live during rollback.
-      rmSync(retired, { recursive: true, force: true })
-      rmSync(livePath, { force: true })
       const delRoot = mkdtempSync(join(tmpdir(), "tv-r9-p1-del-nonprefix-")); roots.push(delRoot)
       const delStore = new LocalBlobStore(delRoot, [MASTER])
       await delStore.createContainer(ACCOUNT, BACKUP_CONTAINER)
@@ -2181,7 +2303,6 @@ describe("round 9 findings", () => {
       const storedConflict = initialDamage.files.find(f => f.conflict)?.conflict
       expect(storedConflict?.liveIsHeldPrefix).toBe(true)
 
-      // Overwrite live in-place so directory entries/mtime stay unchanged, keeping cached inventory active.
       writeFileSync(livePath, Buffer.from("changed-after-detection"))
       await expect(cached.get(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedKeepBoth)
       await expect(cached.delete(ACCOUNT, BACKUP_CONTAINER, `${backupId}/metadata.json`)).rejects.toThrow(expectedKeepBoth)
@@ -2194,7 +2315,6 @@ describe("round 9 findings", () => {
       let mutatedMidScan = false
       vi.mocked(fsPromises.readFile).mockImplementation((async (file: unknown, options: unknown) => {
         const result = await actual.readFile(file as never, options as never)
-        // Mutate live when readIndex reads metadata.json (after recoverRetired already detected the prefix conflict).
         if (!mutatedMidScan && String(file).startsWith(dir) && String(file).endsWith(".tvb") && String(file) !== livePath && !String(file).includes(".retired-")) {
           mutatedMidScan = true
           writeFileSync(livePath, Buffer.from("mutated-mid-scan"))
@@ -2216,27 +2336,24 @@ describe("round 9 findings", () => {
 
   it("P1: storage docs order close-first then copy then delete and qualify retention pause for scoped conflicts", () => {
     const doc = readFileSync(join(process.cwd(), "docs-site/src/content/docs/backups/storage.md"), "utf8")
-    const start = doc.indexOf("### Recover files from interrupted cleanup")
-    expect(start).toBeGreaterThan(-1)
-    const end = doc.indexOf("\n## ", start)
-    const section = doc.slice(start, end > start ? end : undefined)
-    const closeIdx = section.indexOf("Close TenuVault on every computer that uses this backup folder")
-    const copyIdx = section.indexOf("Copy the backup folder, including the `.retired-*` folder, to a safe location")
-    const deleteIdx = section.indexOf("delete that live file")
+    const line = doc.split("\n").find(l => l.includes("`.retired-*`")) ?? ""
+    const closeIdx = line.indexOf("first close TenuVault on every computer that uses this backup folder")
+    const copyIdx = line.indexOf("then copy the backup folder, including the `.retired-*` folder, to a safe location")
+    const deleteIdx = line.indexOf("delete that live file")
     expect(closeIdx).toBeGreaterThan(-1)
     expect(copyIdx).toBeGreaterThan(closeIdx)
     expect(deleteIdx).toBeGreaterThan(copyIdx)
-    expect(section).toContain("If TenuVault tells you it is safe to delete the file at the live path")
-    expect(section).toContain("If TenuVault tells you to keep both files, do not delete either file and contact support with both paths.")
-    expect(section).not.toMatch(/smaller than/i)
-    expect(section).not.toMatch(/compare the two/i)
+    expect(line).toContain("If TenuVault tells you it is safe to delete the file at the live path")
+    expect(line).toContain("If TenuVault tells you to keep both files, do not delete either file and contact support with both paths.")
+    expect(line).not.toMatch(/smaller than/i)
+    expect(line).not.toMatch(/compare the two/i)
 
-    const pauseLines = doc.split("\n").filter(line => line.includes("Retention is paused"))
+    const pauseLines = doc.split("\n").filter(l => l.includes("Retention is paused"))
     expect(pauseLines.length).toBeGreaterThanOrEqual(2)
-    for (const line of pauseLines) {
-      expect(line).toContain("recovery conflict after interrupted cleanup")
-      expect(line).toContain("deletes that touch the conflicted backup are blocked")
-      expect(line).toContain("retention of unrelated expired backups continues")
+    for (const pauseLine of pauseLines) {
+      expect(pauseLine).toContain("recovery conflict after interrupted cleanup")
+      expect(pauseLine).toContain("deletes that touch the conflicted backup are blocked")
+      expect(pauseLine).toContain("retention of unrelated expired backups continues")
     }
   })
 })
@@ -2324,10 +2441,9 @@ describe("round 10 findings", () => {
       }
     }
 
-    // Subcase B: DELETE has already passed its pre-rm check and pauses right at rm(held);
-    // scan links held -> live and pauses before its own rm(held); DELETE then runs rm(held)
-    // first. DELETE must STILL fail with BlobDeleteInterruptedError (because live is present),
-    // and scan's subsequent rm(held) ENOENT must NOT be treated as complete/done.
+    // Subcase B: DELETE passes its pre-rm check and pauses right at rm(held); scan links
+    // held -> live and pauses before its own rm(held); DELETE then runs rm(held) first.
+    // DELETE must fail with BlobDeleteInterruptedError and scan must report interrupted.
     {
       const root = mkdtempSync(join(tmpdir(), "tv-r10-del-race-b-")); roots.push(root)
       const storeDelete = new LocalBlobStore(root, [MASTER])
@@ -2374,7 +2490,6 @@ describe("round 10 findings", () => {
         if (String(target) === heldPath) {
           rmCallCount++
           if (rmCallCount === 1) {
-            // First rm(held) is DELETE's rm(held): pause so scan can link held -> live first.
             deleteAtRm()
             await waitDeleteRm
           }
@@ -2393,13 +2508,11 @@ describe("round 10 findings", () => {
         expect(existsSync(livePath)).toBe(true)
         expect(existsSync(heldPath)).toBe(true)
 
-        // Let DELETE's rm(held) execute while scan is paused between link() and rm(held).
         allowDeleteRm()
         await expect(delPromise).rejects.toBeInstanceOf(BlobDeleteInterruptedError)
         expect(existsSync(livePath)).toBe(true)
         expect(existsSync(heldPath)).toBe(false)
 
-        // Now let scan's rm(held) run and observe ENOENT: scan must report interrupted, never done.
         allowScanRm()
         const damage = await scanPromise as Awaited<ReturnType<LocalBlobStore["damage"]>>
         expect(damage.files.length).toBeGreaterThan(0)
@@ -2430,7 +2543,6 @@ describe("round 10 findings", () => {
     const gatePath = `${lockPath}.reclaim`
     writeFileSync(lockPath, JSON.stringify({ id: "stale-1", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
 
-    // Step 1: Cause releaseReclaimGate to fail both rename attempts so this process leaks its gate.
     vi.mocked(fsPromises.rename).mockImplementation(async (from, to) => {
       if (String(from) === gatePath && String(to).endsWith(".release")) {
         throw Object.assign(new Error("EIO"), { code: "EIO" })
@@ -2444,11 +2556,9 @@ describe("round 10 findings", () => {
       expect(existsSync(gatePath)).toBe(true)
       await store.releaseRetentionLock(ACCOUNT, BACKUP_CONTAINER, lock1)
       lock1 = undefined
-      // Re-plant a stale lock so the next acquire enters reclaimStaleRetentionLock -> acquireReclaimGate.
       writeFileSync(lockPath, JSON.stringify({ id: "stale-2", host: hostname(), pid: deadPid, processStart: "dead", app: "TenuVault" }))
       vi.mocked(fsPromises.rename).mockImplementation(actual.rename)
 
-      // Step 2: Abort while readRetentionLockState(gatePath) is pending.
       const controller = new AbortController()
       let abortedDuringRead = false
       vi.mocked(fsPromises.readFile).mockImplementation((async (file: unknown, options: unknown) => {
@@ -2464,7 +2574,6 @@ describe("round 10 findings", () => {
       expect(abortedDuringRead).toBe(true)
       expect(existsSync(gatePath)).toBe(true)
 
-      // Step 3: A subsequent non-aborted acquire must still recognize the leaked gate and reclaim it.
       vi.mocked(fsPromises.readFile).mockImplementation(actual.readFile)
       lock3 = await store.acquireRetentionLock(ACCOUNT, BACKUP_CONTAINER)
       expect(existsSync(gatePath)).toBe(false)
@@ -2527,8 +2636,7 @@ describe("round 10 findings", () => {
     expect(existsSync(held2)).toBe(true)
     expect(readFileSync(livePath).equals(altered)).toBe(true)
 
-    // Case 3: live is replaced while identicalLiveHeldInfo holds an open handle to the old copy ->
-    // path recheck catches the change, held is NOT removed, and conflict is reported.
+    // Case 3: live is replaced while identicalLiveHeldInfo holds an open handle to the old copy.
     rmSync(retired2, { recursive: true, force: true })
     writeFileSync(livePath, fullBytes)
     const retired3 = join(dir, ".retired-hlrace1")
@@ -2587,7 +2695,7 @@ describe("round 12 findings", () => {
         set: (key, value) => { progressData.set(key, value) },
         delete: key => { progressData.delete(key) },
       }
-      const progressKey = `${TENANT}/${ACCOUNT}`
+      const progressKey = `${TENANT}/${ACCOUNT}/false`
 
       let linkRefused = true
       vi.mocked(fsPromises.link).mockImplementation(async (existing, next) => {
@@ -2625,7 +2733,7 @@ describe("round 12 findings", () => {
         const fetchImpl: typeof fetch = async (input, init) => {
           const req = new Request(input, init)
           const url = new URL(req.url)
-          if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), clock)
+          if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), clock)
           return handleLocalBlobRequest(store, req)
         }
         const runBackup = async () => {
@@ -2654,7 +2762,6 @@ describe("round 12 findings", () => {
         expect(run1.log.join("\n")).not.toContain("local retention lock could not be acquired")
         expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old1)).length).toBe(3)
         expect((await store.list(ACCOUNT, BACKUP_CONTAINER, old2)).length).toBe(3)
-        // Old backup and newly created backup are both readable for restore.
         expect((await store.get(ACCOUNT, BACKUP_CONTAINER, `${old1}DeviceConfigurations/Old.json`)).data.toString()).toBe(JSON.stringify(OLD_ITEM))
 
         const run2 = await runBackup()
@@ -2680,7 +2787,7 @@ describe("round 12 findings", () => {
         const movedFetch: typeof fetch = async (input, init) => {
           const req = new Request(input, init)
           const url = new URL(req.url)
-          if (!localAccountFromUrl(url)) return withBackupServerTime(Response.json({ value: [] }), clock)
+          if (!localAccountFromUrl(url)) return withServerDate(Response.json({ value: [] }), clock)
           return handleLocalBlobRequest(movedStore, req)
         }
         const engineMoved = new BackupEngine({

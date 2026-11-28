@@ -90,7 +90,7 @@ describe("settings import preview", () => {
     })
     services.status.mockResolvedValue({
       tenantId: TENANT, checkedAt: null,
-      modules: [{ id: "conditionalAccess", label: "Entra Conditional Access", description: "", optIn: true, enabled: true, roles: "", check: { id: "conditionalAccess", label: "Entra Conditional Access", backup: "ready", restore: "missing", areas: [] } }],
+      modules: [{ id: "conditionalAccess", label: "Entra Conditional Access", description: "", switchable: true, enabled: true, access: "restore", roles: "", check: { id: "conditionalAccess", label: "Entra Conditional Access", backup: "ready", restore: "missing", areas: [] } }],
     })
     const { onApplied } = render()
     act(() => checkbox("Get nightly builds")!.click())
@@ -100,7 +100,7 @@ describe("settings import preview", () => {
     expect(onApplied).toHaveBeenCalled()
     expect(services.status).toHaveBeenCalledWith(TENANT, "client")
     expect(document.body.textContent).toContain("Settings applied")
-    expect(document.body.textContent).toContain("Entra Conditional Access: permissions for restores are missing.")
+    expect(document.body.textContent).toContain("Entra ID: Conditional Access: permissions for restores are missing.")
   })
 })
 
@@ -108,14 +108,18 @@ describe("missingPermissions", () => {
   it("names enabled modules without the permissions they need, and check failures", () => {
     expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules: [], error: "Sign in again." })).toEqual(["The permissions could not be checked: Sign in again."])
     expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules: [
-      { id: "intune", label: "Intune", description: "", optIn: false, enabled: true, roles: "", check: { id: "intune", label: "Intune", backup: "ready", restore: "ready", areas: [] } },
-      { id: "conditionalAccess", label: "Entra Conditional Access", description: "", optIn: true, enabled: false, roles: "", check: { id: "conditionalAccess", label: "Entra Conditional Access", backup: "missing", restore: "missing", areas: [] } },
+      { id: "intune", label: "Intune", description: "", switchable: true, enabled: true, access: "backup", roles: "", check: { id: "intune", label: "Intune", backup: "ready", restore: "ready", areas: [] } },
+      { id: "conditionalAccess", label: "Entra Conditional Access", description: "", switchable: true, enabled: false, access: "restore", roles: "", check: { id: "conditionalAccess", label: "Entra Conditional Access", backup: "missing", restore: "missing", areas: [] } },
     ] })).toEqual([])
     const modules = [
-      { id: "conditionalAccess", label: "Entra Conditional Access", description: "", optIn: true, enabled: true, roles: "", check: { id: "conditionalAccess", label: "Entra Conditional Access", backup: "missing", restore: "ready", areas: [] } },
-      { id: "intune", label: "Intune", description: "", optIn: false, enabled: true, roles: "", check: { id: "intune", label: "Intune", backup: "missing", restore: "missing", areas: [] } },
+      { id: "conditionalAccess", label: "Entra Conditional Access", description: "", switchable: true, enabled: true, access: "restore", roles: "", check: { id: "conditionalAccess", label: "Entra Conditional Access", backup: "missing", restore: "ready", areas: [] } },
+      { id: "intune", label: "Intune", description: "", switchable: true, enabled: true, access: "backup", roles: "", check: { id: "intune", label: "Intune", backup: "missing", restore: "missing", areas: [] } },
     ] as Parameters<typeof missingPermissions>[0]["modules"]
     // Only the services the import turned on are checked.
-    expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules }, ["conditionalAccess"])).toEqual(["Entra Conditional Access: permissions for backups are missing."])
+    expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules }, ["conditionalAccess"])).toEqual(["Entra ID: Conditional Access: permissions for backups are missing."])
+    // A service set to backup only is not expected to have restore permissions.
+    expect(missingPermissions({ tenantId: TENANT, checkedAt: null, modules: [
+      { id: "entra", label: "Entra ID", description: "", switchable: true, enabled: true, access: "backup", roles: "", check: { id: "entra", label: "Entra ID", backup: "ready", restore: "missing", areas: [] } },
+    ] })).toEqual([])
   })
 })

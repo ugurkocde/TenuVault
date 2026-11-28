@@ -1,7 +1,14 @@
 "use client"
 
+import { LEGACY_COMPARISON_NOTICE } from "../../../../shared/intune/backup-read-coverage"
+
+import { BackupCoverage, BackupTypeDetails } from "@desktop/components/BackupCoverage"
+import { COVERAGE_ISSUE_TEXT, groupBackupCoverage } from "../../../../shared/services/backup-coverage"
+import { LargeContents } from "~/components/backup/large-inventory"
+import { ServiceBackupNotice } from "../../../../renderer/components/ServiceBackupNotice"
+
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { AlertCircle, AlertTriangle, Calendar, CheckCircle, Download, GitBranch, Loader2, Play, RefreshCw, Upload } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
@@ -10,6 +17,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
+import { NO_CHANGES_IN_COMPARED_TYPES, typesNotCompared } from "~/components/backup/unknown-comparison-types"
+import { DirectoryRestore } from "~/components/backup/directory-restore"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
 import { formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, unresolvedNotice, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
@@ -23,13 +32,17 @@ import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { LegacySealedBackupsNotice } from "@desktop/components/LegacySealedBackupsNotice"
 import { DamagedBackupFilesNotice } from "@desktop/components/DamagedBackupFilesNotice"
 import { allows } from "../../../../shared/plans"
-import { AREAS } from "../../../../shared/intune/scope"
+import { compareBackupServices } from "../../../../shared/services/presentation"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices"
 import { storageLabel } from "~/lib/storage-label"
 import { changeTenantStorage, type StorageChoice } from "@desktop/lib/storage"
 import { LinkedMessage } from "~/components/linked-message"
-import { SERVICES_PAGE } from "../../../../shared/services/modules"
+import { NoticeCard, noticeActionClass } from "@desktop/components/NoticeCard"
+import { settingsHref } from "@desktop/lib/settings-section"
+
+import { BACKUP_SERVICES, BACKUP_SERVICE_AREAS, matchesBackupService, parseBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
+import { LEGACY_FOLDERS } from "../../../../shared/intune/scope"
 
 type Tab = "backup" | "restore" | "schedule"
 
@@ -47,15 +60,31 @@ const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1
 
 /** Changes since the previous backup; `first` when no older backup exists. */
 function ChangesText({ backup, first }: { backup: BackupSummary; first: boolean }) {
-  if (!backup.changes) return <span className="text-gray-500" title={first ? undefined : "Made by an older version, or the backup before it did not finish"}>{first ? "First backup" : "Not compared"}</span>
-  const { added, modified, removed } = backup.changes
-  if (added + modified + removed === 0) return <span>None</span>
-  return (
-    <span className="flex flex-wrap gap-x-2">
-      {added > 0 && <span className="text-green-700">+{added}</span>}
-      {modified > 0 && <span className="text-amber-800">~{modified}</span>}
-      {removed > 0 && <span className="text-red-700">-{removed}</span>}
+  const unknown = backup.unknownTypes?.length ?? 0
+  const gap = unknown || backup.legacyReadFailure
+  const { added, modified, removed } = backup.changes ?? { added: 0, modified: 0, removed: 0 }
+  const hasChanges = added + modified + removed > 0
+  const qualification = unknown ? typesNotCompared(unknown) : "Comparison coverage uncertain"
+  if (backup.largeInventory) return (
+    <span className="block text-sm leading-5 text-gray-600" title="Compare large inventory on the Drift Detection page.">
+      {backup.changes ? (gap && !hasChanges ? NO_CHANGES_IN_COMPARED_TYPES : `Policies: +${added}, ~${modified}, -${removed}`) : "Policies not compared"}
+      {gap && <span className="block">{qualification}</span>}
+      <br />Inventory: on demand
     </span>
+  )
+  if (!backup.changes) return <span className="text-gray-500" title={first ? undefined : "Made by an older version, or the backup before it did not finish"}>{first ? "First backup" : "Not compared"}</span>
+  if (!hasChanges && !gap) return <span>None</span>
+  return (
+    <>
+      {hasChanges ? (
+        <span className="flex flex-wrap gap-x-2">
+          {added > 0 && <span className="text-green-700">+{added}</span>}
+          {modified > 0 && <span className="text-amber-800">~{modified}</span>}
+          {removed > 0 && <span className="text-red-700">-{removed}</span>}
+        </span>
+      ) : <span>{NO_CHANGES_IN_COMPARED_TYPES}</span>}
+      {gap && <span className="block text-xs font-normal text-gray-600">{qualification}</span>}
+    </>
   )
 }
 
@@ -63,7 +92,18 @@ export default function BackupRestorePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const requested = searchParams.get("tab")
   const activeTab: Tab = requested === "restore" || requested === "schedule" ? requested : "backup"
-  const setActiveTab = (tab: Tab) => setSearchParams({ tab })
+  const service = parseBackupService(searchParams.get("service"))
+  const [restoreRunning, setRestoreRunning] = useState(false)
+  const setActiveTab = (tab: Tab) => setSearchParams(current => { const next = new URLSearchParams(current); next.set("tab", tab); return next })
+  const setService = (value: string) => {
+    if (restoreRunning) return
+    setSearchParams(current => {
+      const next = new URLSearchParams(current)
+      if (value === "all") next.delete("service")
+      else next.set("service", value)
+      return next
+    })
+  }
 
   const tenants = useTenants()
   const { selectedTenantId, selectedTenant, setSelectedTenantId } = useSelectedTenant()
@@ -71,6 +111,7 @@ export default function BackupRestorePage() {
   const changeStorage = (tenant: Tenant, choice: StorageChoice) => {
     updateTenant(tenant.id, changeTenantStorage(tenant, choice))
   }
+  const requestedBackup = searchParams.get("backup")
   const requestedTenant = searchParams.get("tenant")?.toLowerCase()
   // Notification links select the affected tenant and keep the requested tab.
   useEffect(() => {
@@ -107,6 +148,11 @@ export default function BackupRestorePage() {
   const [completedBackup, setCompletedBackup] = useState<{ jobId: string; tenantId: string } | null>(null)
   const [changesOpen, setChangesOpen] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  // An ordinary-only option offered by the download route belongs to the list and scope the download started from.
+  const [ordinaryOnly, setOrdinaryOnly] = useState<{ list: unknown; id: string; scope: string } | null>(null)
+  // The tenant and storage on screen, and how often they changed, so an answer that arrives after a
+  // switch, even one back to the same tenant, never applies.
+  const scopeRef = useRef({ scope: "", generation: 0 })
   const [exportingDevices, setExportingDevices] = useState(false)
   const detailRef = useRef<HTMLDivElement | null>(null)
 
@@ -120,8 +166,14 @@ export default function BackupRestorePage() {
   const copyCandidates = tenants
     .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId)
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
-  const trends = useMemo(() => backupTypeTrends(backups), [backups])
-  const selected = backups.find((backup) => backup.id === selectedId) ?? null
+  const trends = useMemo(() => backupTypeTrends(backups).filter(type => matchesBackupService(type.folder, service)).sort((a, b) => compareBackupServices(a.folder, b.folder)), [backups, service])
+  const listed = backups.find((backup) => backup.id === selectedId) ?? null
+  const scope = tenant ? `${tenant.credentials.tenantId}:${tenant.storageAccountName}` : ""
+  if (scopeRef.current.scope !== scope) scopeRef.current = { scope, generation: scopeRef.current.generation + 1 }
+  // Leaving a tenant ends its fallback, so coming back offers only the full download again.
+  useEffect(() => { setOrdinaryOnly(null) }, [scope])
+  const selected = listed
+  const offerOrdinary = Boolean(listed && !listed.ordinaryOnlyExport && (listed.ordinaryOnlyAvailable || (ordinaryOnly?.list === backups && ordinaryOnly.id === listed.id && ordinaryOnly.scope === scope)))
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
   useEffect(() => {
@@ -132,6 +184,20 @@ export default function BackupRestorePage() {
   useEffect(() => {
     setSelectedId((current) => (current && backups.some((backup) => backup.id === current) ? current : backups[0]?.id ?? null))
   }, [backups])
+
+  // A Dashboard link selects its exact backup once the tenant's list has loaded.
+  useEffect(() => {
+    if (!requestedBackup || requestedTenant || backupList.backups === null) return
+    if (backups.some(backup => backup.id === requestedBackup)) {
+      setSelectedId(requestedBackup)
+      requestAnimationFrame(() => detailRef.current?.scrollIntoView({ block: "start" }))
+    }
+    setSearchParams(current => {
+      const next = new URLSearchParams(current)
+      next.delete("backup")
+      return next
+    }, { replace: true })
+  }, [requestedBackup, requestedTenant, backupList.backups, backups, setSearchParams])
 
   const fetchBackups = () => backupList.refresh({ force: true })
 
@@ -151,9 +217,9 @@ export default function BackupRestorePage() {
     setShowProgress(true)
   }
 
-  const backupFinished = (success: boolean) => {
-    // Keep failures and cancellations open so their reason can be read.
-    if (success) {
+  const backupFinished = (success: boolean, needsAttention = false) => {
+    // Keep unread types and other problems visible until the admin closes the result.
+    if (success && !needsAttention) {
       setShowProgress(false)
       setJob(null)
     }
@@ -162,24 +228,32 @@ export default function BackupRestorePage() {
       if (job.tenant.credentials) setCompletedBackup({ jobId: job.id, tenantId: job.tenant.credentials.tenantId.toLowerCase() })
       // Show the new backup, the newest in the list.
       setSelectedId(null)
-      void fetchBackups()
     }
   }
 
-  const download = async (backup: BackupSummary) => {
+  const download = async (backup: BackupSummary, chooseOrdinary = false) => {
     if (!tenant) return
+    const startedFrom = backups, startedIn = `${tenant.credentials.tenantId}:${tenant.storageAccountName}`, generation = scopeRef.current.generation
+    const ordinaryOnlyCopy = backup.ordinaryOnlyExport === true || chooseOrdinary
     setIsDownloading(true)
     try {
       const response = await fetch("/api/download-backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id }),
+        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, largeInventory: backup.largeInventory === true || Boolean(backup.companionId) || backup.ordinaryOnlyAvailable === true || ordinaryOnlyCopy, ordinaryOnly: ordinaryOnlyCopy }),
       })
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || "Failed to download backup")
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({}))
+        if (problem.ordinaryOnlyAvailable && response.status === 503) { if (scopeRef.current.generation === generation) setOrdinaryOnly({ list: startedFrom, id: backup.id, scope: startedIn }) }
+        else if (problem.ordinaryOnlyAvailable) void fetchBackups()
+        throw new Error(problem.error || "Failed to download backup")
+      }
+      if (response.headers.get("content-type")?.includes("application/json")) return
+      if (response.headers.get("content-type")?.includes("application/json")) { await response.json(); return }
       const url = URL.createObjectURL(await response.blob())
       const link = document.createElement("a")
       link.href = url
-      link.download = `${backup.id}.zip`
+      link.download = `${backup.id}${ordinaryOnlyCopy ? "-ordinary-only" : ""}.${response.headers.get("content-type") === "application/x-tar" ? "tar" : "zip"}`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -227,7 +301,7 @@ export default function BackupRestorePage() {
   }
 
   const restore = (backup: BackupSummary) => {
-    setRestoreFrom(backup.id)
+    if (!restoreRunning) setRestoreFrom(backup.id)
     setActiveTab("restore")
   }
 
@@ -236,7 +310,7 @@ export default function BackupRestorePage() {
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Backup & Restore</h1>
-          <p className="mt-2 text-base text-gray-500">Back up Intune, see what changed, and restore items from any backup</p>
+          <p className="mt-2 text-base text-gray-500">Back up your services, see what changed, and restore items from any backup</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {tenants.length > 0 && (
@@ -272,7 +346,7 @@ export default function BackupRestorePage() {
           <button
             key={tab.id}
             onClick={() => {
-              if (tab.id === "restore") setRestoreFrom(null)
+              if (tab.id === "restore" && !restoreRunning) setRestoreFrom(null)
               setActiveTab(tab.id)
             }}
             className={cn(
@@ -286,15 +360,19 @@ export default function BackupRestorePage() {
         ))}
       </nav>
 
-      {tenants.length === 0 && (
-        <div className="flex gap-3 rounded-3xl bg-amber-50 p-5">
-          <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-700" />
-          <div>
-            <h3 className="text-sm font-medium text-amber-900">No tenants configured</h3>
-            <p className="mt-1 text-sm text-amber-800">Please add a tenant first to view backup history.</p>
-          </div>
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-3">
+        <label htmlFor="backup-service" className="text-sm font-medium text-gray-700">Service</label>
+        <select id="backup-service" value={service} disabled={restoreRunning} aria-describedby={restoreRunning ? "backup-service-locked" : undefined} onChange={event => setService(event.target.value)} className="h-10 rounded-full border border-border bg-card px-4 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+          <option value="all">All</option>
+          {BACKUP_SERVICES.map(entry => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+        </select>
+        {restoreRunning && <p id="backup-service-locked" className="text-sm text-gray-500">Service cannot be changed while a restore is running.</p>}
+        <p className="text-sm text-gray-500">Filters contents and type lists. Backup runs, totals and downloads cover the whole backup.</p>
+      </div>
+
+      {activeTab !== "schedule" && selectedTenant?.credentials && <ServiceBackupNotice tenantId={selectedTenant.credentials.tenantId} />}
+
+      {tenants.length === 0 && <NoticeCard summary="Connect a tenant to view backup history." />}
 
       {activeTab !== "schedule" && selectedTenant && isLoading && (
         <div className="flex items-center justify-center py-12">
@@ -334,19 +412,19 @@ export default function BackupRestorePage() {
               listLoading={backupList.loading}
               listError={backupList.error}
             />
-            {backupList.unresolved > 0 && (
-              <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">
-                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                {unresolvedNotice(backupList.unresolved)}
-              </p>
-            )}
+            {(backupList.unresolved > 0 || Boolean(backupList.warnings?.length)) && <NoticeCard className="mb-4"
+              tone={backupList.unresolved > 0 ? "error" : "warning"}
+              summary={backupList.unresolved > 0 ? unresolvedNotice(backupList.unresolved)
+                : `${new Set(backupList.warnings).size} backup list ${new Set(backupList.warnings).size === 1 ? "warning" : "warnings"}.`}
+              details={backupList.warnings?.length ? <ul className="list-disc pl-4">
+                {[...new Set(backupList.warnings)].map(warning => <li key={warning}>{warning}</li>)}
+              </ul> : undefined} />}
             <LegacySealedBackupsNotice key={`sealed:${listIdentity}`} count={backupList.sealed} onImported={async () => { await backupList.refresh({ force: true }) }} />
-            {retentionMessage && (
-              <p className="mb-4 text-sm text-gray-500">
-                {retentionMessage}{" "}
-                <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy", { source: "note-retention" })}>See plans</button>
-              </p>
-            )}
+            {retentionMessage && selectedTenant.credentials && <NoticeCard className="mb-4"
+              summary="Backup history is limited by this tenant's plan."
+              details={retentionMessage}
+              dismiss={{ kind: "tip", tenantId: selectedTenant.credentials.tenantId, id: "backup-retention" }}
+              action={<button type="button" className={noticeActionClass} onClick={() => void bridge.license.open("buy", { source: "note-retention" })}>See plans</button>} />}
 
             {backups.length === 0 ? (
               <div className="flex flex-col items-center py-12 text-center">
@@ -381,7 +459,9 @@ export default function BackupRestorePage() {
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
                             {backup.type && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", backup.type === "scheduled" ? "bg-blue-50 text-blue-700" : "bg-muted text-gray-700")}>{TRIGGER_LABEL[backup.type]}</span>}
-                            {kind !== "success" && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status)}</span>}
+                            {(kind !== "success" || backup.coverage === "incomplete") && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status, backup.coverage)}</span>}
+                            {backup.untrustedDate && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", STATUS_STYLE.warning.badge)} title="This backup has a future date and is kept outside automatic retention.">Untrusted date</span>}
+                            {backup.coverage === "incomplete" && <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-gray-700">Coverage incomplete</span>}
                           </div>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-4 text-sm xl:grid-cols-4">
@@ -418,12 +498,15 @@ export default function BackupRestorePage() {
             <BackupDetails
               ref={detailRef}
               backup={selected}
+              service={service}
+              credentials={{ ...tenant.credentials, storageAccountName: tenant.storageAccountName }}
               first={selected.id === backups[backups.length - 1]?.id}
               storageAccountName={tenant.storageAccountName}
               downloading={isDownloading}
               exportingDevices={exportingDevices}
               onChanges={() => setChangesOpen(true)}
               onDownload={() => void download(selected)}
+              onDownloadOrdinary={offerOrdinary ? () => void download(selected, true) : undefined}
               onExportDevices={() => void exportDevices(selected)}
               onRestore={() => restore(selected)}
             />
@@ -431,16 +514,24 @@ export default function BackupRestorePage() {
         </div>
       )}
 
-      {activeTab === "restore" && tenant && !isLoading && !blockingError && (
-        <RestoreWizard
-          key={`${selectedTenant?.id}:${restoreFrom ?? ""}`}
-          tenant={tenant}
-          backups={backups}
-          initialBackupId={restoreFrom}
-          community={community}
-          canCopyToTenants={canCopyToTenants}
-          copyCandidates={copyCandidates}
-        />
+      {tenant && <div hidden={activeTab !== "restore"}><DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}`} tenant={tenant} active={activeTab === "restore"} /></div>}
+      {/* Sidebar filters can also change the tab. Keep restore progress and results mounted. */}
+      {tenant && !isLoading && !blockingError && (
+        <div hidden={activeTab !== "restore"}>
+          <RestoreWizard
+            key={`${selectedTenant?.id}:${restoreFrom ?? ""}`}
+            service={service}
+            active={activeTab === "restore"}
+            onRunningChange={setRestoreRunning}
+            tenant={tenant}
+            backups={backups}
+            initialBackupId={restoreFrom}
+            plan={plan}
+            community={community}
+            canCopyToTenants={canCopyToTenants}
+            copyCandidates={copyCandidates}
+          />
+        </div>
       )}
 
       {activeTab === "schedule" && selectedTenant?.credentials && <BackupSchedulePanel tenantId={selectedTenant.credentials.tenantId} tenantName={selectedTenant.name} tenant={selectedTenant} onStorageChange={changeStorage} />}
@@ -528,6 +619,8 @@ function BackupTrends({ trends, backupCount }: { trends: ReturnType<typeof backu
 }
 
 interface BackupDetailsProps {
+  credentials: Record<string, unknown>
+  service: BackupServiceFilter
   backup: BackupSummary
   first: boolean
   storageAccountName: string
@@ -535,26 +628,88 @@ interface BackupDetailsProps {
   exportingDevices: boolean
   onChanges: () => void
   onDownload: () => void
+  /** Offered after the full download was refused while the ordinary items can still be exported. */
+  onDownloadOrdinary?: () => void
   onExportDevices: () => void
   onRestore: () => void
   ref: React.Ref<HTMLDivElement>
 }
 
 /** Everything known about one backup, from its metadata and file listing. */
-function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
+function BackupDetails({ credentials, service, backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onDownloadOrdinary, onExportDevices, onRestore, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
   // Damaged or unreadable files of this backup on this device: nothing can be read from it.
   const unavailable = backup.status === "unavailable"
   const counts = backup.counts ?? {}
   const excluded = new Set(backup.scope?.excluded ?? [])
-  const areas = AREAS.map(({ area, types }) => ({
-    area,
-    count: types.reduce((sum, type) => sum + (counts[type.folder] ?? 0), 0),
-    types: types.filter((type) => !excluded.has(type.folder) && (counts[type.folder] ?? 0) > 0),
-    left: types.filter((type) => excluded.has(type.folder)).length,
-    all: types.length,
+  const included = new Set(backup.scope?.included ?? [...LEGACY_FOLDERS, ...Object.keys(counts)])
+  const empty = new Set(backup.emptyTypes ?? [])
+  const unread = new Set([...(backup.notRead ?? []), ...(backup.skippedTypes ?? []), ...(backup.failedTypes ?? []), ...Object.keys(backup.notReadCauses ?? {}), ...(backup.largeProblems ?? []).map(problem => problem.folder)])
+  const largeReasons = new Map(backup.largeProblems?.map(problem => [problem.folder, problem.reason]))
+  const readable = backup.readableTypes && new Set(backup.readableTypes)
+  const isReadable = (folder: string) => !unavailable && !largeReasons.has(folder) && !unread.has(folder)
+    && (readable?.has(folder) ?? (empty.has(folder) || backup.coverage === "complete" || (backup.scope != null && !backup.scope.included && kind === "success" && backup.coverage == null)))
+  const selected = [...included].filter(folder => !excluded.has(folder))
+  const coverage = groupBackupCoverage(selected, folder => isReadable(folder) ? "readable" : backup.notReadCauses?.[folder] ?? "unknown")
+  const statusFor = (folder: string, count: number) => {
+    if (excluded.has(folder) || (backup.scope && !included.has(folder))) return "Not included in this backup"
+    if (isReadable(folder)) return count > 0 ? null : "None in the tenant"
+    const reason = largeReasons.get(folder) ?? backup.notReadReasons?.[folder]
+    const cause = backup.notReadCauses?.[folder] ?? "unknown"
+    return reason || unread.has(folder) ? `${COVERAGE_ISSUE_TEXT[cause]}. Not read: ${reason ?? "See the backup log for details."}` : "Coverage unknown"
+  }
+  const groups = BACKUP_SERVICE_AREAS.filter(group => service === "all" || service === group.id).map(group => ({
+    ...group,
+    areas: group.areas.map(({ area, types }) => {
+      const rows = types.map(type => {
+        const count = counts[type.folder] ?? 0
+        return { ...type, count, status: statusFor(type.folder, count) }
+      })
+      return {
+        area,
+        count: rows.reduce((sum, row) => sum + row.count, 0),
+        excluded: rows.every(row => row.status === "Not included in this backup"),
+        rows,
+      }
+    }),
   }))
-  const typeLabel = (folder: string) => capitalize(typeForFolder(folder)?.label ?? folder)
+  const failed = new Set(backup.failedTypes ?? [])
+  const skipped = new Set(backup.skippedTypes ?? [])
+  const recordedCoverage = !unavailable && backup.scope?.included !== undefined && backup.readableTypes !== undefined
+  const omitted = [...new Set([...unread, ...(recordedCoverage ? selected.filter(folder => !isReadable(folder)) : [])])]
+    .filter(folder => !excluded.has(folder) && (service === "all" || matchesBackupService(folder, service)))
+    .map(folder => {
+      const cause = backup.notReadCauses?.[folder]
+      const category = cause && cause !== "unknown" ? "access"
+        : failed.has(folder) || largeReasons.has(folder) ? "failure"
+        : skipped.has(folder) ? "access" : "unknown"
+      const reason = cause && cause !== "unknown" ? COVERAGE_ISSUE_TEXT[cause]
+        : category === "failure" ? "Could not be read"
+        : category === "access" ? "Needs access" : "Cause unknown"
+      const recorded = largeReasons.get(folder) ?? backup.notReadReasons?.[folder]
+      return { folder, category, detail: recorded ? `${reason}. ${recorded}` : reason }
+    })
+  const access = omitted.filter(entry => entry.category === "access").length
+  const unknown = omitted.filter(entry => entry.category === "unknown").length
+  const failedTypes = omitted.filter(entry => entry.category === "failure").length
+  const failures = service === "all" ? backup.failures ?? 0 : 0
+  // A real failure leads, so the warning tone never reads as if missing access were the error.
+  const coverageSummary = [
+    failures > 0 ? `${failures} ${failures === 1 ? "item or type" : "items or types"} could not be read.`
+      : failedTypes > 0 && `${failedTypes} ${failedTypes === 1 ? "type" : "types"} could not be read.`,
+    access > 0 && `Needs access for ${access} backup ${access === 1 ? "type" : "types"}.`,
+    unknown > 0 && `Coverage unknown for ${unknown} ${unknown === 1 ? "type" : "types"}.`,
+  ].filter(Boolean).join(" ")
+  const statusSummary = unavailable ? "This backup could not be opened."
+    : backup.status === "incomplete" && !backup.ordinaryOnlyAvailable ? "This backup stopped before it finished."
+    : kind === "failed" && backup.status !== "incomplete" ? "This backup failed."
+    : kind === "cancelled" ? "This backup was cancelled."
+    : backup.status === "unknown" ? "The status of this backup is unknown."
+    : backup.warning || kind === "warning" && (!coverageSummary || failures > 0 || failedTypes > 0) ? "This backup completed with warnings." : ""
+  const statusDetail = unavailable ? "This backup cannot be downloaded, compared or restored. Older backups are kept."
+    : kind === "cancelled" || kind === "failed" && backup.totalPolicies > 0 && !backup.ordinaryOnlyAvailable
+      ? "Only the policies saved before it stopped are available. It is never used as a complete backup."
+      : backup.status === "unknown" ? "Drift detection does not offer this backup until its details can be read." : ""
 
   return (
     <div ref={ref} className="rounded-3xl bg-white p-6 sm:p-8">
@@ -570,8 +725,14 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
           </Button>
           <Button variant="outline" size="sm" onClick={onDownload} disabled={downloading || unavailable}>
             {downloading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
-            Download
+            {backup.ordinaryOnlyExport ? "Download ordinary only" : "Download"}
           </Button>
+          {onDownloadOrdinary && (
+            <Button variant="outline" size="sm" onClick={onDownloadOrdinary} disabled={downloading || unavailable}>
+              <Download className="mr-1 h-4 w-4" />
+              Download ordinary only
+            </Button>
+          )}
           <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} disabled={kind === "running" || backup.totalPolicies === 0 || unavailable}>
             <RefreshCw className="mr-1 h-4 w-4" />
             Restore from this backup
@@ -579,21 +740,27 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
         </div>
       </div>
 
-      {(kind === "warning" || kind === "failed" || kind === "cancelled" || (backup.skippedTypes?.length ?? 0) > 0) && (
-        <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : kind === "cancelled" ? "bg-gray-100 text-gray-800" : "bg-amber-50 text-amber-900")}>
-          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-          <div className="space-y-1">
-            {unavailable && <p>{backup.error ?? "Files of this backup could not be read."} Until then it cannot be downloaded, compared or restored, and older backups are kept.</p>}
-            {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
-            {backup.status !== "incomplete" && !unavailable && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
-            {kind === "cancelled" && <p>This backup was cancelled before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
-            {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
-            {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
-            {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}
-            {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because the app registration or your role does not allow reading them: {backup.skippedTypes!.map(typeLabel).join(", ")}. <LinkedMessage text={`${SERVICES_PAGE} in Settings shows which permission is missing and how to add it.`} /> Also check that your Intune or Entra role covers these items.</p>}
-          </div>
-        </div>
-      )}
+      <div className="mb-6 space-y-2">
+        {(statusSummary || backup.legacyReadFailure) && <NoticeCard
+          summary={statusSummary || "Some older backup files could not be compared."}
+          tone={kind === "failed" ? "error" : kind === "warning" ? "warning" : "neutral"}
+          details={statusDetail || backup.error || backup.warning || backup.legacyReadFailure ? <>
+            {statusDetail && <p>{statusDetail}</p>}
+            {backup.error && <p>{backup.error}</p>}
+            {backup.warning && <p><LinkedMessage text={backup.warning} /></p>}
+            {backup.legacyReadFailure && <p>{LEGACY_COMPARISON_NOTICE}</p>}
+          </> : undefined}
+        />}
+        {(coverageSummary || (service === "all" && backup.coverage === "incomplete")) && <NoticeCard
+          summary={coverageSummary || "Backup coverage is incomplete."}
+          tone={failures || failedTypes ? "error" : "neutral"}
+          action={access > 0 && <Link className={noticeActionClass} to={`${settingsHref("services")}&tenant=${encodeURIComponent(String(credentials.tenantId))}`}>Add access</Link>}
+          details={omitted.length > 0 || failures > 0 ? <>
+            <BackupTypeDetails entries={omitted} />
+            {failures > 0 && <p>See the backup log for individual read failures.</p>}
+          </> : undefined}
+        />}
+      </div>
 
       <div className="mb-6 grid grid-cols-2 gap-4 text-sm lg:grid-cols-4">
         {[
@@ -614,54 +781,65 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
         </div>
       </div>
 
+      {backup.scope && <div className="mb-6">
+        <BackupCoverage coverage={coverage.filter(row => service === "all" || service === row.service)} emptyLabel="Not included" countsOnly />
+      </div>}
+
+      {(backup.largeInventory || backup.companionId) && <LargeContents key={`${String(credentials.tenantId)}/${String(credentials.storageAccountName)}/${backup.companionId ?? backup.id}`} credentials={credentials} backupId={backup.companionId ?? backup.id} service={service} />}
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         <div>
           <h3 className="mb-3 text-xs font-medium text-gray-500">Contents</h3>
-          <div className="space-y-2">
-            {areas
-              .filter((entry) => entry.count > 0 || entry.left < entry.all)
-              .map((entry) => (
-                <details key={entry.area} className="group rounded-xl bg-gray-50 px-3 py-2.5 text-sm">
-                  <summary className="flex cursor-pointer list-none items-center justify-between">
-                    <span className="text-gray-700">{entry.area}</span>
-                    <span className="font-medium text-gray-900">{entry.count}</span>
-                  </summary>
-                  <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2 text-xs">
-                    {entry.types.map((type) => (
-                      <li key={type.folder} className="flex items-center justify-between gap-2 text-gray-600">
-                        <span>{capitalize(type.label)}</span>
-                        <span className="flex items-center gap-2">
-                          {type.folder === "AutopilotDevices" && !unavailable && (
-                            <button type="button" className="font-medium text-coral-700 underline disabled:text-gray-400" disabled={exportingDevices} onClick={onExportDevices}>
-                              {exportingDevices ? "Exporting..." : "Export CSV"}
-                            </button>
-                          )}
-                          <span>{counts[type.folder]}</span>
-                        </span>
-                      </li>
-                    ))}
-                    {entry.types.length === 0 && <li className="text-gray-500">No items of these types in the tenant.</li>}
-                    {entry.left > 0 && <li className="text-gray-500">{entry.left} type{entry.left === 1 ? "" : "s"} not included in this backup</li>}
-                  </ul>
-                </details>
-              ))}
-            {areas
-              .filter((entry) => entry.left === entry.all)
-              .map((entry) => (
-                <div key={entry.area} className="flex justify-between rounded-xl px-3 py-2 text-sm text-gray-500">
-                  <span>{entry.area}</span>
-                  <span>Not included</span>
-                </div>
-              ))}
+          <div className="space-y-4">
+            {groups.map(group => (
+              <section key={group.id} aria-label={group.label}>
+                <h4 className="mb-2 text-sm font-medium text-gray-900">{group.label}</h4>
+              <div className="space-y-2">
+                {group.areas
+                  .filter((entry) => !entry.excluded)
+                  .map((entry) => (
+                    <details key={entry.area} className="group rounded-xl bg-gray-50 px-3 py-2.5 text-sm">
+                      <summary className="flex cursor-pointer list-none items-center justify-between">
+                        <span className="text-gray-700">{entry.area}</span>
+                        {entry.count > 0 && <span className="font-medium text-gray-900">{entry.count}</span>}
+                      </summary>
+                      <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2 text-xs">
+                        {entry.rows.map((type) => (
+                          <li key={type.folder} className="flex items-start justify-between gap-2 text-gray-600">
+                            <span>{capitalize(type.label)}</span>
+                            <span className="min-w-0 text-right">
+                              {type.folder === "AutopilotDevices" && type.count > 0 && !unavailable && (
+                                <button type="button" className="font-medium text-coral-700 underline disabled:text-gray-400" disabled={exportingDevices} onClick={onExportDevices}>
+                                  {exportingDevices ? "Exporting..." : "Export CSV"}
+                                </button>
+                              )}
+                              {type.count > 0 && <span className="ml-2">{type.count}</span>}
+                              {type.status && <span className="block break-words text-gray-500">{type.status}</span>}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ))}
+                {group.areas
+                  .filter((entry) => entry.excluded)
+                  .map((entry) => (
+                    <div key={entry.area} className="flex justify-between gap-2 rounded-xl px-3 py-2 text-sm text-gray-500">
+                      <span>{entry.area}</span>
+                      <span className="text-right">Not included in this backup</span>
+                    </div>
+                  ))}
+              </div>
+              </section>
+            ))}
           </div>
         </div>
         <div>
           <h3 className="mb-3 text-xs font-medium text-gray-500">About this backup</h3>
           <dl className="divide-y divide-gray-100 text-sm">
             {[
-              ["Status", statusLabel(backup.status)],
+              ["Run status", statusLabel(backup.status, backup.coverage)],
               ["Started", backup.type ? TRIGGER_LABEL[backup.type] : "Not recorded"],
-              ["Included", backup.scope ? backup.scope.description : "Everything"],
+              ["Included", backup.scope?.included ? `${backup.scope.included.length} types` : backup.scope?.description ?? "Not recorded"],
               ["Stored", storageLabel(storageAccountName)],
               ["Backup ID", backup.id],
             ].map(([label, value]) => (

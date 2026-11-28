@@ -1,5 +1,5 @@
-import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
-import { withBackupServerTime } from "./helpers"
+import { emptyIntuneRead, withServerDate } from "./helpers"
+import { createHash } from "node:crypto"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, verifyStorageAccess } from "../src/main/backup/engine"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -25,7 +25,8 @@ function requestTimers() {
 function setup(override: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, concurrency?: number) {
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
-    return override(url, init) ?? withBackupServerTime(url.hostname === "graph.microsoft.com" ? Response.json({ value: [] }) : new Response(null, { status: 201 }))
+    const response = await (override(url, init) ?? (url.hostname === "graph.microsoft.com" ? emptyIntuneRead(url.pathname) : new Response(null, { status: 201 })))
+    return withServerDate(response, new Date())
   })
   const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", concurrency })
   return { engine, fetchImpl }
@@ -38,11 +39,7 @@ function azureBridge(networkFetch: typeof fetch): typeof fetch {
   return createBridgedFetch({
     dispatch: async () => new Response(),
     getDelegatedToken: async () => ({ accessToken: "token", expiresOn: null }),
-    fetch: legacyAzureReader(withNetworkErrors(async (input, init) => {
-      const response = await networkFetch(new Request(input, init))
-      if (response.ok) response.headers.set("etag", '"v1"')
-      return withBackupServerTime(response)
-    }), () => [master]),
+    fetch: legacyAzureReader(withNetworkErrors(async (input, init) => withServerDate(await networkFetch(new Request(input, init)), new Date())), () => [master]),
   })
 }
 
@@ -134,7 +131,7 @@ describe("backup request recovery", () => {
       const url = new URL(sent.url)
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
-        return Response.json(items[0])
+        return Response.json({ ...items[0], assignments: [] })
       }
       if (sent.method === "PUT" && !url.search) uploads.set(decodeURIComponent(url.pathname), { type: sent.headers.get("content-type"), body: await sent.text() })
       return new Response(null, { status: 201 })
@@ -160,7 +157,7 @@ describe("backup request recovery", () => {
     const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
-      return Response.json({ id: url.pathname.split("/").at(-1) })
+      return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
     })
     const handleLocalBlob = vi.fn(async (sent: Request) => {
       if (new URL(sent.url).search) return new Response(null, { status: 201 })
@@ -249,7 +246,7 @@ describe("backup request recovery", () => {
       if (!hanging) return
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
-        return Response.json({ id: url.pathname.split("/").at(-1) })
+        return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       signals.push(init!.signal!)
@@ -291,7 +288,7 @@ describe("backup request recovery", () => {
     const { engine, fetchImpl } = setup((url, init) => {
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
-        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
+        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       } else if (service === "Graph" || url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       signals.push(init!.signal!)
       return new Response(new ReadableStream(), { status: 503 })
@@ -318,7 +315,7 @@ describe("backup request recovery", () => {
     const { engine } = setup((url) => {
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: Array.from({ length: 8 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` })) })
-        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
+        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       } else if (service === "Graph" || url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       failures++
       return new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("Connection reset while reading body")) } }), { status: 503 })
@@ -349,20 +346,17 @@ describe("backup request recovery", () => {
     const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
       const sent = input as Request
       const url = new URL(sent.url)
-      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.hostname === "graph.microsoft.com") return emptyIntuneRead(url.pathname)
       if (url.search) {
         if (sent.method === "PUT") return new Response(null, { status: 201 })
-        const names = [...saved.keys()].filter(name => name.startsWith(`/intune-backups/${url.searchParams.get("prefix")}`))
-        const entries = url.searchParams.has("delimiter") ? prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`)
-          : names.map(name => `<Blob><Name>${name.slice("/intune-backups/".length)}</Name></Blob>`)
-        return new Response(`<EnumerationResults><Blobs>${entries.join("")}</Blobs></EnumerationResults>`)
+        return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
       }
       if (sent.method === "PUT") {
         saved.set(url.pathname, new Uint8Array(await sent.arrayBuffer()))
         return new Response(null, { status: 201 })
       }
       if (sent.method === "DELETE") deletes++
-      if (prefixes.some(prefix => url.pathname.includes(prefix))) reads++
+      reads++
       const body = saved.get(url.pathname)
       return body ? new Response(new Uint8Array(body)) : new Response(null, { status: 404 })
     })
@@ -372,10 +366,11 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.endTime).toBeDefined()
     expect(job.exception).toBeUndefined()
-    // Candidate-local unreadable manifests are kept without stopping discovery or spending retries.
-    expect(reads).toBe(8)
+    // Each unreadable manifest, then the folder's marker (none here), read once.
+    expect(reads).toBe(16)
     expect(deletes).toBe(0)
-    expect(job.log.join("\n")).toContain(message.replace(/\.$/, ""))
+    expect(job.log.join("\n")).toContain(`Could not read the metadata of 8 older backups: ${message.replace(/\.$/, "")}. Older backups were left in place.`)
+    expect(job.log.join("\n")).not.toContain("Could not remove old backups")
     expect(job.log.join("\n")).not.toMatch(/did not respond|network stopped responding/)
     const manifestUrl = new URL(`https://contoso.blob.core.windows.net/intune-backups/${job.backupFolder}/metadata.json`)
     const committed = saved.get(manifestUrl.pathname)!
@@ -384,12 +379,12 @@ describe("backup request recovery", () => {
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const calls = networkFetch.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(reads).toBe(8)
+    expect(reads).toBe(16)
     expect(networkFetch).toHaveBeenCalledTimes(calls)
     expect(saved.get(manifestUrl.pathname)).toBe(committed)
   })
 
-  it("keeps all expired backups when one metadata blob cannot be decrypted", async () => {
+  it("keeps every expired backup when one metadata blob cannot be decrypted", async () => {
     requestTimers()
     vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
     const saved = new Map<string, Uint8Array>()
@@ -404,7 +399,7 @@ describe("backup request recovery", () => {
     const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
       const sent = input as Request
       const url = new URL(sent.url)
-      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.hostname === "graph.microsoft.com") return emptyIntuneRead(url.pathname)
       if (url.search) {
         if (sent.method === "PUT") return new Response(null, { status: 201 })
         const params = url.searchParams
@@ -422,7 +417,7 @@ describe("backup request recovery", () => {
         return new Response(null, { status: 202 })
       }
       const body = saved.get(url.pathname)
-      return body ? new Response(new Uint8Array(body)) : new Response(null, { status: 404 })
+      return body ? new Response(new Uint8Array(body), { headers: { etag: '"fixture"' } }) : new Response(null, { status: 404 })
     })
     const engine = new BackupEngine({ fetch: azureBridge(networkFetch), getToken: async () => "token", retentionDays: () => 30 })
     const job = engine.start(request)
@@ -430,7 +425,8 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.exception).toBeUndefined()
     const log = job.log.join("\n")
-    expect(log).toContain(LEGACY_SEALED_MESSAGE)
+    expect(log).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. Older backups were left in place.`)
+    expect(log).not.toContain("Removed")
     expect(deleted).toEqual([])
     expect([...saved.keys()].filter(path => path.includes("backup-2026-08-02-"))).toHaveLength(2)
   })
@@ -450,7 +446,7 @@ describe("backup request recovery", () => {
     const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
       const sent = input as Request
       const url = new URL(sent.url)
-      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.hostname === "graph.microsoft.com") return emptyIntuneRead(url.pathname)
       if (url.search) {
         if (sent.method === "PUT") return new Response(null, { status: 201 })
         const params = url.searchParams
@@ -476,13 +472,12 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(deleted).toHaveLength(0)
     const log = job.log.join("\n")
-    expect(log).toContain(LEGACY_SEALED_MESSAGE)
+    expect(log).toContain("Could not read the metadata of 1 older backup")
     expect(log).not.toContain("Removed")
   })
 
-  it("commits the complete backup before a retention read hangs", async () => {
+  it("commits the complete backup before eight retention reads hang", async () => {
     requestTimers()
-    vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
     const started = Date.now()
     const saved = new Map<string, string>()
     const signals: AbortSignal[] = []
@@ -494,12 +489,7 @@ describe("backup request recovery", () => {
         return
       }
       if (init?.method !== "GET") return
-      if (url.search) {
-        const entries = url.searchParams.has("delimiter") ? prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`)
-          : [...saved.keys()].map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`)
-        return new Response(`<EnumerationResults><Blobs>${entries.join("")}</Blobs></EnumerationResults>`)
-      }
-      if (saved.has(url.pathname)) return new Response(saved.get(url.pathname), { headers: { etag: '"v1"' } })
+      if (url.search) return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
       expect(saved.size).toBe(2)
       signals.push(init.signal!)
       return new Promise(() => {})
@@ -516,9 +506,9 @@ describe("backup request recovery", () => {
     expect(job.endTime).toBeDefined()
     expect(new Date(job.endTime!).getTime() - started).toBeLessThan(5 * 60_000)
     expect(job.exception).toBeUndefined()
-    expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds")
-    expect(signals).toHaveLength(3)
-    expect(new Set(fetchImpl.mock.calls.filter(([input, init]) => init?.method === "GET" && !new URL(String(input)).search).map(([input]) => String(input))).size).toBe(3)
+    expect(job.log.join("\n")).toContain("Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
+    expect(signals).toHaveLength(24)
+    expect(new Set(fetchImpl.mock.calls.filter(([input, init]) => init?.method === "GET" && !new URL(String(input)).search).map(([input]) => String(input))).size).toBe(8)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)
     expect(saved.size).toBe(2)
@@ -535,7 +525,7 @@ describe("backup request recovery", () => {
     const oldManifest = `/intune-backups/${oldPrefix}metadata.json`
     const oldPolicy = `/intune-backups/${oldPrefix}DeviceConfigurations/Old.json`
     const saved = new Map([
-      [oldManifest, JSON.stringify({ Status: "Success", TenantId: TENANT, Items: { "DeviceConfigurations/old": { file: "Old.json", hash: snapshotHash({ id: "old" }) } }, Scope: { Excluded: request.scope.excluded } })],
+      [oldManifest, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: request.scope.excluded }, Items: { "DeviceConfigurations/old": { file: "Old.json", sha256: createHash("sha256").update(JSON.stringify({ id: "old" })).digest("hex") } } })],
       [oldPolicy, JSON.stringify({ id: "old" })],
     ])
     const original = new Map(saved)
@@ -555,10 +545,10 @@ describe("backup request recovery", () => {
       if (init?.method === "GET" && url.search) {
         const entries = url.searchParams.get("delimiter") === "/"
           ? `<BlobPrefix><Name>${oldPrefix}</Name></BlobPrefix>`
-          : [...saved.keys()].filter(path => path.startsWith(`/intune-backups/${url.searchParams.get("prefix")}`)).map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`).join("")
+          : [...saved.keys()].filter(path => path.startsWith(`/intune-backups/${url.searchParams.get("prefix")}`)).map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name><Properties><Etag>"fixture"</Etag></Properties></Blob>`).join("")
         return new Response(`<EnumerationResults><Blobs>${entries}</Blobs></EnumerationResults>`)
       }
-      if (init?.method === "GET") return new Response(saved.get(url.pathname), { status: saved.has(url.pathname) ? 200 : 404, headers: { etag: '"v1"' } })
+      if (init?.method === "GET") return new Response(saved.get(url.pathname), { headers: { "content-type": "application/json", etag: '"fixture"' } })
       if (init?.method === "DELETE") saved.delete(url.pathname)
     })
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30 })
@@ -571,8 +561,12 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.endTime).toBeDefined()
     expect(job.exception).toBeUndefined()
-    expect(job.log.filter(line => line.includes("Could not remove old backups:"))).toHaveLength(1)
-    expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds. Check your connection and retry. They will be reconsidered on the next run.")
+    if (failure === "metadata read") {
+      expect(job.log.join("\n")).toContain("Could not read the metadata of 1 older backup: Backup request timed out after 90 seconds.")
+    } else {
+      expect(job.log.filter(line => line.includes("Could not remove old backups:"))).toHaveLength(1)
+      expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds. Check your connection and retry. They will be reconsidered on the next run.")
+    }
     expect(signals).toHaveLength(3)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)
@@ -606,10 +600,10 @@ describe("backup request recovery", () => {
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
         { id: "bad-1", displayName: "Bad 1" }, { id: "reset", displayName: "Reset" }, { id: "bad-2", displayName: "Bad 2" },
       ] })
-      if (url.pathname.endsWith("/reset")) return service === "blob" ? Response.json({ id: "reset" }) : new Promise<Response>(resolve => {
-        setTimeout(() => resolve(Response.json({ id: "reset" })), 4500)
+      if (url.pathname.endsWith("/reset")) return service === "blob" ? Response.json({ id: "reset", assignments: [] }) : new Promise<Response>(resolve => {
+        setTimeout(() => resolve(Response.json({ id: "reset", assignments: [] })), 4500)
       })
-      if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
+      if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       failures.push(Date.now() - started)
       throw new TypeError("Connection reset")
     }, 2)
@@ -647,7 +641,7 @@ describe("backup request recovery", () => {
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
         { id: "bad-1", displayName: "Bad 1" }, { id: "saved", displayName: "Saved" }, { id: "bad-2", displayName: "Bad 2" },
       ] })
-      if (url.pathname.endsWith("/saved")) return Response.json({ id: "saved" })
+      if (url.pathname.endsWith("/saved")) return Response.json({ id: "saved", assignments: [] })
       return uploading.then(() => { throw new TypeError("Connection reset") })
     }, 2)
     const job = engine.start(request)
@@ -670,7 +664,7 @@ describe("backup request recovery", () => {
           { id: "saved", displayName: "Saved" },
           ...Array.from({ length: 8 }, (_, index) => ({ id: `hung-${index}`, displayName: `Hung ${index}` })),
         ] })
-        return Response.json({ id: url.pathname.split("/").at(-1) })
+        return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       if (url.pathname.endsWith("/Saved.json")) {
@@ -704,7 +698,7 @@ describe("backup request recovery", () => {
         ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
         { id: "good", displayName: "Good" },
       ] })
-      if (url.pathname.endsWith("/good")) return Response.json({ id: "good" })
+      if (url.pathname.endsWith("/good")) return Response.json({ id: "good", assignments: [] })
       attempts++
       return new Response(null, { status, headers: { "Retry-After": "1" } })
     }, 1)
@@ -732,7 +726,7 @@ describe("backup request recovery", () => {
           controller.close()
         } }))
       }
-      return Response.json({ id: url.pathname.split("/").at(-1) })
+      return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
     }, 1)
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(10_000)
@@ -751,7 +745,7 @@ describe("backup request recovery", () => {
         ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
         { id: "good", displayName: "Good" },
       ] })
-      if (url.pathname.endsWith("/good")) return Response.json({ id: "good" })
+      if (url.pathname.endsWith("/good")) return Response.json({ id: "good", assignments: [] })
       attempts++
       return new Response("Invalid JSON")
     }, 1)
@@ -772,7 +766,7 @@ describe("backup request recovery", () => {
           ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
           { id: "good", displayName: "Good" },
         ] })
-        return Response.json({ id: url.pathname.split("/").at(-1) })
+        return Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (!url.pathname.includes("/Bad")) return
       attempts++
@@ -806,7 +800,7 @@ describe("backup request recovery", () => {
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
         { id: "waiting", displayName: "Waiting" }, { id: "bad-1", displayName: "Bad 1" }, { id: "bad-2", displayName: "Bad 2" },
       ] })
-      if (url.pathname.endsWith("/waiting")) return Response.json({ id: "waiting" })
+      if (url.pathname.endsWith("/waiting")) return Response.json({ id: "waiting", assignments: [] })
       return waitingUpload.then(() => { throw new TypeError("Connection reset") })
     }, 2)
     const job = engine.start(request)
@@ -866,7 +860,7 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") {
         return url.pathname.endsWith("/deviceConfigurations")
           ? Response.json({ value: [{ id: "policy", displayName: "Policy" }] })
-          : Response.json({ id: "policy", displayName: "Policy" })
+          : Response.json({ id: "policy", displayName: "Policy", assignments: [] })
       }
       if (url.search) return new Response(null, { status: 201 })
       const target = url.pathname.endsWith(blob === "metadata" ? "/metadata.json" : "/Policy.json")
@@ -910,7 +904,7 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") {
         return url.pathname.endsWith("/deviceConfigurations")
           ? Response.json({ value: [{ id: "bad", displayName: "Bad" }, { id: "good", displayName: "Good" }] })
-          : Response.json({ id: url.pathname.split("/").at(-1) })
+          : Response.json({ id: url.pathname.split("/").at(-1), assignments: [] })
       }
       if (url.search) return new Response(null, { status: 201 })
       if (url.pathname.endsWith("/Bad.json")) {
@@ -1024,7 +1018,7 @@ describe("backup request recovery", () => {
       const times = calls.get(id) ?? []
       times.push(Date.now() - started)
       calls.set(id, times)
-      return times.length <= 2 ? new Response(null, { status: 429, headers: { "Retry-After": "120" } }) : Response.json({ id })
+      return times.length <= 2 ? new Response(null, { status: 429, headers: { "Retry-After": "120" } }) : Response.json({ id, assignments: [] })
     }
     const engine = new BackupEngine({ fetch: fetchImpl, getToken: async (_tenant, _client, scope) => {
       if (scope.includes("graph.microsoft.com") && ++tokenCalls === 3) await new Promise(resolve => { setTimeout(resolve, 10_000) })
@@ -1089,7 +1083,7 @@ describe("backup request recovery", () => {
       const times = calls.get(id) ?? []
       times.push(Date.now() - started)
       calls.set(id, times)
-      if (times.length > 1) return Response.json({ id, displayName: id })
+      if (times.length > 1) return Response.json({ id, displayName: id, assignments: [] })
       const throttled = () => new Response(null, { status: 429, headers: { "Retry-After": id === "policy-0" || id === "policy-1" ? "120" : "60" } })
       return id === "policy-1" ? new Promise<Response>(resolve => { setTimeout(() => resolve(throttled()), 20_000) }) : throttled()
     })
@@ -1182,7 +1176,7 @@ describe("backup request recovery", () => {
         failedReads++
         throw new TypeError("Connection reset")
       }
-      return Response.json({ id: "good", displayName: "Good" })
+      return Response.json({ id: "good", displayName: "Good", assignments: [] })
     })
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(3_000)

@@ -1,3 +1,6 @@
+import { checkDirectoryRestore } from "./directory-restore-smoke.mjs"
+import { checkConfigurationRestore } from "./configuration-restore-smoke.mjs"
+import { checkIdentityRestoreSafety } from "./identity-restore-safety-smoke.mjs"
 /**
  * Smoke test for the built app (run `npm run build` first).
  *
@@ -11,20 +14,23 @@
  * renderer-to-main API bridge and the per tenant license gate. No tenant is signed in, so
  * the licensing service is never called. Screenshots are written to screenshot-dir.
  */
-import { spawn, spawnSync } from "node:child_process"
+import { deepStrictEqual } from "node:assert"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
-import { tmpdir } from "node:os"
+import { availableParallelism, tmpdir, uptime } from "node:os"
 import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
-import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
+import { checkBackupCancel, checkSignInRequired } from "./backup-cancel-smoke.mjs"
 import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
+import { checkRestoreService } from "./restore-service-smoke.mjs"
 import { disableAutoUpdate, RUN_SWITCH } from "./smoke-update-policy.mjs"
 
-const require = createRequire(import.meta.url)
+const require = createRequire(join(process.cwd(), "package.json"))
 const desktopDir = resolve(import.meta.dirname, "..")
 const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "out", "smoke"))
 const packagedApp = process.env.TENUVAULT_SMOKE_APP
+const upgradeProfile = process.env.TENUVAULT_SMOKE_SECTION === "backup-upgrade"
 
 // A packaged build would check for updates like an installed app; the suite switches the update
 // channel, so a release could download and, on macOS, replace the app under test when it quits.
@@ -92,6 +98,7 @@ if (!packagedApp) args.push(`--inspect=127.0.0.1:${inspectorPort}`)
 // The policy's mark, so recovery after a killed run can tell this app is still running.
 if (updatePolicy?.token) args.push(`${RUN_SWITCH}=${updatePolicy.token}`)
 if (process.platform === "linux") args.push("--no-sandbox")
+if (process.platform === "linux" && upgradeProfile && !packagedApp) args.push("--password-store=basic")
 // On a Wayland desktop the compositor stops sending frame callbacks to a window it does not draw
 // (an idle or locked screen, another workspace), so CSS animations stall and a dialog's exit
 // animation never ends. X11 (XWayland on a desktop, Xvfb in CI) keeps producing frames.
@@ -101,12 +108,28 @@ if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOK
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
 const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
+function historicalProfile(mode) {
+  // Windows DPAPI binds the fixture to this runner's account. The unsigned Electron helper on
+  // macOS is a different Keychain client from the packaged app. Linux development smoke uses the frozen profile.
+  if (packagedApp && process.platform === "darwin") throw new Error("Run the signed macOS upgrade check in RELEASING.md")
+  const flags = process.platform === "linux" ? ["--no-sandbox", "--ozone-platform=x11", ...(!packagedApp ? ["--password-store=basic"] : [])] : []
+  execFileSync(require("electron"), [...flags, join(desktopDir, "scripts", "backup-upgrade-profile.cjs")], {
+    env: { ...env, TV_SMOKE_UPGRADE_MODE: mode, TV_SMOKE_UPGRADE_PROFILE: profile, TV_SMOKE_UPGRADE_FIXTURE: process.env.TENUVAULT_SMOKE_UPGRADE_FIXTURE ?? join(desktopDir, "test", "fixtures", "backup-upgrade") },
+    stdio: "inherit", timeout: 30_000,
+  })
+}
+
+if (upgradeProfile) historicalProfile("seed")
 // Only a development run needs the electron package, and it loads after the policy step, so a
 // missing package cannot skip the recovery of a packaged run.
 app = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
 let appLog = ""
 app.stdout.on("data", (d) => (appLog += d))
 app.stderr.on("data", (d) => (appLog += d))
+
+const machineLoad = () => `${process.platform === "win32" ? `uptime ${Math.round(uptime())} seconds` : execFileSync("uptime", { encoding: "utf8" }).trim()} (${availableParallelism()} CPUs)`
+console.log(`Machine load at start: ${machineLoad()}`)
+const smokeStarted = Date.now()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 let failures = 0
@@ -198,14 +221,27 @@ async function screenshot(name) {
   writeFileSync(join(shotsDir, `${name}.png`), Buffer.from(result.data, "base64"))
 }
 
+async function captureState(name) {
+  const stem = name.replace(/\W+/g, "-")
+  await screenshot(stem)
+  const state = await evaluate(`(() => {
+    const inspect = doc => ({ text: doc.body.innerText, html: doc.documentElement.outerHTML, focus: doc.activeElement?.outerHTML,
+      visibility: doc.visibilityState, animations: doc.getAnimations().map(a => ({ name: a.animationName, playState: a.playState, currentTime: a.currentTime, timing: a.effect?.getComputedTiming(), target: a.effect?.target?.outerHTML })) });
+    return { main: inspect(document), frames: [...document.querySelectorAll('iframe')].map(f => inspect(f.contentDocument)) };
+  })()`)
+  writeFileSync(join(shotsDir, `${stem}.json`), JSON.stringify({ elapsedMs: Date.now() - smokeStarted, uptime: machineLoad(), ...state }, null, 2))
+  writeFileSync(join(shotsDir, "main-process.log"), appLog)
+}
+
 async function check(name, fn) {
+  const started = Date.now()
   try {
     await fn()
-    console.log(`ok   ${name}`)
+    console.log(`ok   ${name} (${Date.now() - started} ms)`)
   } catch (error) {
     failures++
     console.log(`FAIL ${name}: ${error.message}`)
-    await screenshot(`fail-${name.replace(/\W+/g, "-")}`).catch(() => {})
+    await captureState(`fail-${name}`).catch(() => {})
   }
 }
 
@@ -227,6 +263,9 @@ async function assertPageInMain(text, message) {
   assert(!(await evaluate(`document.querySelector('main')?.innerText.includes("This screen could not be loaded")`)), `${message}: the page failed behind the error boundary`)
 }
 
+// Keep the automated page active when another app covers the smoke window. Otherwise
+// Chromium suspends animation frames, including the real dialog teardown checked below.
+await send("Emulation.setFocusEmulationEnabled", { enabled: true })
 await send("Page.enable")
 await send("Runtime.enable")
 
@@ -242,60 +281,65 @@ async function disableAnimations() {
   })()`)
 }
 
+if (upgradeProfile) {
+  const tenantId = "11111111-1111-1111-1111-111111111111"
+  const request = {
+    tenantId, appId: "22222222-2222-2222-2222-222222222222",
+    clientSecret: "tenuvault-desktop-delegated-auth", subscriptionId: "local",
+    resourceGroupName: "local", storageAccountName: `tvlocal-${tenantId}`,
+  }
+  await check("Backup History lists both historical backups without warnings", async () => {
+    assert(await waitForCondition(`Boolean(window.tenuvault?.backups && document.getElementById("root")?.childElementCount)`, 30000), "the renderer bridge did not start")
+    for (const summary of [false, true]) {
+      const [status, history] = await evaluate(`fetch("/api/list-backups", { method: "POST", body: JSON.stringify(${JSON.stringify({ ...request, summary })}) }).then(async response => [response.status, await response.json()])`)
+      assert(status === 200, `Backup History returned HTTP ${status}: ${history.error ?? ""}`)
+      assert(JSON.stringify(history.backups.map(row => [row.id, row.status, row.totalPolicies])) === JSON.stringify([
+        ["backup-2026-11-02-020000", "Success", 2], ["backup-2026-11-01-020000", "Success", 2],
+      ]), "Backup History did not return the two historical backups")
+      assert(!history.warnings?.length && !history.damagedFiles && !history.unreadableBackups, "Backup History reported unreadable files")
+    }
+    const problem = await evaluate(`window.tenuvault.backups.inventoryProblem(${JSON.stringify(tenantId)})`)
+    assert(problem === null, "The historical backup inventory reported damage")
+  })
+  await check("Every historical policy and manifest downloads with its original content", async () => {
+    const JSZip = require("jszip")
+    const items = {
+      "CompliancePolicies/alpha": { file: "alpha.json" },
+      "DeviceConfigurations/beta": { file: "beta.json" },
+    }
+    for (const backupId of ["backup-2026-11-01-020000", "backup-2026-11-02-020000"]) {
+      const [status, body] = await evaluate(`fetch("/api/download-backup", {
+        method: "POST", body: JSON.stringify(${JSON.stringify({ ...request, backupId })})
+      }).then(async response => [response.status, Array.from(new Uint8Array(await response.arrayBuffer()))])`)
+      assert(status === 200, `${backupId} download returned HTTP ${status}: ${Buffer.from(body).toString("utf8").slice(0, 200)}`)
+      const zip = await JSZip.loadAsync(Buffer.from(body), { checkCRC32: true })
+      const expected = {
+        "metadata.json": { Status: "Success", TenantId: tenantId, RunId: backupId, Items: items },
+        "CompliancePolicies/alpha.json": { id: "alpha", displayName: "Synthetic compliance policy" },
+        "DeviceConfigurations/beta.json": { id: "beta", displayName: "Synthetic device configuration" },
+        "tenuvault-manifest.json": { version: 1, sourceTenantId: tenantId, backupId },
+      }
+      const paths = Object.values(zip.files).filter(file => !file.dir).map(file => file.name)
+      deepStrictEqual(paths.sort(), Object.keys(expected).sort(), `${backupId} archive inventory changed`)
+      for (const [path, value] of Object.entries(expected)) {
+        deepStrictEqual(JSON.parse(await zip.file(path).async("string")), value, `${backupId}/${path} changed`)
+      }
+    }
+  })
+  await finish()
+}
+
 await check("first run shows the welcome screen", async () => {
   assert(await waitForText("Welcome to TenuVault", 30000), "welcome screen did not appear")
   await disableAnimations()
   assert(!(await evaluate(`document.body.innerText.includes("Backup & Restore")`)), "welcome screen missing, app shown instead")
   assert(await waitForText("Connect your tenant"), "setup call to action missing")
   const settled = await waitForTrialHealth()
-  if (settled.tenantTrialsEnabled) {
-    assert(await waitForText("New tenants start with a Pro trial, no card and no email needed."), "tenant trial welcome guidance missing")
-    assert(!(await evaluate(`document.body.innerText.includes("Try Pro free for 30 days, no card")`)), "emailed trial link visible with tenant trials enabled")
-  } else {
-    assert(await waitForText("Try Pro free for 30 days, no card"), "trial link missing")
-  }
+  if (!settled.tenantTrialsEnabled) assert(await waitForText("Try Pro free for 30 days, no card"), "trial link missing")
   assert(await waitForText("I have a license key"), "license key link missing")
-  assert(await waitForText("Rather do it together? Book a free setup call"), "free setup call row missing")
-  assert(await evaluate(`document.body.innerText.includes("30 minutes, free on every plan. You share your screen and we set it up in your tenant.")`), "free setup call details missing")
-  // The row sits under the helper text of Connect your tenant and above the setup diagnostics question.
-  assert(await evaluate(`(() => {
-    const link = document.querySelector('[data-setup-call="welcome"]')
-    const connect = [...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant")
-    const diagnostics = document.querySelector('section[aria-labelledby="setup-diagnostics-title"]')
-    const after = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
-    return Boolean(link && connect) && link.textContent === "Book a free setup call" && after(connect, link) && (!diagnostics || after(link, diagnostics))
-  })()`), "free setup call row is not below Connect your tenant and above the setup diagnostics question")
-  // At the size this window has, which is the smallest one on a small display, what a new admin
-  // has to reach shows without scrolling: Connect your tenant, the setup call and the answers
-  // to the setup diagnostics question.
-  await evaluate(`window.scrollTo(0, 0)`)
-  const cutOff = await evaluate(`(() => {
-    const button = label => [...document.querySelectorAll("button")].find(b => b.innerText.trim() === label)
-    const parts = { "Connect your tenant": button("Connect your tenant"), "Book a free setup call": document.querySelector('[data-setup-call="welcome"]'), "Share setup diagnostics": button("Share setup diagnostics"), "Don't share": button("Don't share") }
-    return { page: innerWidth + "x" + innerHeight, parts: Object.entries(parts).filter(([, part]) => part && (part.getBoundingClientRect().top < 0 || part.getBoundingClientRect().bottom > innerHeight)).map(([label]) => label) }
-  })()`)
-  assert(cutOff.parts.length === 0, `welcome screen cuts off ${cutOff.parts.join(", ")} in a ${cutOff.page} page`)
+  assert(await waitForText("What TenuVault sends"), "data flows link missing")
+  assert(!(await evaluate(`Boolean(document.getElementById("setup-diagnostics-title"))`)), "setup diagnostics are visible before the first backup")
   await screenshot("00-welcome")
-  // The whole screen fits the window as it opens: 1440x920, less the title bar and menu of this
-  // platform. With tenant trials off the helper text is longer and a second link joins the license
-  // key link, which the fonts of a Linux runner may wrap, so that state is not measured.
-  if (settled.tenantTrialsEnabled) {
-    const frame = await evaluate(`Math.min(Math.max(outerHeight - innerHeight, 0), 80)`)
-    await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 920 - frame, deviceScaleFactor: 1, mobile: false })
-    try {
-      await sleep(300)
-      const overflow = await evaluate(`(() => {
-        // The card with the margin the screen keeps around it, which is what has to fit.
-        const card = document.querySelector('[data-setup-call="welcome"]').closest(".bg-card")
-        const margin = getComputedStyle(card.parentElement)
-        return { height: innerHeight, content: Math.round(card.getBoundingClientRect().height + parseFloat(margin.paddingTop) + parseFloat(margin.paddingBottom)), scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) }
-      })()`)
-      console.log(`     welcome screen: ${overflow.content}px in a ${overflow.height}px page`)
-      assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `welcome screen scrolls: ${JSON.stringify(overflow)}`)
-    } finally {
-      await send("Emulation.clearDeviceMetricsOverride")
-    }
-  }
 })
 
 // On Windows an unpacked build reports managed updates without any policy (no uninstaller beside
@@ -307,14 +351,14 @@ if (packagedApp && process.platform === "darwin") {
   })
 }
 
-await check("the welcome screen opens the free setup call page in the browser, named after the screen", async () => {
+await check("the welcome screen opens the data flows guide", async () => {
   try {
     await evaluate(`(() => {
-      window.__setupCall = { opened: [] }
+      window.__dataFlows = { opened: [] }
       const frame = document.createElement("iframe")
       frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
       document.body.appendChild(frame)
-      window.__setupCallFrame = frame
+      window.__dataFlowsFrame = frame
       // Give the router the app's URL instead of about:blank.
       frame.contentDocument.open()
       frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
@@ -323,7 +367,7 @@ await check("the welcome screen opens the free setup call page in the browser, n
       // Run the built renderer with a recording external bridge, without changing the frozen preload bridge.
       frame.contentWindow.tenuvault = {
         ...window.tenuvault,
-        app: { ...window.tenuvault.app, openExternal: url => { window.__setupCall.opened.push(url); return Promise.resolve() } },
+        app: { ...window.tenuvault.app, openExternal: url => { window.__dataFlows.opened.push(url); return Promise.resolve() } },
       }
       document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
       const script = frame.contentDocument.createElement("script")
@@ -331,15 +375,15 @@ await check("the welcome screen opens the free setup call page in the browser, n
       script.src = document.querySelector('script[type="module"]').src
       frame.contentDocument.head.appendChild(script)
     })()`)
-    const body = `window.__setupCallFrame.contentDocument.body`
-    assert(await waitForCondition(`${body}.innerText.includes("Welcome to TenuVault") && Boolean(${body}.querySelector('[data-setup-call="welcome"]'))`), "welcome screen with the free setup call did not render")
-    await evaluate(`${body}.querySelector('[data-setup-call="welcome"]').click()`)
-    assert(await waitForCondition(`window.__setupCall.opened.length === 1`), "free setup call did not use the external bridge")
-    const opened = await evaluate(`window.__setupCall.opened`)
-    assert(opened.length === 1 && opened[0] === "https://www.tenuvault.com/setup-call?src=app-welcome", `free setup call opened ${JSON.stringify(opened)}`)
-    assert(await evaluate(`${body}.innerText.includes("Welcome to TenuVault")`), "free setup call left the welcome screen")
+    const body = `window.__dataFlowsFrame.contentDocument.body`
+    assert(await waitForCondition(`${body}.innerText.includes("Welcome to TenuVault") && ${body}.innerText.includes("What TenuVault sends")`), "welcome screen with the data flows link did not render")
+    await evaluate(`[...${body}.querySelectorAll("button")].find(button => button.innerText === "What TenuVault sends").click()`)
+    assert(await waitForCondition(`window.__dataFlows.opened.length === 1`), "data flows link did not use the external bridge")
+    const opened = await evaluate(`window.__dataFlows.opened`)
+    assert(opened.length === 1 && opened[0] === "https://docs.tenuvault.com/security/data-flows/", `data flows link opened ${JSON.stringify(opened)}`)
+    assert(await evaluate(`${body}.innerText.includes("Welcome to TenuVault")`), "data flows link left the welcome screen")
   } finally {
-    await evaluate(`window.__setupCallFrame?.remove(); delete window.__setupCallFrame; delete window.__setupCall`)
+    await evaluate(`window.__dataFlowsFrame?.remove(); delete window.__dataFlowsFrame; delete window.__dataFlows`)
   }
 })
 
@@ -482,9 +526,9 @@ await check("hung license checks time out and ignore late responses after retry"
     assert(await evaluate(`window.__licenseTimeout.calls === 4 && ${body}.innerText.includes("Welcome to TenuVault")`), "background check did not keep the loaded status")
     await evaluate(`window.__licenseTimeout.onChanged({ ...window.__licenseTimeout.status, hasKey: true })`)
     // With a key and no tenant the app opens the guided setup, which has the window to itself.
-    assert(await waitForCondition(`${body}.innerText.includes("Set up with Microsoft sign-in")`), "license change was not delivered during the pending check")
+    assert(await waitForCondition(`${body}.innerText.includes("How do you want to connect?")`), "license change was not delivered during the pending check")
     assert(await waitForCondition(`window.__licenseTimeout.expired === 2 && window.__licenseTimeout.timers.size === 0`), "hung background check did not time out")
-    assert(await evaluate(`${body}.innerText.includes("Set up with Microsoft sign-in") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
+    assert(await evaluate(`${body}.innerText.includes("How do you want to connect?") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
     await evaluate(`window.__licenseTimeout.refresh()`)
     assert(await waitForCondition(`window.__licenseTimeout.calls === 5 && ${body}.innerText.includes("Welcome to TenuVault")`), "background timeout left the refresh guard locked")
     await evaluate(`window.__licenseTimeout.resolveBackground()`)
@@ -511,23 +555,31 @@ await check("malformed license keys are rejected", async () => {
 // Without a key, Community (or a license shared by the organization) starts at the tenant sign-in.
 await check("Community users can reach the tenant sign-in without a key", async () => {
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant").click()`)
-  assert(await waitForText("Set up TenuVault", 15000), "tenant sign-in did not open")
-  assert(await waitForText("Set up with Microsoft sign-in"), "setup checklist missing")
+  assert(await waitForText("How do you want to connect?", 15000), "tenant sign-in did not open")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
-  assert(await evaluate(`[...document.querySelectorAll('nav[aria-label="Help"] > *')].map(item => item.textContent).join("|") === "Free setup call|License|Share feedback|Support"`), "first-run header does not list Free setup call, License, Share feedback and Support")
+  assert(await evaluate(`[...document.querySelectorAll('nav[aria-label="Help"] > *')].map(item => item.textContent.trim()).join("|") === "Help"`), "first-run header does not show one Help menu")
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
   await sleep(300)
-  const overflow = await evaluate(`({ height: innerHeight, scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) })`)
-  assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `Connect step scrolls: ${JSON.stringify(overflow)}`)
+  const assertFit = async name => {
+    const overflow = await evaluate(`({ height: innerHeight, scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) })`)
+    assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `${name} scrolls: ${JSON.stringify(overflow)}`)
+  }
+  assert(await waitForText("How do you want to connect?"), "method choice missing")
+  assert(await evaluate(`[...document.querySelectorAll("[data-sign-in-method]")].map(card => card.getAttribute("aria-label").replace("Choose ", "")).join("|") === "TenuVault app|Your own app registration"`), "sign-in method order is wrong")
+  await assertFit("Sign-in method cards")
   await screenshot("00b-setup-connect")
+  await evaluate(`document.querySelector('[data-sign-in-method="ownApp"]').click()`)
+  assert(await waitForText("Set up with Microsoft sign-in"), "own registration setup missing")
+  await assertFit("Own registration Connect step")
   await send("Emulation.clearDeviceMetricsOverride")
+  assert(await waitForCondition(`window.tenuvault.storage.getItemSync("tenuvault.onboarding.draft")?.includes('"step":0')`), "setup draft did not save")
 })
 
 await check("dashboard renders in the desktop shell", async () => {
   await disableAnimations()
   await go("#/portal/dashboard", "Dashboard")
-  await assertPageInMain("Protect your Intune policies", "dashboard")
+  await assertPageInMain("Protect your tenant configuration", "dashboard")
   await sleep(1000)
   await screenshot("01-dashboard")
 })
@@ -546,13 +598,12 @@ await check("a failed page keeps the sidebar and offers recovery", async () => {
     assert(renderFailures > beforeRetry, "Try again did not re-render the failed page")
     await screenshot("01b-page-error")
     await evaluate(`document.querySelector('nav a[href="#/portal/dashboard"]').click()`)
-    assert(await waitForCondition(`document.querySelector('main')?.innerText.includes('Protect your Intune policies') && !document.querySelector('main [role="alert"]')`), "sidebar did not open a healthy page")
+    assert(await waitForCondition(`document.querySelector('main')?.innerText.includes('Protect your tenant configuration') && !document.querySelector('main [role="alert"]')`), "sidebar did not open a healthy page")
     await send("Network.setBlockedURLs", { urls: [] })
     // React keeps a rejected lazy import. Reload retries the module after the failure is removed.
     await go("#/portal/overview", "This screen could not be loaded")
     await evaluate(`[...document.querySelectorAll('main button')].find(b => b.textContent === 'Reload').click()`)
-    assert(await waitForText("Welcome to TenuVault"), "Reload did not restart the app")
-    await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('Connect your tenant')).click()`)
+    assert(await waitForText("All tenants"), "Reload did not restore the page with a saved setup draft")
     await go("#/portal/overview", "All tenants")
     assert(await waitForCondition(`Boolean(document.querySelector('main h1')?.textContent.includes('All tenants'))`), "Reload did not recover the page")
     await go("#/portal/dashboard", "Dashboard")
@@ -569,7 +620,7 @@ await check("unhandled promise rejections are logged without replacing the page"
   await evaluate(`void Promise.reject(new Error('Smoke unhandled rejection'))`)
   for (let attempt = 0; unhandledRejections <= beforeRejection && attempt < 20; attempt++) await sleep(100)
   assert(unhandledRejections > beforeRejection, "unhandled rejection was not logged")
-  assert(await evaluate(`document.querySelector('main')?.innerText.includes('Protect your Intune policies') && !document.querySelector('main [role="alert"]')`), "unhandled rejection replaced the page")
+  assert(await evaluate(`document.querySelector('main')?.innerText.includes('Protect your tenant configuration') && !document.querySelector('main [role="alert"]')`), "unhandled rejection replaced the page")
 })
 
 await check("preload bridge is isolated", async () => {
@@ -716,6 +767,8 @@ await check("the first tenant without a license works as Community", async () =>
 })
 
 await check("tenants page offers delegated sign-in", async () => {
+  // This is a separate new tenant, so it must start with no fields from the recovery fixture.
+  await evaluate(`window.tenuvault.storage.removeItem("tenuvault.onboarding.draft")`)
   await go("#/portal/tenants", "Tenants")
   await sleep(500)
   const opened = await evaluate(`(() => {
@@ -726,13 +779,25 @@ await check("tenants page offers delegated sign-in", async () => {
   assert(opened, "Connect tenant button not found")
   // Connect tenant opens the guided setup, the one way to connect a tenant on the desktop.
   assert(await waitForCondition(`location.hash === "#/portal/onboarding"`), "Connect tenant did not open the guided setup")
-  assert(await waitForText("Set up with Microsoft sign-in"), "guided setup did not open")
+  assert(await waitForText("How do you want to connect?"), "adding a tenant did not open the sign-in wizard")
+  await evaluate(`document.querySelector('[data-sign-in-method="ownApp"]').click()`)
+  assert(await waitForText("Set up with Microsoft sign-in"), "connect step did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
   await screenshot("03-add-tenant")
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
+  try {
+    const size = await evaluate(`(() => {
+      const viewport = document.scrollingElement
+      return { width: viewport.scrollWidth, height: viewport.scrollHeight }
+    })()`)
+    assert(size.width <= 1024 && size.height <= 901, `Connect overflows at 1024x900: ${size.width}x${size.height}`)
+  } finally {
+    await send("Emulation.clearDeviceMetricsOverride")
+  }
 })
 
 await check("onboarding is the desktop wizard, without client secrets", async () => {
-  await go("#/portal/onboarding", "Set up TenuVault")
+  await go("#/portal/onboarding", "Set up with Microsoft sign-in")
   assert(await waitForText("Set up with Microsoft sign-in"), "Microsoft setup button missing")
   await evaluate(`[...document.querySelectorAll("summary")].find(item => item.textContent.includes("What the setup does")).click()`)
   assert(await waitForText("Permissions the app registration gets"), "permission list missing")
@@ -804,12 +869,14 @@ await check("settings sidebar switches sections and names the section in the URL
     assert(await waitForCondition(`document.activeElement === document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')`), "focus did not land on the active section entry after the dialog closed")
     await evaluate(`location.hash = "#/portal/settings?section=about"`)
     assert(await waitForCondition(`${agreementOpen} && Boolean(${dialogClose})`), "dialog did not come back with its section")
+    assert(await waitForCondition(`(() => { const dialog = document.querySelector('[role="dialog"]'); return dialog?.dataset.state === "open" && !dialog.getAnimations({ subtree: true }).some(a => a.playState === "running") })()`), "license agreement enter animation did not settle")
     await evaluate(`${dialogClose}.click()`)
     assert(await waitForCondition(`!${agreementOpen}`), "license agreement dialog did not close")
     closed = true
   } finally {
     // A failure above must not leave real animations on or the agreement open (it would come back
     // with the about section) for the checks that follow.
+    if (!closed) await captureState("agreement-before-cleanup").catch(() => {})
     await disableAnimations()
     if (!closed) {
       await evaluate(`location.hash = "#/portal/settings?section=about"`)
@@ -1065,7 +1132,7 @@ await check("App Backup keeps stored access independent of sign-in and exposes g
   } finally { await send("Emulation.clearDeviceMetricsOverride") }
 })
 
-await checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, assert, send })
+await checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, captureState, assert, send })
 // Focused local App Backup validation; CI leaves this unset and runs the complete suite.
 if (process.env.TENUVAULT_SMOKE_SECTION === "app-backup") await finish()
 
@@ -1523,6 +1590,8 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
   }
 })
 
+await checkIdentityRestoreSafety({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+
 await check("restore journal applied IDs use validated inline inputs", async () => {
   const tenantId = "11111111-1111-1111-1111-111111111111"
   const originalId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -1796,6 +1865,13 @@ await check("dashboard shows the selected tenant in light and dark", async () =>
   await evaluate(`document.documentElement.classList.toggle("dark", ${wasDark})`)
 })
 
+await check("backup services use the same alphabetical order in navigation and the filter", async () => {
+  await go("#/portal/backup", "Backup & Restore")
+  const order = ["Entra ID", "Intune"]
+  assert(await waitForCondition(`JSON.stringify([...document.querySelectorAll('section[aria-label="Services"] a > span:first-of-type')].map(e => e.textContent)) === ${JSON.stringify(JSON.stringify(order))}`), "sidebar services out of order")
+  assert(await waitForCondition(`JSON.stringify([...document.querySelectorAll('#backup-service option')].slice(1).map(e => e.textContent)) === ${JSON.stringify(JSON.stringify(order))}`), "backup service filter out of order")
+})
+
 await check("restore deep links and navigation preserve the selected tab", async () => {
   await go("#/portal/backup?tab=restore", "Backup & Restore")
   // The sidebar already contains "Backup & Restore" before the lazy page loads.
@@ -1805,6 +1881,7 @@ await check("restore deep links and navigation preserve the selected tab", async
 
 await check("search with no matches and missing dates stay truthful", async () => {
   await go("#/portal/tenants", "Tenant Management")
+  assert(await waitForCondition(`[...document.querySelectorAll('[aria-label^="Backup services for"]')].some(group => [...group.querySelectorAll("a")].map(link => link.innerText).join(", ") === "Entra ID, Intune")`), "tenant backups are out of order")
   assert(!(await evaluate(`document.body.innerText.includes('NaN') || document.body.innerText.includes('Next backup in 2 hours')`)), "invented time shown")
   await evaluate(`(() => { const input = document.querySelector('[aria-label="Search tenants"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'no-such-tenant'); input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
   assert(await waitForText("No matching tenants"), "search claims no tenants are configured")
@@ -1816,7 +1893,7 @@ await check("appearance can switch to dark and back", async () => {
   await evaluate(`(() => { const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'dark')); select.value = 'dark'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
   assert(await evaluate(`document.documentElement.classList.contains('dark')`), "dark appearance was not applied")
   await screenshot("12-settings-dark")
-  await go("#/portal/onboarding", "Connect your tenant")
+  await go("#/portal/onboarding", "Set up with Microsoft sign-in")
   const contrast = await evaluate(`(() => {
     const style = getComputedStyle(document.querySelector('[data-tenant-connect]'));
     const luminance = color => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const ctx = canvas.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0); };
@@ -1848,6 +1925,55 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
   await go("#/portal/settings?section=appearance", "Appearance")
   await go("#/portal/backup?tab=schedule", "Automatic backups")
   assert(await waitForCondition(`document.getElementById('schedule-time')?.value === '07:45'`), 'navigation discarded the draft')
+})
+
+await checkRestoreService({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+await checkDirectoryRestore({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+await checkConfigurationRestore({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+
+await check("large inventory pages stay bounded in dark mode at 1024 pixels", async () => {
+  await evaluate(`(() => {
+    window.__largeOriginalFetch = window.fetch;
+    const backupId = 'backup-2026-11-16-000000';
+    window.fetch = (input, init) => {
+      const route = String(input);
+      if (route === '/api/list-backups') return Promise.resolve(Response.json({ backups: [{ id: backupId, timestamp: '2026-11-16T00:00:00Z', type: 'manual', status: 'Success', totalPolicies: 100000, counts: { DeviceConfigurations: 100000 }, scope: null, size: 200000000, duration: 1200, changes: null, comparedWith: null, largeInventory: true }] }));
+      if (route === '/api/list-backup-contents') {
+        const page = JSON.parse(init.body).largePage || 0;
+        const policies = Array.from({ length: 1000 }, (_, index) => ({ path: backupId + '/DeviceConfigurations/object-' + (page * 1000 + index) + '.json', displayName: 'object-' + (page * 1000 + index) }));
+        return Promise.resolve(Response.json({ largePage: page, hasMore: page < 99, content: { metadata: { LargeItems: { DeviceConfigurations: { count: 100000 } } }, groups: [{ folder: 'DeviceConfigurations', label: 'Synthetic inventory', area: 'Tenant administration', count: 100000, limitation: 'This inventory cannot be restored.', policies }] } }));
+      }
+      if (route === '/api/restore-preview') return Promise.resolve(Response.json({ items: JSON.parse(init.body).paths.map(path => ({ path, name: path.split('/').pop(), blocker: 'This inventory cannot be restored.', replaceBlocker: 'This inventory cannot be restored.' })) }));
+      return window.__largeOriginalFetch(input, init);
+    };
+  })()`)
+  try {
+    // Remount the page so the fixture replaces a cached sign-in failure before controls appear.
+    await go("#/portal/tenants", "Tenant Management")
+    await go("#/portal/backup?tab=backup", "Backup & Restore")
+    assert(await waitForText('Backup Timeline'), 'backup history did not open')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Refresh').click()`)
+    assert(await waitForText('Large inventory, page 1'), 'large contents did not load')
+    await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
+    await evaluate(`document.documentElement.classList.add('dark')`)
+    await evaluate(`[...document.querySelectorAll('summary')].find(summary => summary.textContent.includes('Synthetic inventory'))?.click()`)
+    assert((await evaluate(`document.querySelectorAll('li').length`)) < 1500, 'the screen rendered the full inventory')
+    assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), 'large contents overflow at 1024 pixels')
+    await evaluate(`[...document.querySelectorAll('p')].find(item => item.textContent.startsWith('Large inventory, page'))?.scrollIntoView({ block: 'center' })`)
+    await screenshot('layer7a-large-contents-dark-1024')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Next page').click()`)
+    assert(await waitForText('Large inventory, page 2'), 'next contents page did not replace the first')
+    assert(!(await evaluate(`document.querySelector('main').innerText.includes('object-0')`)), 'prior contents rows accumulated')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.includes('Restore from this backup')).click()`)
+    assert(await waitForText('Inventory page 1.'), 'the restore picker did not load a bounded page')
+    assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), 'the inventory picker overflowed at 1024 pixels')
+    await evaluate(`[...document.querySelectorAll('span')].find(item => item.textContent.startsWith('Inventory page 1.'))?.scrollIntoView({ block: 'center' })`)
+    await screenshot('layer7a-large-picker-dark-1024')
+  } finally {
+    await evaluate(`window.fetch = window.__largeOriginalFetch; delete window.__largeOriginalFetch; document.documentElement.classList.remove('dark')`)
+    await send('Emulation.clearDeviceMetricsOverride')
+    await go("#/portal/backup?tab=schedule", "Automatic backups")
+  }
 })
 
 await check("switching tenants cannot show an older tenant's drift results", async () => {
@@ -2058,6 +2184,8 @@ await check("paid roadmap screens explain their plan and the server refuses Comm
   assert(result === 402, `Community reached a paid roadmap action: ${result}`)
   const audit = await evaluate(`fetch("/api/audit/logs", { method: "POST", body: JSON.stringify({ tenantId: "${tenant}" }) }).then(r => r.status)`)
   assert(audit === 402, `Community reached the audit log: ${audit}`)
+  const directory = await evaluate(`fetch("/api/restore-directory", { method: "POST", body: JSON.stringify({ tenantId: "${tenant}", action: "preview" }) }).then(r => r.status)`)
+  assert(directory === 402, `Community reached directory restore: ${directory}`)
 })
 
 await check("tenant changes wait for the disclaimer, once per tenant", async () => {
@@ -2121,13 +2249,42 @@ if (licenseKey) {
   })
 }
 
+await checkSignInRequired({ check, evaluate, waitForCondition, assert, desktopDir, inspectorPort: packagedApp ? undefined : inspectorPort })
+
+await check("generic reauthentication IPC refuses shared clients and invalid input", async () => {
+  const tenantId = "11111111-1111-1111-1111-111111111111"
+  const ownClient = "22222222-2222-2222-2222-222222222222"
+  const cases = [
+    [[tenantId, "14D82EEC-204B-4C2F-B7E8-296A70DAB67E"], "Microsoft Graph Command Line Tools is only used by the setup helper and cannot be used to sign in."],
+    [[tenantId, "61EFF188-672B-4BE4-ACAC-2D254A6F9E05"], "Choose TenuVault app in the sign-in method settings."],
+    [[tenantId, null], "Choose a tenant and a valid application ID."],
+    [[null, ownClient], "Choose a tenant and a valid application ID."],
+    [[tenantId, ownClient, ["https://graph.microsoft.com/.default"]], "Unknown sign-in scope."],
+  ]
+  for (const [args, expected] of cases) {
+    const error = await evaluate(`window.tenuvault.auth.reauthenticate(...${JSON.stringify(args)}).then(() => "", error => error.message)`)
+    assert(error.includes(expected), `reauthentication IPC did not return "${expected}"`)
+  }
+})
 await finish()
 
 async function finish() {
+  writeFileSync(join(shotsDir, "main-process.log"), appLog)
+  console.log(`Machine load at finish: ${machineLoad()}`)
   ws.close()
   const exited = new Promise((r) => app.once("exit", r))
   app.kill()
   await Promise.race([exited, sleep(5000)])
+  if (upgradeProfile) {
+    try {
+      assert(appStopped(), "The upgraded app did not exit")
+      historicalProfile("verify")
+      console.log("ok   the historical keyring is unchanged")
+    } catch (error) {
+      failures++
+      console.log(`FAIL historical keyring: ${error.message}`)
+    }
+  }
   // Chromium helper processes can hold the profile briefly on Windows; cleanup must not fail the run.
   try {
     rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

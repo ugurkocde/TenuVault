@@ -7,16 +7,16 @@ The last setup step takes a first backup, so you know sign-in, permissions and s
 
 ## Run it from the guided setup
 
-The **First backup** step is headed **Take a first backup** and shows **&lt;tenant&gt; is connected.** It explains what the backup does:
+Select **Start first backup** on **Where should backups go?**. The backup starts automatically and the progress bar shows what TenuVault is saving. Select **Cancel backup** to stop it.
 
-* It reads your Intune policies, scripts and settings, and changes nothing in your tenant.
-* Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.
-* It usually takes a few minutes, longer for large tenants.
+When **Your first backup is done** appears, you can review the counts and duration, expand **See backup details**, or set up the options below. On a new installation, TenuVault may ask whether you want to share [setup diagnostics](/security/data-flows/#setup-diagnostics) below the result. Select **Go to dashboard** when you are ready to leave setup. On the Dashboard, **Turn on daily backups** (or **Set up automatic backups** on Community) opens Schedule, and **View backup** opens the saved backup. The first-backup card stays until you dismiss it or a second backup succeeds.
 
-1. Select **Run first backup**.
-2. Watch the progress bar and the results. TenuVault first lists every Intune type (**Reading Intune configuration...**), then saves each object (**Backing up &lt;type&gt;**). Each type appears in the results list as it is backed up, with its count. Select **Cancel backup** to stop it.
-3. When the backup succeeds, the step shows **Your first backup is done** and **Next steps**, described below.
-4. Select **Go to dashboard**.
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/setup-first-backup.webp" aria-label="Open the first backup screenshot">
+    <img src="/images/screenshots/setup-first-backup.webp" alt="First backup completion card with counts, duration and a Go to dashboard button" width="1440" height="900" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Review the backup and choose when to open the dashboard.</figcaption>
+</figure>
 
 The first backup uses the default scope, **Everything except apps**: policies, scripts, updates, enrollment and tenant settings. To include apps, run a manual backup with **Everything** from **Backup & Restore**, described below. See [What gets backed up](/backups/coverage/).
 
@@ -28,10 +28,12 @@ If the first backup fails or you cancel it, select **Try again** to run it again
 
 After a successful first backup, the step offers two things:
 
-* **Turn on automatic backups.** One button turns on a schedule for this tenant: **Back up every Sunday at 02:00** on Community, or **Back up daily at 02:00** on Pro and MSP. TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next time TenuVault starts. Change the day and time later in **Backup & Restore**, **Schedule**. See [Schedule backups](/backups/schedules/).
-* **Save your recovery key**, for backups on this device, if you have not saved it yet. Select **Save recovery key** and keep the file somewhere safe, such as your password manager. Without the recovery key, backups on this device cannot be read after a reinstall or on another computer. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key). For a tenant with Azure storage this step is left out, because Azure backups do not need the key.
+* **Turn on weekly backups** schedules backups on Sundays at 02:00 on Community. **Turn on daily backups** schedules backups at 02:00 on Pro and MSP. TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next time TenuVault starts. Change the day and time later in **Backup & Restore**, **Schedule**. See [Schedule backups](/backups/schedules/).
+* **Save your recovery key**, for backups on this device, if you have not saved it yet. Keep the file somewhere safe, such as your password manager. Without the recovery key, backups on this device cannot be read after a reinstall or on another computer. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key). For a tenant with Azure storage this step is left out, because Azure backups do not need the key.
 
 When a schedule is already on or the key is already saved, the step says so instead.
+
+Starting TenuVault when you sign in to your computer is off by default. To enable it, open **Settings > Background runner**.
 
 ## Run it from Backup & Restore
 
@@ -58,13 +60,14 @@ For more on manual backups, see [Run a backup](/backups/).
 | Result | Meaning |
 | --- | --- |
 | **Backup completed successfully** | Every object in scope was saved. |
-| **Backup completed with &lt;n&gt; warnings** | Most objects were saved, but some could not be read. **Needs attention** lists each one with the reason. Older backups are kept because this backup is incomplete. |
-| **Backup failed: no policies could be saved** | Nothing was saved. Check **Needs attention** or the raw log for the first error. |
+| **Backup completed with &lt;n&gt; warnings** | Most objects were saved, but some could not be read. **Details** lists the affected types and reasons. Older backups are kept because this backup is incomplete. |
+| **Backup failed: no policies could be saved** | Nothing was saved. Open **Details** on the result or check the raw log for the first error. |
+| **Backup failed: nothing could be read** | Every selected type was left out, for example for a missing permission or a product the tenant has no license for. The error names the main cause, and **Details** lists the reason per type. |
 
 Below the result, TenuVault shows:
 
 * **Policies saved**, **Types backed up** and **Duration**, plus inventory such as Autopilot devices, which is counted apart from policies
-* **Needs attention**, when a type could not be read, was left out for a missing permission, or some of its objects could not be saved, each with the reason
+* Separate counts for missing access, read failures and save failures. **Details** groups affected types by service.
 * every type that was backed up, with the number of objects saved
 * **&lt;n&gt; types had nothing to back up**, which you can expand to see the types your tenant has none of
 * **Show raw log**, the full technical log with **Copy log**, for support
@@ -78,7 +81,7 @@ After a successful manual backup on Community, a line beside the completion resu
 | Message | Fix |
 | --- | --- |
 | **Skipped &lt;type&gt;: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.** | Your app registration is missing a permission TenuVault uses or its admin consent, or your Intune role does not cover this type. Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration manually](/getting-started/app-registration/#3-add-the-delegated-permissions). |
-| **Could not read &lt;type&gt;** | **Needs attention** shows the error Microsoft Graph returned. If it is an access error, check that your Intune role includes this type. |
+| **Could not read &lt;type&gt;** | **Details** shows the error Microsoft Graph returned. If it is an access error, check that your Intune role includes this type. |
 | A banner asks you to sign in again | Your Microsoft session ended. Select **Sign in** in the banner, then run the backup again. |
 | **You do not have write access to storage account &lt;name&gt; ...** | See [Storage errors](/getting-started/choose-storage/#storage-errors). |
 
@@ -88,10 +91,14 @@ TenuVault is set up. Next:
 
 * [Schedule backups](/backups/schedules/), if you did not turn on automatic backups in **Next steps**. Community tenants can back up weekly; Pro and MSP can also back up daily.
 * Keep TenuVault running in the menu bar on macOS or the tray on Windows so schedules run. See [Settings reference](/settings/#background-runner).
-* Learn how to [restore Intune policies](/restore/) and [detect drift](/drift/).
+* Learn how to [restore supported configuration](/restore/) and [detect drift](/drift/).
 
 Once you have a successful backup, [practice an Intune restore](https://www.tenuvault.com/guides/intune-restore-drill) before you need one in an incident.
 
 ## Related pages
 
 * [Set up and schedule Microsoft Intune backups](https://www.tenuvault.com/guides/intune-backup-setup): the setup guide, on the product site
+
+## Your chosen services
+
+Your first backup covers Intune and the Entra ID areas you enabled on **Check** that your sign-in can read.

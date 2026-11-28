@@ -58,6 +58,7 @@ interface Tenant {
 
 interface TenantContextType {
   tenants: Tenant[]
+  isLoaded: boolean
   selectedTenantId: number | null
   setSelectedTenantId: (id: number | null) => void
   addTenant: (tenant: Tenant) => void
@@ -405,6 +406,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   return (
     <TenantContext.Provider value={{
       tenants,
+      isLoaded,
       selectedTenantId,
       setSelectedTenantId,
       addTenant,
@@ -423,12 +425,25 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
 }
 
 // Custom hooks for using the context
+/** Embedded change-set reviews can also be rendered outside the tenant workspace. */
+export function useTenantById(tenantId: string) {
+  return useContext(TenantContext)?.tenants.find(tenant => tenant.credentials?.tenantId.toLowerCase() === tenantId.toLowerCase())
+}
+
 export function useTenants() {
   const context = useContext(TenantContext)
   if (!context) {
     throw new Error("useTenants must be used within a TenantProvider")
   }
   return context.tenants
+}
+
+export function useTenantsLoaded() {
+  const context = useContext(TenantContext)
+  if (!context) {
+    throw new Error("useTenantsLoaded must be used within a TenantProvider")
+  }
+  return context.isLoaded
 }
 
 export function useSelectedTenant() {

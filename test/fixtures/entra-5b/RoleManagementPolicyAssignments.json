@@ -1,0 +1,1056 @@
+{
+  "folder": "RoleManagementPolicyAssignments",
+  "path": "policies/roleManagementPolicyAssignments",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 148,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/roleManagementPolicyAssignments?$filter=scopeId%20eq%20%27%2F%27%20and%20scopeType%20eq%20%27DirectoryRole%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f8886e0a3ec1_00000000-0000-4000-8000-f8886e0a3ec1",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f8886e0a3ec1",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f8886e0a3ec1"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-37a200e224a2_00000000-0000-4000-8000-37a200e224a2",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-37a200e224a2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-37a200e224a2"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-200000396dba_00000000-0000-4000-8000-200000396dba",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-200000396dba",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-200000396dba"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e44f40760d33_00000000-0000-4000-8000-e44f40760d33",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e44f40760d33",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-e44f40760d33"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-552ef8c923d4_00000000-0000-4000-8000-552ef8c923d4",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-552ef8c923d4",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-552ef8c923d4"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f3d65b5eb86e_00000000-0000-4000-8000-f3d65b5eb86e",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f3d65b5eb86e",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f3d65b5eb86e"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-502593962650_00000000-0000-4000-8000-502593962650",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-502593962650",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-502593962650"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-824a3b5e6c94_00000000-0000-4000-8000-824a3b5e6c94",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-824a3b5e6c94",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-824a3b5e6c94"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-6dc525385a0a_00000000-0000-4000-8000-6dc525385a0a",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-6dc525385a0a",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-6dc525385a0a"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1b248b90e7f2_00000000-0000-4000-8000-1b248b90e7f2",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1b248b90e7f2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-4a3cbf6cfdc3_00000000-0000-4000-8000-4a3cbf6cfdc3",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-4a3cbf6cfdc3",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-4a3cbf6cfdc3"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e77133ddfcef_00000000-0000-4000-8000-e77133ddfcef",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e77133ddfcef",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-e77133ddfcef"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-edb40cc2bed2_00000000-0000-4000-8000-edb40cc2bed2",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-edb40cc2bed2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-edb40cc2bed2"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d3e20675441b_00000000-0000-4000-8000-d3e20675441b",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d3e20675441b",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-d3e20675441b"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-6659e7e0d2c4_00000000-0000-4000-8000-6659e7e0d2c4",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-6659e7e0d2c4",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-6659e7e0d2c4"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-48474d14cf9d_00000000-0000-4000-8000-48474d14cf9d",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-48474d14cf9d",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-48474d14cf9d"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1011a9dd2639_00000000-0000-4000-8000-1011a9dd2639",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1011a9dd2639",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-1011a9dd2639"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-768d329eb731_00000000-0000-4000-8000-768d329eb731",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-768d329eb731",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-768d329eb731"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-63e8894dd47a_00000000-0000-4000-8000-63e8894dd47a",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-63e8894dd47a",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-63e8894dd47a"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8b40f2d103be_00000000-0000-4000-8000-8b40f2d103be",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8b40f2d103be",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-8b40f2d103be"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-6cd2d78668cd_00000000-0000-4000-8000-6cd2d78668cd",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-6cd2d78668cd",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-6cd2d78668cd"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-3b867241546f_00000000-0000-4000-8000-3b867241546f",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-3b867241546f",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-788762ead048_00000000-0000-4000-8000-788762ead048",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-788762ead048",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-788762ead048"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d15e7c8dc126_00000000-0000-4000-8000-d15e7c8dc126",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d15e7c8dc126",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-d15e7c8dc126"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-cbd4a762a759_00000000-0000-4000-8000-cbd4a762a759",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-cbd4a762a759",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-cbd4a762a759"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8ef5b7317192_00000000-0000-4000-8000-8ef5b7317192",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8ef5b7317192",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-8ef5b7317192"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ad59f67e4ce7_00000000-0000-4000-8000-ad59f67e4ce7",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ad59f67e4ce7",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-ad59f67e4ce7"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-874325c683f6_00000000-0000-4000-8000-874325c683f6",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-874325c683f6",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-874325c683f6"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-dd1f5ada104b_00000000-0000-4000-8000-dd1f5ada104b",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-dd1f5ada104b",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-dd1f5ada104b"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8a128e870151_00000000-0000-4000-8000-8a128e870151",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8a128e870151",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-8a128e870151"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ccb463e98f47_00000000-0000-4000-8000-ccb463e98f47",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ccb463e98f47",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-ccb463e98f47"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d3c0515a91a9_00000000-0000-4000-8000-d3c0515a91a9",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d3c0515a91a9",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-d3c0515a91a9"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ef630f7d58b8_00000000-0000-4000-8000-ef630f7d58b8",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ef630f7d58b8",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-ef630f7d58b8"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b4ae70858c12_00000000-0000-4000-8000-b4ae70858c12",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b4ae70858c12",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-b4ae70858c12"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a72b78b78679_00000000-0000-4000-8000-a72b78b78679",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a72b78b78679",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-a72b78b78679"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a471a20475f8_00000000-0000-4000-8000-a471a20475f8",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a471a20475f8",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-a471a20475f8"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-587d8aa4e0a8_00000000-0000-4000-8000-587d8aa4e0a8",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-587d8aa4e0a8",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-587d8aa4e0a8"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-da0018fd9a15_00000000-0000-4000-8000-da0018fd9a15",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-da0018fd9a15",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-da0018fd9a15"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f3a5d8472803_00000000-0000-4000-8000-f3a5d8472803",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f3a5d8472803",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f3a5d8472803"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ba494881c45b_00000000-0000-4000-8000-ba494881c45b",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ba494881c45b",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-ba494881c45b"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-25a9a61df0c6_00000000-0000-4000-8000-25a9a61df0c6",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-25a9a61df0c6",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-25a9a61df0c6"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-37ebdcd269eb_00000000-0000-4000-8000-37ebdcd269eb",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-37ebdcd269eb",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-37ebdcd269eb"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-0cdade394b9f_00000000-0000-4000-8000-0cdade394b9f",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-0cdade394b9f",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-0cdade394b9f"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-5d71d3039906_00000000-0000-4000-8000-5d71d3039906",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-5d71d3039906",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-5d71d3039906"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e7cb8e238390_00000000-0000-4000-8000-e7cb8e238390",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e7cb8e238390",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-e7cb8e238390"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-4fa6e52ac4d4_00000000-0000-4000-8000-4fa6e52ac4d4",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-4fa6e52ac4d4",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-4fa6e52ac4d4"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1bbc13b7ae71_00000000-0000-4000-8000-1bbc13b7ae71",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1bbc13b7ae71",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-1bbc13b7ae71"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-fb3437b14e61_00000000-0000-4000-8000-fb3437b14e61",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-fb3437b14e61",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-fb3437b14e61"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-9e1e09bf333f_00000000-0000-4000-8000-9e1e09bf333f",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-9e1e09bf333f",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-9e1e09bf333f"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a6eeb3747dc9_00000000-0000-4000-8000-a6eeb3747dc9",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a6eeb3747dc9",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-a6eeb3747dc9"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-451d390140f8_00000000-0000-4000-8000-451d390140f8",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-451d390140f8",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-451d390140f8"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-26cc435bf8c5_00000000-0000-4000-8000-26cc435bf8c5",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-26cc435bf8c5",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-26cc435bf8c5"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-6710cf4e30fe_00000000-0000-4000-8000-6710cf4e30fe",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-6710cf4e30fe",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-6710cf4e30fe"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f29b70c5b0ce_00000000-0000-4000-8000-f29b70c5b0ce",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f29b70c5b0ce",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f29b70c5b0ce"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-312798df47f2_00000000-0000-4000-8000-312798df47f2",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-312798df47f2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-312798df47f2"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-330ad4412ec9_00000000-0000-4000-8000-330ad4412ec9",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-330ad4412ec9",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-330ad4412ec9"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-2116e5c9607e_00000000-0000-4000-8000-2116e5c9607e",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-2116e5c9607e",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-2116e5c9607e"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f6aa865a8464_00000000-0000-4000-8000-f6aa865a8464",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f6aa865a8464",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f6aa865a8464"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e03f036d8685_00000000-0000-4000-8000-e03f036d8685",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e03f036d8685",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-e03f036d8685"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1f81fd5133e0_00000000-0000-4000-8000-1f81fd5133e0",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1f81fd5133e0",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-1f81fd5133e0"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-7763272b92af_00000000-0000-4000-8000-7763272b92af",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-7763272b92af",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-7763272b92af"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-12c872e6e3ce_00000000-0000-4000-8000-12c872e6e3ce",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-12c872e6e3ce",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-12c872e6e3ce"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f9df4749b1bb_00000000-0000-4000-8000-f9df4749b1bb",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f9df4749b1bb",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f9df4749b1bb"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-35cab2dad740_00000000-0000-4000-8000-35cab2dad740",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-35cab2dad740",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-35cab2dad740"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-af8470483770_00000000-0000-4000-8000-af8470483770",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-af8470483770",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-af8470483770"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-3470e01b5b1e_00000000-0000-4000-8000-3470e01b5b1e",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-3470e01b5b1e",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-3470e01b5b1e"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1f803efe83eb_00000000-0000-4000-8000-1f803efe83eb",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1f803efe83eb",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-1f803efe83eb"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b7e1b3354378_00000000-0000-4000-8000-b7e1b3354378",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b7e1b3354378",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-b7e1b3354378"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d0425d38c376_00000000-0000-4000-8000-d0425d38c376",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d0425d38c376",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-d0425d38c376"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-682f641248a2_00000000-0000-4000-8000-682f641248a2",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-682f641248a2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-682f641248a2"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-18295db2b79f_00000000-0000-4000-8000-18295db2b79f",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-18295db2b79f",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-18295db2b79f"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-fe196422cdea_00000000-0000-4000-8000-fe196422cdea",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-fe196422cdea",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-fe196422cdea"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-544b4a18bae1_00000000-0000-4000-8000-544b4a18bae1",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-544b4a18bae1",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-544b4a18bae1"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-99a74b0980f1_00000000-0000-4000-8000-99a74b0980f1",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-99a74b0980f1",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-99a74b0980f1"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-11f662d680a2_00000000-0000-4000-8000-11f662d680a2",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-11f662d680a2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-11f662d680a2"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-809068b7aefc_00000000-0000-4000-8000-809068b7aefc",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-809068b7aefc",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-809068b7aefc"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-14912252ed29_00000000-0000-4000-8000-14912252ed29",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-14912252ed29",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-14912252ed29"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-cee6969027d4_00000000-0000-4000-8000-cee6969027d4",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-cee6969027d4",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-cee6969027d4"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-83e6e20c559a_00000000-0000-4000-8000-83e6e20c559a",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-83e6e20c559a",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-83e6e20c559a"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-10ff758d6c39_00000000-0000-4000-8000-10ff758d6c39",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-10ff758d6c39",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-10ff758d6c39"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b3a3ae85a5af_00000000-0000-4000-8000-b3a3ae85a5af",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b3a3ae85a5af",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-b3a3ae85a5af"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-33706fe8387c_00000000-0000-4000-8000-33706fe8387c",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-33706fe8387c",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-33706fe8387c"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b21ff622f622_00000000-0000-4000-8000-b21ff622f622",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b21ff622f622",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-b21ff622f622"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8ffb6693cd87_00000000-0000-4000-8000-8ffb6693cd87",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8ffb6693cd87",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-8ffb6693cd87"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-10be62c63054_00000000-0000-4000-8000-10be62c63054",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-10be62c63054",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-3bc227586022_00000000-0000-4000-8000-3bc227586022",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-3bc227586022",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-3bc227586022"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a4ef011984bb_00000000-0000-4000-8000-a4ef011984bb",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a4ef011984bb",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-a4ef011984bb"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b1f72faccf5b_00000000-0000-4000-8000-b1f72faccf5b",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b1f72faccf5b",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-b1f72faccf5b"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f46fc6ce9f8b_00000000-0000-4000-8000-f46fc6ce9f8b",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f46fc6ce9f8b",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f46fc6ce9f8b"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a82aa2b6a8e4_00000000-0000-4000-8000-a82aa2b6a8e4",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a82aa2b6a8e4",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-a82aa2b6a8e4"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-264f2566fc6e_00000000-0000-4000-8000-264f2566fc6e",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-264f2566fc6e",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-264f2566fc6e"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b8dbd7da333d_00000000-0000-4000-8000-b8dbd7da333d",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b8dbd7da333d",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-b8dbd7da333d"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8cef20205722_00000000-0000-4000-8000-8cef20205722",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-8cef20205722",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-8cef20205722"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-85597d9c2d6e_00000000-0000-4000-8000-85597d9c2d6e",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-85597d9c2d6e",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-85597d9c2d6e"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1299cf3cd105_00000000-0000-4000-8000-1299cf3cd105",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1299cf3cd105",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-1299cf3cd105"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e07b5a7944ec_00000000-0000-4000-8000-e07b5a7944ec",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-e07b5a7944ec",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-e07b5a7944ec"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-c9103871f969_00000000-0000-4000-8000-c9103871f969",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-c9103871f969",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-c9103871f969"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f58798a693c6_00000000-0000-4000-8000-f58798a693c6",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f58798a693c6",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f58798a693c6"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-9e21435c7374_00000000-0000-4000-8000-9e21435c7374",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-9e21435c7374",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-9e21435c7374"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-202a7a954f5e_00000000-0000-4000-8000-202a7a954f5e",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-202a7a954f5e",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-202a7a954f5e"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-0073d6007c7a_00000000-0000-4000-8000-0073d6007c7a",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-0073d6007c7a",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-0073d6007c7a"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-66c7ef7b9ca1_00000000-0000-4000-8000-66c7ef7b9ca1",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-66c7ef7b9ca1",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-66c7ef7b9ca1"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-27786fb6b5db_00000000-0000-4000-8000-27786fb6b5db",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-27786fb6b5db",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-27786fb6b5db"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f2fafce9bf98_00000000-0000-4000-8000-f2fafce9bf98",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f2fafce9bf98",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f2fafce9bf98"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-9ce3e110caf2_00000000-0000-4000-8000-9ce3e110caf2",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-9ce3e110caf2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-9ce3e110caf2"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-0184607c1e39_00000000-0000-4000-8000-0184607c1e39",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-0184607c1e39",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-0184607c1e39"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-17027e2a564c_00000000-0000-4000-8000-17027e2a564c",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-17027e2a564c",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-17027e2a564c"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-220afea330a9_00000000-0000-4000-8000-220afea330a9",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-220afea330a9",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-220afea330a9"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-07478e4a8937_00000000-0000-4000-8000-07478e4a8937",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-07478e4a8937",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-07478e4a8937"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ecfb4a7b43c3_00000000-0000-4000-8000-ecfb4a7b43c3",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ecfb4a7b43c3",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-ecfb4a7b43c3"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-442dfb3daad2_00000000-0000-4000-8000-442dfb3daad2",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-442dfb3daad2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-442dfb3daad2"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1801cd0de6a6_00000000-0000-4000-8000-1801cd0de6a6",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1801cd0de6a6",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-1801cd0de6a6"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-200a07640faa_00000000-0000-4000-8000-200a07640faa",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-200a07640faa",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-200a07640faa"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-035e28f896eb_00000000-0000-4000-8000-035e28f896eb",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-035e28f896eb",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-035e28f896eb"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ffec9ed59920_00000000-0000-4000-8000-ffec9ed59920",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ffec9ed59920",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-ffec9ed59920"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-81a2b494e6c9_00000000-0000-4000-8000-81a2b494e6c9",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-81a2b494e6c9",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-81a2b494e6c9"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-45aca778b41c_00000000-0000-4000-8000-45aca778b41c",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-45aca778b41c",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-45aca778b41c"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-7af4a5b3cd79_00000000-0000-4000-8000-7af4a5b3cd79",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-7af4a5b3cd79",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-7af4a5b3cd79"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-06584abbc8cb_00000000-0000-4000-8000-06584abbc8cb",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-06584abbc8cb",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-06584abbc8cb"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f43ffb3a3e69_00000000-0000-4000-8000-f43ffb3a3e69",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f43ffb3a3e69",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-f43ffb3a3e69"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-3a6ceb1546b0_00000000-0000-4000-8000-3a6ceb1546b0",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-3a6ceb1546b0",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-3a6ceb1546b0"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1525769f4bce_00000000-0000-4000-8000-1525769f4bce",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1525769f4bce",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-1525769f4bce"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-2505391ef2d6_00000000-0000-4000-8000-fa5fbdda49cc",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-2505391ef2d6",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-fa5fbdda49cc"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-32c4779400c2_00000000-0000-4000-8000-39e9faefafd9",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-32c4779400c2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-39e9faefafd9"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d08df6936596_00000000-0000-4000-8000-4bd6e3ea8b7e",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d08df6936596",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-4bd6e3ea8b7e"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-465f9e536237_00000000-0000-4000-8000-97191720d0db",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-465f9e536237",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-97191720d0db"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ab204a7fb6cc_00000000-0000-4000-8000-705f34427194",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-ab204a7fb6cc",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-705f34427194"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-36a6af82cd68_00000000-0000-4000-8000-d28f26e0cd1d",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-36a6af82cd68",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-d28f26e0cd1d"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-55015539535e_00000000-0000-4000-8000-ba655ba01c79",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-55015539535e",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-ba655ba01c79"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-36cbed08c1bb_00000000-0000-4000-8000-434d4f4f77fd",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-36cbed08c1bb",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-434d4f4f77fd"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f3d0d32682a6_00000000-0000-4000-8000-155a6705ef3a",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-f3d0d32682a6",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-155a6705ef3a"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-83810e38bb28_00000000-0000-4000-8000-9c0668ccb887",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-83810e38bb28",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-9c0668ccb887"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d3ac855aaadd_00000000-0000-4000-8000-3c3a5fd28456",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d3ac855aaadd",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-3c3a5fd28456"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a7118d4e63f2_00000000-0000-4000-8000-05c9a85bf9d7",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a7118d4e63f2",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-05c9a85bf9d7"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-c4fd306f58ab_00000000-0000-4000-8000-c58cd73cbfc9",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-c4fd306f58ab",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-c58cd73cbfc9"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b2899963aa15_00000000-0000-4000-8000-21badcdf04eb",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-b2899963aa15",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-21badcdf04eb"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1b7d30abf4eb_00000000-0000-4000-8000-160514133569",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-1b7d30abf4eb",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-160514133569"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-40f13e682bb8_00000000-0000-4000-8000-41fa31c8f0e0",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-40f13e682bb8",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-41fa31c8f0e0"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-605102d383ad_00000000-0000-4000-8000-3d8170e23e96",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-605102d383ad",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-3d8170e23e96"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-04a836c2d79c_00000000-0000-4000-8000-555c8a481cb7",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-04a836c2d79c",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-555c8a481cb7"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-5fe70d1a067e_00000000-0000-4000-8000-7653a71c1f45",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-5fe70d1a067e",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-7653a71c1f45"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-94ab6ad48abd_00000000-0000-4000-8000-9672be2ab0ce",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-94ab6ad48abd",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-9672be2ab0ce"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-cd26d47bc77b_00000000-0000-4000-8000-cd26d47bc77b",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-cd26d47bc77b",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-cd26d47bc77b"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a7ebcf8254b0_00000000-0000-4000-8000-a7ebcf8254b0",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-a7ebcf8254b0",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-a7ebcf8254b0"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d9170ab994e9_00000000-0000-4000-8000-d9170ab994e9",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-d9170ab994e9",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-d9170ab994e9"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-646c64e4539a_00000000-0000-4000-8000-646c64e4539a",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-646c64e4539a",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-646c64e4539a"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-cd2f4d4224e4_00000000-0000-4000-8000-cd2f4d4224e4",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-cd2f4d4224e4",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-cd2f4d4224e4"
+          },
+          {
+            "id": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-7f8f8a611d52_00000000-0000-4000-8000-7f8f8a611d52",
+            "policyId": "DirectoryRole_00000000-0000-4000-8000-836b20d0164d_00000000-0000-4000-8000-7f8f8a611d52",
+            "scopeId": "/",
+            "scopeType": "DirectoryRole",
+            "roleDefinitionId": "00000000-0000-4000-8000-7f8f8a611d52"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -253,9 +253,162 @@ changes reach nightly users first.
 The audit log (viewing, searching, exporting and removing old entries) is Pro and MSP. Every
 plan records events; Community sees a locked preview on the Audit Log page.
 
-## Compatibility notes for the next release
+## Verify a signed macOS upgrade
+
+Use a test macOS account and the signed 0.5.x and 0.6 installers. In 0.5.x, save
+a local backup and download its archive. Save a separate copy of the backup
+folder before upgrading. Install 0.6 over 0.5.x in the same account and open it
+with the existing Keychain and profile. Open Backup History and download every
+backup in the test profile. Compare the archive entries and each policy and
+manifest with the originals. Check for missing entries and unreadable backup
+warnings. Stop the release if any backup cannot be read or a payload differs.
+
+## Compatibility notes for 0.6.0
+
+- **Local backup folders.** Lab defaults to `Documents/TenuVault Lab Backups`. A saved Lab override pointing to `Documents/TenuVault Backups` opens for browsing only. In **Settings > Storage and recovery**, switch to the Lab folder or copy backups you can verify with your Lab-created recovery key. The original files are kept. Stable keeps its existing folder settings.
+
+- **Retention.** The app verifies every file of an expired backup before deleting it, including manifest fingerprints on encrypted policies. Cleanup uses the Microsoft time from the current run. In both storage locations, old backups are kept if that time is unavailable, Microsoft Graph and Azure Storage disagree by more than five minutes, or the device clock differs by more than one hour. Backups with dates more than one hour in the future show an Untrusted date label in Backup History and stay outside automatic retention until Microsoft time passes their date. Azure cleanup keeps manifests through payload deletion. An ordinary remnant with neither a 0.6 run record nor a large companion stays in place.
+
+Backups that only skip types for missing access count as successful and still show incomplete coverage. A denied read with a verified grant, an incomplete capture of a readable type or a storage failure counts against backup success.
+
+- **Azure backup coverage.** Run the cloud backup setup script again with the existing values to deploy backup runbook 1.6.1. This version verifies policy details and records incomplete reads so change reports can qualify comparisons. The Schedule tab prompts for an update when the last run reports a version earlier than 1.6.1. The audit capability threshold remains 1.5.0.
+
+- Comparisons of pre-0.6 backups continue to show deletions for types with no recorded failure. An older backup with an unassigned read failure adds a warning about those deletions. Backups that record per-type outcomes need a complete read for each compared type.
+
+- **Tenant sign-in.** After a downgrade to 0.5.x, a tenant connected through the new wizard
+  uses its own app registration if it has one. Signing in again in 0.5.x may require a fresh
+  sign-in when you return to 0.6. New TenuVault app and in-app registration setups use the tenant
+  from Microsoft sign-in by default. Use the tenant ID or domain option for a guest tenant.
+  Existing app registrations still require their IDs.
+
+  Before downgrading to 0.5.x, switch to your own app registration in 0.6 if the tenant uses
+  the TenuVault app. If you already downgraded, return to 0.6 to recover the connection.
+  Removing the tenant in 0.5.x deletes its backup schedule.
+
+- **TenuVault app.** 0.6 offers two sign-in methods: the TenuVault app (recommended) and your
+  own app registration. If the TenuVault app is temporarily unavailable, choose your own app
+  registration. Earlier 0.6 lab or nightly profiles that used Start now prompt you to choose
+  a sign-in method; existing backups stay readable and scheduled backups pause with a notice
+  until a method is chosen.
+
+- **Intune policy sets.** Policy sets stay under Apps. Standard Intune setup already includes the Configuration permission. A signed-in backup with neither Configuration permission marks policy sets **Not read**. A Backup Reader without the Configuration read role fails its credential check. The restore preview blocks policy sets that lack the Configuration write scope and names the missing permission.
+- **Stable Entra coverage.** Back up device registration and enrollment, authentication methods and contexts, terms of use, and optional groups and devices. Eligible group directory restore requires individual review. The expanded Entra catalog is available for lab testing.
+- **Upgrade from 0.5.x.** Intune and Conditional Access retain their saved choices. Entra device and access settings are available through a switch on Check and in Settings. Groups and device inventory are opt-in. Azure Automation runbook 1.6.1 retains its Intune and Conditional Access coverage.
+- **Runs that read nothing.** A run now reports Failed when every selected type was left out by a permission, role, license or sign-in requirement. This includes a run for Entra ID with every selected type left out, and a custom Intune run in which every selected optional type is denied. The scheduler treats both as failures and retention keeps earlier backups. A successful read that returns an empty list or an unset policy still counts as coverage.
+- **Downgrade and unattended backups.** Before assigning a Backup Reader permissions for Entra ID beyond the old Conditional Access read role, update every computer that uses it. Versions before 0.6 reject those additional roles. Azure Automation continues to cover Intune and separately configured Conditional Access. Use desktop manual or scheduled backups for Entra device and access settings.
+- **Stored state.** The existing `services.modules` keys now retain independent service switches, opt-in areas and the requested access level. The health history stores bounded evidence in encrypted app state, scoped to the tenant and connection. The first check establishes a baseline. Evidence from an old connection or reader cannot verify the one currently in use.
+
+- The 30 minute directory consistency rule now applies only to confirming TenuVault's own uncertain relationship additions and removals when its journal records an acknowledged opposite write for the same member and object. Preview reads can still be stale after TenuVault's own write; run a fresh preview when needed. Acknowledged results survive same-session save retries. Cancellation keeps the execution page ID visible for recovery and is shown only for the active restore request.
+- Directory exact member removal is not performed for Conditional Access includeGroups or excludeGroups targets because membership changes can affect policy enforcement and safe remaining membership cannot be established across concurrent edits or replication delay. Remove those members in Microsoft Entra. Unreadable targeting blocks removal; ordinary security-group removals remain available. Member additions, owner additions and nonempty descriptions retain their existing checks. Synced and formerly synced users and groups remain blocked. Throttle waits can be cancelled and safely resumed, relationship previews reuse a saved bounded difference, and Windows startup keeps file flushes without requiring directory handles.
+
+- Directory restore opt-in adds only the admitted operation scopes and the read scopes needed for protection. Backup, Backup Reader provisioning, allowlist and renewal remain unchanged. Account state, recycle recovery, invitations, licenses, Microsoft 365 groups, dynamic rules, privileged groups and nested principals remain blocked. Recreated identities get new IDs and need reference review; recreated users need sign-in setup in Entra.
+
+- Directory restore for eligible Entra ID groups requires Pro or MSP.
+
+- Settings, Storage and recovery now saves designated recovery account IDs per tenant and shows guarded restore results, saved reference reports and read-back reconciliation. Guarded history has no manual outcome reset. Protected identity resolution includes group members, group owners and PIM eligibility; incomplete safety reads block a future identity write.
+
+- New Azure Automation backups record which types were read in full. If a policy detail read fails, drift leaves that type out of the comparison. Older backups still report deletions for types without a recorded failure and warn when a failed read could not be assigned to a type.
+- Cloud change reports now warn when either backup declares directory inventory that Azure Automation did not compare, including a missing or unreadable large companion. Ordinary report exports retain their previous JSON, Markdown and HTML layout. Azure Automation does not capture directory inventory.
+
+- Large backups use `intune-backups-large`, with claims and manifests under `backup-large-<UTC start time>/` and snapshots and shards under `payload/backup-large-<UTC start time>/`. Ordinary and older backups keep their existing paths in `intune-backups`. Before a Backup Reader captures large types, rerun `New-TenuVaultStorage.ps1 -BackupReaderAppId <application ID>` with the usual storage arguments to provision both containers and the writer role on each. History adds one bounded discovery listing and, locally, one container-properties read; it never enumerates large payloads. No large backups using the earlier unreleased layout are migrated.
+- Ordinary types always stay in `intune-backups`. Mixed runs publish ordinary snapshots first, then write a separate large companion folder with the same run ID and start time. History resolves reciprocal manifests with matching folder, tenant and nonempty run IDs into one run with combined status and coverage. Missing, unreadable, running, cancelled, interrupted or mismatched companions make the run incomplete with per-large-type causes, including recorded capture failures. Ordinary restore and comparison remain independent. Retention evaluates verified complete pairs together and protects runs inside retention. Owned incomplete, cancelled, crashed, orphaned and partly deleted halves expire after the tenant's retention period plus a 7-day recovery grace, on both storages. Cleanup requires a consistent app ownership claim for the tenant; unverified, forged and foreign claims are kept and reported. Forever deletes nothing. Claims are deleted last so the next eligible pass finishes interrupted cleanup. Logs report deleted and retained counts and bytes; history shows recovery guidance and known costs, explicitly marking unfinished large payload costs as unavailable when no size manifest exists. Ordinary backups without companions retain their existing behavior. Dashboard counts resolved history rows without regrouping copied run IDs and scopes attempt reconciliation by tenant. Complete large discovery proves an undiscovered companion is missing with zero extra GETs; failed or partial discovery permits at most 8 direct companion lookups per request and marks the rest unresolved with a cause. Complete mixed runs export and import as a single version 3 tar preserving both reciprocal manifests. An explicitly labeled ordinary-only ZIP removes companion dependencies and imports independently. Ordinary-only ZIP export and import remain unchanged. Each manifest links its companion; the ordinary manifest records large outcomes separately in `LargeBackupOutcomes`. A missing, refused or unwritable large container affects only large types, reported as not read with cause `storage` and the message "Storage not provisioned for large backups" plus the provisioning step. Large discovery failures omit large history with a warning and preserve all ordinary history. A large-only import needs no ordinary container. Existing ordinary and 0.5.x paths and request counts remain unchanged, apart from the already introduced bounded large discovery request. A Backup Reader with only its 0.5.x container assignment needs no storage changes for ordinary types; rerun the provisioning script above only to enable large storage, rather than granting a broader Contributor role.
+
+- Large inventory infrastructure is opt-in through a type's volume declaration. Existing ordinary type snapshots and inline Items manifests remain unchanged. Large backups add bounded LargeItems indexes and sorted relationship shards, require this release to browse, and export as uncompressed POSIX tar. Backups without large types retain ZIP and remain readable by the current release. The archive importer accepts both formats, enforces proportional finite limits and commits metadata last. Large runs yield to queued tenants at page boundaries and leave other tenants' schedules eligible while running.
+
+- Adding permissions checks the connected access token's delegated claims for existing consent and refreshed access. This avoids false refusals when the sign-in response lists fully qualified scopes or `.default`. Unreadable and app-only tokens require a delegated sign-in. Scope names and known registration GUIDs are compared without regard to case, while existing consented scopes keep their spelling when updated.
+
+- Settings can add delegated service, area and supported restore permissions to the exact connected registration after an administrator sign-in and preview. This separate action requires existing tenant-wide consent and a credential-free, single-tenant public client with root-path HTTP localhost or 127.0.0.1 redirects, with or without a port. Individual consent requires separate administrator review. Existing grants are updated in place; partial or unanswered writes require a fresh preview before retrying. The app rereads each exact write target immediately before updating it and reports observed concurrent changes as partial. Graph offers no documented conditional update for these whole-value replacements; a simultaneous edit can still be lost. Quick setup reuse and the Backup Reader are unchanged.
+
+* New tenant setup uses Connect, Check, Storage and First backup. Intune is included. The switch on Check adds Entra device and access settings and Conditional Access. Setup requests backup access only. Settings controls optional areas, and supported restores show how to request additional access when needed. Existing tenants keep their applicable service settings. Setup waits up to 20 seconds for the permission result before offering storage. An unavailable check is advisory.
 
 Put these in the next stable release's notes, then remove them here.
+
+- **Services and permissions.** Settings now checks Graph sign-in, the Backup Reader and storage
+  independently, shows exact missing-permission routes and dated backup verification, and requires
+  confirmation before Intune is turned off. Intune off is visible in backup history and schedules.
+  Conditional Access keeps its independent choice inside the Entra ID card. Entra device and
+  access settings stay off for existing tenants until enabled. Each card shows permissions and last-backup verification.
+  The Azure CLI permission route skips scopes already declared on the registration. If a consent
+  write fails, check consent in Entra before retrying because the request may have been applied.
+
+- **Connection health history.** Health records now keep the active Backup Reader certificate's
+  public SHA-256 thumbprint. Earlier health evidence is discarded when its account, registration,
+  storage connection or active reader credential changes, including after restarting the app.
+  Older health evidence with no persisted ownership is discarded conservatively at the next read.
+  Acknowledgements use the displayed report's receipt, so later notices remain visible.
+
+- **Connection checks.** TenuVault asks Microsoft for a new token of the signed-in admin when it
+  starts (for the tenant that is open only), after a sign-in, and when a backup of a tenant starts
+  and ends, and for a new Backup Reader token before a scheduled backup that runs with the reader.
+  Admins who watch the Entra sign-in logs see more non-interactive sign-ins of the TenuVault app
+  registration than before. No new destination and no new permission: the firewall allow list
+  does not change.
+
+- **Setup diagnostics.** After the first successful backup in guided setup, new installs ask
+  whether to share setup diagnostics with `POST https://www.tenuvault.com/api/desktop-events`
+  (schema 1). Turning it off or setting the disable policy sends `POST /api/desktop-events/erase`.
+  The website's ingest and erase endpoints
+  and the privacy page's setup diagnostics section must be deployed before a
+  build with this feature ships, nightlies included; until then a sharing install retries with
+  backoff and drops its queue after 7 days. The event names and props are a contract with that
+  endpoint: they are add-only, and a new event or prop ships on the server before any app sends
+  it. Existing installs are never asked. Admins can turn it off with the `DisableSetupDiagnostics`
+  policy (Windows DWORD under `SOFTWARE\Policies\TenuVault`, macOS managed preference for
+  `com.tenuvault.desktop`).
+- **Services per tenant.** Intune can be turned off for a tenant under Settings > Services and
+  permissions; it stays on for every existing tenant until an admin turns it off. The setting is
+  stored in the same place and shape as before (`services.modules` in the app state), with more
+  fields per service. Versions before 0.6 ignore those fields and always back up Intune, so a
+  downgrade backs up Intune again for a tenant that had it off. Restore history now needs access
+  to a service the tenant backs up (Intune while it is on), and its refusal message no longer
+  names Intune.
+- **Backup Reader per service.** A Backup Reader now follows the services its tenant backs up. The
+  five Intune permissions are required only while Intune is on, and the reader may hold the read
+  permission of any service (`New-TenuVaultBackupReader.ps1 -Services`, `-Areas`). Versions
+  before 0.6 know only the Intune permissions and `Policy.Read.All`: they refuse a reader that
+  holds any other permission ("permissions beyond read-only backup"), and its scheduled backups
+  stop on that computer. A reader shared by several computers must not get Entra ID
+  permissions before every one of them runs 0.6. A reader verified before the update keeps
+  working unchanged. A change of its permissions no longer stops scheduled backups: they keep
+  running with the verified permissions the reader still has, leave out what a removed permission
+  read, and the Backup Reader card asks for a new verification.
+- **Setup script parameters.** `New-TenuVaultDesktopApp.ps1` takes `-Services`, `-RestoreAccess`
+  and `-Areas`. Without them it requests exactly the permissions it requested before, and every
+  existing switch works as before. Quick setup still reuses an app registration that has
+  tenant-wide admin consent for one of the Intune permissions of the default set, and now also one
+  whose consent covers more than half of the permissions that backing up Entra ID asks
+  for, or everything a setup for Conditional Access alone asks for (`User.Read`,
+  `Organization.Read.All` and `Policy.Read.All`). When sign-in to the enterprise application of
+  such a registration is turned off, setup stops instead of creating another one.
+
+- **Backup coverage and outcomes.** A backup's `metadata.json` gains two fields: `Coverage`
+  (`Complete` or `Incomplete`) and `Outcomes` (one entry per selected type: saved, not configured,
+  skipped with a cause, or failed). `Status`, `Failures`, `SkippedTypes`, `FailedTypes` and every
+  other field keep their meaning and their values, so the result of a backup, scheduled retries,
+  notifications and retention do not change for a tenant that backs up what it did before. What
+  is new to see: a backup with a type that was left out (for example one the app registration is
+  denied, or one the Backup Reader does not read) shows "Coverage incomplete" in the backup result
+  and in Backup Details. Versions before 0.6 ignore both fields and import such a backup as
+  before. A backup that holds a type those versions do not know is refused there as a whole
+  ("Unsupported backup item"). Backups made before 0.6 import into 0.6 and show no coverage.
+- **A backup that read nothing fails.** A backup in which every selected type was left out (for a
+  missing permission, role or license, or because only a signed-in admin can read it) used to end
+  as successful although it held nothing. It now ends as failed with "Backup failed: nothing
+  could be read" and the cause most of its types share. The scheduler retries it, the
+  notification is a failure and every older backup is kept. This shows for a tenant that backs
+  up only Conditional Access or Entra ID. For Intune it shows only when the backup
+  choice leaves out device configuration profiles, compliance policies, settings catalog and
+  endpoint security policies and administrative templates, and every remaining type is denied;
+  a refused read of those four always failed the backup. A backup that read some types and left
+  others out ends as before, and so does one whose types are all empty or not set up.
+- **Refusals and pauses are counted per service.** For a tenant that backs up Intune and
+  Conditional Access, refused reads and throttling are now counted for each service on its own.
+  Five consecutive refused Intune reads end the backup even when Conditional Access reads succeed
+  in between, and a pause of more than five minutes that Microsoft Graph asks of Intune no longer
+  stops the Conditional Access reads. Requests that get no answer still count for both together.
+- **Restore capability.** Every type has a restore capability, and a type without one is never
+  written to a tenant by restore, revert, change sets, Sync, baselines or the copy to another
+  tenant. Every type of earlier versions keeps what it could do.
 
 - macOS: the `DisableAutoUpdate` and `DisableSetupDiagnostics` policies are read only from a
   configuration profile (`/Library/Managed Preferences`). A value written with `defaults write`
@@ -374,9 +527,10 @@ Both maintainers have the same rights and follow the same rules; nobody can bypa
 - A stable release promotes the newest nightly's commit, so stable only ships a build nightly
   users already ran. That commit's nightly must also have passed the nightly verification. Any maintainer may start one.
 - Releases only build commits reachable from `main`, and manual runs must be started from `main`.
-- Pull request installers are unsigned and receive no signing credentials. Manual CI builds
-  are also unsigned unless `signed_windows` is explicitly selected. That option uses the
-  release signing credentials and production helper signature guard, verifies both app and
-  helper publishers, and uploads a portable x64 verification ZIP alongside the installers.
-  It does not publish a release. Run it before accepting the signed helper on a test PC:
-  `gh workflow run ci.yml --ref <reviewed-branch> -f signed_windows=true`.
+- Pull request installers are unsigned and receive no signing credentials. For manual CI,
+  select `signed_windows` to verify the signed Windows app and capture helper and upload a
+  portable x64 verification ZIP alongside the installers. Select `signed_macos` to verify
+  Developer ID signatures and notarization and upload both architectures' DMGs and ZIPs.
+  Both options use release signing credentials and deliver the installers through GitHub
+  Actions artifacts. To request both:
+  `gh workflow run ci.yml --ref <reviewed-branch> -f signed_windows=true -f signed_macos=true`.

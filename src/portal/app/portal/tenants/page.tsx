@@ -1,5 +1,9 @@
 "use client"
 
+import { AppMetadataRemovalNotice } from "~/components/tenants/app-metadata-removal-notice"
+import { Link } from "react-router-dom"
+import { BACKUP_SERVICES } from "@desktop/lib/backup-service"
+import { ServiceBackupNotice } from "@desktop/components/ServiceBackupNotice"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { trackBackup } from "@desktop/lib/backups"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
@@ -43,6 +47,7 @@ import { tenantPlanName, tenantLicense, tenantPlan, useLicense } from "@desktop/
 import { GatedButton } from "@desktop/components/PlanGate"
 import { PlanBadge } from "@desktop/components/UpgradeNote"
 import { allows, type Plan } from "../../../../shared/plans"
+import { comparisonTypeName, LEGACY_COMPARISON_NOTICE, type ComparisonCoverageNotice } from "../../../../shared/intune/backup-read-coverage"
 import { Badge } from "~/components/ui/badge"
 import { Checkbox } from "~/components/ui/checkbox"
 import {
@@ -61,6 +66,17 @@ function GraphCount({ value }: { value: number | null | undefined }) {
   return typeof value === "number" ? <>{value}</> : <span title="Microsoft Graph could not read this count">n/a</span>
 }
 
+function TenantBackupLinks({ tenant }: { tenant: Tenant }) {
+  const tenantId = tenant.credentials?.tenantId
+  if (!tenantId) return null
+  return <div className="flex flex-wrap gap-2" role="group" aria-label={`Backup services for ${tenant.name}`} data-no-select>
+    {BACKUP_SERVICES.map(service => <Link key={service.id}
+      to={`/portal/backup?service=${service.id}&tenant=${encodeURIComponent(tenantId)}`}
+      className="rounded-lg border border-border px-2 py-1 text-xs text-blue-700 hover:underline"
+      aria-label={`View ${service.label} backups for ${tenant.name}`}>{service.label}</Link>)}
+  </div>
+}
+
 function TenantsPageContent() {
   const { confirm, confirmDialog } = useConfirm()
   const { schedules, error: schedulesError } = useSchedules()
@@ -70,7 +86,7 @@ function TenantsPageContent() {
   const portfolioPlan: Plan | null = !licenseStatus ? null
     : licenseStatus.tenants.some((t) => t.entitled && t.plan === "msp") ? "msp"
     : licenseStatus.tenants.some((t) => t.entitled && t.plan === "pro") ? "pro" : "community"
-  const [driftByTenant, setDriftByTenant] = useState<Record<string, { total: number; critical: number } | { error: string }>>({})
+  const [driftByTenant, setDriftByTenant] = useState<Record<string, ({ total: number; critical: number } & ComparisonCoverageNotice) | { error: string }>>({})
   const [checkingDrift, setCheckingDrift] = useState(false)
   const searchParams = useSearchParams()
   const [searchQuery, setSearchQuery] = useState("")
@@ -362,7 +378,12 @@ function TenantsPageContent() {
           }
           setDriftByTenant((current) => ({
             ...current,
-            [tenantId]: response.ok ? { total: data.summary?.total ?? 0, critical: data.summary?.critical ?? 0 } : { error: data.error ?? "Drift check failed" },
+            [tenantId]: response.ok ? {
+              total: data.summary?.total ?? 0,
+              critical: data.summary?.critical ?? 0,
+              unknownTypes: data.unknownTypes,
+              legacyReadFailure: data.legacyReadFailure,
+            } : { error: data.error ?? "Drift check failed" },
           }))
         } catch (error) {
           setDriftByTenant((current) => ({ ...current, [tenantId]: { error: error instanceof Error ? error.message : "Drift check failed" } }))
@@ -698,7 +719,7 @@ function TenantsPageContent() {
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Tenant Management</h1>
-          <p className="mt-2 text-base text-gray-500">Manage and monitor all your Intune tenants</p>
+          <p className="mt-2 text-base text-gray-500">Manage and monitor your Microsoft tenants</p>
         </div>
         <div className="flex gap-3">
           <Button
@@ -847,7 +868,7 @@ function TenantsPageContent() {
             <Database className="h-7 w-7 text-gray-500" />
           </div>
           <h3 className="text-xl font-medium tracking-tight text-gray-900 mb-2">{tenants.length ? "No matching tenants" : "No tenants configured"}</h3>
-          <p className="text-gray-500">{tenants.length ? "Try a different name or domain." : "Get started by connecting your first Intune tenant"}</p>
+          <p className="text-gray-500">{tenants.length ? "Try a different name or domain." : "Get started by connecting your first tenant"}</p>
           {tenants.length > 0 && <Button className="mt-6" onClick={() => setSearchQuery("")}>Clear search</Button>}
         </div>
       ) : viewMode === "grid" ? (
@@ -1048,7 +1069,8 @@ function TenantsPageContent() {
                 </div>
               )}
 
-              {/* Policy Breakdown */}
+              <div className="mb-4"><TenantBackupLinks tenant={tenant} /></div>
+              <p className="mb-2 text-xs font-medium text-gray-500">Live Intune counts</p>
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <div className="flex flex-col justify-between gap-1 rounded-2xl bg-gray-50 p-4">
                   <span className="block text-xs text-gray-500">Compliance Policies</span>
@@ -1145,6 +1167,7 @@ function TenantsPageContent() {
                   )}
                 </Button>
               </div>
+              {tenant.credentials && <div className="mt-3"><ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage /><AppMetadataRemovalNotice tenantId={tenant.credentials.tenantId} /></div>}
             </div>
           </div>
         ))}
@@ -1301,6 +1324,7 @@ function TenantsPageContent() {
                           <div className="text-sm text-gray-500">{tenant.domain}</div>
                         </div>
                       </div>
+                      {tenant.credentials && <div className="mt-3 w-64 space-y-2 whitespace-normal"><TenantBackupLinks tenant={tenant} /><ServiceBackupNotice key={tenant.credentials.appId} tenantId={tenant.credentials.tenantId} showCoverage /><AppMetadataRemovalNotice tenantId={tenant.credentials.tenantId} /></div>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={cn(
@@ -1373,8 +1397,19 @@ function TenantsPageContent() {
                         const drift = driftByTenant[tenant.credentials?.tenantId?.toLowerCase() ?? ""]
                         if (!drift) return <span className="text-gray-400">Not checked</span>
                         if ("error" in drift) return <span className="text-amber-700" title={drift.error}>Not available</span>
-                        if (drift.total === 0) return <span className="text-green-700">No drift</span>
-                        return <span className={drift.critical > 0 ? "text-red-700" : "text-amber-800"}>{drift.total} change{drift.total === 1 ? "" : "s"}{drift.critical > 0 ? `, ${drift.critical} critical` : ""}</span>
+                        const unknown = drift.unknownTypes?.length ?? 0
+                        if (drift.total === 0 && !unknown && !drift.legacyReadFailure) return <span className="text-green-700">No drift</span>
+                        return <div className="space-y-1">
+                          <p className={drift.critical > 0 ? "text-red-700" : drift.total > 0 ? "text-amber-800" : "text-gray-700"}>
+                            {drift.total} change{drift.total === 1 ? "" : "s"}{drift.critical > 0 ? `, ${drift.critical} critical` : ""}
+                          </p>
+                          {unknown > 0 && <p className="text-xs text-amber-700" title={drift.unknownTypes?.map(comparisonTypeName).join(", ")}>
+                            {unknown} {unknown === 1 ? "type" : "types"} not compared
+                          </p>}
+                          {drift.legacyReadFailure && <p className="max-w-40 whitespace-normal text-xs text-amber-700" title={LEGACY_COMPARISON_NOTICE}>
+                            Older backup has an unassigned read failure
+                          </p>}
+                        </div>
                       })()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">

@@ -1,3 +1,5 @@
+import { backupBlobName, backupContainer, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../../shared/backup-storage"
+import { indexPath, largeIndexes } from "../../shared/large-backup"
 import { execFile } from "node:child_process"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
@@ -5,7 +7,7 @@ import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, rmdir
 import { hostname } from "node:os"
 import { basename, dirname, join, resolve, win32 } from "node:path"
 import { promisify } from "node:util"
-import { BACKUP_CONTAINER, BACKUP_OWNER_FILE } from "../../shared/constants"
+import { BACKUP_CONTAINER, BACKUP_OWNER_FILE, BACKUP_RUN_RECORD_FILE } from "../../shared/constants"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
 import { mapLimit } from "../../shared/map-limit"
 
@@ -70,18 +72,20 @@ export async function localBackupsExist(
     let incomplete = false
     for (const account of accounts) {
       if (!account.isDirectory()) continue
-      const folder = join(root, account.name, "intune-backups")
-      try {
-        const files = await readDirectory(folder)
-        if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
-        for (const file of files) {
-          if (file.isDirectory() && file.name.startsWith(RETIRED_PREFIX)
-            && (await readDirectory(join(folder, file.name))).some(held => held.name !== RETIRED_STAMP)) return true
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-          incomplete = true
-          console.warn(`[backups] Could not scan local backup folder ${folder}:`, error)
+      for (const container of [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER]) {
+        const folder = join(root, account.name, container)
+        try {
+          const files = await readDirectory(folder)
+          if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
+          for (const file of files) {
+            if (file.isDirectory() && file.name.startsWith(RETIRED_PREFIX)
+              && (await readDirectory(join(folder, file.name))).length) return true
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            incomplete = true
+            console.warn(`[backups] Could not scan local backup folder ${folder}:`, error)
+          }
         }
       }
     }
@@ -208,7 +212,7 @@ export interface ExpectedReplacement {
 }
 export class BlobReplacementChangedError extends Error {
   constructor(readonly prefix: string, message?: string, readonly restoredEtag?: string) {
-    super(message ?? `Replacement backup ${prefix} changed before deletion.`)
+    super(message ?? `Replacement backup ${prefix} changed before cleanup completed`)
     this.name = "BlobReplacementChangedError"
   }
 }
@@ -609,7 +613,10 @@ async function waitForInFlightPuts(dir: string, prefixes: string[] | undefined, 
   if (!prefixes?.length) return
   const key = resolve(dir)
   const normalized = prefixes.map(normalizePrefix)
-  const matches = (name: string) => normalized.some(prefix => name.startsWith(prefix))
+  const matches = (name: string) => {
+    const logical = logicalBackupName(name)
+    return normalized.some(prefix => name.startsWith(prefix) || logical.startsWith(prefix))
+  }
   while (true) {
     signal?.throwIfAborted()
     const set = inFlightPutsByDir.get(key)
@@ -676,8 +683,9 @@ export function releaseLocalRetentionGuard(lockId: string): void {
 function isPrefixProtected(dir: string, name: string): boolean {
   const prefixes = protectedPrefixesByDir.get(resolve(dir))
   if (!prefixes || prefixes.size === 0) return false
+  const logical = logicalBackupName(name)
   for (const prefix of prefixes.keys()) {
-    if (name.startsWith(prefix)) return true
+    if (name.startsWith(prefix) || logical.startsWith(prefix)) return true
   }
   return false
 }
@@ -685,8 +693,9 @@ function isPrefixProtected(dir: string, name: string): boolean {
 function assertPrefixNotProtected(dir: string, name: string): void {
   const prefixes = protectedPrefixesByDir.get(resolve(dir))
   if (!prefixes || prefixes.size === 0) return
+  const logical = logicalBackupName(name)
   for (const prefix of prefixes.keys()) {
-    if (name.startsWith(prefix)) {
+    if (name.startsWith(prefix) || logical.startsWith(prefix)) {
       throw new BlobProtectedError(`Backup ${prefix} is protected by an active retention cleanup and cannot be modified.`)
     }
   }
@@ -791,7 +800,7 @@ const DELETE_RECHECK_MS = 5_000
 /** Damaged files named in a message at most. */
 export const MAX_NAMED_FILES = 10
 
-const backupFolderOf = (name: string) => /^(backup-[^/]+)\//.exec(name)?.[1] ?? null
+const backupFolderOf = (name: string) => /^(backup-[^/]+)\//.exec(logicalBackupName(name))?.[1] ?? null
 
 /** One sentence on the damage in a container, for messages. */
 function describeDamage(damage: InventoryDamage): string {
@@ -896,12 +905,12 @@ export class LocalBlobStore {
    * @param root   Folder that holds the encrypted backups.
    * @param masterKeys Current master key first, then older keys that must stay readable.
    * @param writeFormat Format for new files and overwrites; see WRITE_FORMAT.
-   * @param processInfo Optional process-info reader override (for tests).
    */
   constructor(
     private readonly root: string,
     masterKeys: Buffer[],
     private readonly writeFormat: Version = WRITE_FORMAT,
+    private readonly guardWrites?: (path: string) => void,
     private readonly processInfo?: ProcessInfoReader,
   ) {
     if (masterKeys.length === 0) throw new Error("A backup encryption key is required.")
@@ -920,6 +929,7 @@ export class LocalBlobStore {
   async createContainer(account: string, container: string): Promise<boolean> {
     const existed = await this.containerExists(account, container)
     const dir = this.dir(account, container)
+    this.guardWrites?.(dir)
     await mkdirDurable(dir)
     if (!existed && !this.index.has(dir)) {
       // A container we just created starts with a known empty inventory.
@@ -1036,16 +1046,7 @@ export class LocalBlobStore {
   private async readBody(account: string, container: string, entry: Entry, entries: Map<string, Entry>): Promise<{ blob: StoredBlob; data: Buffer }> {
     const { name } = entry
     const folder = backupFolderOf(name)
-    // Bind the bytes and ETag to the same open file, even when the live path is replaced.
-    const file = await open(join(this.dir(account, container), entry.file), "r")
-    let raw: Buffer
-    try {
-      if (fileStamp(await file.stat({ bigint: true })) !== entry.stamp) throw new BlobConditionNotMetError(name)
-      raw = await file.readFile()
-      if (fileStamp(await file.stat({ bigint: true })) !== entry.stamp) throw new BlobConditionNotMetError(name)
-    } finally {
-      await file.close()
-    }
+    const raw = await readFile(join(this.dir(account, container), entry.file))
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
     if (!version) throw new Error("Invalid backup header")
     const headerLength = raw.readUInt16BE(MAGIC_LENGTH)
@@ -1060,7 +1061,7 @@ export class LocalBlobStore {
       const why = unreadable(error)
       const { reason } = why
       const damage = this.damageOf.get(entries)
-      if (damage && container === BACKUP_CONTAINER && !damage.files.some((file) => file.file === entry.file)) {
+      if (damage && [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].includes(container) && !damage.files.some((file) => file.file === entry.file)) {
         damage.files.push(damagedFile(entry.file, why, folder))
         if (folder && !damage.unavailable.has(folder)) damage.unavailable.set(folder, `one of its files could not be read: ${reason}.`)
         this.damagedStamps.get(entries)?.set(entry.file, entry.stamp)
@@ -1213,13 +1214,10 @@ export class LocalBlobStore {
         }
       } else {
         const conflict = damage.files.find(file => file.conflict)?.conflict
-        const held = damage.files.find(file => file.file.startsWith(RETIRED_PREFIX))
         const recovery = conflict
           ? `A file was kept at ${conflict.held} after interrupted cleanup because ${conflict.live} already exists.${conflictAsideNote(conflict.aside)} ${await resolveConflictGuidance(conflict)}`
-          : held
-            ? `A file was kept in ${held.file} after interrupted cleanup. Follow the backup storage recovery instructions.`
-            : RECOVERY
-        throw new IncompleteInventoryError(damage.files.length, `${describeDamage(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${recovery}`)
+          : RECOVERY
+        throw new IncompleteInventoryError(damage.files.length, `${damageSummary(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${recovery}`)
       }
     }
     const entry = entries.get(name)
@@ -1245,10 +1243,7 @@ export class LocalBlobStore {
           }
         }
         const path = join(dir, entry.file)
-        const info = await lstat(path, { bigint: true }).catch(error => {
-          if (isMissing(error)) throw new BlobConditionNotMetError(name)
-          throw error
-        })
+        const info = await lstat(path, { bigint: true })
         if (!info.isFile() || info.ino === 0n || `"${fileStamp(info)}"` !== (options.ifMatch ?? `"${entry.stamp}"`)) throw new BlobConditionNotMetError(name)
         const quarantine = await mkdtemp(join(dir, RETIRED_PREFIX))
         const held = join(quarantine, entry.file)
@@ -1344,9 +1339,9 @@ export class LocalBlobStore {
 
   /**
    * Re-checks replacement expectations directly on disk after `rename(path, held)` and before
-   * `rm(held)`, ignoring our own active quarantine folder. Returns the first changed replacement
-   * prefix, or null when every expected replacement file matches and no extra/unreadable file
-   * appeared under any replacement prefix.
+   * `rm(held)`, ignoring our own active quarantine folder. Groups replacements by their resolved
+   * container (including `LARGE_BACKUP_CONTAINER` companions). Returns the first changed prefix,
+   * or null when every expected replacement file matches and no extra/unreadable file appeared.
    */
   private async findChangedReplacement(
     account: string,
@@ -1357,95 +1352,111 @@ export class LocalBlobStore {
     currentEntries: Map<string, Entry>,
     retentionLockId?: string,
   ): Promise<string | null> {
-    const repDir = this.dir(account, container)
-    const names = await this.names(repDir)
-    if (names.length === 0) return expectedReplacements[0]!.prefix
-    const prefixes = expectedReplacements.map(rep => rep.prefix)
-    const quarantineName = repDir === currentDir ? basename(currentQuarantine) : null
-    const unrelatedConflictLiveFiles = new Set<string>()
-    for (const folder of names) {
-      if (!folder.startsWith(RETIRED_PREFIX) || folder === quarantineName) continue
-      const retiredDir = join(repDir, folder)
-      const dirInfo = await lstat(retiredDir).catch(() => null)
-      if (!dirInfo?.isDirectory()) return expectedReplacements[0]!.prefix
-      const stampInfo = await lstat(join(retiredDir, RETIRED_STAMP)).catch(error => isMissing(error) ? null : undefined)
-      if (stampInfo === undefined) return expectedReplacements[0]!.prefix
-      const since = Math.max(dirInfo.mtimeMs, stampInfo ? (stampInfo.isFile() ? stampInfo.mtimeMs : Infinity) : 0)
-      if (Date.now() - since <= RETIRED_GRACE_MS) return expectedReplacements[0]!.prefix
-      const rawEntries = await readdir(retiredDir).catch(() => null)
-      if (!rawEntries) return expectedReplacements[0]!.prefix
-      const heldFiles = rawEntries.filter(file => file !== RETIRED_STAMP)
-      if (heldFiles.length === 0) {
-        if (retentionLockId !== undefined && repDir === currentDir && (await this.removeAgedEmptyQuarantine(retiredDir, retentionLockId, repDir))) {
-          continue
-        }
-        return expectedReplacements[0]!.prefix
-      }
-      for (const file of heldFiles) {
-        if (!/^[a-f0-9]+\.tvb$/i.test(file)) return expectedReplacements[0]!.prefix
-        const entry = await this.readEntry(retiredDir, account, container, file)
-        if (entry === VANISHED || entry instanceof Unreadable) return expectedReplacements[0]!.prefix
-        if (!backupFolderOf(entry.name) || prefixes.some(prefix => entry.name.startsWith(prefix))) {
-          return expectedReplacements[0]!.prefix
-        }
-        if (this.fileNames(account, container, entry.name).includes(file)) {
-          unrelatedConflictLiveFiles.add(file)
-        }
-      }
-    }
-    const filesOnDisk = new Set(names.filter(file => file.endsWith(EXT)))
-    const knownEntries = repDir === currentDir ? currentEntries : await this.entries(account, container)
-    const knownByFile = new Map<string, Entry>([...knownEntries.values()].map(entry => [entry.file, entry]))
-    const matchedFiles = new Set<string>()
+    const byContainer = new Map<string, ExpectedReplacement[]>()
     for (const rep of expectedReplacements) {
-      const pairs = Object.entries(rep.blobs)
-      if (pairs.length === 0) return rep.prefix
-      for (const [blobName, expectedEtag] of pairs) {
-        const candidates = new Set<string>()
-        const knownFile = knownEntries.get(blobName)?.file
-        if (knownFile && filesOnDisk.has(knownFile)) candidates.add(knownFile)
-        for (const candidate of this.fileNames(account, container, blobName)) {
-          if (filesOnDisk.has(candidate)) candidates.add(candidate)
+      const targetContainer = (container === BACKUP_CONTAINER || container === LARGE_BACKUP_CONTAINER)
+        ? backupContainer(rep.prefix)
+        : container
+      const list = byContainer.get(targetContainer)
+      if (list) list.push(rep)
+      else byContainer.set(targetContainer, [rep])
+    }
+    for (const [targetContainer, reps] of byContainer) {
+      const repDir = this.dir(account, targetContainer)
+      const names = await this.names(repDir)
+      if (names.length === 0) return reps[0]!.prefix
+      const prefixes = reps.map(rep => rep.prefix)
+      const quarantineName = repDir === currentDir ? basename(currentQuarantine) : null
+      const unrelatedConflictLiveFiles = new Set<string>()
+      for (const folder of names) {
+        if (!folder.startsWith(RETIRED_PREFIX) || folder === quarantineName) continue
+        const retiredDir = join(repDir, folder)
+        const dirInfo = await lstat(retiredDir).catch(() => null)
+        if (!dirInfo?.isDirectory()) return reps[0]!.prefix
+        const stampInfo = await lstat(join(retiredDir, RETIRED_STAMP)).catch(error => isMissing(error) ? null : undefined)
+        if (stampInfo === undefined) return reps[0]!.prefix
+        const since = Math.max(dirInfo.mtimeMs, stampInfo ? (stampInfo.isFile() ? stampInfo.mtimeMs : Infinity) : 0)
+        if (Date.now() - since <= RETIRED_GRACE_MS) return reps[0]!.prefix
+        const rawEntries = await readdir(retiredDir).catch(() => null)
+        if (!rawEntries) return reps[0]!.prefix
+        const heldFiles = rawEntries.filter(file => file !== RETIRED_STAMP)
+        if (heldFiles.length === 0) {
+          if (retentionLockId !== undefined && repDir === currentDir && (await this.removeAgedEmptyQuarantine(retiredDir, retentionLockId, repDir))) {
+            continue
+          }
+          return reps[0]!.prefix
         }
-        let matched: string | null = null
-        for (const candidate of candidates) {
-          if (matchedFiles.has(candidate)) continue
-          const info = await lstat(join(repDir, candidate), { bigint: true }).catch(() => null)
-          if (info && info.isFile() && info.ino !== 0n && `"${fileStamp(info)}"` === expectedEtag) {
-            matched = candidate
-            break
+        for (const file of heldFiles) {
+          if (!/^[a-f0-9]+\.tvb$/i.test(file)) return reps[0]!.prefix
+          const entry = await this.readEntry(retiredDir, account, targetContainer, file)
+          if (entry === VANISHED || entry instanceof Unreadable) return reps[0]!.prefix
+          const logical = logicalBackupName(entry.name)
+          if (!backupFolderOf(entry.name) || prefixes.some(prefix => entry.name.startsWith(prefix) || logical.startsWith(prefix))) {
+            return reps[0]!.prefix
+          }
+          if (this.fileNames(account, targetContainer, entry.name).includes(file)) {
+            unrelatedConflictLiveFiles.add(file)
           }
         }
-        if (!matched) return rep.prefix
-        matchedFiles.add(matched)
       }
-    }
-    const otherFiles = [...filesOnDisk].filter(file => !matchedFiles.has(file))
-    let extraChanged: string | null = null
-    await mapLimit(otherFiles, HEADER_CONCURRENCY, async file => {
-      if (extraChanged) return
-      const info = await lstat(join(repDir, file), { bigint: true }).catch(() => null)
-      if (!info) return
-      if (!info.isFile()) {
-        extraChanged ??= prefixes[0]!
-        return
+      const filesOnDisk = new Set(names.filter(file => file.endsWith(EXT)))
+      const knownEntries = repDir === currentDir ? currentEntries : await this.entries(account, targetContainer)
+      const knownByFile = new Map<string, Entry>([...knownEntries.values()].map(entry => [entry.file, entry]))
+      const matchedFiles = new Set<string>()
+      for (const rep of reps) {
+        const pairs = Object.entries(rep.blobs)
+        if (pairs.length === 0) return rep.prefix
+        for (const [logicalName, expectedEtag] of pairs) {
+          const physicalName = backupBlobName(logicalName)
+          const candidates = new Set<string>()
+          const knownFile = knownEntries.get(physicalName)?.file ?? knownEntries.get(logicalName)?.file
+          if (knownFile && filesOnDisk.has(knownFile)) candidates.add(knownFile)
+          for (const candidate of this.fileNames(account, targetContainer, physicalName)) {
+            if (filesOnDisk.has(candidate)) candidates.add(candidate)
+          }
+          let matched: string | null = null
+          for (const candidate of candidates) {
+            if (matchedFiles.has(candidate)) continue
+            const info = await lstat(join(repDir, candidate), { bigint: true }).catch(() => null)
+            if (info && info.isFile() && info.ino !== 0n && `"${fileStamp(info)}"` === expectedEtag) {
+              matched = candidate
+              break
+            }
+          }
+          if (!matched) return rep.prefix
+          matchedFiles.add(matched)
+        }
       }
-      const known = knownByFile.get(file)
-      if (known && fileStamp(info) === known.stamp) {
-        const hit = prefixes.find(prefix => known.name.startsWith(prefix))
+      const otherFiles = [...filesOnDisk].filter(file => !matchedFiles.has(file))
+      let extraChanged: string | null = null
+      await mapLimit(otherFiles, HEADER_CONCURRENCY, async file => {
+        if (extraChanged) return
+        const info = await lstat(join(repDir, file), { bigint: true }).catch(() => null)
+        if (!info) return
+        if (!info.isFile()) {
+          extraChanged ??= prefixes[0]!
+          return
+        }
+        const known = knownByFile.get(file)
+        if (known && fileStamp(info) === known.stamp) {
+          const logical = logicalBackupName(known.name)
+          const hit = prefixes.find(prefix => known.name.startsWith(prefix) || logical.startsWith(prefix))
+          if (hit) extraChanged ??= hit
+          return
+        }
+        const read = await this.readEntry(repDir, account, targetContainer, file)
+        if (read === VANISHED) return
+        if (read instanceof Unreadable) {
+          if (!unrelatedConflictLiveFiles.has(file)) extraChanged ??= prefixes[0]!
+          return
+        }
+        const logical = logicalBackupName(read.name)
+        const hit = prefixes.find(prefix => read.name.startsWith(prefix) || logical.startsWith(prefix))
         if (hit) extraChanged ??= hit
-        return
-      }
-      const read = await this.readEntry(repDir, account, container, file)
-      if (read === VANISHED) return
-      if (read instanceof Unreadable) {
-        if (!unrelatedConflictLiveFiles.has(file)) extraChanged ??= prefixes[0]!
-        return
-      }
-      const hit = prefixes.find(prefix => read.name.startsWith(prefix))
-      if (hit) extraChanged ??= hit
-    })
-    return extraChanged
+      })
+      if (extraChanged) return extraChanged
+    }
+    return null
   }
 
   /**
@@ -1463,13 +1474,20 @@ export class LocalBlobStore {
     }
   }
 
-  private registerLockProtectedPrefixes(dir: string, id: string, prefixes: string[] | undefined): void {
-    if (!prefixes?.length) return
+  private registerLockProtectedPrefixes(account: string, container: string, dir: string, id: string, prefixes: string[] | undefined): Array<{ dir: string; prefix: string }> {
+    if (!prefixes?.length) return []
     const resolvedDir = resolve(dir)
     const key = `${resolvedDir}\0${id}`
-    const entries = prefixes.map(prefix => addProtectedPrefix(dir, prefix))
+    const entries: Array<{ dir: string; prefix: string }> = []
+    for (const prefix of prefixes) {
+      const targetContainer = (container === BACKUP_CONTAINER || container === LARGE_BACKUP_CONTAINER)
+        ? backupContainer(prefix)
+        : container
+      entries.push(addProtectedPrefix(this.dir(account, targetContainer), prefix))
+    }
     lockProtectedEntries.set(key, entries)
     for (const listener of guardRegisteredListeners) listener(resolvedDir, id)
+    return entries
   }
 
   private releaseLockProtectedPrefixes(dir: string, id: string): void {
@@ -1636,8 +1654,16 @@ export class LocalBlobStore {
           await rm(tmpPath, { force: true }).catch(() => undefined)
           if (process.platform !== "win32") await syncDirectory(dir)
           signal?.throwIfAborted()
-          this.registerLockProtectedPrefixes(dir, id, protectedPrefixes)
-          await waitForInFlightPuts(dir, protectedPrefixes, signal)
+          const registered = this.registerLockProtectedPrefixes(account, container, dir, id, protectedPrefixes)
+          const prefixesByDir = new Map<string, string[]>()
+          for (const entry of registered) {
+            const list = prefixesByDir.get(entry.dir)
+            if (list) list.push(entry.prefix)
+            else prefixesByDir.set(entry.dir, [entry.prefix])
+          }
+          for (const [targetDir, targetPrefixes] of prefixesByDir) {
+            await waitForInFlightPuts(targetDir, targetPrefixes, signal)
+          }
           signal?.throwIfAborted()
           return id
         } catch (error) {
@@ -2078,6 +2104,7 @@ export class LocalBlobStore {
 
   /** Own directory mutations update the cache without making the next put rebuild it. */
   private async write<T>(dir: string, run: () => Promise<T>): Promise<T> {
+    this.guardWrites?.(dir)
     this.writes.set(dir, (this.writes.get(dir) ?? 0) + 1)
     this.changed(dir)
     try {
@@ -2473,7 +2500,7 @@ export class LocalBlobStore {
       entries.set(entry.name, entry)
     }
     // Other containers fail closed, as the backup container did before damage could be traced.
-    if (container !== BACKUP_CONTAINER) {
+    if (![BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].includes(container)) {
       const count = retired.length + unreadableFiles.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
       if (count) throw new IncompleteInventoryError(count)
       return entries
@@ -2508,7 +2535,7 @@ export class LocalBlobStore {
     // Blob names whose files can be traced to a backup folder, by the encrypted file name they would have.
     const folders = new Set([...entries.keys(), ...claims.keys()].map(backupFolderOf).filter((folder) => folder !== null))
     const traced = new Map<string, string>()
-    for (const folder of folders) traced.set(`${folder}/metadata.json`, folder).set(`${folder}/${BACKUP_OWNER_FILE}`, folder)
+    for (const folder of folders) traced.set(`${folder}/metadata.json`, folder).set(`${folder}/${BACKUP_OWNER_FILE}`, folder).set(`${folder}/${BACKUP_RUN_RECORD_FILE}`, folder)
     const withManifest = new Set<string>()
     // Folders whose metadata.json has no item list (backups from versions before the manifest).
     const legacy = new Set<string>()
@@ -2518,7 +2545,7 @@ export class LocalBlobStore {
     for (const entry of entries.values()) {
       if (!/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
       const folder = backupFolderOf(entry.name)!
-      let metadata: { Items?: unknown }
+      let metadata: { Items?: unknown; LargeItems?: unknown }
       try {
         const raw = await readFile(join(dir, entry.file))
         const body = raw.subarray(MAGIC_LENGTH + 2 + raw.readUInt16BE(MAGIC_LENGTH))
@@ -2537,7 +2564,7 @@ export class LocalBlobStore {
         unavailable(folder, "its manifest (metadata.json) is not valid.")
         continue
       }
-      const prefix = `${folder}/`
+      const prefix = backupBlobName(`${folder}/`)
       let missing = 0
       let nonConflictMissing = 0
       let valid = true
@@ -2551,6 +2578,23 @@ export class LocalBlobStore {
           missing++
           if (!conflictedBlobNames.has(name)) nonConflictMissing++
         }
+      }
+      if (metadata.LargeItems) {
+        try {
+          for (const [type, index] of Object.entries(largeIndexes(metadata))) {
+            for (let shard = 0; shard < index.shards; shard++) {
+              const name = `${prefix}${indexPath(type, shard)}`
+              traced.set(name, folder)
+              if (!entries.has(name)) {
+                missing++
+                if (!conflictedBlobNames.has(name)) nonConflictMissing++
+              }
+            }
+          }
+          // Unknown damaged headers may belong to a large snapshot outside the inline inventory.
+          // Its index will be checked lazily, so do not exempt it from unattributed damage.
+          legacy.add(folder)
+        } catch { valid = false }
       }
       if (!valid) {
         damage.hasNonConflictDamage = true
@@ -2622,6 +2666,7 @@ export class LocalBlobStore {
   }
 
   private async writeBodyDamage(dir: string, value: Record<string, BodyDamage>): Promise<void> {
+    this.guardWrites?.(dir)
     const path = join(dir, BODY_DAMAGE_FILE)
     if (Object.keys(value).length === 0) {
       await rm(path, { force: true })

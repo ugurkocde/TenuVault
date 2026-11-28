@@ -1,11 +1,13 @@
 ---
 title: "Change reports"
-description: A report of what changed in Intune between two backups, setting by setting, with who made each change. Save it as PDF, Markdown or JSON, or have it sent by email after every scheduled backup.
+description: Review changes across Entra ID and Intune backups. Export a report or send it by email.
 ---
 
-A change report documents what changed in a tenant between two backups: every added, changed and deleted item, the settings that changed with their old and new values, the settings of new and deleted items (up to 300 per item), and who made each change according to the Intune and Entra audit logs. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
+A change report documents added, changed and deleted policies between two backups. It includes the old and new values of changed settings, up to 300 settings per new or deleted policy, and the actors identified by matching audit events. It also summarizes changes to covered directory records. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
 
 Open **Reports** in the sidebar. The page works on the tenant selected in the tenant switcher.
+
+Change reports cover saved Entra ID and Intune configuration. Conditional Access changes fall under Entra ID. Reports can name actors for supported Conditional Access and Intune audit events. Other areas can show configuration changes with no actor attribution.
 
 ## What your plan includes
 
@@ -27,7 +29,9 @@ Reports generated on a paid plan stay readable and can still be saved as PDF, Ma
    * **Choose two backups**: pick the older and the newer backup yourself.
 3. Click **Generate report**.
 
-The report runs in the background and shows in the activity panel, so you can open another page meanwhile. It needs two complete backups. Backups that failed, are still running or completed with warnings are not offered by the first three periods; with **Choose two backups** you can pick a backup that completed with warnings, and items it could not read may then show as deleted or added.
+The report runs in the background and shows in the activity panel, so you can open another page meanwhile. It needs two backups. The first three periods offer only backups that finished successfully. With **Choose two backups**, you can also pick a backup that completed with warnings.
+
+For backups that record per-type outcomes, the report lists types either backup could not read in full under **Types not compared** and leaves them out of the change counts. For older backups, TenuVault uses the recorded scope and excludes types with known failures. If an older backup recorded a read failure without identifying the type, some reported additions or deletions may be policies that backup failed to read.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/reports.webp" aria-label="Open full-size screenshot: reports">
@@ -40,11 +44,12 @@ The report runs in the background and shows in the activity panel, so you can op
 
 Click a report in the **Reports** list to open it. It has these parts, in the app and in every saved format:
 
-* **Summary**: how many items were changed, added and deleted, and how many of them have matching audit events.
+* **Summary**: how many policies were changed, added and deleted, and how many of them have matching audit events.
 * **Deleted**: each deleted item with the settings it had, and the backup that still holds it, so you can [restore](/restore/) it.
 * **Changed**: each changed item with the settings that changed, before and after. A renamed item shows its previous name.
 * **Added**: each new item with the settings it has, including its assignments.
 * **Other activity**: audit events in the same period that match no item in the report. This is where you see a change that was made and undone between the two backups, or a change to something TenuVault does not back up.
+* **Comparison coverage**: whether the ordinary comparison completed, plus separate counts of added, changed, deleted and unchanged inventory objects for each large folder. Directory inventory is compared from bounded index pages without reading every object. Mixed runs use the verified inventory companion of each backup. A missing or incomplete comparison is stated explicitly. Inventory changes have no per-object settings or audit attribution in these reports.
 * **Not compared**: files that could not be read and were left out.
 
 Each item lists at most 300 settings. An item with more says how many are not listed; the backup itself holds the full item.
@@ -55,11 +60,11 @@ The settings use the same readable names and values as [drift detection](/drift/
 
 ## Who made a change
 
-TenuVault reads the audit events between the times the two backups started and matches them to the report's items by the object's ID. When an event names no ID, it is matched by the item's name.
+TenuVault reads the audit events between the times the two backups started and matches them to the report's policies by object ID. When an event names no ID, it is matched by the policy's name.
 
 * Intune changes come from the Intune audit log, which TenuVault can already read with its standard permissions. Your account needs an Intune role that can read audit logs.
-* Conditional Access changes come from the Entra audit log, which needs the optional delegated `AuditLog.Read.All` permission. It is only read when the report contains Conditional Access policies, named locations or authentication strengths. Without the permission, those items have no actors and the report says why. See [Permissions](/security/permissions/).
-* Intune and Entra keep audit events for a limited time, so reports of older backups can have fewer matching events.
+* Conditional Access changes come from the Entra audit log, which needs the optional delegated `AuditLog.Read.All` permission. It is only read when the report contains Conditional Access policies, named locations or authentication strengths. Without the permission, those changes have no actors and the report says why. See [Permissions](/security/permissions/).
+* Entra and Intune keep audit events for a limited time, so reports of older backups can have fewer matching events.
 * A change made during a backup can appear in the audit events of one report and in the item changes of the next.
 
 When the audit log cannot be read at all, the report is still made and says that who made the changes is unknown, and why. In the app, a throttled read (429) suggests generating the report again in a few minutes. [Cloud backup reports](/backups/cloud/#change-reports-by-email) arrive by email instead, so they only name the reason, for example "Microsoft Graph throttled the Intune audit log request."
@@ -111,3 +116,9 @@ Like the scheduled backups themselves, this runs only while TenuVault is running
 * [Compare backups](/backups/compare/): the changes of one backup in Backup History
 * [Drift detection](/drift/): act on recent changes, with revert and restore
 * [Notifications](/notifications/): alerts and Intune change digests in Teams, email or webhooks
+
+Scheduled reports skip unchanged backups only when both the ordinary and inventory comparisons completed and found no changes. Preview, email and exports list the types that could not be compared. Unread types, inventory changes, unreadable index pages and comparisons that were not performed still produce a report. Older saved reports without recorded coverage cannot establish that nothing changed.
+
+### Inventory in cloud reports
+
+Azure Automation still backs up Intune and Conditional Access only. If either compared backup declares directory inventory, including a missing or unreadable large companion, its cloud report says that inventory comparison was not performed. Zero ordinary policy changes do not establish that the inventory is unchanged. The report and email retain this warning. Backups without inventory keep their existing export layout.

@@ -36,6 +36,25 @@
     Assigning a group needs Entra ID P1 or P2, and only direct members get access (nested
     groups do not). Off by default so an admin who is not in the group is not locked out.
 
+.PARAMETER Services
+    The services the app registration can back up: Intune, ConditionalAccess and Entra.
+    Default: Intune and ConditionalAccess, which is what the script has always requested. Each
+    service brings its own read permissions; nothing is requested for a service you leave out.
+    An empty list is refused; leave the parameter out to get the default.
+
+.PARAMETER RestoreAccess
+    The services TenuVault may also restore, which adds their write permissions. Default: Intune,
+    when Intune is one of the services, as before. When you pass it, name every service that gets
+    write permissions; pass None to request read permissions only. Restoring Intune device
+    categories and clean-up rules needs DeviceManagementManagedDevices.ReadWrite.All, and restoring
+    Entra group expiration policies needs Directory.ReadWrite.All; the script never requests these
+    two, because they reach far beyond those settings.
+
+.PARAMETER Areas
+    Areas of Entra that are backed up only on request: Groups and UsersAndDevices.
+    Groups and UsersAndDevices hold personal data. Needs Entra in -Services. An empty list is
+    refused; leave the parameter out to back up none of these areas.
+
 .PARAMETER IncludeGroupRead
     Deprecated and accepted for compatibility. GroupMember.Read.All is added by default.
 
@@ -54,7 +73,8 @@
 .PARAMETER IncludeConditionalAccessRestore
     When set, also requests the delegated Policy.ReadWrite.ConditionalAccess permission, so
     TenuVault can restore Entra Conditional Access policies, named locations and authentication
-    strengths. Backing them up only needs Policy.Read.All, which is always requested. A restore
+    strengths. Backing them up only needs Policy.Read.All, which is requested by default and
+    added with this switch when your choice of services left it out. A restore
     still needs an admin with the Conditional Access Administrator or Security Administrator
     role, and restored policies start in report-only mode. Off by default, so the default
     permission set cannot change Conditional Access.
@@ -74,12 +94,20 @@
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -UseDeviceCode
 
+.EXAMPLE
+    ./New-TenuVaultDesktopApp.ps1 -Services Intune,Entra -RestoreAccess Intune
+
+.EXAMPLE
+    ./New-TenuVaultDesktopApp.ps1 -Services Entra -RestoreAccess None -Areas Groups
 #>
 [CmdletBinding()]
 param(
     [string]$TenantId,
     [string]$DisplayName = "TenuVault Desktop",
     [string]$AllowedGroupId,
+    [ValidateSet('Intune', 'ConditionalAccess', 'Entra')][string[]]$Services,
+    [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'None')][string[]]$RestoreAccess,
+    [ValidateSet('Groups', 'UsersAndDevices')][string[]]$Areas,
     [switch]$IncludeGroupRead,
     [switch]$IncludeNotifications,
     [switch]$IncludeAuditLog,
@@ -101,6 +129,58 @@ if ($AllowedGroupId) {
     $groupGuid = [Guid]::Empty
     if (-not [Guid]::TryParse($AllowedGroupId, [ref]$groupGuid)) { throw "-AllowedGroupId must be the object ID of a group, a GUID. Nothing was changed." }
 }
+
+# What each service and area needs from Microsoft Graph, as delegated permissions: Backup to read
+# it, Restore to read and write it. TenuVault's own tests keep this table equal to the one the app uses.
+# BEGIN PERMISSION TABLE
+$basePermissions = @('User.Read', 'Organization.Read.All', 'GroupMember.Read.All')
+$defaultServices = @('ConditionalAccess', 'Intune')
+$defaultRestoreAccess = @('Intune')
+$permissionTable = @(
+    @{ Service = 'ConditionalAccess'; Area = 'NamedLocations'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.Read.All', 'Policy.ReadWrite.ConditionalAccess') }
+    @{ Service = 'ConditionalAccess'; Area = 'AuthenticationStrengths'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.ReadWrite.ConditionalAccess') }
+    @{ Service = 'ConditionalAccess'; Area = 'Policies'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.Read.All', 'Policy.ReadWrite.ConditionalAccess') }
+    @{ Service = 'Intune'; Area = 'Configuration'; OptIn = $false; Backup = @('DeviceManagementConfiguration.Read.All'); Restore = @('DeviceManagementConfiguration.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Apps'; OptIn = $false; Backup = @('DeviceManagementApps.Read.All', 'DeviceManagementConfiguration.Read.All'); Restore = @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementConfiguration.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Enrollment'; OptIn = $false; Backup = @('DeviceManagementServiceConfig.Read.All'); Restore = @('DeviceManagementServiceConfig.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Scripts'; OptIn = $false; Backup = @('DeviceManagementScripts.Read.All'); Restore = @('DeviceManagementScripts.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Roles'; OptIn = $false; Backup = @('DeviceManagementRBAC.Read.All'); Restore = @('DeviceManagementRBAC.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Devices'; OptIn = $false; Backup = @('DeviceManagementManagedDevices.Read.All'); Restore = @('DeviceManagementManagedDevices.Read.All') }
+    @{ Service = 'Entra'; Area = 'TenantSettings'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.Read.All') }
+    @{ Service = 'Entra'; Area = 'Authentication'; OptIn = $false; Backup = @('Policy.Read.All', 'AuthenticationContext.Read.All'); Restore = @('Policy.Read.All', 'AuthenticationContext.Read.All') }
+    @{ Service = 'Entra'; Area = 'Governance'; OptIn = $false; Backup = @('Agreement.Read.All'); Restore = @('Agreement.Read.All') }
+    @{ Service = 'Entra'; Area = 'Groups'; OptIn = $true; Backup = @('Group.Read.All', 'Directory.Read.All'); Restore = @('Group.ReadWrite.All', 'GroupMember.ReadWrite.All', 'User.Read.All', 'Application.Read.All', 'Policy.Read.All', 'RoleManagement.Read.Directory', 'Directory.Read.All') }
+    @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Backup = @('Device.Read.All'); Restore = @('Device.Read.All') }
+)
+# END PERMISSION TABLE
+# A list that was passed empty is refused: taking it for a parameter that was left out would
+# request the default permissions without saying so.
+foreach ($name in 'Services', 'Areas') {
+    if ($PSBoundParameters.ContainsKey($name) -and -not $PSBoundParameters[$name]) { throw "-$name was given without a value. Name at least one, or leave -$name out. Nothing was changed." }
+}
+$chosenServices = $Services
+if (-not $chosenServices) { $chosenServices = $defaultServices }
+$chosenRestore = $RestoreAccess
+if (-not $PSBoundParameters.ContainsKey('RestoreAccess')) { $chosenRestore = @($defaultRestoreAccess | Where-Object { $chosenServices -contains $_ }) }
+if ($chosenRestore -contains 'None') {
+    if (@($chosenRestore).Count -gt 1) { throw "-RestoreAccess None cannot be combined with a service. Nothing was changed." }
+    $chosenRestore = @()
+}
+foreach ($name in $chosenRestore) {
+    if ($chosenServices -notcontains $name) { throw "-RestoreAccess names $name, which is not one of the services in -Services. Nothing was changed." }
+}
+foreach ($name in $Areas) {
+    if (-not ($permissionTable | Where-Object { $_.OptIn -and $_.Area -eq $name -and $chosenServices -contains $_.Service })) { throw "-Areas names $name, which belongs to a service that is not in -Services. Nothing was changed." }
+}
+$graphScopes = @($basePermissions)
+foreach ($row in $permissionTable) {
+    if ($chosenServices -notcontains $row.Service) { continue }
+    if ($row.OptIn -and $Areas -notcontains $row.Area) { continue }
+    $wanted = $row.Backup
+    if ($chosenRestore -contains $row.Service) { $wanted = $row.Restore }
+    foreach ($name in $wanted) { if ($graphScopes -notcontains $name) { $graphScopes += $name } }
+}
+
 # Windows PowerShell 5.1 does not offer TLS 1.2 by default on older systems.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 # Behind a proxy that asks for the Windows sign-in, answer with the current user (5.1, then 7).
@@ -284,7 +364,7 @@ $context = @{ TenantId = $identity.tid }
 Write-Host "Signed in as $username (tenant $($context.TenantId))."
 
 function Invoke-Graph([string]$Method, [string]$Path, $Body, [switch]$ReplicationRetry) {
-    $parameters = @{ Method = $Method; Uri = "https://graph.microsoft.com/v1.0$Path"; Headers = @{ Authorization = "Bearer $($token.access_token)" } }
+    $parameters = @{ Method = $Method; Uri = "https://graph.microsoft.com/beta$Path"; Headers = @{ Authorization = "Bearer $($token.access_token)" } }
     if ($null -ne $Body) {
         $parameters.ContentType = 'application/json; charset=utf-8'
         $parameters.Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 20))
@@ -321,7 +401,7 @@ function Get-GraphItems([string]$Path) {
         if ($page.'@odata.nextLink') {
             $next = [uri]$page.'@odata.nextLink'
             if ($next.Host -ne 'graph.microsoft.com' -or $next.Scheme -ne 'https') { throw 'Unexpected Graph paging address.' }
-            $Path = $next.PathAndQuery -replace '^/v1.0', ''
+            $Path = $next.PathAndQuery -replace '^/beta', ''
         }
     } while ($Path)
 }
@@ -331,19 +411,7 @@ $resources = @(
     @{
         Name   = "Microsoft Graph"
         AppId  = "00000003-0000-0000-c000-000000000000"
-        Scopes = @(
-            "User.Read",
-            "Organization.Read.All",
-            # Reads group names and membership for assignments and the hygiene group check.
-            "GroupMember.Read.All",
-            "Policy.Read.All",
-            "DeviceManagementConfiguration.ReadWrite.All",
-            "DeviceManagementApps.ReadWrite.All",
-            "DeviceManagementServiceConfig.ReadWrite.All",
-            "DeviceManagementScripts.ReadWrite.All",
-            "DeviceManagementRBAC.ReadWrite.All",
-            "DeviceManagementManagedDevices.Read.All"
-        )
+        Scopes = $graphScopes
     },
     @{
         # Lists subscriptions and storage accounts in the backup storage picker.
@@ -359,26 +427,30 @@ $resources = @(
     }
 )
 
+# Permissions that single features need, added only on request and only once.
+$optional = @()
 if ($IncludeGroupRead) {
     Write-Warning "-IncludeGroupRead is no longer needed: group read (GroupMember.Read.All) is part of the default permissions."
 }
 
 if ($IncludeConditionalAccessRestore) {
     # Opt-in only: restores Conditional Access. Microsoft Graph also needs Policy.Read.All for these writes.
-    $resources[0].Scopes += "Policy.ReadWrite.ConditionalAccess"
+    $optional += "Policy.ReadWrite.ConditionalAccess"
+    $optional += "Policy.Read.All"
 }
 
 if ($IncludeAuditLog) {
     # Opt-in only: Conditional Access change watching reads the Entra audit log.
-    $resources[0].Scopes += "AuditLog.Read.All"
+    $optional += "AuditLog.Read.All"
 }
 
 if ($IncludeNotifications) {
     # Opt-in only: notification email as the signed-in admin, plus group recipient resolution.
-    $resources[0].Scopes += "Mail.Send"
+    $optional += "Mail.Send"
     # Reading other members' mail and userType needs their basic profile properties.
-    $resources[0].Scopes += "User.Read.All"
+    $optional += "User.Read.All"
 }
+foreach ($name in $optional) { if ($resources[0].Scopes -notcontains $name) { $resources[0].Scopes += $name } }
 
 $requiredResourceAccess = @()
 foreach ($resource in $resources) {
@@ -390,7 +462,7 @@ foreach ($resource in $resources) {
     }
     $resource.ServicePrincipalId = $sp.id
     $access = foreach ($scopeName in $resource.Scopes) {
-        $permission = $sp.oauth2PermissionScopes | Where-Object Value -eq $scopeName
+        $permission = $sp.publishedPermissionScopes | Where-Object Value -eq $scopeName
         if (-not $permission) { throw "Delegated permission $scopeName was not found on $($resource.Name)." }
         @{ id = $permission.id; type = 'Scope' }
     }
@@ -414,7 +486,16 @@ try {
     Write-Host "Granting admin consent for these delegated permissions..."
     foreach ($resource in $resources) {
         Write-Host "  $($resource.Name): $($resource.Scopes -join ', ')"
-        Invoke-Graph POST '/oauth2PermissionGrants' @{ clientId = $appSp.id; consentType = 'AllPrincipals'; resourceId = $resource.ServicePrincipalId; scope = ($resource.Scopes -join ' ') } -ReplicationRetry | Out-Null
+        # Graph beta requires these legacy dates on create and ignores them. Match Entra's minimum
+        # start date and use a future expiry placeholder for consent that lasts until revoked.
+        Invoke-Graph POST '/oauth2PermissionGrants' @{
+            clientId = $appSp.id
+            consentType = 'AllPrincipals'
+            resourceId = $resource.ServicePrincipalId
+            scope = ($resource.Scopes -join ' ')
+            startTime = '0001-01-01T00:00:00Z'
+            expiryTime = '9999-12-31T23:59:59Z'
+        } -ReplicationRetry | Out-Null
     }
     if ($AllowedGroupId) {
         Write-Host "Limiting sign-in to members of group $AllowedGroupId..."
@@ -442,7 +523,11 @@ try {
     }
 } catch { }
 Write-Host ""
-Write-Host "The admins who use TenuVault also need an Intune role (for example Intune Administrator)."
+if ($chosenServices -contains 'Intune') {
+    Write-Host "The admins who use TenuVault also need an Intune role (for example Intune Administrator)."
+} else {
+    Write-Host "The admins who use TenuVault also need a role that can read the services you chose (for example Global Reader)."
+}
 Write-Host "For backups, schedules and the audit log in an Azure storage account they also need 'Storage"
 Write-Host "Blob Data Contributor' and read access on that account (see New-TenuVaultStorage.ps1)."
 if (-not $AllowedGroupId) {

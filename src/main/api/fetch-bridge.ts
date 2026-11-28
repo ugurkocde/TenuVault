@@ -1,11 +1,17 @@
+import { namedSignInCode } from "../../shared/sign-in-errors"
 import { registerStorageToken } from "../storage/azure-seal"
 import { FetchPreconditionError } from "./network-error"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { localAccountFromUrl, routeUsesLocalStorage } from "../storage/blob-emulator"
+import { currentRouteTenant, localAccountFromUrl, routeUsesLocalStorage } from "../storage/blob-emulator"
 
 export interface DelegatedToken {
   accessToken: string
   expiresOn: Date | null
+}
+
+export interface RequestAuthorization {
+  url?: URL
+  beforeDispatch?: () => void
 }
 
 export interface FetchBridgeOptions {
@@ -19,6 +25,9 @@ export interface FetchBridgeOptions {
    * local backup store, so no path skips licensing.
    */
   authorizeTenant?: (tenant: string) => unknown
+  authorizeRequest?: (url: URL, input: RequestInfo | URL, init: RequestInit | undefined, tenant: string | null) => Promise<void | RequestAuthorization>
+  authorizeResource?: (tenant: string, scope: string) => void
+  bindOwnClientCredentials?: (tenant: string, clientId: string, scope: string, token: string, expiresIn?: number) => void
   /** Serves Blob requests for local (`tvlocal-...`) storage accounts from the encrypted store. */
   handleLocalBlob?: (request: Request) => Promise<Response>
   fetch?: typeof fetch
@@ -81,35 +90,58 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
           return Response.json({ error: "invalid_request", error_description: "The tenant in the token URL is not a plain tenant ID." }, { status: 400 })
         }
         const request = new Request(input, init)
-        if (request.method === "POST") {
+        const form = request.method === "POST" ? new URLSearchParams(await request.clone().text()) : null
+        if (form) {
           const tenant = decodeURIComponent(tokenPath[1])
-          const form = new URLSearchParams(await request.clone().text())
           if (form.get("grant_type") === "client_credentials") {
             try {
               await options.authorizeTenant?.(tenant)
             } catch (error) {
               return tokenError(403, "unauthorized_client", error)
             }
+            if (form.get("scope")?.includes("storage.azure.com") && routeUsesLocalStorage(tenant)) {
+              return Response.json({ token_type: "Bearer", access_token: LOCAL_STORAGE_TOKEN, expires_in: 3600, ext_expires_in: 3600 })
+            }
             if (form.get("client_secret") === DELEGATED_CLIENT_SECRET) {
               return await delegatedTokenResponse(options, tenant, form)
             }
+            try {
+              options.authorizeResource?.(tenant, form.get("scope") ?? "")
+            } catch (error) {
+              return tokenError(403, "unauthorized_client", error)
+            }
           }
         }
-        const requestForm = request.method === "POST" ? await request.clone().text() : ""
         const response = await realFetch(request)
-        if (request.method === "POST" && response.ok) {
-          const form = new URLSearchParams(requestForm)
-          if (form.get("scope")?.includes("storage.azure.com")) {
-            // Registered so backups sealed by earlier versions open for this tenant (storage/azure-seal.ts).
-            // A body that is not a token (for example a captive portal page) still goes to MSAL, which
-            // reports it as a response it could not parse. Rejecting here would look like no response at all.
-            const token = await response.clone().json().catch(() => null) as { access_token?: unknown } | null
-            if (typeof token?.access_token === "string") registerStorageToken(token.access_token, decodeURIComponent(tokenPath[1]))
+        if (form && response.ok) {
+          const scope = form.get("scope")
+          const client = form.get("client_id")
+          const storage = scope?.includes("storage.azure.com")
+          const ownCredentials = client && scope && form.get("grant_type") === "client_credentials" && form.has("client_secret")
+          if (storage || ownCredentials) {
+            // A captive portal response still goes to MSAL, which reports a response it could not parse.
+            const token = await response.clone().json().catch(() => null) as { access_token?: unknown; expires_in?: unknown } | null
+            if (typeof token?.access_token === "string") {
+              const tenant = decodeURIComponent(tokenPath[1])
+              if (storage) registerStorageToken(token.access_token, tenant)
+              if (ownCredentials) {
+                options.bindOwnClientCredentials?.(tenant, client, scope, token.access_token,
+                  typeof token.expires_in === "number" && Number.isFinite(token.expires_in) ? token.expires_in : undefined)
+              }
+            }
           }
         }
         return response
       }
 
+      const authorization = await options.authorizeRequest?.(url, input, init, currentRouteTenant())
+      const authorizedUrl = authorization?.url
+      authorization?.beforeDispatch?.()
+      if (authorizedUrl) {
+        // Keep a scoped Graph request inside Graph, including when Graph returns a redirect.
+        const request = new Request(input, { ...init, redirect: "error" })
+        return realFetch(authorizedUrl.href === url.href ? request : new Request(authorizedUrl, request))
+      }
       return realFetch(input, init)
     } catch (error) {
       if (networkAttempted || error instanceof FetchPreconditionError) throw error
@@ -125,13 +157,18 @@ async function delegatedTokenResponse(
 ): Promise<Response> {
   const clientId = form.get("client_id")
   const scope = form.get("scope")
+  // Local blob requests need no token, so a route on this device's backups must not depend
+  // on Azure Storage consent or an active sign-in method.
+  if (scope?.includes("storage.azure.com") && routeUsesLocalStorage(tenant)) {
+    return Response.json({ token_type: "Bearer", access_token: LOCAL_STORAGE_TOKEN, expires_in: 3600, ext_expires_in: 3600 })
+  }
   if (!clientId || !scope) {
     return Response.json({ error: "invalid_request", error_description: "client_id and scope are required" }, { status: 400 })
   }
-  // Local blob requests need no token, so a route on this device's backups must not depend
-  // on Azure Storage consent (the backup engine skips this token the same way).
-  if (scope.includes("storage.azure.com") && routeUsesLocalStorage(tenant)) {
-    return Response.json({ token_type: "Bearer", access_token: LOCAL_STORAGE_TOKEN, expires_in: 3600, ext_expires_in: 3600 })
+  try {
+    options.authorizeResource?.(tenant, scope)
+  } catch (error) {
+    return tokenError(403, "unauthorized_client", error)
   }
   try {
     const token = await options.getDelegatedToken(tenant, clientId, scope, form.get("force_refresh") === "true")
@@ -143,7 +180,10 @@ async function delegatedTokenResponse(
       ext_expires_in: expiresIn,
     })
   } catch (error) {
-    console.error(`[auth] Delegated token for ${tenant} (${scope}) failed:`, error)
+    const code = error && typeof error === "object" && "errorNo" in error ? error.errorNo : undefined
+    const normalized = typeof code === "string" || typeof code === "number" ? `AADSTS${code}`
+      : error instanceof Error ? namedSignInCode(error.message) : undefined
+    console.error("[auth] Delegated token request refused", normalized && /^AADSTS\d{4,8}$/.test(normalized) ? normalized : "interaction_required")
     return tokenError(401, "interaction_required", error)
   }
 }

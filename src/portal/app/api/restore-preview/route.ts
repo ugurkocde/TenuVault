@@ -1,14 +1,17 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { graphCaller, locateLive, readLive } from "~/lib/policies/graph-restore"
 import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
+import { backupOnlyRestoreMessage } from "../../../../shared/intune/restore-availability"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
-import { moduleForFolder, restorePermissionBlocker } from "../../../../shared/services/modules"
+import { checksRestorePermission, restorePermissionBlocker } from "../../../../shared/services/modules"
 import { grantedPermissions } from "../../../../shared/services/token"
+import { LOCAL_STORAGE_PREFIX } from "../../../../shared/constants"
 import { isLegacySealedError } from "../../../../shared/legacy-sealed"
 
 const MAX_ITEMS = 2000
@@ -53,7 +56,8 @@ export async function POST(request: NextRequest) {
   const { tenantId, appId, clientSecret, storageAccountName, backupId, paths, live } = body as {
     tenantId?: string; appId?: string; clientSecret?: string; storageAccountName?: string; backupId?: string; paths?: unknown; live?: unknown
   }
-  if (!tenantId || !appId || !clientSecret || !storageAccountName || !backupId || !/^[a-zA-Z0-9_-]+$/.test(backupId)) {
+  const local = typeof storageAccountName === "string" && storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
+  if (!tenantId || (!local && (!appId || !clientSecret)) || !storageAccountName || !backupId || !/^[a-zA-Z0-9_-]+$/.test(backupId)) {
     return NextResponse.json({ error: "Missing required parameters" }, { status: 400 })
   }
   if (!Array.isArray(paths) || paths.length > MAX_ITEMS || !paths.every((path) => validPolicyPath(path, backupId))) {
@@ -61,37 +65,46 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const client = appId ?? ""
+    const secret = clientSecret ?? ""
+    const reviewable = paths.filter(path => !backupOnlyRestoreMessage(String(path).split("/")[1] ?? ""))
     const [storageToken, graphToken] = await Promise.all([
-      token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
-      // An opt-in service's items are checked against the app registration's permissions, so a restore
-      // that would be refused shows as not restorable here instead of failing when it starts.
-      live === true
-        ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
-        : paths.some((path) => moduleForFolder(String(path).split("/")[1] ?? "")?.module.optIn)
+      token(tenantId, client, secret, "https://storage.azure.com/.default"),
+      // Check the app registration's permissions for these folders even without a live comparison.
+      live === true && reviewable.length > 0 && client && secret
+        ? token(tenantId, client, secret, "https://graph.microsoft.com/.default")
+        : client && secret && reviewable.some((path) => checksRestorePermission(String(path).split("/")[1] ?? ""))
           // Without the token the restore still checks the permission before its first write.
-          ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => "")
+          ? token(tenantId, client, secret, "https://graph.microsoft.com/.default").catch(() => "")
           : Promise.resolve(""),
     ])
     const granted = grantedPermissions(graphToken)
-    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     // A backup that records no tenant cannot change live policies; it can still be restored as a copy.
     const ownership = owned.owned ? undefined : UNTAGGED_BACKUP
-    const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
+    const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, client, secret, "https://graph.microsoft.com/.default", true) })
 
     const preview = async (path: string): Promise<PreviewItem> => {
       const folder = path.split("/")[1] ?? ""
       const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
       const fallbackName = (path.split("/")[2] ?? "").replace(/\.json$/, "")
+      const backupOnly = backupOnlyRestoreMessage(folder)
+      if (backupOnly) return { path, folder: type?.folder ?? folder, name: fallbackName, blocker: backupOnly, replaceBlocker: backupOnly }
       if (!type) return { path, folder, name: fallbackName, blocker: "This backup file is not an Intune type TenuVault can restore.", replaceBlocker: "This type cannot be replaced." }
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${path.split("/").map(encodeURIComponent).join("/")}`, {
+      if (type.volume === "large") {
+        const blocker = type.limitation ?? "This inventory cannot be restored."
+        return { path, folder: type.folder, name: fallbackName, blocker, replaceBlocker: blocker }
+      }
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(path)}`, {
         headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
       })
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }
       const snapshot = (await response.json()) as Item
-      const item: PreviewItem = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot), ...restoreCapabilities(type, snapshot) }
+      const details = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot) }
+      const item: PreviewItem = { ...details, ...restoreCapabilities(type, snapshot) }
       if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item
       try {
@@ -121,7 +134,7 @@ export async function POST(request: NextRequest) {
       while (next < paths.length) {
         const index = next++
         const path = paths[index] as string
-        try { items[index] = withPermission(await preview(path), granted) }
+        try { items[index] = withPermission(await preview(path), granted, client) }
         catch (error) {
           // A backup sealed by an earlier version says which key it needs.
           const sealed = isLegacySealedError(error) ? (error as Error).message : null
@@ -135,8 +148,8 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** Marks an item not restorable when the app registration lacks its opt-in service's write permission. */
-function withPermission(item: PreviewItem, granted: ReturnType<typeof grantedPermissions>): PreviewItem {
-  const blocker = restorePermissionBlocker(item.folder, granted)
+/** Adds connection guidance to actions the snapshot can support. */
+function withPermission(item: PreviewItem, granted: ReturnType<typeof grantedPermissions>, appId: string): PreviewItem {
+  const blocker = restorePermissionBlocker(item.folder, granted, appId)
   return blocker ? { ...item, blocker: item.blocker ?? blocker, replaceBlocker: item.replaceBlocker ?? blocker } : item
 }

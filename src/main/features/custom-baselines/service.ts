@@ -374,11 +374,11 @@ export function saveVersion(deps: FeatureDeps, tenantId: string, id: string, inp
  * (policyMatchKey); a match is updated in place (its scope tags and assignments stay), no match
  * creates the policy unassigned. Policies with non-portable settings, several matches or a
  * different platform or template are left out and reported. Deploying a baseline of another
- * tenant needs that tenant in `targetTenants`; on Pro both tenants share the license.
+ * tenant needs that tenant in `targetTenants`; both tenants need an active Pro or MSP entitlement, including Pro trials.
  */
-export async function deployVersion(deps: FeatureDeps, context: { tenantId: string; plan: Plan; targetTenants: string[] }, input: { baselineId: string; sourceTenantId: string | null; version: number | null; policyKeys: string[] | null; title: string | null; ticket: string | null }, actor: Actor): Promise<{ deployment: Stored<DeploymentRecord>; changeSet: Stored<ChangeSetRecord> }> {
+export async function deployVersion(deps: FeatureDeps, context: { tenantId: string; targetTenants: string[] }, input: { baselineId: string; sourceTenantId: string | null; version: number | null; policyKeys: string[] | null; title: string | null; ticket: string | null }, actor: Actor): Promise<{ deployment: Stored<DeploymentRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const target = context.tenantId
-  const owner = input.sourceTenantId && input.sourceTenantId.toLowerCase() !== target ? requireSourceTenant({ ...context, deps }, input.sourceTenantId, { distinct: true }) : target
+  const owner = input.sourceTenantId && input.sourceTenantId.toLowerCase() !== target ? requireSourceTenant({ ...context, deps }, input.sourceTenantId) : target
   const baseline = getBaseline(deps, owner, input.baselineId)
   const version = getVersion(deps, owner, baseline, input.version)
   const open = listDeployments(deps, target).filter((entry) => entry.baselineId === baseline.id && entry.baselineTenantId === owner).map((entry) => syncDeployment(deps, target, entry.id)).find((entry) => entry.status === "change-set")

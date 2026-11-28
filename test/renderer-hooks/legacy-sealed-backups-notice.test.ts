@@ -68,7 +68,7 @@ describe("legacy sealed Azure backups notice", () => {
     expect(container.textContent).toContain("2 older Azure backups need a recovery key")
     expect(container.textContent).toContain("encrypted by an earlier TenuVault version")
     expect(container.textContent).toContain("New backups and your other backups are not affected")
-    expect([...container.querySelectorAll("button")].map((button) => button.textContent?.trim())).toEqual(["Import recovery key"])
+    expect([...container.querySelectorAll("button")].map((button) => button.textContent?.trim())).toEqual(["Details", "Import recovery key"])
   })
 
   it("lists the backups again after an import and says so when some still cannot be opened", async () => {

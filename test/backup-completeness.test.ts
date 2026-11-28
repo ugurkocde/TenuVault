@@ -1,4 +1,3 @@
-import { withBackupServerTime } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -7,7 +6,7 @@ import { describe, expect, it } from "vitest"
 import { BackupEngine } from "../src/main/backup/engine"
 import { BackupScheduler, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
-import { memoryStore } from "./helpers"
+import { emptyIntuneRead, memoryStore, withServerDate } from "./helpers"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -23,7 +22,7 @@ function engineSetup(graph: (url: URL) => Response, options: { retentionDays?: n
     const request = new Request(input, init)
     const url = new URL(request.url)
     if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
-    return withBackupServerTime(graph(url), options.now ? new Date(options.now) : undefined)
+    return withServerDate(graph(url), options.now ? new Date(options.now) : new Date())
   }) as typeof fetch
   const engine = new BackupEngine({
     fetch: fetchImpl,
@@ -40,12 +39,12 @@ async function finished(engine: BackupEngine, id: string) {
 }
 
 function emptyGraph(url: URL) {
-  if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+  if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
   return Response.json({ id: url.pathname.split("/").pop() })
 }
 
 describe("retention after an incomplete backup", () => {
-  it("keeps the older copy when a newer backup covering the same type fails verification", async () => {
+  it("keeps a verified local backup when a newer manifest references a missing policy", async () => {
     const { engine, store, account } = engineSetup(emptyGraph, { retentionDays: 30, now: "2026-09-24T12:00:00Z" })
     const older = "backup-2026-07-01-020000", newer = "backup-2026-08-01-020000"
     await store.createContainer(account, "intune-backups")
@@ -66,10 +65,10 @@ describe("retention after an incomplete backup", () => {
     const put = (name: string, body: unknown) => store.put(account, "intune-backups", name, Buffer.from(JSON.stringify(body)), "application/json")
     // A: the last complete backup, holding apps. B: newer, but one item could not be read, so
     // its copy of apps may be missing that item. Both are past the retention period.
-    await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Failures: 0, Items: { "Apps/reader": { file: "Reader.json" } }, Scope: { Included: ["Apps"] } })
-    await put("backup-2026-07-01-020000/Apps/Reader.json", { id: "reader" })
-    await put("backup-2026-08-01-020000/metadata.json", { Status: "CompletedWithWarnings", Failures: 1, Items: { "Apps/reader": { file: "Reader.json" } }, Scope: { Included: ["Apps"] } })
-    await put("backup-2026-08-01-020000/Apps/Reader.json", { id: "reader" })
+    await put("backup-2026-07-01-020000/metadata.json", { Status: "Success", Failures: 0, Scope: { Excluded: [] } })
+    await put("backup-2026-07-01-020000/Apps/Reader.json", {})
+    await put("backup-2026-08-01-020000/metadata.json", { Status: "CompletedWithWarnings", Failures: 1, Scope: { Excluded: [] } })
+    await put("backup-2026-08-01-020000/Apps/Reader.json", {})
     // C: the new backup leaves apps out, so retention looks for the newest copy of them.
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: { excluded: ["Apps"] } }).id)
     expect(job.status).toBe("Completed")
@@ -108,9 +107,9 @@ describe("scheduled outcome of a partial backup", () => {
       if (url.pathname === "/beta/deviceManagement/deviceConfigurations" && !url.search) {
         return Response.json({ value: [{ id: "dc1", displayName: "Good" }, { id: "dc2", displayName: "Bad" }] })
       }
-      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
+      if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return emptyIntuneRead(url.pathname)
       if (url.pathname.endsWith("/dc2")) return Response.json({ error: { message: "Forbidden" } }, { status: 403 })
-      return Response.json({ id: url.pathname.split("/").pop() })
+      return Response.json({ id: url.pathname.split("/").pop(), assignments: [] })
     }
     const { engine, store, account } = engineSetup(partialGraph)
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, trigger: "scheduled" }).id)

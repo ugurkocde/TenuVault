@@ -1,3 +1,4 @@
+import type { PermissionChoice } from "../../shared/services/manifest"
 import { useEffect, useRef, useState } from "react"
 import { Check, Copy, ExternalLink, RotateCcw, Send } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -50,11 +51,11 @@ function useCopyNote(): [Copied, (value: Copied) => void, string, (value: string
 }
 
 /** Copies the setup instructions for the Entra administrator, and counts the handoff route. */
-async function copyHandoff(show: (value: Copied) => void, setError: (value: string) => void) {
+async function copyHandoff(show: (value: Copied) => void, setError: (value: string) => void, choice?: PermissionChoice) {
   setError("")
   recordSetup({ name: "setup_route", props: { route: "handoff" } })
   try {
-    await navigator.clipboard.writeText(setupHandoffText())
+    await navigator.clipboard.writeText(setupHandoffText(choice))
     show("handoff")
   } catch (caught) {
     setError(`Could not copy: ${caught instanceof Error ? caught.message : String(caught)}`)
@@ -86,7 +87,8 @@ function Notes({ copied, error }: { copied: Copied; error: string }) {
  * Shown next to a sign-in that has waited for the browser for 3 minutes: start it again, open the
  * same sign-in in another browser, or hand the setup to an administrator.
  */
-export function SignInRecoveryPanel({ kind, onTryAgain, retrying = false }: {
+export function SignInRecoveryPanel({ kind, onTryAgain, retrying = false, choice }: {
+  choice?: PermissionChoice
   /** The waiting sign-in: the first sign-in to the tenant or the setup sign-in. */
   kind: "signin" | "setup"
   /** Cancels the waiting sign-in and starts it again. */
@@ -119,7 +121,7 @@ export function SignInRecoveryPanel({ kind, onTryAgain, retrying = false }: {
           {copied === "link" ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Copy className="mr-2 h-4 w-4" aria-hidden="true" />}
           {copied === "link" ? "Copied" : "Copy sign-in link"}
         </Button>
-        <HandoffButton copied={copied === "handoff"} onCopy={() => void copyHandoff(show, setError)} />
+        <HandoffButton copied={copied === "handoff"} onCopy={() => void copyHandoff(show, setError, choice)} />
         <SetupCallLink source="signin-waiting" variant="button" />
       </div>
       <Notes copied={copied} error={error} />
@@ -132,7 +134,7 @@ export function SignInRecoveryPanel({ kind, onTryAgain, retrying = false }: {
  * timeout; the handoff and the manual setup for the Conditional Access, consent and MFA refusals
  * that another administrator or the manual route can get around. Nothing for other errors.
  */
-export function SignInErrorActions({ message, onTryAgain }: { message: string; onTryAgain: () => void }) {
+export function SignInErrorActions({ message, onTryAgain, choice }: { choice?: PermissionChoice; message: string; onTryAgain: () => void }) {
   const [copied, show, error, setError] = useCopyNote()
   const timeout = isSignInTimeout(message)
   if (!timeout && !offersSignInHandoff(message)) return null
@@ -145,7 +147,7 @@ export function SignInErrorActions({ message, onTryAgain }: { message: string; o
             Try again
           </Button>
         )}
-        <HandoffButton copied={copied === "handoff"} onCopy={() => void copyHandoff(show, setError)} />
+        <HandoffButton copied={copied === "handoff"} onCopy={() => void copyHandoff(show, setError, choice)} />
         {!timeout && (
           <Button type="button" variant="ghost" size="sm" className="text-foreground" onClick={() => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)}>
             <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />

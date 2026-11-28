@@ -1,3 +1,4 @@
+import { NoticeCard } from "../NoticeCard"
 import { AlertTriangle } from "lucide-react"
 import { cn } from "~/lib/utils"
 import type { MatchStatus, OibPlatform, OibPolicy, PolicyMatch } from "../../../shared/oib/types"
@@ -44,24 +45,25 @@ export function MatchNotes({ loaded, legacy }: { loaded: LoadedPlatform[]; legac
   const older = legacy ? rows.filter(r => r.match.legacy.length) : []
   const copies = older.reduce((n, r) => n + r.match.legacy.length, 0)
   if (!deprecated.length && !duplicates.length && !older.length) return null
-  return <div className="mt-5 space-y-3">
-    {duplicates.length > 0 && <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-900"><p className="flex items-center gap-2 font-medium"><AlertTriangle className="h-4 w-4" aria-hidden="true" />{duplicates.length} {duplicates.length === 1 ? "policy has" : "policies have"} several matching tenant policies and {duplicates.length === 1 ? "is" : "are"} skipped. Resolve the duplicates in Intune first.</p>
-      <ul className="mt-3 space-y-3 text-xs">{duplicates.map(r => <li key={rowKey(r)}>
+  return <div className="mt-5 space-y-2">
+    {duplicates.length > 0 && <NoticeCard tone="warning"
+      summary={`${duplicates.length} ${duplicates.length === 1 ? "policy has" : "policies have"} ambiguous matches. Resolve them in Intune.`}
+      details={<ul className="space-y-2">{duplicates.map(r => <li key={rowKey(r)}>
         <p className="font-medium">{r.policy.name}</p>
-        <p className="mt-1 opacity-90">{ambiguousReason(r.match)}</p>
-        <ul className="mt-1 list-disc space-y-1 pl-5">{r.match.matches?.map(m => <li key={m.id}>{m.name}<span className="ml-2 font-mono opacity-80">{m.id}</span></li>)}</ul>
-      </li>)}</ul></div>}
-    {older.length > 0 && <details className="group rounded-2xl bg-amber-50 p-4 text-sm text-amber-950"><summary className="flex cursor-pointer items-center gap-2 font-medium"><AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-      <span className="flex-1">{copies} other {copies === 1 ? "copy" : "copies"} of OIB policies {copies === 1 ? "is" : "are"} still deployed next to the matched policy (older versions or extra copies). {copies === 1 ? "It keeps" : "They keep"} applying settings to assigned devices until removed in Intune.</span>
-      <span className="text-xs font-normal text-blue-700 group-open:hidden">Show</span><span className="hidden text-xs font-normal text-blue-700 group-open:inline">Hide</span></summary>
-      <ul className="mt-3 space-y-2 text-xs">{older.map(r => <li key={rowKey(r)}>
-        <p className="font-medium">{r.policy.name}{r.match.tenant && <span className="font-normal opacity-80">, matched to {r.match.tenant.name}</span>}</p>
-        <ul className="mt-1 list-disc space-y-0.5 pl-5">{r.match.legacy.map(l => <li key={l.id}>{l.name}<span className="ml-2 font-mono opacity-80">{l.id}</span></li>)}</ul>
-      </li>)}</ul></details>}
-    {deprecated.length > 0 && <div className="rounded-2xl bg-amber-50 p-4 text-sm text-amber-950"><p className="flex items-center gap-2 font-medium"><AlertTriangle className="h-4 w-4" aria-hidden="true" />Deprecated OIB policies are deployed in this tenant. Review them for removal.</p>
-      <ul className="mt-3 space-y-3 text-xs">{deprecated.map(d => <li key={d.tenant.id}>
-        <p className="font-medium">{d.tenant.name}<span className="ml-2 font-mono font-normal opacity-80">{d.tenant.id}</span></p>
-        {d.replacements.length > 0 && <ul className="mt-1 list-disc space-y-1 pl-5">{d.replacements.map(r => <li key={r.oibId}>Replacement {r.deployed ? "deployed" : "available in OIB"}: {r.name}</li>)}</ul>}
-      </li>)}</ul></div>}
+        <p>{ambiguousReason(r.match)}</p>
+        <ul className="list-disc pl-4">{r.match.matches?.map(m => <li key={m.id}>{m.name} <span className="font-mono">{m.id}</span></li>)}</ul>
+      </li>)}</ul>} />}
+    {older.length > 0 && <NoticeCard tone="warning"
+      summary={`${copies} extra ${copies === 1 ? "copy of an OIB policy still applies" : "copies of OIB policies still apply"} settings.`}
+      details={<ul className="space-y-2">{older.map(r => <li key={rowKey(r)}>
+        <p className="font-medium">{r.policy.name}{r.match.tenant && `, matched to ${r.match.tenant.name}`}</p>
+        <ul className="list-disc pl-4">{r.match.legacy.map(l => <li key={l.id}>{l.name} <span className="font-mono">{l.id}</span></li>)}</ul>
+      </li>)}</ul>} />}
+    {deprecated.length > 0 && <NoticeCard tone="warning"
+      summary={`Review ${deprecated.length} deployed OIB ${deprecated.length === 1 ? "policy" : "policies"} for removal.`}
+      details={<ul className="space-y-2">{deprecated.map(d => <li key={d.tenant.id}>
+        <p className="font-medium">{d.tenant.name} <span className="font-mono font-normal">{d.tenant.id}</span></p>
+        {d.replacements.length > 0 && <ul className="list-disc pl-4">{d.replacements.map(r => <li key={r.oibId}>Replacement {r.deployed ? "deployed" : "available in OIB"}: {r.name}</li>)}</ul>}
+      </li>)}</ul>} />}
   </div>
 }

@@ -320,5 +320,16 @@ describe("useLocalInventoryProblems", () => {
     await picked.resolve(readable("/b"))
     expect(container.textContent).toContain("/b")
   })
+
+  it("aligns the unreadable backups notice inside the onboarding card instead of indenting it", async () => {
+    backups.settings.mockResolvedValue(affected)
+    backups.inventoryProblem.mockResolvedValue(PROBLEM)
+    const onChange = vi.fn()
+    const { container } = mount(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onboarding: true, onChange }))
+    await flush()
+    const notice = container.querySelector('[data-notice-tone="neutral"]')!
+    expect(notice.parentElement?.className).toBe("px-4 pb-4")
+    expect(notice.parentElement?.className).not.toContain("ml-14")
+  })
 })
 

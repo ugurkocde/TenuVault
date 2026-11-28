@@ -6,9 +6,18 @@ import { describe, expect, it, vi } from "vitest"
 import { AuditStorageService } from "../src/portal/lib/audit/storage"
 import { auditExportJSON } from "../src/portal/lib/audit/export"
 import { createHash } from "node:crypto"
+import { fixture, scriptedGraph, type GraphRoute } from "./helpers/backup-fixture"
+import listPages from "./fixtures/cloud-backup/list-pages.json"
+import expandedAssignments from "./fixtures/cloud-backup/expanded-assignments.json"
+import roleDetails from "./fixtures/cloud-backup/role-details.json"
+import { compareObjects } from "../src/portal/app/api/detect-drifts/route"
+import { moduleForFolder } from "../src/shared/services/modules"
 import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
 import { listSnapshot } from "../src/shared/intune/read"
+import { compareBackups } from "../src/shared/intune/backup-changes"
+import { comparisonCoverage } from "../src/shared/intune/backup-read-coverage"
 import { comparableSnapshot } from "../src/shared/intune/compare"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
 import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudStatus } from "../src/shared/cloud-backup"
 import { resolveBackupOwnership } from "../src/shared/backup-ownership"
@@ -26,12 +35,13 @@ function runAuditSetup(shell: (file: string, args: string[], options: { encoding
   return shell(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: auditSetupTimeout })
 }
 type RunCall = { condition?: string; uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
-type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
+type DriftRow = { field: string; oldValue?: { id?: string } | null; newValue?: { id?: string } | null }
+type Run = { scenario?: string | null; calls: RunCall[]; error?: string | null; output?: string[]; compared?: { Drifts: Array<{ configId: string; changes?: DriftRow[] }>; UnknownTypes: string[] } }
 let plainRuns: Run[] | undefined
-/** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
+/** The scenarios of the plain-run fixture, in the order printed by the PowerShell harness. */
 function runPlainFixture(): Run[] {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
-  plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
+  plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
   return plainRuns
 }
 const TENANT = "11111111-2222-3333-4444-555555555555"
@@ -64,7 +74,7 @@ describe("Cloud audit contract", () => {
       expect(write.uri).toMatch(new RegExp(`-event-${TENANT}-${entry.job.runId}\\.json$`))
       expect(file).toMatchObject({ version: "2.0", metadata: { entryCount: 1, createdAt: entry.timestamp } })
       expect(entry).toMatchObject({ user: { tenantId: TENANT, name: "Cloud backup managed identity" },
-        job: { status, producer: "cloud-runbook", producerVersion: "1.5.0", stage: "terminal" } })
+        job: { status, producer: "cloud-runbook", producerVersion: RUNBOOK_VERSION, stage: "terminal" } })
       const note = JSON.parse(scenario.calls.find(call => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!)
       expect(entry.job.runId).toBe(note.runId)
       const name = new URL(write.uri).pathname.slice("/audit-logs/".length)
@@ -122,6 +132,10 @@ describe("Cloud audit contract", () => {
     startDenied: RestartRun
     resultsDenied: RestartRun
     graph401: RestartRun
+    page429: RestartRun
+    page503: RestartRun
+    pageCancelled: RestartRun
+    privateList: RestartRun
     auditWriteDenied: RestartRun
     identity: { token: string; calls: number }
     transport: { budgeted: number; unbudgeted: number }
@@ -378,6 +392,28 @@ describe("Cloud audit contract", () => {
     expect(run.calls.some(call => call.uri.includes(".tenuvault-owner.json"))).toBe(false)
   }, 60_000)
 
+  it.runIf(Boolean(pwsh))("keeps personal identifiers out of cloud list failure output and outcomes", () => {
+    const run = restartCases().privateList
+    const manifest = JSON.parse(manifestFiles(run)[0]![1])
+    const outcome = manifest.Outcomes.find((entry: { Folder: string }) => entry.Folder === "DeviceCategories")
+    expect.soft(outcome).toMatchObject({ Outcome: "failed", Status: 400, Error: "HTTP 400" })
+    expect.soft(run.output).toContain("Could not read device categories: HTTP 400")
+    expect(JSON.stringify({ output: run.output, outcome })).not.toContain("Private Ada")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh)).each([["page429", 429], ["page503", 503], ["pageCancelled", 0]] as const)(
+    "keeps coverage incomplete when the runbook exhausts retries for %s",
+    (scenario, status) => {
+      const run = restartCases()[scenario]
+      expect(run.calls.filter(call => call.uri.endsWith("/deviceManagement/deviceCategories?page=2"))).toHaveLength(3)
+      const manifest = JSON.parse(Object.entries(run.blobs).find(([url]) => url.endsWith("/metadata.json"))![1])
+      expect(manifest).toMatchObject({
+        Status: "Failed", Coverage: "Incomplete", FailedTypes: ["DeviceCategories"],
+        Outcomes: [expect.objectContaining({ Folder: "DeviceCategories", Outcome: "failed", Saved: 0, Status: status })],
+      })
+    }, 60_000,
+  )
+
   it("offers an ARM upgrade that leaves a PowerShell setup's backup writer, variables and schedule in place", () => {
     const resources = template.resources as Array<{ type: string; name: string; condition?: string; dependsOn?: string[] }>
     const audit = resources.filter(resource => resource.name.includes("audit"))
@@ -443,7 +479,7 @@ describe("Cloud audit contract", () => {
       expect(output).toContain("Done. In TenuVault")
       expect(setupCalls).toEqual([
         "blob soft delete", "container soft delete", "assign Reader", "assign Storage Blob Data Contributor",
-        ...(denial === "Container" ? [] : ["create intune-backups", "assign backup writer", "versioning", "lifecycle"]),
+        ...(denial === "Container" ? [] : ["create intune-backups", "create intune-backups-large", "assign backup writer", "assign backup writer", "versioning", "lifecycle"]),
         "final firewall read",
       ])
       if (denial !== "Container") expect(output).toContain("Assign it to the Backup Reader service principal")
@@ -527,11 +563,12 @@ describe("Cloud audit contract", () => {
 
 describe("Invoke-TenuVaultBackup.ps1 type table", () => {
   it("covers every desktop registry type with the same folder, path and read shape", () => {
-    for (const type of INTUNE_TYPES) {
+    for (const type of INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id))) {
       const row = runbook.split("\n").find((line) => line.includes(`Folder = '${type.folder}'`))
       expect(row, type.folder).toBeTruthy()
       expect(row).toContain(`Path = '${type.path}'`)
       expect(row).toContain(`NameKey = '${type.nameKey}'`)
+      expect(row?.includes("DetailValueObject = $true"), type.folder).toBe(type.detailEnvelope?.beta === "valueObject")
       expect(row).toContain(type.expand ? `Expand = '${type.expand}'` : "Expand = $null")
       expect(row).toContain(type.select ? `Select = '${type.select}'` : "Select = $null")
       expect(row).toContain(type.listQuery ? `ListQuery = '${type.listQuery}'` : "ListQuery = $null")
@@ -548,7 +585,7 @@ describe("Invoke-TenuVaultBackup.ps1 type table", () => {
         if (extra.each) expect(row).toContain(`Template = '${extra.each.path("{id}", "{entryId}")}'`)
       }
     }
-    expect([...runbook.matchAll(/Folder = '/g)]).toHaveLength(INTUNE_TYPES.length)
+    expect([...runbook.matchAll(/Folder = '/g)]).toHaveLength(INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id)).length)
   })
 
   it("mirrors the singleton, the built-in skips and the masked OMA-URI rule", () => {
@@ -581,10 +618,11 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(runbook).toContain('headers["If-None-Match"] = "*"')
   })
 
-  it("carries a plain runbook version, which the app does not flag for upgrade", () => {
+  it("flags deployed runbooks that predate accurate comparison coverage", () => {
     const version = RUNBOOK_VERSION
     // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0; 1.4.0 records how a run started.
-    expect(version).toBe("1.5.0")
+    expect.soft(version).toBe("1.6.1")
+    expect.soft(cloudRunbookNeedsUpgrade("1.5.0")).toBe(true)
     expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
@@ -690,6 +728,219 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(parseCloudStatus(JSON.parse(failedStatus!.body!), "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Failed" })
     expect(failed!.calls.some((call) => call.method === "Put" && call.uri.includes("/tenuvault-backup-results/cloud-backup-outcomes/run-"))).toBe(true)
     expect(failed!.calls.some((call) => call.uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("captures a timed out detail read and excludes that type from both comparators", () => {
+    const runs = runPlainFixture()
+    const baseline = runs[0]!
+    const timedOut = runs[9]!
+    const manifest = (run: Run) => JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+    const older = manifest(baseline)
+    const newer = manifest(timedOut)
+    expect(older.Items["DeviceConfigurations/cfg-1"]).toBeDefined()
+    expect(timedOut.calls.filter(call => call.uri.includes("/deviceManagement/deviceConfigurations")).map(call => call.uri))
+      .toEqual([expect.stringMatching(/deviceConfigurations$/), expect.stringMatching(/deviceConfigurations\/cfg-1/)])
+    expect(timedOut.compared).toMatchObject({ Drifts: [], UnknownTypes: ["DeviceConfigurations"], LegacyReadFailure: false })
+    expect(compareBackups(older, newer)).toEqual([])
+    expect(comparisonCoverage(older, newer)).toMatchObject({ unknown: ["DeviceConfigurations"], legacyReadFailure: false })
+    expect(newer).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["DeviceConfigurations"], Coverage: "Incomplete" })
+    expect(newer.Outcomes).toEqual(expect.arrayContaining([
+      { Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Error: "Detail call timed out for [redacted]" },
+      { Folder: "AutopilotDevices", Outcome: "saved", Saved: 1 },
+      { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
+    ]))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh)).each([
+    [10, "missing value", "Graph returned an invalid policy collection"],
+    [11, "null value", "Graph returned an invalid policy collection"],
+    [12, "object value", "Graph returned an invalid policy collection"],
+    [13, "invalid continuation", "Graph returned an invalid continuation link"],
+  ])("marks the type unread when a later page in scenario %i has %s", (index, _case, error) => {
+    const run = runPlainFixture()[index]!
+    const blobs = writtenBlobs(run)
+    const manifest = JSON.parse(blobs.get(`${folderOf(blobs)}/metadata.json`)!)
+    expect(run.calls.filter(call => call.uri.includes("/deviceManagement/deviceConfigurations")).map(call => call.uri))
+      .toEqual([expect.stringMatching(/deviceConfigurations$/), expect.stringMatching(/deviceConfigurations\?page=2$/)])
+    expect(manifest).toMatchObject({ Status: "CompletedWithWarnings", Coverage: "Incomplete", FailedTypes: ["DeviceConfigurations"] })
+    expect(manifest.Outcomes).toEqual(expect.arrayContaining([
+      { Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0, Error: error },
+      { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
+    ]))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("omits deletions for an unread list but keeps deletions for a valid empty list", () => {
+    const runs = runPlainFixture()
+    const manifest = (run: Run) => {
+      const blobs = writtenBlobs(run)
+      return JSON.parse(blobs.get(`${folderOf(blobs)}/metadata.json`)!)
+    }
+    const baseline = manifest(runs[0]!)
+    const malformed = runs[10]!
+    const empty = runs[14]!
+    const emptyManifest = manifest(empty)
+    expect(emptyManifest).toMatchObject({ Status: "Success", Coverage: "Complete" })
+    expect(emptyManifest.Outcomes).toContainEqual({ Folder: "DeviceConfigurations", Outcome: "saved", Saved: 0 })
+    expect(compareBackups(baseline, emptyManifest)).toHaveLength(1)
+    expect(empty.compared?.Drifts).toHaveLength(1)
+    expect(compareBackups(baseline, manifest(malformed))).toEqual([])
+    expect(malformed.compared).toMatchObject({ Drifts: [], UnknownTypes: ["DeviceConfigurations"], LegacyReadFailure: false })
+  }, 60_000)
+
+  it.each(listPages.map((scenario, index) => ({ ...scenario, index })))("validates $name before recording complete coverage on desktop and in PowerShell", async ({ responses, failed, changes, index }) => {
+    const configs = "/beta/deviceManagement/deviceConfigurations"
+    const autopilot = "/beta/deviceManagement/windowsAutopilotDeviceIdentities"
+    const baseline = {
+      [configs]: { value: [{ id: "cfg-1", displayName: "Baseline Wi-Fi" }] },
+      [autopilot]: { value: [{ id: "ap-1", serialNumber: "SN-0001" }] },
+      [`${configs}/cfg-1?$expand=assignments`]: { id: "cfg-1", displayName: "Baseline Wi-Fi", assignments: expandedAssignments.assignments },
+      [`${configs}/cfg-2?$expand=assignments`]: { id: "cfg-2", displayName: "Second policy", assignments: [] },
+    }
+    const folders = ["DeviceConfigurations", "AutopilotDevices", "CompliancePolicySettings"]
+    const scope = { excluded: INTUNE_TYPES.filter(type => !folders.includes(type.folder)).map(type => type.folder) }
+    const capture = async (routes: Record<string, unknown>) => {
+      const desktop = fixture(scriptedGraph(routes))
+      const job = await desktop.run({ scope })
+      return desktop.manifest(job)
+    }
+    const before = await capture(baseline)
+    const desktop = await capture({ ...baseline, ...responses })
+    const differences = compareBackups(before, desktop).map(({ change, id }) => ({ change, id }))
+    expect(differences).toEqual(changes)
+    expect(desktop.Coverage).toBe(failed ? "Incomplete" : "Complete")
+    expect(comparisonCoverage(before, desktop).unknown).toEqual(failed ? [failed] : [])
+
+    if (!pwsh) return
+    const runs = runPlainFixture()
+    const cloudRun = runs[15 + index]!
+    const manifest = (run: Run) => JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+    const cloud = manifest(cloudRun)
+    const cloudBefore = manifest(runs[0]!)
+    expect(cloud.Coverage).toBe(desktop.Coverage)
+    const unread = (outcomes: Array<{ Folder: string; Outcome: string }>) =>
+      outcomes.filter(entry => entry.Outcome === "failed").map(entry => entry.Folder)
+    expect(unread(desktop.Outcomes)).toEqual(failed ? [failed] : [])
+    expect(unread(cloud.Outcomes)).toEqual(unread(desktop.Outcomes))
+    expect(compareBackups(cloudBefore, cloud).map(({ change, id }) => ({ change, id }))).toEqual(differences)
+    expect(cloudRun.compared).toMatchObject({ UnknownTypes: failed ? [failed] : [], LegacyReadFailure: false })
+    expect(cloudRun.compared?.Drifts.map(drift => drift.configId)).toEqual(differences.map(({ id }) => id))
+    if (changes.some(({ change }) => change === "added")) {
+      for (const result of [desktop, cloud]) {
+        expect(result.Outcomes).toContainEqual({ Folder: "DeviceConfigurations", Outcome: "saved", Saved: 2 })
+        expect(Object.keys(result.Items)).toEqual(expect.arrayContaining(["DeviceConfigurations/cfg-1", "DeviceConfigurations/cfg-2"]))
+      }
+    }
+  }, 60_000)
+
+  it.each(["desktop", ...(pwsh ? ["runbook"] : [])])("keeps assignments out of drift when the %s backup cannot validate the policy", async engine => {
+    const configs = "/beta/deviceManagement/deviceConfigurations"
+    const detail = `${configs}/cfg-1?$expand=assignments`
+    const relationship = `${configs}/cfg-1/assignments`
+    const snapshot = { id: "cfg-1", displayName: "Baseline Wi-Fi", assignments: expandedAssignments.assignments }
+    const file = "DeviceConfigurations/Baseline Wi-Fi.json"
+    const folders = ["DeviceConfigurations", "CompliancePolicySettings"]
+    const scope = { excluded: INTUNE_TYPES.filter(type => !folders.includes(type.folder)).map(type => type.folder) }
+    const capture = async (scenario?: typeof expandedAssignments.cases[number]) => {
+      const { list, detail: response, assignments, relationshipPages, relationshipStatus } = scenario ?? {}
+      const omitted = relationshipPages || relationshipStatus
+      const routes: Record<string, GraphRoute> = {
+        [configs]: { value: list ?? [snapshot] },
+        [detail]: response ?? (omitted ? { id: snapshot.id, displayName: snapshot.displayName } : { ...snapshot, assignments: assignments ?? snapshot.assignments }),
+      }
+      for (const [index, entries] of (relationshipPages ?? []).entries()) {
+        const path = index === 0 ? relationship : `${relationship}?page=${index + 1}`
+        routes[path] = {
+          value: entries.map(entry => entry === null ? null : snapshot.assignments[entry]),
+          ...(index + 1 < relationshipPages!.length && { "@odata.nextLink": `https://graph.microsoft.com${relationship}?page=${index + 2}` }),
+        }
+      }
+      if (relationshipStatus) routes[relationship] = () => new Response(null, { status: relationshipStatus })
+      const desktop = fixture(scriptedGraph(routes))
+      const job = await desktop.run({ scope })
+      return { manifest: await desktop.manifest(job), policy: await desktop.file(job, file), paths: desktop.requests.map(call => call.path) }
+    }
+    const cloud = (index: number) => {
+      const run = runPlainFixture()[index]!
+      const blobs = writtenBlobs(run)
+      const folder = folderOf(blobs)
+      const policy = blobs.get(`${folder}/${file}`)
+      return { manifest: JSON.parse(blobs.get(`${folder}/metadata.json`)!), policy: policy ? JSON.parse(policy) : undefined, compared: run.compared,
+        paths: run.calls.filter(call => call.method === "Get" && call.uri.startsWith("https://graph.microsoft.com")).map(call => new URL(call.uri).pathname + new URL(call.uri).search) }
+    }
+    const before = engine === "desktop" ? await capture() : cloud(0)
+    for (const [index, scenario] of expandedAssignments.cases.entries()) {
+      const after = engine === "desktop"
+        ? await capture(scenario)
+        : cloud(16 + listPages.length + index)
+      const removed = scenario.removed ?? []
+      const unknown = scenario.unread ? ["DeviceConfigurations"] : []
+      const changes = compareBackups(before.manifest, after.manifest)
+      expect.soft(after.manifest.Coverage, scenario.name).toBe(scenario.unread ? "Incomplete" : "Complete")
+      expect.soft(comparisonCoverage(before.manifest, after.manifest).unknown, scenario.name).toEqual(unknown)
+      expect.soft(changes.map(change => change.change), scenario.name).toEqual(removed.length ? ["modified"] : [])
+      expect.soft(after.policy?.id, scenario.name).toBe(scenario.unread ? undefined : snapshot.id)
+      expect.soft(after.policy?.assignments, scenario.name).toEqual(scenario.unread ? undefined : scenario.assignments ?? snapshot.assignments.filter(assignment => !removed.includes(assignment.id)))
+      const pages = scenario.relationshipPages?.length ?? (scenario.relationshipStatus ? 1 : 0)
+      expect.soft(after.paths.filter(path => path.startsWith(relationship)), scenario.name).toEqual(Array.from({ length: pages }, (_, index) => index === 0 ? relationship : `${relationship}?page=${index + 1}`))
+      let rows: DriftRow[]
+      if ("compared" in after) {
+        expect.soft(after.compared, scenario.name).toMatchObject({ UnknownTypes: unknown })
+        expect.soft(after.compared?.Drifts.map(drift => drift.configId), scenario.name).toEqual(removed.length ? ["cfg-1"] : [])
+        rows = after.compared?.Drifts.flatMap(drift => drift.changes ?? []) ?? []
+      } else {
+        rows = changes.length && after.policy ? compareObjects(before.policy, after.policy) : []
+      }
+      expect.soft(rows.filter(row => row.field.startsWith("assignments[") && row.oldValue?.id && !row.newValue?.id).map(row => row.oldValue?.id), scenario.name).toEqual(removed)
+    }
+  }, 60_000)
+
+  it.each(["desktop", ...(pwsh ? ["runbook"] : [])])("saves wrapped role assignments and bare role values in the %s backup", async engine => {
+    const desktop = engine === "desktop" ? fixture(scriptedGraph(roleDetails)) : undefined
+    const job = await desktop?.run({ scope: { excluded: INTUNE_TYPES.filter(type => type.folder !== "RoleDefinitions").map(type => type.folder) } })
+    const run = engine === "runbook" ? runPlainFixture().find(result => result.scenario === "role-details") : undefined
+    if (engine === "runbook" && !run) throw new Error("The plain runbook fixture did not emit the role details scenario")
+    const blobs = run ? writtenBlobs(run) : undefined
+    const root = blobs ? folderOf(blobs) : undefined
+    const readFile = async (file: string) => {
+      if (!blobs) return desktop!.file(job!, file)
+      const body = blobs.get(`${root}/${file}`)
+      return body ? JSON.parse(body) : undefined
+    }
+    expect.soft(await readFile("RoleDefinitions/Help desk.json")).toEqual({
+      ...roleDetails["/beta/deviceManagement/roleDefinitions/role-1"],
+      roleAssignments: [roleDetails["/beta/deviceManagement/roleAssignments/assignment-1"].value],
+    })
+    expect.soft(await readFile("RoleDefinitions/Object value.json")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-2"], roleAssignments: [] })
+    expect(await readFile("RoleDefinitions/Array value.json")).toEqual({ ...roleDetails["/beta/deviceManagement/roleDefinitions/role-3"], roleAssignments: [] })
+
+    const file = "Help desk.json"
+    const key = "RoleDefinitions/role-1"
+    const detail = roleDetails["/beta/deviceManagement/roleAssignments/assignment-1"].value
+    const snapshot = { ...roleDetails["/beta/deviceManagement/roleDefinitions/role-1"], roleAssignments: [detail] }
+    const historical = (member: string) => ({
+      Scope: { Included: ["RoleDefinitions"], Excluded: [] },
+      Items: { [key]: { file, hash: snapshotHash({ ...snapshot, roleAssignments: [
+        { ...detail, members: member, resourceScopes: null, scopeMembers: "scope-member-1", roleScopeTagIds: null },
+      ] }) } },
+    })
+    const manifest = await readFile("metadata.json")
+    expect(manifest.Items[key].hash).toBe(snapshotHash(snapshot))
+    expect(historical("member-1").Items[key].hash).toBe("nqJCtL/UMTIVAlR3MX8WAX")
+    const current = { ...manifest, Items: { [key]: manifest.Items[key] } }
+    expect.soft(compareBackups(historical("member-1"), current)).toEqual([])
+    expect.soft(compareBackups(current, historical("member-1"))).toEqual([])
+    expect(compareBackups(historical("different-member"), current)).toMatchObject([{ id: "role-1", change: "modified" }])
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("keeps personal identifiers out of cloud detail failure output and outcomes", () => {
+    const runs = runPlainFixture()
+    const run = runs[15 + listPages.length]!
+    const metadata = JSON.parse(run.calls.find(call => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+    const outcome = metadata.Outcomes.find((entry: { Folder: string }) => entry.Folder === "DeviceConfigurations")
+    expect(outcome).toMatchObject({ Outcome: "failed", Status: 400, Error: "HTTP 400" })
+    expect(run.output).toContain("Could not back up device configuration profiles: HTTP 400")
+    expect(runs[9]!.output).toContain("Could not back up device configuration profiles: Detail call timed out for [redacted]")
+    expect(JSON.stringify({ output: run.output, outcome })).not.toMatch(/Private Ada|admin\+lab@|guest_example\.test#EXT#@/i)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {
@@ -1173,4 +1424,14 @@ describe("azuredeploy.json", () => {
     const role = resources.find((resource) => resource.type === "Microsoft.Authorization/roleDefinitions")!
     expect(JSON.stringify((role.properties as { permissions: unknown }).permissions)).not.toContain("delete")
   })
+})
+
+it.runIf(Boolean(pwsh))("documents added and deleted role assignments with the same rows for legacy and current snapshots", () => {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/documented-role-rows.ps1", import.meta.url))
+  const results = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }))
+  expect(results.map((result: { change: string }) => result.change)).toEqual(["added", "deleted"])
+  for (const { legacy, current } of results) {
+    expect(legacy.length).toBeGreaterThan(0)
+    expect(legacy).toEqual(current)
+  }
 })

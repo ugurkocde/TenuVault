@@ -1,0 +1,24 @@
+{
+  "folder": "AdminConsentRequestPolicy",
+  "path": "policies/adminConsentRequestPolicy",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/adminConsentRequestPolicy": {
+      "status": 200,
+      "body": {
+        "isEnabled": false,
+        "notifyReviewers": false,
+        "remindersEnabled": false,
+        "requestDurationInDays": 0,
+        "version": 0,
+        "reviewers": []
+      }
+    }
+  }
+}

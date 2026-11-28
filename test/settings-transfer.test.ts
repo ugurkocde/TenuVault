@@ -110,7 +110,7 @@ describe("settings file export", () => {
       tenantId: TENANT,
       name: "Tenant aaaa",
       domain: "aaaa.onmicrosoft.com",
-      services: { conditionalAccess: { enabled: true } },
+      services: { intune: { enabled: true }, conditionalAccess: { enabled: true }, entra: { enabled: false } },
       backupScope: { excluded: [] },
       schedule: { enabled: true, frequency: "weekly", time: "02:00", weekday: 1 },
       cloudBackup: expect.objectContaining({ automationAccount: "aa-tenuvault", storageAccount: "contosobackups" }),
@@ -169,20 +169,26 @@ describe("settings file round trip", () => {
 
     const preview = b.transfer.open(text, "system")
     expect(preview.groups.map((group) => [group.id, group.connected])).toEqual([["app", true], [TENANT, true]])
-    expect(everyItem(preview).every((item) => item.status === "change")).toBe(true)
+    expect(everyItem(preview).filter(item => item.id.startsWith(`${TENANT}:service:`)).map(item => item.label))
+      .toEqual(["Entra ID", "Entra ID: Conditional Access", "Intune"])
+    // Services that are the same on both computers have nothing to change.
+    const same = ["intune", "entra"].map((id) => `${TENANT}:service:${id}`)
+    expect(everyItem(preview).filter((item) => same.includes(item.id)).every((item) => item.status === "same")).toBe(true)
+    expect(everyItem(preview).filter((item) => !same.includes(item.id)).every((item) => item.status === "change")).toBe(true)
     // Items with a warning start unselected; the others are selected.
     expect(find(preview, "app:nightlyUpdates")).toMatchObject({ selected: false, warning: expect.any(String) })
     expect(find(preview, `${TENANT}:schedule`)).toMatchObject({ selected: false, warning: expect.stringContaining("backed up twice") })
     expect(find(preview, "app:retentionDays")).toMatchObject({ selected: true, current: "30 days", next: "90 days" })
 
     const result = b.transfer.apply(preview.importId, everyItem(preview).map((item) => item.id), "system")
-    expect(result.items.every((item) => item.outcome === "applied")).toBe(true)
+    expect(result.items.filter((item) => !same.includes(item.id)).every((item) => item.outcome === "applied")).toBe(true)
+    expect(result.items.filter((item) => same.includes(item.id)).every((item) => item.outcome === "skipped")).toBe(true)
     expect(result.appearance).toBe("dark")
     expect(result.servicesEnabled).toEqual({ [TENANT]: ["conditionalAccess"] })
 
     expect(b.preferences.saved()).toEqual({ retentionDays: 90, keepRunningInTray: false, nightlyUpdates: true })
     expect(b.branding.get()).toEqual(a.branding.get())
-    expect(b.modules.enabled(TENANT)).toEqual(["conditionalAccess"])
+    expect(b.modules.selection(TENANT).services).toEqual(["intune", "conditionalAccess"])
     expect(b.scopes.get(TENANT)).toEqual({ scope: { excluded: [] }, saved: true })
     expect(JSON.parse(b.store.get(`renderer.tenuvault_cloud_backup_${TENANT}`)!)).toEqual(JSON.parse(a.store.get(`renderer.tenuvault_cloud_backup_${TENANT}`)!))
     const schedule = b.scheduler.list()[0]!
@@ -199,9 +205,14 @@ describe("settings file round trip", () => {
     const a = configured()
     const b = machine([{ tenantId: TENANT }])
     const preview = b.transfer.open(a.transfer.exportFile({ app: true, tenantIds: [TENANT], connection: false, appearance: "dark" }), "system")
+    // An import turns services on or off only; their access level and opt-in areas stay as they are.
+    b.modules.setAccess(TENANT, "conditionalAccess", "backup")
+    b.modules.setArea(TENANT, "entra", "groups", true)
     b.transfer.apply(preview.importId, ["app:retentionDays", `${TENANT}:service:conditionalAccess`], "system")
     expect(b.preferences.saved()).toEqual({ retentionDays: 90 })
-    expect(b.modules.enabled(TENANT)).toEqual(["conditionalAccess"])
+    expect(b.modules.selection(TENANT).services).toEqual(["intune", "conditionalAccess"])
+    expect(b.modules.get(TENANT).conditionalAccess.access).toBe("backup")
+    expect(b.modules.get(TENANT).entra.areas.groups).toBe(true)
     expect(b.branding.get()).toBeNull()
     expect(b.scheduler.list()).toEqual([])
     expect(b.scopes.get(TENANT).saved).toBe(false)
@@ -310,9 +321,9 @@ describe("settings that cannot be applied", () => {
     const preview = b.transfer.open(file({
       alerts: { rules: [] },
       app: { preferences: { retentionDays: 60, communityBannerDismissedAt: "2026-11-01T00:00:00.000Z" }, wallpaper: "x" },
-      tenants: [{ tenantId: TENANT, services: { conditionalAccess: { enabled: true }, defender: { enabled: true }, intune: { enabled: false } }, favoriteColor: "red" }],
+      tenants: [{ tenantId: TENANT, services: { conditionalAccess: { enabled: true }, purview: { enabled: true } }, favoriteColor: "red" }],
     }), "system")
-    expect(preview.skipped).toEqual(['Section "alerts"', 'This computer: "wallpaper"', 'This computer: "communityBannerDismissedAt"', 'Tenant aaaa: "favoriteColor"', 'Tenant aaaa: the service "defender"'])
+    expect(preview.skipped).toEqual(['Section "alerts"', 'This computer: "wallpaper"', 'This computer: "communityBannerDismissedAt"', 'Tenant aaaa: "favoriteColor"', 'Tenant aaaa: the service "purview"'])
     expect(everyItem(preview).map((item) => item.id)).toEqual(["app:retentionDays", `${TENANT}:service:conditionalAccess`])
     b.transfer.apply(preview.importId, everyItem(preview).map((item) => item.id), "system")
     expect(b.preferences.saved()).toEqual({ retentionDays: 60 })
@@ -346,8 +357,8 @@ describe("tenants on the importing computer", () => {
     expect(() => b.transfer.apply(preview.importId, [`${OTHER}:service:conditionalAccess`], "system")).toThrow("not part of this file")
 
     b.transfer.apply(preview.importId, everyItem(preview).map((item) => item.id), "system")
-    expect(b.modules.enabled(OTHER)).toEqual([])
-    expect(b.modules.enabled(THIRD)).toEqual(["conditionalAccess"])
+    expect(b.modules.selection(OTHER).services).toEqual(["intune"])
+    expect(b.modules.selection(THIRD).services).toEqual(["intune", "conditionalAccess"])
     expect(b.store.get("renderer.tenuvault_tenants")).toBe(tenantsBefore)
   })
 

@@ -1,0 +1,658 @@
+{
+  "drift": {
+    "drifts": [
+      {
+        "id": "drift-1794941589047",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "info",
+        "type": "Configuration Policy",
+        "configName": "WIN - Defender",
+        "backupFile": "ConfigurationPolicies/WIN - Defender.json",
+        "configId": "p-defender",
+        "changeType": "modified",
+        "description": "roleScopeTagIds[\"12\"] changed from \"undefined\" to \"12\"",
+        "impact": "6 configuration changes will affect assigned devices",
+        "changes": [
+          {
+            "field": "roleScopeTagIds[\"12\"]",
+            "newValue": "12"
+          },
+          {
+            "field": "settings[device_vendor_msft_policy_config_defender_allowcloudprotection].settingInstance.choiceSettingValue.value",
+            "oldValue": "device_vendor_msft_policy_config_defender_allowcloudprotection_1",
+            "newValue": "device_vendor_msft_policy_config_defender_allowcloudprotection_0"
+          },
+          {
+            "field": "settings[device_vendor_msft_policy_config_defender_avgcpuloadfactor].settingInstance.simpleSettingValue.value",
+            "oldValue": 50,
+            "newValue": 1.5
+          },
+          {
+            "field": "settings[com.apple.applicationaccess_com.apple.applicationaccess]",
+            "oldValue": {
+              "id": "2",
+              "settingInstance": {
+                "settingDefinitionId": "com.apple.applicationaccess_com.apple.applicationaccess",
+                "groupSettingCollectionValue": []
+              }
+            }
+          },
+          {
+            "field": "settings[device_vendor_msft_policy_config_defender_cloudblocklevel]",
+            "newValue": {
+              "id": "3",
+              "settingInstance": {
+                "settingDefinitionId": "device_vendor_msft_policy_config_defender_cloudblocklevel",
+                "choiceSettingValue": {
+                  "value": "device_vendor_msft_policy_config_defender_cloudblocklevel_2",
+                  "children": []
+                }
+              }
+            }
+          },
+          {
+            "field": "assignments[1]",
+            "newValue": {
+              "id": "a2",
+              "target": {
+                "@odata.type": "#microsoft.graph.allLicensedUsersAssignmentTarget",
+                "deviceAndAppManagementAssignmentFilterId": "f-9",
+                "deviceAndAppManagementAssignmentFilterType": "exclude"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "drift-1794941589048",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "info",
+        "type": "Configuration Policy",
+        "configName": "Unread assignments",
+        "backupFile": "ConfigurationPolicies/Unread assignments.json",
+        "configId": "p-unread",
+        "changeType": "modified",
+        "description": "platforms changed from \"windows10\" to \"macOS\"",
+        "impact": "1 configuration change will affect assigned devices",
+        "changes": [
+          {
+            "field": "platforms",
+            "oldValue": "windows10",
+            "newValue": "macOS"
+          }
+        ]
+      },
+      {
+        "id": "drift-1794941589049",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "info",
+        "type": "Configuration Policy",
+        "configName": "WIN - Edge </td><script>alert(1)</script>",
+        "backupFile": "ConfigurationPolicies/WIN - Edge.json",
+        "configId": "p-edge",
+        "changeType": "added",
+        "description": "New Configuration Policy policy added",
+        "impact": "New Configuration Policy will be applied to assigned devices",
+        "changes": [
+          {
+            "field": "name",
+            "newValue": "WIN - Edge </td><script>alert(1)</script>"
+          },
+          {
+            "field": "platforms",
+            "newValue": "windows10"
+          },
+          {
+            "field": "technologies",
+            "newValue": "mdm"
+          },
+          {
+            "field": "settingCount",
+            "newValue": 2
+          },
+          {
+            "field": "settings[device_vendor_msft_policy_config_microsoft_edge~policy~microsoft_edge_passwordmanagerenabled]",
+            "newValue": {
+              "id": "0",
+              "settingInstance": {
+                "settingDefinitionId": "device_vendor_msft_policy_config_microsoft_edge~policy~microsoft_edge_passwordmanagerenabled",
+                "choiceSettingValue": {
+                  "value": "device_vendor_msft_policy_config_microsoft_edge~policy~microsoft_edge_passwordmanagerenabled_0",
+                  "children": []
+                }
+              }
+            }
+          },
+          {
+            "field": "settings[vendor_msft_wifi_key]",
+            "newValue": {
+              "id": "1",
+              "settingInstance": {
+                "settingDefinitionId": "vendor_msft_wifi_key",
+                "simpleSettingValue": {
+                  "@odata.type": "#microsoft.graph.deviceManagementConfigurationSecretSettingValue",
+                  "value": "[redacted]"
+                }
+              }
+            }
+          },
+          {
+            "field": "assignments[0]",
+            "newValue": {
+              "target": {
+                "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+                "groupId": "g-3",
+                "deviceAndAppManagementAssignmentFilterId": "f-1",
+                "deviceAndAppManagementAssignmentFilterType": "include"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "drift-1794941589050",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "info",
+        "type": "Configuration Policy",
+        "configName": "[Restored] Kiosk",
+        "backupFile": "ConfigurationPolicies/[Restored] Kiosk.json",
+        "configId": "p-copy",
+        "changeType": "added",
+        "description": "New Configuration Policy policy added",
+        "impact": "New Configuration Policy will be applied to assigned devices",
+        "likelyRestoredCopy": true,
+        "changes": [
+          {
+            "field": "name",
+            "newValue": "[Restored] Kiosk"
+          },
+          {
+            "field": "platforms",
+            "newValue": "windows10"
+          }
+        ]
+      },
+      {
+        "id": "drift-1794941589051",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "warning",
+        "type": "Device Configuration",
+        "configName": "Wi-Fi",
+        "backupFile": "DeviceConfigurations/Wi-Fi.json",
+        "configId": "d-wifi",
+        "changeType": "modified",
+        "description": "Plain changed from 1 to 2",
+        "impact": "3 configuration changes will affect assigned devices",
+        "changes": [
+          {
+            "field": "ssid",
+            "oldValue": "corp",
+            "newValue": "corp-2"
+          },
+          {
+            "field": "omaSettings[Plain].value",
+            "oldValue": 1,
+            "newValue": 2,
+            "displayName": "Plain"
+          },
+          {
+            "field": "secretValues",
+            "oldValue": "[redacted]",
+            "newValue": "[redacted]",
+            "displayName": "Secret values"
+          }
+        ]
+      },
+      {
+        "id": "drift-1794941589052",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "warning",
+        "type": "Compliance Policy",
+        "configName": "Windows 11 - Compliance",
+        "previousName": "Win11 Compliance",
+        "backupFile": "CompliancePolicies/Win11 Compliance.json",
+        "configId": "c-win",
+        "changeType": "modified",
+        "description": "displayName changed from \"Win11 Compliance\" to \"Windows 11 - Compliance\"",
+        "impact": "4 configuration changes will affect assigned devices",
+        "changes": [
+          {
+            "field": "displayName",
+            "oldValue": "Win11 Compliance",
+            "newValue": "Windows 11 - Compliance"
+          },
+          {
+            "field": "passwordMinimumLength",
+            "oldValue": 12,
+            "newValue": 8
+          },
+          {
+            "field": "osMinimumVersion",
+            "oldValue": "10.0.22000",
+            "newValue": "10.0.22631"
+          },
+          {
+            "field": "assignments[1]",
+            "newValue": {
+              "target": {
+                "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget",
+                "groupId": "g-4"
+              }
+            }
+          }
+        ],
+        "createBlocker": "This compliance snapshot is missing its required block action. Create a new complete backup before restoring.",
+        "replaceBlocker": "This compliance snapshot is missing its required block action. Create a new complete backup before restoring."
+      },
+      {
+        "id": "drift-1794941589053",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "critical",
+        "type": "Compliance policy settings",
+        "configName": "Compliance policy settings",
+        "backupFile": "CompliancePolicySettings/Compliance policy settings.json",
+        "configId": "CompliancePolicySettings",
+        "changeType": "modified",
+        "description": "Mark devices with no compliance policy assigned as: Compliant to Not compliant",
+        "impact": "2 tenant-wide changes can affect the compliance status of enrolled devices",
+        "changes": [
+          {
+            "field": "secureByDefault",
+            "oldValue": false,
+            "newValue": true
+          },
+          {
+            "field": "deviceComplianceCheckinThresholdDays",
+            "oldValue": 30,
+            "newValue": 0
+          }
+        ],
+        "createBlocker": "This is a tenant-wide setting, not a policy. Restore replaces it in place in the same tenant; it cannot be created as a copy or copied to another tenant."
+      },
+      {
+        "id": "drift-1794941589054",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "critical",
+        "type": "Conditional Access policies",
+        "configName": "CA001 - Require MFA",
+        "backupFile": "ConditionalAccessPolicies/CA001.json",
+        "configId": "ca-1",
+        "changeType": "modified",
+        "description": "state changed from \"enabled\" to \"enabledForReportingButNotEnforced\"",
+        "impact": "2 configuration changes will affect assigned devices",
+        "changes": [
+          {
+            "field": "state",
+            "oldValue": "enabled",
+            "newValue": "enabledForReportingButNotEnforced"
+          },
+          {
+            "field": "conditions.users.excludeUsers[\"u-break-glass\"]",
+            "newValue": "u-break-glass"
+          }
+        ]
+      },
+      {
+        "id": "drift-1794941589055",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "info",
+        "type": "Android app protection policies",
+        "configName": "APP - Android",
+        "backupFile": "AppProtectionAndroid/APP - Android.json",
+        "configId": "m-android",
+        "changeType": "modified",
+        "description": "allowedDataStorageLocations[\"box\"] changed from \"undefined\" to \"box\"",
+        "impact": "4 configuration changes will affect assigned devices",
+        "changes": [
+          {
+            "field": "allowedDataStorageLocations[\"box\"]",
+            "newValue": "box"
+          },
+          {
+            "field": "apps[com.microsoft.teams]",
+            "oldValue": {
+              "id": "com.microsoft.teams.package-1",
+              "version": "1",
+              "mobileAppIdentifier": {
+                "@odata.type": "#microsoft.graph.androidMobileAppIdentifier",
+                "packageId": "com.microsoft.teams"
+              }
+            }
+          },
+          {
+            "field": "apps[com.microsoft.emmx]",
+            "newValue": {
+              "id": "com.microsoft.emmx.package-2",
+              "version": "2",
+              "mobileAppIdentifier": {
+                "@odata.type": "#microsoft.graph.androidMobileAppIdentifier",
+                "packageId": "com.microsoft.emmx"
+              }
+            }
+          },
+          {
+            "field": "assignments[0]",
+            "newValue": {
+              "id": "a-9",
+              "target": {
+                "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget",
+                "groupId": "bbbbbbbb-2222-4222-8222-222222222222",
+                "deviceAndAppManagementAssignmentFilterId": null,
+                "deviceAndAppManagementAssignmentFilterType": "none"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "drift-1794941589056",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "info",
+        "type": "IOS app protection policies",
+        "configName": "APP - iOS",
+        "backupFile": "AppProtectionIOS/APP - iOS.json",
+        "configId": "m-ios",
+        "changeType": "modified",
+        "description": "pinRequired enabled",
+        "impact": "1 configuration change will affect assigned devices",
+        "changes": [
+          {
+            "field": "pinRequired",
+            "oldValue": false,
+            "newValue": true
+          }
+        ]
+      },
+      {
+        "id": "drift-1794941589057",
+        "tenant": "Current Tenant",
+        "tenantId": "current-tenant",
+        "detectedAt": "2026-11-17T18:53:09.044Z",
+        "fromBackup": "backup-2026-11-05-020000",
+        "toBackup": "backup-2026-11-06-020000",
+        "fromBackupTimestamp": "2026-11-05T02:00:00.000Z",
+        "toBackupTimestamp": "2026-11-06T02:00:00.000Z",
+        "affectedPolicies": 1,
+        "affectedDevices": 0,
+        "comparisonIndex": 0,
+        "severity": "warning",
+        "type": "Device Configuration",
+        "configName": "macOS - FileVault",
+        "backupFile": "DeviceConfigurations/macOS - FileVault.json",
+        "configId": "d-filevault",
+        "changeType": "deleted",
+        "description": "Device Configuration policy deleted",
+        "impact": "Device Configuration no longer applied to devices",
+        "changes": [
+          {
+            "field": "displayName",
+            "oldValue": "macOS - FileVault"
+          },
+          {
+            "field": "@odata.type",
+            "oldValue": "#microsoft.graph.macOSEndpointProtectionConfiguration"
+          },
+          {
+            "field": "fileVaultEnabled",
+            "oldValue": true
+          },
+          {
+            "field": "fileVaultNumberOfTimesUserCanIgnore",
+            "oldValue": 3
+          },
+          {
+            "field": "fileVaultRecoveryKeyEscrowLocationDescription",
+            "oldValue": "[redacted]"
+          },
+          {
+            "field": "assignments[0]",
+            "oldValue": {
+              "target": {
+                "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget",
+                "groupId": "g-2",
+                "deviceAndAppManagementAssignmentFilterType": "none"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "total": 11,
+      "critical": 2,
+      "warning": 3,
+      "info": 6,
+      "added": 2,
+      "modified": 8,
+      "deleted": 1,
+      "affectedTenants": 1
+    },
+    "lastScan": "2026-11-17T18:53:09.048Z",
+    "backupsAnalyzed": 2,
+    "baseline": {
+      "id": "backup-2026-11-05-020000",
+      "timestamp": "2026-11-05T02:00:00.000Z",
+      "trigger": "scheduled",
+      "status": "Success"
+    },
+    "comparison": {
+      "id": "backup-2026-11-06-020000",
+      "timestamp": "2026-11-06T02:00:00.000Z",
+      "trigger": "scheduled",
+      "status": "Success"
+    },
+    "warnings": [],
+    "stats": {
+      "compared": 11,
+      "unchanged": 1
+    },
+    "settingNames": {
+      "settings": {
+        "device_vendor_msft_policy_config_defender_allowcloudprotection": "Allow Cloud Protection",
+        "com.apple.applicationaccess_com.apple.applicationaccess": "Restrictions",
+        "device_vendor_msft_policy_config_defender_cloudblocklevel": "Cloud Block Level"
+      },
+      "options": {
+        "device_vendor_msft_policy_config_defender_allowcloudprotection_0": "Not allowed. Turns off Cloud Protection.",
+        "device_vendor_msft_policy_config_defender_allowcloudprotection_1": "Allowed. Turns on Cloud Protection.",
+        "device_vendor_msft_policy_config_defender_cloudblocklevel_2": "High"
+      }
+    }
+  },
+  "changes": [
+    {
+      "auditId": "e1",
+      "at": "2026-11-05T09:14:00.000Z",
+      "category": "DeviceConfiguration",
+      "changeType": "updated",
+      "resourceName": "WIN - Defender",
+      "resourceType": "DeviceManagementConfigurationPolicy",
+      "actorUpn": "megan@contoso.example",
+      "actorAppId": null,
+      "actorAppName": null,
+      "activity": "Patch DeviceManagementConfigurationPolicy",
+      "resourceId": "p-defender",
+      "settings": [],
+      "settingsMore": 0,
+      "source": "Intune"
+    },
+    {
+      "auditId": "e2",
+      "at": "2026-11-05T11:05:00.000Z",
+      "category": "Compliance",
+      "changeType": "updated",
+      "resourceName": "Windows 11 - Compliance",
+      "resourceType": null,
+      "actorUpn": null,
+      "actorAppId": null,
+      "actorAppName": "Graph Explorer",
+      "activity": "Patch DeviceCompliancePolicy",
+      "resourceId": null,
+      "settings": [],
+      "settingsMore": 0,
+      "source": "Intune"
+    },
+    {
+      "auditId": "e3",
+      "at": "2026-11-05T11:06:00.000Z",
+      "category": "Compliance",
+      "changeType": "assigned",
+      "resourceName": "Windows 11 - Compliance",
+      "resourceType": null,
+      "actorUpn": "megan@contoso.example",
+      "actorAppId": null,
+      "actorAppName": null,
+      "activity": "Assign DeviceCompliancePolicy",
+      "resourceId": "c-win",
+      "settings": [],
+      "settingsMore": 0,
+      "source": "Intune"
+    },
+    {
+      "auditId": "e4",
+      "at": "2026-11-05T16:20:00.000Z",
+      "category": "DeviceConfiguration",
+      "changeType": "updated",
+      "resourceName": "Kiosk | settings",
+      "resourceType": null,
+      "actorUpn": "lidia|<x>@contoso.example",
+      "actorAppId": null,
+      "actorAppName": null,
+      "activity": "Patch DeviceConfiguration",
+      "resourceId": "d-kiosk",
+      "settings": [],
+      "settingsMore": 0,
+      "source": "Intune"
+    },
+    {
+      "auditId": "e5",
+      "at": "2026-11-05T15:52:00.000Z",
+      "category": "DeviceConfiguration",
+      "changeType": "deleted",
+      "resourceName": "macOS - FileVault",
+      "resourceType": null,
+      "actorUpn": "alex@contoso.example",
+      "actorAppId": null,
+      "actorAppName": null,
+      "activity": "Delete DeviceConfiguration",
+      "resourceId": "D-FILEVAULT",
+      "settings": [],
+      "settingsMore": 0,
+      "source": "Intune"
+    },
+    {
+      "auditId": "e8",
+      "at": "2026-11-05T13:40:00.000Z",
+      "category": "DeviceConfiguration",
+      "changeType": "updated",
+      "resourceName": "APP - Android",
+      "resourceType": "AndroidManagedAppProtection",
+      "actorUpn": "sam@contoso.example",
+      "actorAppId": null,
+      "actorAppName": null,
+      "activity": "Patch AndroidManagedAppProtection",
+      "resourceId": "m-android",
+      "settings": [],
+      "settingsMore": 0,
+      "source": "Intune"
+    }
+  ],
+  "options": {
+    "tenantId": "8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14",
+    "tenantName": "Contoso <Müller> & Co",
+    "generatedAt": "2026-11-06T02:14:00.000Z",
+    "trigger": "scheduled",
+    "includeValues": true,
+    "includeActors": true
+  }
+}

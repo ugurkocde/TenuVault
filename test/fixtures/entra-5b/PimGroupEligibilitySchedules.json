@@ -1,0 +1,588 @@
+{
+  "folder": "PimGroupEligibilitySchedules",
+  "path": "identityGovernance/privilegedAccess/group/eligibilitySchedules",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/groups?$select=id&$top=999&$count=true&$filter=(securityEnabled%20eq%20true%20or%20groupTypes%2Fany(c%3Ac%20eq%20%27Unified%27))%20and%20onPremisesSyncEnabled%20ne%20true%20and%20not%20groupTypes%2Fany(c%3Ac%20eq%20%27DynamicMembership%27)": {
+      "status": 200,
+      "body": {
+        "@odata.count": 63,
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-608cd6db456b"
+          },
+          {
+            "id": "00000000-0000-4000-8000-f610d5be08ee"
+          },
+          {
+            "id": "00000000-0000-4000-8000-847c9f4d47f8"
+          },
+          {
+            "id": "00000000-0000-4000-8000-acb1333deddc"
+          },
+          {
+            "id": "00000000-0000-4000-8000-abffe5b0ac08"
+          },
+          {
+            "id": "00000000-0000-4000-8000-b25fab98f098"
+          },
+          {
+            "id": "00000000-0000-4000-8000-bd96c6237863"
+          },
+          {
+            "id": "00000000-0000-4000-8000-cf3e1690026e"
+          },
+          {
+            "id": "00000000-0000-4000-8000-96fb0fd6064a"
+          },
+          {
+            "id": "00000000-0000-4000-8000-dd6cfcca2304"
+          },
+          {
+            "id": "00000000-0000-4000-8000-eea2a5d11f68"
+          },
+          {
+            "id": "00000000-0000-4000-8000-5b3f04c12fee"
+          },
+          {
+            "id": "00000000-0000-4000-8000-1448944d8d8d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-3697479425dd"
+          },
+          {
+            "id": "00000000-0000-4000-8000-51bd0a40d7b9"
+          },
+          {
+            "id": "00000000-0000-4000-8000-a6bbc362d62f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-9704235ad501"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7ff4b62a1263"
+          },
+          {
+            "id": "00000000-0000-4000-8000-cf3b171f395f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-c50cd51772bf"
+          },
+          {
+            "id": "00000000-0000-4000-8000-58d081dd95b5"
+          },
+          {
+            "id": "00000000-0000-4000-8000-68503c79c5c9"
+          },
+          {
+            "id": "00000000-0000-4000-8000-e3ae54f1defe"
+          },
+          {
+            "id": "00000000-0000-4000-8000-e1739b0352d1"
+          },
+          {
+            "id": "00000000-0000-4000-8000-8685983ecfad"
+          },
+          {
+            "id": "00000000-0000-4000-8000-af3c4cb78a2d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-9d18f4ea595d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-8e201bc15282"
+          },
+          {
+            "id": "00000000-0000-4000-8000-8699638fb82d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-6fbb69682a27"
+          },
+          {
+            "id": "00000000-0000-4000-8000-d0e587a7d421"
+          },
+          {
+            "id": "00000000-0000-4000-8000-84b43833e51f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-e5de8bef1732"
+          },
+          {
+            "id": "00000000-0000-4000-8000-24d9c4ac2102"
+          },
+          {
+            "id": "00000000-0000-4000-8000-763e1c4fc951"
+          },
+          {
+            "id": "00000000-0000-4000-8000-43e07e325b91"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7aaec7cdf428"
+          },
+          {
+            "id": "00000000-0000-4000-8000-9227e7ac0046"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7c4bb335534f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-d209a9c4aa59"
+          },
+          {
+            "id": "00000000-0000-4000-8000-47cbe6db293f"
+          },
+          {
+            "id": "00000000-0000-4000-8000-3b95f7c87355"
+          },
+          {
+            "id": "00000000-0000-4000-8000-c78f34d92bb6"
+          },
+          {
+            "id": "00000000-0000-4000-8000-47010d7616a3"
+          },
+          {
+            "id": "00000000-0000-4000-8000-1821753c4266"
+          },
+          {
+            "id": "00000000-0000-4000-8000-0a3e66bd699a"
+          },
+          {
+            "id": "00000000-0000-4000-8000-ad8abcb315ed"
+          },
+          {
+            "id": "00000000-0000-4000-8000-025481d09e85"
+          },
+          {
+            "id": "00000000-0000-4000-8000-ad12bb07d90d"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7cfbe79a1eb2"
+          },
+          {
+            "id": "00000000-0000-4000-8000-3a2a1ff284bf"
+          },
+          {
+            "id": "00000000-0000-4000-8000-f9660973a155"
+          },
+          {
+            "id": "00000000-0000-4000-8000-548aa095e25e"
+          },
+          {
+            "id": "00000000-0000-4000-8000-cd1b72fca497"
+          },
+          {
+            "id": "00000000-0000-4000-8000-ca9b5165e074"
+          },
+          {
+            "id": "00000000-0000-4000-8000-077a5e269590"
+          },
+          {
+            "id": "00000000-0000-4000-8000-94046128ce32"
+          },
+          {
+            "id": "00000000-0000-4000-8000-7091e81da2a9"
+          },
+          {
+            "id": "00000000-0000-4000-8000-f3f9ff683dbd"
+          },
+          {
+            "id": "00000000-0000-4000-8000-13ab29f1f606"
+          },
+          {
+            "id": "00000000-0000-4000-8000-c5dc2b2111b6"
+          },
+          {
+            "id": "00000000-0000-4000-8000-273d53b2fb54"
+          },
+          {
+            "id": "00000000-0000-4000-8000-432f241af06a"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-608cd6db456b%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-f610d5be08ee%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-847c9f4d47f8%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-acb1333deddc%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-abffe5b0ac08%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-b25fab98f098%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-bd96c6237863%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-cf3e1690026e%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-96fb0fd6064a%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-dd6cfcca2304%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-eea2a5d11f68%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-5b3f04c12fee%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-1448944d8d8d%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-3697479425dd%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-51bd0a40d7b9%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-a6bbc362d62f%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-9704235ad501%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7ff4b62a1263%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-cf3b171f395f%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-c50cd51772bf%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-58d081dd95b5%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-68503c79c5c9%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-e3ae54f1defe%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-e1739b0352d1%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-8685983ecfad%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-af3c4cb78a2d%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-9d18f4ea595d%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-8e201bc15282%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-8699638fb82d%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-6fbb69682a27%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-d0e587a7d421%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-84b43833e51f%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-e5de8bef1732%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-24d9c4ac2102%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-763e1c4fc951%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-43e07e325b91%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7aaec7cdf428%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-9227e7ac0046%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7c4bb335534f%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-d209a9c4aa59%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-47cbe6db293f%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-3b95f7c87355%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-c78f34d92bb6%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-47010d7616a3%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-1821753c4266%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-0a3e66bd699a%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-ad8abcb315ed%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-025481d09e85%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-ad12bb07d90d%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7cfbe79a1eb2%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-3a2a1ff284bf%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-f9660973a155%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-548aa095e25e%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-cd1b72fca497%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-ca9b5165e074%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-077a5e269590%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-94046128ce32%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-7091e81da2a9%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-f3f9ff683dbd%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-13ab29f1f606%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-c5dc2b2111b6%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-273d53b2fb54%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    "/v1.0/identityGovernance/privilegedAccess/group/eligibilitySchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-432f241af06a%27": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "verified": "2026-11-17",
+  "liveCount": 38,
+  "samples": {
+    "object": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "appId": "Example",
+      "displayName": "Example",
+      "description": null,
+      "signInAudience": "Example",
+      "identifierUris": [],
+      "groupMembershipClaims": null,
+      "isFallbackPublicClient": true,
+      "tags": [],
+      "notes": null,
+      "createdDateTime": "Example",
+      "publisherDomain": "Example",
+      "optionalClaims": null,
+      "web": {
+        "homePageUrl": null,
+        "logoutUrl": null,
+        "redirectUris": [],
+        "implicitGrantSettings": {
+          "enableAccessTokenIssuance": false,
+          "enableIdTokenIssuance": false
+        },
+        "redirectUriSettings": []
+      },
+      "spa": {
+        "redirectUris": []
+      },
+      "publicClient": {
+        "redirectUris": [
+          "Example"
+        ]
+      },
+      "api": {
+        "acceptMappedClaims": null,
+        "knownClientApplications": [],
+        "requestedAccessTokenVersion": null,
+        "oauth2PermissionScopes": [],
+        "preAuthorizedApplications": []
+      },
+      "appRoles": [],
+      "requiredResourceAccess": [
+        {
+          "resourceAppId": "Example",
+          "resourceAccess": [
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "type": "Example"
+            }
+          ]
+        }
+      ],
+      "verifiedPublisher": {
+        "displayName": null,
+        "verifiedPublisherId": null,
+        "addedDateTime": null
+      },
+      "passwordCredentials": [],
+      "keyCredentials": []
+    },
+    "owners": {
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "federatedIdentityCredentials": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "name": "Example",
+      "issuer": "Example",
+      "subject": "Example",
+      "audiences": [
+        "Example"
+      ],
+      "description": "Example"
+    }
+  },
+  "shapes": {
+    "object": {
+      "pages": 1,
+      "entries": 38,
+      "keys": [
+        "id",
+        "appId",
+        "displayName",
+        "description",
+        "signInAudience",
+        "identifierUris",
+        "groupMembershipClaims",
+        "isFallbackPublicClient",
+        "tags",
+        "notes",
+        "createdDateTime",
+        "publisherDomain",
+        "optionalClaims",
+        "web",
+        "spa",
+        "publicClient",
+        "api",
+        "appRoles",
+        "requiredResourceAccess",
+        "verifiedPublisher",
+        "passwordCredentials",
+        "keyCredentials"
+      ]
+    },
+    "owners": {
+      "pages": 38,
+      "entries": 4,
+      "keys": [
+        "id"
+      ]
+    },
+    "federatedIdentityCredentials": {
+      "pages": 38,
+      "entries": 4,
+      "keys": [
+        "id",
+        "name",
+        "issuer",
+        "subject",
+        "audiences",
+        "description"
+      ]
+    },
+    "extensionProperties": {
+      "pages": 38,
+      "entries": 0,
+      "keys": []
+    }
+  }
+}

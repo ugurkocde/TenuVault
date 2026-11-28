@@ -1,3 +1,4 @@
+import { emptyIntuneRead } from "./helpers"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -185,7 +186,7 @@ describe("Conditional Access module permissions", () => {
   })
 
   it("explains how to add the restore permission, and leads to the card that fixes it", () => {
-    expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toMatch(/Policy.ReadWrite.ConditionalAccess.*Services and permissions shows how to add it/)
+    expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toMatch(/Policy.ReadWrite.ConditionalAccess.*Services and permissions shows how to add them/)
     expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"))).toBeUndefined()
   })
 
@@ -322,6 +323,7 @@ describe("Backing up Conditional Access", () => {
   const jwt = (scp: string) => `e30.${Buffer.from(JSON.stringify({ scp })).toString("base64url")}.sig`
 
   function setup(options: { modules: Array<"conditionalAccess">; scopes: string }) {
+    const services = { services: ["intune" as const, ...options.modules] }
     const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-ca-")), [randomBytes(32)])
     const graphPaths: string[] = []
     const engine = new BackupEngine({
@@ -334,11 +336,11 @@ describe("Backing up Conditional Access", () => {
         if (graphPath === "/beta/identity/conditionalAccess/policies") return Response.json({ value: [{ id: "p1", displayName: "Require MFA" }] })
         if (graphPath === "/beta/identity/conditionalAccess/policies/p1") return Response.json(policy({ id: "p1", displayName: "Require MFA" }))
         if (graphPath === "/beta/identity/conditionalAccess/authenticationStrength/policies") return Response.json({ value: [strength({ id: "00000000-0000-0000-0000-000000000002", policyType: "builtIn" })] })
-        if (graphPath.startsWith("/beta/")) return Response.json({ value: [] })
+        if (graphPath.startsWith("/beta/")) return emptyIntuneRead(graphPath)
         throw new Error(`unexpected ${url}`)
       }) as typeof fetch,
       getToken: async () => jwt(options.scopes),
-      enabledModules: () => options.modules,
+      services: () => services,
       now: () => new Date("2026-11-03T02:00:00Z"),
     })
     const run = async () => {

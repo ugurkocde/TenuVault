@@ -1,6 +1,8 @@
+import { RestoreAccess, useRestoreAccess } from "../../components/RestoreAccess"
 import { TENANT_ADMIN, inTenant } from "../../../shared/intune/admin-links"
 import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState, type ReactNode } from "react"
+import { useTenantById } from "~/contexts/TenantContext"
 import { Link } from "react-router-dom"
 import { CheckCircle2, ChevronDown, ChevronRight, Eye, History, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -79,8 +81,11 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
   const step = stepOf(changeSet, preview)
   // A stale change set is finished; only a new preview of the change creates a reviewable one.
   const canReview = !!actions && ["in-review", "approved"].includes(changeSet.status)
-  const canApply = !!actions && changeSet.status === "approved"
-  const canRetry = !!actions && Object.values(changeSet.results).some(result => !(result.status === "approval" && result.partial) && result.status !== "verified") && ["partial", "failed", "uncertain", "applying"].includes(changeSet.status)
+  const credentials = useTenantById(changeSet.tenantId)?.credentials
+  const access = useRestoreAccess(credentials, Boolean(actions))
+  const issues = actions ? access.issuesFor(changeSet.operations.map(operation => operation.folder)) : []
+  const canApply = !!actions && changeSet.status === "approved" && issues.length === 0
+  const canRetry = !!actions && issues.length === 0 && Object.values(changeSet.results).some(result => !(result.status === "approval" && result.partial) && result.status !== "verified") && ["partial", "failed", "uncertain", "applying"].includes(changeSet.status)
   const canRollback = !!actions && changeSet.kind === "change" && !!changeSet.preChange
 
   return (
@@ -97,6 +102,8 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
         {!embedded && <Chip tone={STATUS_TONE[changeSet.status]}>{statusLabel(changeSet.status)}</Chip>}
       </div>
       {intro}
+      {credentials && <RestoreAccess credentials={credentials} issues={issues} checking={access.checking}
+        error={access.error} onCheck={() => access.refresh(true)} />}
 
       <ol className="flex flex-wrap gap-2" aria-label="Steps">
         {STEPS.map((label, index) => (

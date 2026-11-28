@@ -1,12 +1,22 @@
 "use client"
 
+import { NoticeCard } from "@desktop/components/NoticeCard"
+import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
+import { DIRECTORY_REVIEW_FOLDERS } from "../../../shared/intune/directory-review-folders"
+import { backupOnlyRestoreMessage } from "../../../shared/intune/restore-availability"
+import { DirectoryRestore } from "./directory-restore"
+import { ConfigurationRestore } from "./configuration-restore"
+import { INTUNE_TYPES, restoreCapability } from "../../../shared/intune/registry"
+import { isLargeBackup } from "../../../shared/backup-storage"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
-import { moduleForFolder } from "../../../shared/services/modules"
+import { restoreAdminCenter } from "../../../shared/services/presentation"
+import { compareBackupServices } from "../../../shared/services/presentation"
 import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
+import { CONNECTION_WRITE_REFUSED } from "../../../shared/tenant-connection"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
 
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -37,15 +47,12 @@ import { mergeOutcomes, retryBatches } from "~/lib/policies/restore-retry"
 import { FeatureApiError } from "@desktop/lib/feature-api"
 import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
+import { RestoreAccess, RestoreTargetAccess, useRestoreAccess } from "@desktop/components/RestoreAccess"
 import { GatedButton } from "@desktop/components/PlanGate"
+import type { Plan as LicensePlan } from "../../../shared/plans"
 import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
 import { LinkedMessage } from "~/components/linked-message"
 
-
-/** Where an admin checks a restored item: Conditional Access lives in Entra, everything else in Intune. */
-function adminCenter(folder: string | undefined): string {
-  return folder && moduleForFolder(folder)?.module.id === "conditionalAccess" ? "Entra" : "Intune"
-}
 
 /** "1 item completed.", or with what failed and what was skipped when there is any. */
 export function restoreSummary(handled: number, failed: number, skipped: number): string {
@@ -61,10 +68,15 @@ interface CopyTarget {
 }
 
 interface RestoreWizardProps {
+  service?: BackupServiceFilter
+  /** False while the wizard is mounted on a hidden tab. */
+  active?: boolean
+  onRunningChange?: (running: boolean) => void
   tenant: BackupTenant
   backups: BackupSummary[]
   /** Preselected backup, for example from "Restore" in the backup history. */
   initialBackupId: string | null
+  plan?: LicensePlan | null
   community: boolean
   canCopyToTenants: boolean
   copyCandidates: CopyTarget[]
@@ -79,6 +91,12 @@ const STEPS: Array<{ id: Step; label: string }> = [
   { id: "run", label: "Restore" },
 ]
 
+/** The last inventory page the backup contents route serves. */
+const LAST_INVENTORY_PAGE = 500
+/** How long a page of the linked large backup may take before it counts as unreadable. */
+export const COMPANION_DEADLINE_MS = 120_000
+const COMPANION_UNREADABLE = "The linked large backup with this run's directory objects could not be read. Other items can still be restored. Refresh the backup list after it finishes, or check its status in Backup History."
+
 interface BackupItem {
   path: string
   folder: string
@@ -89,6 +107,8 @@ interface BackupItem {
   replaceBlocker?: string
   readiness?: RecoveryReadiness
   snapshot?: unknown
+  /** The backup the item was read from: the chosen backup or its verified large companion. */
+  source: string
 }
 
 /** The deprecated-settings check for the chosen backup, against the Settings Catalog as read now. */
@@ -157,6 +177,8 @@ interface Outcome {
   partial?: boolean
   policyId?: string
   repairToken?: string
+  guardedRunId?: string
+  replacedReferences?: import("../../../shared/intune/restore-references").ReplacedReference[]
   adminLink?: AdminLink
 }
 
@@ -221,11 +243,13 @@ function confirmText(plans: Array<{ plan: Plan }>, tenantName: string, assignmen
 
 /** The admin cancelled the disclaimer: the request was refused before anything was written. */
 class NotAccepted extends Error {}
+class ConnectionWriteRefused extends Error {}
 
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal })
   const data = await response.json().catch(() => ({}))
   if (response.status === ACKNOWLEDGEMENT_REQUIRED) throw new NotAccepted(data.error ?? "No changes were made.")
+  if (response.status === 403 && data.code === CONNECTION_WRITE_REFUSED) throw new ConnectionWriteRefused(data.error ?? "The connection refused the restore before any changes were made.")
   if (!response.ok) throw new FeatureApiError(data.error ?? `Request failed (${response.status})`, response.status, data.upgrade)
   return data as T
 }
@@ -234,21 +258,35 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
  * Restores items from a backup in five steps: choose the backup, the items and how to restore them,
  * review what will happen to each item in the tenant as it is now, then watch the restore run.
  */
-export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates }: RestoreWizardProps) {
+export function RestoreWizard({ tenant, backups, initialBackupId, plan, community, canCopyToTenants, copyCandidates, service = "all", onRunningChange, active = true }: RestoreWizardProps) {
+  const effectivePlan: LicensePlan | null = plan !== undefined ? plan : community ? "community" : "pro"
   const showPlanError = (error: unknown) => showFeaturePlanError(error, community
-    ? ["fullRestore", "replaceRestore", "restoreAssignments", "bulkActions"]
+    ? ["fullRestore", "replaceRestore", "restoreAssignments", "directoryRestore", "bulkActions"]
     : !canCopyToTenants ? ["bulkActions"] : [])
   // A backup that stopped early still holds complete snapshots of the items it saved.
   const restorable = backups.filter((backup) => statusKind(backup.status) !== "running" && backup.totalPolicies > 0)
   const [step, setStep] = useState<Step>(initialBackupId ? "items" : "backup")
   const [backupId, setBackupId] = useState<string | null>(initialBackupId)
   const backup = backups.find((entry) => entry.id === backupId) ?? null
+  const companionId = backup?.companionId
+  const access = useRestoreAccess(tenant.credentials, active && (step === "items" || step === "review"))
+  const [accessRevision, setAccessRevision] = useState(0)
+  const checkAccess = async () => {
+    await access.refresh(true)
+    if (step === "items") setAccessRevision(revision => revision + 1)
+  }
 
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [itemsError, setItemsError] = useState("")
   const [catalogCheck, setCatalogCheck] = useState<CatalogCheckState | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState("")
+  const [largePage, setLargePage] = useState(0)
+  const [companionError, setCompanionError] = useState("")
+  // Total is null when the first page of a linked large backup could not be read, so it is not known yet.
+  const [largePaging, setLargePaging] = useState<{ hasMore: boolean; total: number | null } | null>(null)
+  // The page whose items are loading; page buttons wait for it, so no page is skipped.
+  const [pageLoading, setPageLoading] = useState(false)
   const [openTypes, setOpenTypes] = useState<Set<string>>(new Set())
   /** How many items each type's list and the readiness list show, beyond LIST_PAGE. */
   const [shown, setShown] = useState<Record<string, number>>({})
@@ -295,6 +333,16 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [validationError, setValidationError] = useState("")
 
   const [running, setRunning] = useState(false)
+  // Keep the original items and retry context until the admin starts a new selection.
+  const [runService, setRunService] = useState<BackupServiceFilter | null>(null)
+  const contentsService = runService ?? service
+  useEffect(() => { setLargePage(0); setLargePaging(null) }, [backupId, tenant, contentsService])
+  const previousService = useRef(contentsService)
+  const [serviceNotice, setServiceNotice] = useState("")
+  useEffect(() => {
+    onRunningChange?.(running)
+    return () => onRunningChange?.(false)
+  }, [running, onRunningChange])
   const [progress, setProgress] = useState<{ total: number; done: number; current: string | null; results: Outcome[] } | null>(null)
   const [result, setResult] = useState<{ outcome: "success" | "partial" | "failed"; message: string; results: Outcome[] } | null>(null)
   const [runPaths, setRunPaths] = useState<string[]>([])
@@ -323,8 +371,14 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   // Items of the chosen backup, with names and restore blockers read from the snapshots.
   useEffect(() => {
     if (!backupId) return
+    if (previousService.current !== contentsService) {
+      setServiceNotice("Service changed. Restore selections were cleared. Choose items for this service.")
+      setStep("items")
+    }
+    previousService.current = contentsService
     setItems(null)
     setItemsError("")
+    setCompanionError("")
     setCatalogCheck(null)
     setSelected(new Set())
     setShown({})
@@ -333,41 +387,113 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setValidationError("")
     const controller = new AbortController()
     const credentials = { ...tenant.credentials, storageAccountName: tenant.storageAccountName, subscriptionId: "local", resourceGroupName: "local", backupId }
-    void (async () => {
-      const contents = await post<{ content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; policies: Array<{ path: string; displayName?: string }> }> } }>(
+    // One backup's items for the selected service, with names and restore blockers from its snapshots.
+    const load = async (source: string, signal: AbortSignal = controller.signal) => {
+      const contents = await post<{ largePage?: number; hasMore?: boolean; content: { groups: Array<{ folder: string; label: string; area: string; limitation?: string; count?: number; policies: Array<{ path: string; displayName?: string }> }> } }>(
         "/api/list-backup-contents",
-        credentials,
-        controller.signal,
+        { ...credentials, backupId: source, largePage },
+        signal,
       )
-      const listed: BackupItem[] = contents.content.groups.flatMap((group) =>
-        group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation })),
-      )
+      const groups = contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService))
+      const listed: BackupItem[] = groups.flatMap((group) =>
+        group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation, source })))
       const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
       for (let start = 0; start < listed.length; start += PREVIEW_CHUNK) {
         const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
           "/api/restore-preview",
-          { ...credentials, paths: listed.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
-          controller.signal,
+          { ...credentials, backupId: source, paths: listed.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
+          signal,
         )
         for (const item of preview.items) details[item.path] = item
       }
-      setItems(listed.map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
+      const items = listed.map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness }))
+      // Inventory paging belongs to a backup whose items are shown in the selected service.
+      const paging = contents.largePage !== undefined && items.length ? { hasMore: contents.hasMore === true, total: groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) } : null
+      return { items, paging }
+    }
+    // A page of a large backup that does not answer in time counts as unreadable, so its pages stay reachable.
+    const chosenLoad = new AbortController()
+    const stopChosen = () => chosenLoad.abort()
+    controller.signal.addEventListener("abort", stopChosen)
+    const chosenDeadline = isLargeBackup(backupId) ? setTimeout(stopChosen, COMPANION_DEADLINE_MS) : undefined
+    void (async () => {
+      // The chosen backup is shown as soon as it loads. Its failure is the error.
+      const chosen = await load(backupId, chosenLoad.signal).finally(() => { clearTimeout(chosenDeadline); controller.signal.removeEventListener("abort", stopChosen) })
+      if (controller.signal.aborted) return
+      setItems(chosen.items)
+      // A companion's later page keeps the paging it was opened with until the companion answers. An empty
+      // later page of a large backup is past its last one: Previous stays and Next turns off.
+      if (chosen.paging) setLargePaging(chosen.paging)
+      else if (largePage > 0 && isLargeBackup(backupId)) setLargePaging(previous => previous && { ...previous, hasMore: false })
+      else if (!companionId || largePage === 0) setLargePaging(null)
+      // A mixed run keeps its large types, such as directory objects, in a verified companion backup.
+      // It is added on its own and never holds back or removes the chosen backup's items.
+      if (!companionId) return
+      // A later companion page keeps its paging, so the admin moves on without a reload that would clear
+      // the chosen backup's items and selections: an empty page is the last one, and one that cannot be
+      // read keeps Next page so a readable later page stays reachable.
+      setPageLoading(true)
+      // A companion page that does not answer in time counts as unreadable, so paging never stays locked.
+      const companionLoad = new AbortController()
+      const stopCompanion = () => companionLoad.abort()
+      controller.signal.addEventListener("abort", stopCompanion)
+      const deadline = setTimeout(stopCompanion, COMPANION_DEADLINE_MS)
+      try {
+        const companion = await load(companionId, companionLoad.signal)
+        if (controller.signal.aborted) return
+        setItems(previous => [...(previous ?? []), ...companion.items])
+        if (companion.paging) setLargePaging(companion.paging)
+        else if (!chosen.paging && largePage > 0) setLargePaging(previous => previous && { ...previous, hasMore: false })
+      } catch {
+        if (controller.signal.aborted) return
+        setCompanionError(COMPANION_UNREADABLE)
+        // Any unreadable page may be the only one, so the pages around it stay reachable, up to the last
+        // page the route serves; an empty page still ends paging. Route statuses do not say reliably whether
+        // the whole backup was refused, so none is read here.
+        // A service view that hides every large type has no companion page to reach.
+        const shown = INTUNE_TYPES.some(type => type.volume === "large" && matchesBackupService(type.folder, contentsService))
+        if (!chosen.paging && shown) setLargePaging(previous => ({ hasMore: true, total: previous?.total ?? null }))
+      } finally {
+        clearTimeout(deadline)
+        controller.signal.removeEventListener("abort", stopCompanion)
+        if (!controller.signal.aborted) setPageLoading(false)
+      }
     })().catch((error: unknown) => {
-      if (error instanceof DOMException && error.name === "AbortError") return
+      if (controller.signal.aborted) return
+      // A deadline ends the request as an abort; it is reported like any page that could not be read.
+      if (chosenLoad.signal.aborted) error = new Error("This inventory page did not answer in time.")
+      // An ordinary backup has no pages of its own, so a failure on a later page of its companion returns
+      // once to page 1, where the chosen backup's items show again.
+      if (largePage > 0 && !isLargeBackup(backupId)) { setLargePage(0); return }
       showPlanError(error)
       setItemsError(error instanceof Error ? error.message : String(error))
+      // A large backup's unreadable page may be the only one, so the pages around it stay reachable, up to
+      // the last page the route serves; an empty page still ends paging. A service view that hides every
+      // large type has no page to reach.
+      if (isLargeBackup(backupId) && INTUNE_TYPES.some(type => type.volume === "large" && matchesBackupService(type.folder, contentsService))) {
+        setItems([])
+        setLargePaging(previous => ({ hasMore: true, total: previous?.total ?? null }))
+      }
     })
-    return () => controller.abort()
-  }, [backupId, tenant])
+    return () => { controller.abort(); setPageLoading(false) }
+  }, [backupId, companionId, tenant, largePage, contentsService, accessRevision])
 
-  const selectionBlocker = (item: BackupItem) => mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
+  const accessIssues = access.issuesFor((items ?? []).filter(item => !backupOnlyRestoreMessage(item.folder)).map(item => item.folder))
+  const selectionBlocker = (item: BackupItem) => {
+    const backupOnly = backupOnlyRestoreMessage(item.folder)
+    if (backupOnly) return backupOnly
+    const issue = access.issueFor(item.folder)
+    // Backup access in the source is enough when the selected policies will be copied elsewhere.
+    if (issue && (!canCopyToTenants || !copyCandidates.length)) return "Restore access is required."
+    return mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
+  }
 
   const itemByPath = useMemo(() => new Map((items ?? []).map((item) => [item.path, item])), [items])
 
   useEffect(() => {
     setSelected((current) => new Set([...current].filter((path) => {
       const item = itemByPath.get(path)
-      return item && !(mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker)
+      return item && !backupOnlyRestoreMessage(item.folder) && !(mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker)
     })))
   }, [itemByPath, mode, community, copying])
 
@@ -420,7 +546,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       else types.set(item.folder, [item])
       areas.set(item.area, types)
     }
-    return areas
+    return new Map([...areas].sort(([, left], [, right]) => compareBackupServices(left.keys().next().value!, right.keys().next().value!)))
   }, [visible])
 
   const maxSelection = community ? 1 : undefined
@@ -437,6 +563,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const item = itemByPath.get(path)
     const state = review?.[path]
     const blocker = state?.blocker ?? item?.blocker
+    if (item && !copying && access.issueFor(item.folder)) return "cannot"
     if (copying) return blocker ? "cannot" : "copy"
     if (mode === "copy") return blocker ? "cannot" : "create"
     if (state?.replaceBlocker ?? item?.replaceBlocker) return "cannot"
@@ -445,7 +572,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     if (state.live === "same" || (state.assignmentsOnly && !assignments)) return "skip"
     return "overwrite"
   }
-  const selectedPaths = [...selected]
+  const selectedPaths = [...selected].filter(path => {
+    const item = itemByPath.get(path)
+    return item && !backupOnlyRestoreMessage(item.folder)
+  })
   const deprecatedSelected = selectedPaths.filter((path) => deprecatedByPath.has(path))
   const plans = review ? selectedPaths.map((path) => ({ path, plan: planFor(path) })) : []
   const actionable = plans.filter((entry) => !["skip", "cannot"].includes(entry.plan)).map((entry) => entry.path)
@@ -525,6 +655,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const completed: Outcome[] = []
     const attempted: typeof batches = []
     setStep("run")
+    setRunService(contentsService)
+    setServiceNotice("")
     setRunning(true)
     setResult(null)
     setRunPaths(paths)
@@ -582,13 +714,16 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         return targets.flatMap((targetTenantId) => batch.paths.filter((path) => !completed.some((item) => item.path === path && item.targetTenantId?.toLowerCase() === targetTenantId?.toLowerCase()))
           .map((path) => ({ ...outcome, path, targetTenantId })))
       }
-      // A refused disclaimer wrote nothing, so the batch it stopped stays open for another try.
-      const refused = error instanceof NotAccepted ? attempted.pop() : undefined
-      const notStarted = refused ? missing(refused, { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }) : []
+      // The connection guard and disclaimer can refuse a batch before a route runs.
+      const readOnly = error instanceof ConnectionWriteRefused
+      const refused = readOnly || error instanceof NotAccepted ? attempted.pop() : undefined
+      const notStarted = refused ? missing(refused, readOnly
+        ? { success: false, action: "skipped", retryable: false, error: error.message }
+        : { success: false, retryable: true, error: "Not started: the disclaimer was not accepted." }) : []
       // A lost response leaves the write outcome unknown. Keep completed results and
       // block blind repetition of every attempted item whose result is missing.
       const known = mergeOutcomes(previous, completed)
-      const unknown = attempted.flatMap((batch) => missing(batch, { success: false, retryable: false, error: "Outcome unknown. Check Intune before attempting another restore." }))
+      const unknown = attempted.flatMap((batch) => missing(batch, { success: false, retryable: false, error: "Outcome unknown." }))
       setResult({ outcome: known.some((item) => item.success) ? "partial" : "failed",
         message: `Restore interrupted: ${error instanceof Error ? error.message : String(error)}`, results: mergeOutcomes(known, [...notStarted, ...unknown]) })
     } finally {
@@ -600,6 +735,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   }
 
   const startOver = () => {
+    setRunService(null)
     setResult(null)
     setProgress(null)
     setSelected(new Set())
@@ -621,6 +757,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   return (
     <div className="space-y-6">
+      {(runService !== null && runService !== service) ? <p role="status" className="text-sm text-gray-500">This restore keeps the service and items chosen when it started.</p> : serviceNotice && <p role="status" className="text-sm text-gray-500">{serviceNotice}</p>}
       <RestoreApprovals key={tenant.credentials.tenantId} tenant={tenant} enabled={usesApproval || !!result?.results.some(outcome => outcome.approval)} revision={approvalRevision} openRevision={approvalOpenRevision} onOutcome={outcome => {
         setApprovalRevision(value => value + 1)
         setResult(current => {
@@ -682,7 +819,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                         {entry.scope && entry.scope.excluded.length > 0 && `, ${entry.scope.description.toLowerCase()}`}
                       </span>
                     </span>
-                    <span className={cn("text-xs", kind === "success" || kind === "cancelled" ? "text-gray-500" : kind === "warning" ? "text-amber-800" : "text-red-700")}>{statusLabel(entry.status)}</span>
+                    <span className={cn("text-xs", kind === "success" || kind === "cancelled" ? "text-gray-500" : kind === "warning" ? "text-amber-800" : "text-red-700")}>{statusLabel(entry.status, entry.coverage)}</span>
                   </button>
                 )
               })}
@@ -711,6 +848,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </label>
           </div>
 
+          {accessIssues.length > 0 && <div className="mt-4"><RestoreAccess credentials={tenant.credentials} issues={accessIssues} checking={access.checking} error={access.error} onCheck={checkAccess} /></div>}
+
           {!community && (
             <label className="mt-4 block text-sm text-gray-700">
               Restore method
@@ -722,39 +861,24 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </label>
           )}
 
-          {statusKind(backup.status) === "cancelled" ? (
-            <p className="mt-4 flex gap-2 rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-800">
-              <Ban className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              Cancelled: this backup was cancelled before it finished, so some items may be missing from it.
-            </p>
-          ) : statusKind(backup.status) !== "success" && (
-            <p className="mt-4 flex gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              {backup.status === "unknown" ? `${backup.error ?? "This backup's details could not be read."} Whether it completed is not known, so some items may be missing from it.` : "This backup did not complete fully, so some items may be missing from it."}
-            </p>
-          )}
-          {itemsError && <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{itemsError}</p>}
+          {statusKind(backup.status) !== "success" && <NoticeCard className="mt-4"
+            tone={statusKind(backup.status) === "failed" ? "error" : "neutral"}
+            summary={statusKind(backup.status) === "cancelled" ? "The backup was cancelled. Some items may be missing."
+              : backup.status === "unknown" ? "Backup status is unknown. Some items may be missing."
+              : "The backup did not finish. Some items may be missing."}
+            details={backup.error} />}
+          {itemsError && <NoticeCard className="mt-4" tone="error" summary="Backup items could not be loaded." details={itemsError} />}
+          {companionError && <NoticeCard className="mt-4" tone="error" summary="Linked backup items could not be loaded." details={companionError} />}
           {catalogCheck?.state === "checking" && (
             <p className="mt-4 flex items-center gap-2 text-sm text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Checking the current Settings Catalog for deprecated settings...
             </p>
           )}
-          {catalogCheck?.state === "unavailable" && (
-            <p className="mt-4 flex gap-2 rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-800">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              Deprecated settings not checked: {catalogCheck.reason}
-            </p>
-          )}
-          {catalogCheck?.state === "checked" && deprecatedByPath.size > 0 && (
-            <p className="mt-4 flex gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              <span>
-                Deprecated settings: {deprecatedByPath.size} of {catalogPolicyCount} Settings Catalog {catalogPolicyCount === 1 ? "policy" : "policies"} in this backup {deprecatedByPath.size === 1 ? "contains" : "contain"} settings Microsoft lists as deprecated
-                (Settings Catalog checked {formatDate(catalogCheck.checkedAt ?? "")}, {catalogCheck.total} definitions). They restore exactly as backed up and may be ignored by current versions.
-                {deprecatedSelected.length > 0 && ` ${deprecatedSelected.length} of them ${deprecatedSelected.length === 1 ? "is" : "are"} selected.`}
-              </span>
-            </p>
-          )}
+          {catalogCheck?.state === "unavailable" && <NoticeCard className="mt-4"
+            summary="Deprecated settings could not be checked." details={catalogCheck.reason} />}
+          {catalogCheck?.state === "checked" && deprecatedByPath.size > 0 && <NoticeCard className="mt-4" tone="warning"
+            summary={`${deprecatedByPath.size} policies contain deprecated settings.${deprecatedSelected.length ? ` ${deprecatedSelected.length} selected.` : ""}`}
+            details={<p>Checked {catalogPolicyCount} policies and {catalogCheck.total} definitions on {formatDate(catalogCheck.checkedAt ?? "")}. These settings restore as backed up and may be ignored by current versions.</p>} />}
           {!items && !itemsError && (
             <div className="flex items-center gap-2 py-10 text-sm text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Reading the backup...
@@ -763,6 +887,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
           {items && (
             <>
+              {largePaging && <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-blue-50 p-4 text-sm text-blue-900">
+                <span>Inventory page {largePage + 1}.{largePaging.total !== null && ` This backup contains ${largePaging.total.toLocaleString()} objects.`} Search and selection apply to this page.</span>
+                <Button variant="outline" size="sm" disabled={largePage === 0 || pageLoading} onClick={() => setLargePage(page => page - 1)}>Previous page</Button>
+                <Button variant="outline" size="sm" disabled={!largePaging.hasMore || pageLoading || largePage >= LAST_INVENTORY_PAGE} onClick={() => setLargePage(page => page + 1)}>Next page</Button>
+              </div>}
               <details className="mt-4 rounded-xl border p-4 text-sm"><summary className="cursor-pointer font-medium">Recovery readiness for {items.length} objects</summary>
                 <p className="my-2 text-gray-600">Readiness is conservative for cross-tenant recovery. Supply installers and Apple tokens through Intune, then map supported resulting objects below. No tenant changes occur during this review.</p>
                 <ul className="max-h-64 overflow-auto">{items.slice(0, shown[READINESS] ?? LIST_PAGE).map(item => <li key={item.path} className="border-t py-2"><strong>{item.name}</strong>{item.readiness ? <><p>{item.readiness.automatic ? "Automatic configuration restore available" : "Review required"}</p><p>External artifacts: {item.readiness.externalArtifacts.join(" ") || "None identified"}</p><p>Missing mappings: {item.readiness.missingMappings.join(", ") || "None identified"}</p><p>Manual actions: {item.readiness.manualActions.join(" ") || "None identified"}</p></> : <p>Readiness unavailable. Retry loading the backup.</p>}</li>)}</ul>
@@ -853,6 +982,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                       )}
                                     </span>
                                   </label>
+                                  {!copying && !access.issueFor(item.folder) && DIRECTORY_REVIEW_FOLDERS.includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={item.source} path={item.path} active={active} plan={effectivePlan} />}
+                                  {!copying && !backupOnlyRestoreMessage(item.folder) && !access.issueFor(item.folder) && (!DIRECTORY_REVIEW_FOLDERS.includes(item.folder) || item.folder === "AdministrativeUnits") && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}
                               <li className="pl-11">
@@ -873,7 +1004,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             <Button variant="outline" onClick={() => setStep("backup")}>
               <ArrowLeft className="h-4 w-4" /> Other backup
             </Button>
-            <Button className="bg-coral-600 text-white hover:bg-coral-700" disabled={selected.size === 0} onClick={() => setStep("options")}>
+            <Button className="bg-coral-600 text-white hover:bg-coral-700" disabled={selected.size === 0 || ![...selected].some(path => { const item = itemByPath.get(path); return item && !selectionBlocker(item) })} onClick={() => setStep("options")}>
               Next <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
@@ -1081,6 +1212,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </p>
             <p className="mt-1 text-sm text-gray-500">
               Reads the whole backup back and checks every item: manifest completeness, decryptability, policy payloads and assignment references. Nothing is written to {tenant.name}, to Microsoft Graph or to a change set.
+              {companionId && " This run also has a linked large backup with directory objects. The dry run checks this backup only, not the linked large backup."}
             </p>
             {community && (
               <UpgradeNote feature="fullRestore" message="Validating a whole backup is included in TenuVault Pro and MSP. Community restores one item at a time as an unassigned copy." className="mt-3" />
@@ -1103,23 +1235,25 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     </li>
                   ))}
                 </ul>
-                {validation.items.filter((item) => !item.ok).length > 0 && (
-                  <ul className="mt-3 space-y-2">
-                    {validation.items.filter((item) => !item.ok).map((item) => (
-                      <li key={item.path} className="rounded-2xl bg-red-50 px-4 py-3 text-red-800">
-                        <span className="block font-medium">{item.name}</span>
-                        <span className="block text-xs">{item.path}</span>
-                        {item.checks.filter((entry) => !entry.ok).map((entry) => (
-                          <span key={entry.id} className="block text-xs">{entry.label}: {entry.detail}</span>
-                        ))}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {validation.items.some(item => !item.ok) && <NoticeCard className="mt-3" tone="error"
+                  summary={`${validation.items.filter(item => !item.ok).length} items failed restore validation.`}
+                  details={<ul className="space-y-2">{validation.items.filter(item => !item.ok).map(item => (
+                    <li key={item.path}>
+                      <p className="font-medium">{item.name}</p>
+                      <p>{item.path}</p>
+                      {item.checks.filter(entry => !entry.ok).map(entry => <p key={entry.id}>{entry.label}: {entry.detail}</p>)}
+                    </li>
+                  ))}</ul>} />}
+
               </div>
             )}
           </div>
 
+          {copying ? copyCandidates.filter(target => copyTargets.includes(target.tenantId)).map(target =>
+            <RestoreTargetAccess key={target.tenantId} credentials={target} name={target.name}
+              folders={selectedPaths.flatMap(path => itemByPath.get(path)?.folder ?? [])} />)
+            : <RestoreAccess credentials={tenant.credentials} issues={access.issuesFor(selectedPaths.flatMap(path => itemByPath.get(path)?.folder ?? []))}
+                checking={access.checking} error={access.error} onCheck={checkAccess} />}
           <div className="mt-6 flex justify-between gap-3">
             <Button variant="outline" onClick={() => setStep("options")}>
               <ArrowLeft className="h-4 w-4" /> Options
@@ -1175,6 +1309,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto">
             {(result?.results ?? progress?.results ?? []).slice(0, shown[RESULTS] ?? LIST_PAGE).map((outcome, index) => {
               const Icon = outcome.approval ? ShieldCheck : outcome.success ? (outcome.action === "unchanged" ? SkipForward : CheckCircle) : outcome.action === "skipped" ? Ban : XCircle
+              const center = restoreAdminCenter(itemByPath.get(outcome.path)?.folder ?? outcome.path)
               const text = outcome.success
                 ? outcome.action === "unchanged"
                   ? "Already matched the backup"
@@ -1196,9 +1331,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     </span>
                     <span className="block text-xs text-gray-500"><LinkedMessage text={text} /></span>
                     {outcome.approvalState === "required" && <Button variant="outline" className="mt-2" aria-controls="restore-approval-list" onClick={() => setApprovalOpenRevision(value => value + 1)}>Submit for approval</Button>}
-                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
+                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : `Check and repair it in ${center}.`}</span>}
                     {/* A skipped item was refused before any write, so there is nothing to check. */}
-                    {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
+                    {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {center} before retrying. A write may already have completed.</span>}
+                    {outcome.guardedRunId && <span className="block break-all text-xs text-gray-500">Saved restore {outcome.guardedRunId}. Review and read back its outcome in Settings, Storage and recovery.</span>}
+                    {outcome.replacedReferences?.map((reference, index) => <span key={`reference-${index}`} className="block break-all text-xs text-amber-800">Review {reference.path}, {reference.property}: {reference.mapping.kind} {reference.mapping.source} now maps to {reference.mapping.target}.</span>)}
                     {outcome.warnings?.map((warning) => (
                       <span key={warning} className="block text-xs text-amber-800">
                         <LinkedMessage text={warning} />

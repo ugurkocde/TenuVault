@@ -73,15 +73,16 @@ export function withRecoveryBackups(guard: (request: Request) => Promise<Respons
  */
 export function backupAuthorization(options: {
   license: RecoveryLicense
-  tokenFor: (tenantId: string, clientId: string, scope: string) => Promise<{ accessToken: string }>
+  tokenFor: (tenantId: string, clientId: string, scope: string, forceRefresh?: boolean) => Promise<{ accessToken: string }>
   retentionDays: (tenantId: string) => number
 }) {
   const authorizeTenant = tenantAuthorizer(options.license)
   return {
     authorizeTenant,
-    getToken: async (tenantId: string, clientId: string, scope: string): Promise<string> => {
+    /** `fresh`: a token Microsoft issues now instead of a cached one. */
+    getToken: async (tenantId: string, clientId: string, scope: string, fresh?: boolean): Promise<string> => {
       await authorizeTenant(tenantId)
-      return (await options.tokenFor(tenantId, clientId, scope)).accessToken
+      return (await (fresh ? options.tokenFor(tenantId, clientId, scope, true) : options.tokenFor(tenantId, clientId, scope))).accessToken
     },
     retentionDays: (tenantId: string): number => (inRecovery(tenantId) ? 0 : options.retentionDays(tenantId)),
   }

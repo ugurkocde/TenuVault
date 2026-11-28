@@ -6,6 +6,8 @@ import { POST as backupChanges } from "../src/portal/app/api/backup-changes/rout
 import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
 import { endlessBody } from "./helpers"
+import { BackupEngine } from "../src/main/backup/engine"
+import { BackupRunHistory } from "../src/main/backup/run-history"
 
 const args = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", subscriptionId: "local", resourceGroupName: "local" }
 const request = (body: object) => new NextRequest("http://tenuvault.internal/api/test", { method: "POST", body: JSON.stringify({ ...args, ...body }) })
@@ -50,6 +52,101 @@ const blobs = {
 }
 
 describe("backup history", () => {
+  it("uses fixed guidance when an Azure response claims backup files are unavailable", async () => {
+    storage(blobs)
+    const account = "private-admin@example.test"
+    const served = globalThis.fetch
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith(`${newer}/metadata.json`)) {
+        return new Response(`<Error><Code>BackupUnavailable</Code><Message>Could not read the files for ${account}.</Message></Error>`, { status: 409 })
+      }
+      return served(input, init)
+    }))
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      expect(JSON.stringify(listed)).not.toContain(account)
+      expect(listed.backups.find((backup: { id: string }) => backup.id === newer)).toMatchObject({
+        status: "unavailable", error: expect.stringContaining("HTTP 409, BackupUnavailable"),
+      })
+    }
+  })
+
+  it("reports a backup's coverage with the types it did not read in full, and nothing for a backup that does not record it", async () => {
+    const recorded = "backup-2026-11-10-020000"
+    const included = ["DeviceConfigurations", "PowerShellScripts", "DeviceCategories", "Apps", "CompliancePolicies"]
+    storage({
+      ...blobs,
+      [`${recorded}/metadata.json`]: {
+        Status: "Success", Failures: 0, Scope: { Included: included, Excluded: [] }, SkippedTypes: ["PowerShellScripts"], FailedTypes: [], Items: {}, Coverage: "Incomplete",
+        Outcomes: [
+          { Folder: "DeviceConfigurations", Outcome: "saved", Saved: 2 },
+          { Folder: "PowerShellScripts", Outcome: "skipped", Cause: "permission", Reason: "Access was denied." },
+          { Folder: "DeviceCategories", Outcome: "skipped", Cause: "permission", Reason: "The Backup Reader has no permission for this type.", Reader: true },
+          { Folder: "Apps", Outcome: "failed", Error: "Timed out", Saved: 0 },
+          { Folder: "CompliancePolicies", Outcome: "saved", Saved: 0 },
+        ],
+      },
+    })
+    const { backups } = await (await listBackups(request({}))).json()
+    // The status is unchanged; coverage is next to it.
+    expect(backups[0]).toMatchObject({ id: recorded, status: "Success", failures: 0, skippedTypes: ["PowerShellScripts"], coverage: "incomplete", notRead: ["PowerShellScripts", "DeviceCategories", "Apps"] })
+    expect(backups[0]).toMatchObject({
+      scope: { included },
+      emptyTypes: ["CompliancePolicies"],
+      readableTypes: ["DeviceConfigurations", "CompliancePolicies"],
+      notReadCauses: { PowerShellScripts: "permission", DeviceCategories: "permission" },
+      notReadReasons: { PowerShellScripts: "Access was denied.", DeviceCategories: "The Backup Reader has no permission for this type.", Apps: "Timed out" },
+    })
+    // Backups made before coverage was recorded: not known, which is never shown as incomplete.
+    expect(backups[1]).toMatchObject({ id: newer, coverage: null, notRead: [] })
+  })
+
+  it("includes preflight permission skips when listing a backup with a saved type", async () => {
+    storage({
+      [`${newer}/metadata.json`]: {
+        BackupFolder: newer, Status: "Success", RunbookVersion: "desktop", Trigger: "manual",
+        ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 },
+        Scope: { Included: ["CompliancePolicies"], Excluded: [] },
+        Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Incomplete",
+        Outcomes: [
+          { Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 },
+          { Folder: "DeviceConfigurations", Outcome: "skipped", Cause: "permission", Reason: "The app lacks permission." },
+        ],
+        Items: fingerprint({ "CompliancePolicies/1": ["A.json", "a"] }),
+      },
+      [`${newer}/CompliancePolicies/A.json`]: { id: "1", displayName: "A" },
+    })
+    const { backups } = await (await listBackups(request({}))).json()
+    expect(backups[0]).toMatchObject({
+      scope: { included: ["CompliancePolicies", "DeviceConfigurations"] },
+      readableTypes: ["CompliancePolicies"], notRead: ["DeviceConfigurations"],
+      notReadCauses: { DeviceConfigurations: "permission" },
+    })
+  })
+
+  it("returns the same unknown types as the detail dialog when the only change is in an unread type", async () => {
+    const scope = { Included: ["DeviceConfigurations", "CompliancePolicies"], Excluded: [] }
+    const unchanged = fingerprint({ "CompliancePolicies/1": ["Compliance.json", "same"] })
+    storage({
+      [`${older}/metadata.json`]: {
+        Status: "Success", Scope: scope, Coverage: "Complete",
+        Items: { ...unchanged, ...fingerprint({ "DeviceConfigurations/1": ["A.json", "before"] }) },
+        Outcomes: [{ Folder: "DeviceConfigurations", Outcome: "saved", Saved: 1 }, { Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 }],
+      },
+      [`${newer}/metadata.json`]: {
+        Status: "CompletedWithWarnings", Scope: scope, Coverage: "Incomplete", Failures: 1, FailedTypes: ["DeviceConfigurations"],
+        Items: unchanged,
+        Outcomes: [{ Folder: "DeviceConfigurations", Outcome: "failed", Saved: 0 }, { Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 }],
+      },
+    })
+    const detail = await (await backupChanges(request({ backupId: newer }))).json()
+    expect(detail).toMatchObject({ changes: [], unknownTypes: ["DeviceConfigurations"] })
+    const { backups } = await (await listBackups(request({}))).json()
+    expect(backups[0]).toMatchObject({
+      id: newer, comparedWith: older, changes: { added: 0, modified: 0, removed: 0 }, unknownTypes: detail.unknownTypes,
+    })
+  })
+
   it("reports real duration, trigger, scope, counts and item changes for the types both backups hold", async () => {
     storage(blobs)
     const { backups } = await (await listBackups(request({}))).json()
@@ -212,6 +309,59 @@ describe("backups the list cannot place", () => {
       expect(backups.find((backup: { id: string }) => backup.id === newer)).toMatchObject({ status: "Cancelled" })
       expect(backups.find((backup: { id: string }) => backup.id === older)).toMatchObject({ status: "Success" })
     }
+  })
+})
+
+describe("desktop run ownership in Backup History", () => {
+  it.each([false, true])("lists an interrupted run after restart and keeps the background runner's live run (summary=%s)", async (summary) => {
+    const state = new Map<string, string>()
+    const store = { get: (key: string) => state.get(key) ?? null, set: (key: string, value: string) => { state.set(key, value) }, delete: (key: string) => { state.delete(key) } }
+    const backupName = (at: Date) => `backup-${at.toISOString().slice(0, 19).replace("T", "-").replaceAll(":", "")}`
+    const now = new Date()
+    const stoppedAt = new Date(now.getTime() - 3 * 60_000)
+    const unknownAt = new Date(now.getTime() - 2 * 60_000)
+    const newerAt = new Date(now.getTime() - 60_000)
+    const interrupted = { id: "desktop-interrupted", tenantId: args.tenantId, storageAccountName: args.storageAccountName, startTime: stoppedAt.toISOString() }
+    new BackupRunHistory(store).remember([interrupted])
+    const history = new BackupRunHistory(store)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const engine = new BackupEngine({
+      fetch: async () => new Response(null, { status: 404 }),
+      getToken: async () => { throw new Error("Must use the background runner's credentials") },
+      unattendedTokens: () => ({
+        mode: "app-only",
+        graph: async () => { await gate; throw new Error("Stopped by the test") },
+        storage: async () => "token",
+      }),
+      now: () => now,
+      onStarted: job => history.remember([job]),
+    })
+    const live = engine.start({ tenantId: args.tenantId, clientId: args.appId, storageAccountName: args.storageAccountName, trigger: "scheduled" })
+    const marker = (RunId: string) => ({ Source: "TenuVault Desktop", TenantId: args.tenantId, RunId })
+    const saved: Record<string, unknown> = {
+      [`${backupName(stoppedAt)}/${BACKUP_OWNER_FILE}`]: marker(interrupted.id),
+      [`${backupName(unknownAt)}/${BACKUP_OWNER_FILE}`]: marker("desktop-another-installation"),
+      [`${live.backupFolder}/${BACKUP_OWNER_FILE}`]: marker(live.id),
+    }
+    storage(saved)
+    const list = async () => {
+      const response = await listBackups(request({ summary }), (tenant, account, id) =>
+        engine.isRunActive(tenant, account, id) ? "running" : history.owns(tenant, account, id) ? "incomplete" : undefined)
+      expect(response.status).toBe(200)
+      const { backups } = await response.json()
+      return Object.fromEntries(backups.map((row: { runId: string; status: string }) => [row.runId, row.status]))
+    }
+    try {
+      expect(live.authMode).toBe("app-only")
+      expect(await list()).toEqual({ [interrupted.id]: "incomplete", "desktop-another-installation": "running", [live.id]: "running" })
+      saved[`${backupName(newerAt)}/metadata.json`] = { TenantId: args.tenantId, RunId: "desktop-newer", Status: "Success" }
+      expect(await list()).toMatchObject({ [interrupted.id]: "incomplete", "desktop-newer": "Success", [live.id]: "running" })
+    } finally {
+      release()
+      await engine.waitForJob(live)
+    }
+    expect(await list()).toMatchObject({ [live.id]: "incomplete" })
   })
 })
 

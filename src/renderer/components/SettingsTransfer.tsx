@@ -7,6 +7,7 @@ import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Checkbox } from "~/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
+import { DISPLAY_MODULE_ORDER } from "../../shared/services/presentation"
 import type { ServicesStatus } from "../../shared/ipc"
 import type { TransferApplyResult, TransferGroup, TransferItem, TransferPreview } from "../../shared/settings-transfer"
 import { getAppearance, setAppearance } from "../lib/appearance"
@@ -27,9 +28,13 @@ function connectedTenants(tenants: ReturnType<typeof useTenants>) {
 /** Which permissions an applied services change still needs, from the sign-in TenuVault already has. */
 export function missingPermissions(status: ServicesStatus, moduleIds?: string[]): string[] {
   if (status.error) return [`The permissions could not be checked: ${status.error}`]
-  return status.modules.filter((module) => module.enabled && module.check && (!moduleIds || moduleIds.includes(module.id))).flatMap((module) => {
-    const missing = [module.check!.backup !== "ready" && "backups", module.check!.restore !== "ready" && "restores"].filter(Boolean)
-    return missing.length ? [`${module.label}: permissions for ${missing.join(" and ")} are missing.`] : []
+  return DISPLAY_MODULE_ORDER.flatMap(id => {
+    const module = status.modules.find(entry => entry.id === id)
+    if (!module?.enabled || !module.check || (moduleIds && !moduleIds.includes(id))) return []
+    const label = id === "conditionalAccess" ? "Entra ID: Conditional Access" : module.label
+    // A service set to backup only is not expected to have restore permissions.
+    const missing = [module.check.backup !== "ready" && "backups", module.access === "restore" && module.check.restore !== "ready" && "restores"].filter(Boolean)
+    return missing.length ? [`${label}: permissions for ${missing.join(" and ")} are missing.`] : []
   })
 }
 

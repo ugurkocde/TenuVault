@@ -1,0 +1,29 @@
+{
+  "folder": "MultiTenantOrganization",
+  "path": "tenantRelationships/multiTenantOrganization",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/tenantRelationships/multiTenantOrganization": {
+      "status": 200,
+      "body": {
+        "id": "00000000-0000-4000-8000-655fdd0baf94",
+        "createdDateTime": null,
+        "state": "Example state",
+        "displayName": null,
+        "description": null
+      }
+    },
+    "/v1.0/tenantRelationships/multiTenantOrganization/tenants": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

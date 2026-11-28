@@ -33,6 +33,15 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
 }
 
 /**
+ * The status a finished backup is notified with. Like the scheduled result, it follows the job's
+ * status, its failures and its warnings, never its coverage: a type the sign-in may not read is
+ * left out of a backup that still completed.
+ */
+export function notifiedStatus(job: Pick<BackupJob, "status" | "failures" | "progressMessage">): "Success" | "CompletedWithWarnings" | "Failed" {
+  return job.status === "Failed" ? "Failed" : job.failures || /completed with \d+ warnings?/i.test(job.progressMessage) ? "CompletedWithWarnings" : "Success"
+}
+
+/**
  * Starts an unattended (scheduled or tray) backup and waits for it to end. A run that joins a
  * backup already running for the tenant adopts its outcome, but a cancellation of that backup was
  * not a cancellation of this run, so the run then starts a backup of its own. `wait` sees every
@@ -76,6 +85,7 @@ export class BackupScheduler {
   private startupTimer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private reconciliationFailed = false
+  private readonly largeRuns = new Set<string>()
 
   constructor(
     private readonly store: KeyValueStore,
@@ -86,10 +96,12 @@ export class BackupScheduler {
     private readonly run: (tenantId: string, afterFailure: boolean, slot: string) => Promise<ScheduledRunResult>,
     private readonly onChange: () => void = () => undefined,
     private readonly now: () => Date = () => new Date(),
-    private readonly coverage?: (tenantId: string) => { plan: Plan | null; azure: boolean; endedAt?: number; pendingChoice?: boolean } | undefined,
+    private readonly coverage?: (tenantId: string) => { plan: Plan | null; azure: boolean; endedAt?: number; pendingChoice?: boolean; needsSignInMethod?: boolean } | undefined,
     private readonly prepare: (() => Promise<void>) | undefined = undefined,
     private readonly onFallback: (tenantId: string) => void = () => undefined,
-    private readonly onPaused: (tenantId: string, reason: "azure" | "choice") => void = () => undefined,
+    private readonly onPaused: (tenantId: string, reason: "azure" | "choice" | "signInMethod") => void = () => undefined,
+    /** Streaming tenants release the scheduler tick while their engine job yields between pages. */
+    private readonly largeTenant: (tenantId: string) => boolean = () => false,
   ) {}
 
   /** The saved schedules as stored, without reconciling plan fallbacks, so reading has no side effect. */
@@ -182,7 +194,7 @@ export class BackupScheduler {
       if (this.reconciliationFailed) return
       for (const tenantId of Object.keys(reconciled)) {
         const schedule = this.read()[tenantId]
-        if (!schedule || !this.isDue(schedule)) continue
+        if (!schedule || this.largeRuns.has(tenantId) || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
         const attempts = this.slotAttempts(schedule, slot) + 1
         const afterFailure = this.attempted(schedule, slot) && schedule.lastStatus === "Failed"
@@ -201,6 +213,7 @@ export class BackupScheduler {
             lastMessage: keepStatus ? schedule.lastMessage : undefined,
           },
         })
+        const finish = async () => {
         const result: ScheduledRunResult | null = await this.run(schedule.tenantId, afterFailure, slot.toISOString()).catch((error: unknown) => error instanceof CommunityChoicePendingError ? null : ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
@@ -209,7 +222,7 @@ export class BackupScheduler {
         const current = all[schedule.tenantId]
         if (!result) {
           if (current && current.since === schedule.since) this.write({ ...all, [tenantId]: { ...current, lastAttemptAt: schedule.lastAttemptAt, attemptSlot: schedule.attemptSlot, attempts: schedule.attempts, lastStatus: schedule.lastStatus, lastMessage: schedule.lastMessage } })
-          continue
+          return
         }
         if (current) {
           const at = this.now().toISOString()
@@ -228,6 +241,11 @@ export class BackupScheduler {
           }
           this.write(all)
         }
+        }
+        if (this.largeTenant(tenantId)) {
+          this.largeRuns.add(tenantId)
+          void finish().catch(error => console.warn("[backup-scheduler] Could not record a large run:", error)).finally(() => this.largeRuns.delete(tenantId))
+        } else await finish()
       }
     })().finally(() => {
       this.running = null
@@ -319,7 +337,8 @@ export class BackupScheduler {
       const coverage = this.coverage?.(schedule.tenantId)
       if (!coverage) continue
       const before = JSON.stringify(schedule)
-      const pausedReason = coverage.plan === "community" && coverage.azure ? "Paused: Azure storage needs Pro"
+      const pausedReason = coverage.needsSignInMethod ? "Paused: Start now was removed in 0.6. Choose a sign-in method"
+        : coverage.plan === "community" && coverage.azure ? "Paused: Azure storage needs Pro"
         : coverage.plan === null && coverage.pendingChoice ? "Paused: choose a Community tenant or add a license" : undefined
       const fallback = coverage.plan === "community" && schedule.frequency === "daily"
         ? schedule.fallbackWeekday ?? this.firstFallbackSlot(schedule, coverage.endedAt).getDay() : undefined
@@ -331,13 +350,19 @@ export class BackupScheduler {
         schedule.fallbackNoticeFor = noticeFor
         notices.push(() => this.onFallback(schedule.tenantId))
       }
-      if (pausedReason && coverage.azure && coverage.plan === "community") {
+      if (coverage.needsSignInMethod) {
+        if (schedule.enabled && !schedule.signInMethodPauseNotified) {
+          schedule.signInMethodPauseNotified = true
+          notices.push(() => this.onPaused(schedule.tenantId, "signInMethod"))
+        }
+      } else schedule.signInMethodPauseNotified = undefined
+      if (pausedReason && !coverage.needsSignInMethod && coverage.azure && coverage.plan === "community") {
         if (schedule.enabled && !schedule.azurePauseNotified) {
           schedule.azurePauseNotified = true
           notices.push(() => this.onPaused(schedule.tenantId, "azure"))
         }
       } else schedule.azurePauseNotified = undefined
-      if (coverage.pendingChoice) {
+      if (!coverage.needsSignInMethod && coverage.pendingChoice) {
         if (schedule.enabled && !schedule.choicePauseNotified) {
           schedule.choicePauseNotified = true
           if (!choiceNotified) notices.push(() => this.onPaused(schedule.tenantId, "choice"))
@@ -402,6 +427,7 @@ function parseSchedule(id: string, value: unknown): BackupSchedule | null {
     || (entry.fallbackNoticeFor !== undefined && typeof entry.fallbackNoticeFor !== "string")
     || (entry.azurePauseNotified !== undefined && typeof entry.azurePauseNotified !== "boolean")
     || (entry.choicePauseNotified !== undefined && typeof entry.choicePauseNotified !== "boolean")
+    || (entry.signInMethodPauseNotified !== undefined && typeof entry.signInMethodPauseNotified !== "boolean")
     || (entry.pausedReason !== undefined && typeof entry.pausedReason !== "string")
     || (entry.weekday !== undefined && !validWeekday(entry.weekday))
     || (entry.lastRunAt !== undefined && !validDate(entry.lastRunAt))

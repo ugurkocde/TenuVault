@@ -23,7 +23,7 @@ const discardCapture = vi.hoisted(() => vi.fn(async (_id: string) => undefined))
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     app: { info: async () => ({}) },
-    auth: { accounts: async () => [] },
+    auth: { accounts: async () => [], packConsentPlan: async () => null },
     schedules: { list: async () => [] },
     license: { open: async () => undefined, tenantTrialAction: trialAction },
     preferences: { get: async () => ({}), set: async () => ({}) },
@@ -103,8 +103,8 @@ function statusFor(plan: "community" | "pro" | "msp") {
   return { hasKey: paid, keyState: paid ? "active" : "none", keyMessage: null, keyHint: null, persisted: true, offline: false, message: null, plan: paid ? plan : null, tenantLimit: paid ? 2 : null, validUntil: null, communityTenantId: paid ? null : "t-1", tenants: [tenantEntry("t-1", plan)] }
 }
 
-function selectTenant() {
-  selectedTenantState.current = { id: 1, name: "Contoso", credentials: { tenantId: "t-1", appId: "app-1", clientSecret: "" } }
+function selectTenant(appId = "app-1") {
+  selectedTenantState.current = { id: 1, name: "Contoso", credentials: { tenantId: "t-1", appId, clientSecret: "" } }
 }
 
 const PAID_ENTRIES = [["Audit Log", "/portal/audit"], ["Copy to Tenants", "/portal/sync"], ["Governance", "/portal/governance"], ["Changes", "/portal/changes"], ["Operations", "/portal/operations"], ["Reports", "/portal/reports"], ["Alerts", "/portal/alerts"]] as const
@@ -114,6 +114,22 @@ function sidebarLink(container: HTMLElement, href: string): HTMLAnchorElement {
 }
 
 describe("sidebar plan badges for paid screens", () => {
+  it("places Services between Tenants and Protect without changing the other navigation order", async () => {
+    const container = await render(createElement(DesktopLayout))
+    const nav = container.querySelector('nav[aria-label="Main navigation"]')!
+    const group = nav.querySelector('section[aria-label="Services"]')!
+    expect(group.querySelector("h2")?.textContent).toBe("Services")
+    expect([...group.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Entra ID", "Intune"])
+    expect(group.previousElementSibling?.textContent).toBe("DashboardTenants")
+    expect(group.closest("#nav-items-Protect")).toBeNull()
+    for (const link of group.querySelectorAll("a")) expect(link.hasAttribute("data-nav-row")).toBe(true)
+    expect(group.nextElementSibling?.textContent).toContain("ProtectBackup & RestoreApp Backup")
+    const filtered = await render(createElement(DesktopLayout), "/portal/backup?service=entra")
+    expect(sidebarLink(filtered, "/portal/backup").className).not.toContain("bg-primary")
+    const unknown = await render(createElement(DesktopLayout), "/portal/backup?service=unknown")
+    expect(sidebarLink(unknown, "/portal/backup").className).toContain("bg-primary")
+  })
+
   it("badges each hub by all of its tabs, and the audit log and Sync by their feature", () => {
     expect(NAV_PLAN_FEATURES["/portal/audit"]).toEqual(["auditLog"])
     expect(NAV_PLAN_FEATURES["/portal/sync"]).toEqual(["sync"])
@@ -367,12 +383,12 @@ describe("license banners after tenant trials", () => {
     const expected = { community: "You are on Community, the free plan.", "not-covered": "not covered by your", offline: "could not reach the licensing service", "organization-expiry": "The license shared by your organization" }[mode]!
     expect(container.textContent).toContain(expected)
   })
-  it.each(["/license", "/portal/onboarding", "/portal/overview"])("renders a global welcome only when the route does not own it (%s)", async route => {
+  it.each(["/license", "/portal/onboarding", "/portal/dashboard", "/portal/overview"])("renders a global welcome only when the route does not own it (%s)", async route => {
     const end = new Date(Date.now() + 9 * 86400_000).toISOString()
     licenseStatus.current = { ...statusFor("pro"), hasKey: false, trial: true, tenantTrialsEnabled: true, trialEndsAt: end, tenants: [{ ...tenantEntry("t-1", "pro"), source: "trial", trial: true, trialEndsAt: end, trialAcknowledged: false }] }
     selectTenant()
     const container = await render(createElement(DesktopLayout), route)
-    expect(container.textContent?.includes("Pro trial started")).toBe(route === "/portal/overview")
+    expect(container.textContent?.includes("Pro trial ·")).toBe(route === "/portal/overview")
   })
 })
 
@@ -654,8 +670,9 @@ describe("sidebar groups and Help", () => {
     let go: (path: string) => void = () => undefined
     function Navigator() { go = useNavigate(); return null }
     const container = await render(createElement("div", null, createElement(Navigator), createElement(DesktopLayout)), "/portal/onboarding")
-    const header = [...container.querySelectorAll<HTMLButtonElement>('nav[aria-label="Help"] button')].find((button) => button.textContent === "Share feedback")!
-    await act(async () => header.click())
+    const header = container.querySelector('nav[aria-label="Help"] button')!
+    await act(async () => header.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })))
+    await act(async () => menuItem("Share feedback")!.click())
     // The capture starts once the page has painted.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(feedbackCapture).toHaveBeenCalledTimes(1)
@@ -700,9 +717,9 @@ describe("sidebar groups and Help", () => {
     expect(container.querySelector("aside")).toBeNull()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, LAUNCH_MS)) })
     expect(whatsNewDialog.mock.lastCall?.[0].open).toBe(true)
-    // With no sidebar, focus goes back to the guided setup's Support button when the dialog closes.
+    // With no sidebar, focus goes back to the guided setup's Help button when the dialog closes.
     const props = whatsNewDialog.mock.lastCall?.[0] as { returnFocus?: { current: HTMLElement | null } }
-    expect(props.returnFocus?.current?.textContent).toBe("Support")
+    expect(props.returnFocus?.current?.textContent?.trim()).toBe("Help")
     expect(props.returnFocus?.current?.closest('nav[aria-label="Help"]')).not.toBeNull()
   })
 

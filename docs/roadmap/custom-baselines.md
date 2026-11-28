@@ -62,10 +62,11 @@ Lets an organization keep its own Settings Catalog baseline in TenuVault. Route:
 - Community: `list` and `get` only (stored records stay readable after a downgrade). Every other
   action answers 402. The free Custom Baselines framework (pack import on the Frameworks page) is
   unchanged and stays free.
-- Pro: everything for the tenant the baseline belongs to, and deploying into the other tenant of
-  the same license (`sourceTenantId` and `targetTenants` name the baseline's tenant; the route
-  checks both plans and `sameLicense`, otherwise 403).
-- MSP: deploying into any connected MSP tenant with the same parameters.
+- Pro and MSP: everything for the tenant the baseline belongs to, and deploying into any other
+  connected tenant on Pro, a Pro trial or MSP, however each tenant is licensed
+  (`sourceTenantId` and `targetTenants` name the baseline's tenant; the route checks both plans
+  and `proPair`, otherwise 403). Preview, approve and apply of such a deployment check the pair
+  again; reject and rollbacks do not.
 
 ## Limits
 
@@ -115,8 +116,9 @@ Reads and writes use the Graph beta endpoint and the delegated scope
    operations, none sets assignments; blocked policies are listed with the reason. Review,
    approve and apply: a backup runs first. In Intune the created policies are unassigned; updated
    policies keep their assignments. Preview and create a rollback, apply it.
-5. Pro with two tenants of the same license: deploy into the second tenant. With a tenant of
-   another license the deployment is refused. On MSP any connected MSP tenant works.
+5. Pro with a second tenant on a different license (for example one on the key, one on a Pro
+   trial): deploy into the second tenant. With a Community or unlicensed tenant the deployment is
+   refused.
 6. OIB updates: with a baseline on an older release, check for newer releases, compare, resolve
    the conflicts, create the rebased version. History shows the new base release; the tenant is
    unchanged.

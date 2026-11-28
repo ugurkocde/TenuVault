@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { Activity, CheckCircle2 } from "lucide-react"
 import { Button } from "~/components/ui/button"
+import { onboardingLink } from "./OnboardingCard"
 import type { RendererSetupEvent, SetupDiagnosticsStatus } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 
@@ -32,11 +33,14 @@ function useDiagnosticsStatus(): [SetupDiagnosticsStatus | null, (status: SetupD
 
 const openDocs = () => void bridge.app.openExternal(SETUP_DIAGNOSTICS_DOCS_URL).catch(() => undefined)
 
+export function WhatTenuVaultSends() {
+  return <button type="button" className="text-xs text-gray-600 underline underline-offset-2" onClick={() => void bridge.app.openExternal(SETUP_DIAGNOSTICS_DOCS_URL.split("#")[0]!)}>What TenuVault sends</button>
+}
+
 const linkClass = "rounded-sm font-medium text-blue-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
 /**
- * The question on the welcome screen, below "Connect your tenant". It never blocks the setup:
- * Connect works without an answer, and nothing is preselected.
+ * An optional question after the first backup. The dashboard is available without an answer.
  */
 export function SetupDiagnosticsCard() {
   const [status, setStatus] = useDiagnosticsStatus()
@@ -58,6 +62,7 @@ export function SetupDiagnosticsCard() {
     setBusy(true)
     setError("")
     try {
+      // Keep the existing onboarding consent source for the diagnostics service.
       setStatus(share ? await bridge.diagnostics.consent("welcome") : await bridge.diagnostics.decline())
       setAnswered(share ? "granted" : "declined")
     } catch (caught) {
@@ -68,25 +73,23 @@ export function SetupDiagnosticsCard() {
   }
 
   return (
-    <section aria-labelledby="setup-diagnostics-title" className="space-y-3 rounded-2xl border border-gray-200 p-4">
+    <section aria-labelledby="setup-diagnostics-title" className="space-y-3 rounded-2xl border border-border bg-card p-4">
       <div className="flex items-start gap-3">
         <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Activity className="h-4 w-4" /></span>
         <div className="min-w-0 space-y-1">
-          <h2 id="setup-diagnostics-title" className="text-sm font-medium text-gray-900">Help us make setup work in your environment</h2>
+          <h2 id="setup-diagnostics-title" className="text-sm font-medium text-gray-900">Share anonymous setup results to help us fix setup problems?</h2>
           <p className="text-xs text-gray-600">
-            TenuVault can tell us which setup steps worked and which Microsoft error codes stopped them, for 30 days after
-            you agree. Never sent: tenant names or IDs, account names, policies or backups. A random ID links the steps. It is
-            deleted from this computer after 30 days, and we delete the events after 180 days.
+            After you agree, TenuVault can share setup events and Microsoft error codes for 30 days. Names, tenant IDs, policies and backups stay private.
           </p>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void answer(true)}>Share setup diagnostics</Button>
-        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void answer(false)}>Don&apos;t share</Button>
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void answer(true)}>Share</Button>
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void answer(false)}>No thanks</Button>
       </div>
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
       <p className="text-xs text-gray-600">
-        <button type="button" className={linkClass} onClick={openDocs}>See exactly what is sent</button>
+        <button type="button" className={`${onboardingLink} text-xs`} onClick={openDocs}>See exactly what is sent</button>
         <span aria-hidden="true"> · </span>
         Change it anytime in Settings
       </p>

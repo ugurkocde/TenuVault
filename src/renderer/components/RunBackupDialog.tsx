@@ -1,3 +1,4 @@
+import { DEFAULT_SELECTION, type ServiceSelection } from "../../shared/services/modules"
 import { useEffect, useState } from "react"
 import { Loader2, Play } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -27,6 +28,7 @@ const same = (a: BackupScope, b: BackupScope) => normalizeScope(a).excluded.join
 
 /** Asks what to back up, starting from the tenant's saved choice, then starts the backup. */
 export function RunBackupDialog({ open, onOpenChange, tenant, counts, uncounted, onStarted }: RunBackupDialogProps) {
+  const [selection, setSelection] = useState<ServiceSelection>(DEFAULT_SELECTION)
   const [scope, setScope] = useState<BackupScope | null>(null)
   const [saved, setSaved] = useState<BackupScope | null>(null)
   const [remember, setRemember] = useState(false)
@@ -47,6 +49,7 @@ export function RunBackupDialog({ open, onOpenChange, tenant, counts, uncounted,
     setLoadError("")
     bridge.backups.scope(tenantId).then((setting) => {
       if (!current) return
+      setSelection(setting.selection ?? DEFAULT_SELECTION)
       setScope(setting.scope)
       setSaved(setting.scope)
     }, (failure: unknown) => {
@@ -79,7 +82,7 @@ export function RunBackupDialog({ open, onOpenChange, tenant, counts, uncounted,
     }
   }
 
-  const empty = scope !== null && includedTypes(scope).length === 0
+  const empty = scope !== null && includedTypes(scope, selection).length === 0
   const changed = scope !== null && saved !== null && !same(scope, saved)
 
   return (
@@ -91,7 +94,7 @@ export function RunBackupDialog({ open, onOpenChange, tenant, counts, uncounted,
         </DialogHeader>
 
         {scope ? (
-          <BackupScopePicker value={scope} onChange={setScope} counts={counts} uncounted={uncounted} disabled={starting} />
+          <BackupScopePicker selection={selection} value={scope} onChange={setScope} counts={counts} uncounted={uncounted} disabled={starting} />
         ) : loadError ? (
           <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
             <p className="min-w-0 flex-1">This tenant's backup settings could not be loaded: {loadError}</p>

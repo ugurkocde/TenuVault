@@ -16,6 +16,8 @@ faq:
 
 [Multi Admin Approval](https://learn.microsoft.com/intune/fundamentals/role-based-access-control/multi-admin-approval) is an Intune feature that requires a second administrator to approve changes to protected areas before they take effect. This page explains what it means for TenuVault: what keeps working, how a restore goes through approval, and what to do for other kinds of changes.
 
+Multi Admin Approval is an Intune feature. For the separate Entra ID review and confirmations, see [Restore Entra ID configuration](/restore/identity/).
+
 ## What keeps working
 
 Multi Admin Approval only intercepts **changes**: creating, updating, assigning and deleting. It never intercepts reads. Everything in TenuVault that only reads Intune works as usual in a tenant with Multi Admin Approval:

@@ -49,16 +49,41 @@ To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
 ## Services and permissions
 
-Shows, for each connected tenant, which services TenuVault backs up and what the tenant's app registration allows for each one: read permissions for backups and drift detection, write permissions for restores. TenuVault reads this from the sign-in it already has, so the check sends no request to Microsoft and changes nothing. With more than one tenant, an overview at the top lists every tenant; select one to see its details.
+Choose a tenant to see three independent connections: **Microsoft Graph sign-in**, **Backup Reader** and **Backup storage**. Opening Settings checks the connection with a fresh token request (or reuses a check from the last minute). It never opens a sign-in window and never blocks a backup. **Check again** asks Microsoft again, including for the Backup Reader.
+
+The sidebar also lists **Entra ID** and **Intune** in a **Services** group below **Backup & Restore**. An enabled service with access opens backup contents filtered to that service. **Needs access** opens this Settings section for a service you chose that the current sign-in cannot read. It stays enabled. Open **Details** on the service notice to see the areas that need access and guidance for your sign-in method. **Off** also opens this Settings section. Badges follow the selected tenant. While service status is loading or unavailable, links open filtered backup contents without a badge. The backup page's **Service** filter only changes the view; use the switches here to change future backup coverage.
+
+![Services and permissions with independent connection states and both services](/images/services/healthy-light.png)
+
+
 
 | Control | What it does |
 | --- | --- |
-| **Check again** | Gets a new sign-in token and checks again, for example after you granted admin consent to a permission. |
-| **Include in backups** | Turns an opt-in service, such as Entra Conditional Access, on or off for the tenant. While it is off, backups leave its items out. |
-| **Open API permissions in Entra** | Shown when a permission is missing. Opens the tenant's existing app registration in Entra, where you add the permission and grant admin consent. That needs a Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator. |
-| **Copy Azure CLI commands** | Shown when only a service's restore permission is missing. Copies the commands that add it to the existing app registration and grant admin consent. |
+| Service switch | Changes what new manual and scheduled backups cover. Turning Intune off asks for confirmation and names what will stop being backed up. Existing backups keep their contents. Backup history and Schedule show **Intune is off** when it is off. |
+| Opt-in area switch | Includes that area only after you choose it. Groups and users and devices explain the personal data stored before you turn them on. Turn the service on before changing its opt-in areas. |
+| **Access to request** | Chooses backup permissions or backup and restore permissions. This grants nothing and never blocks a restore your token allows. |
+| **Add the missing permissions** | Offers **Add in the app**, Azure CLI commands, a link to the exact Entra registration and instructions you can copy to an administrator. **Add in the app** opens a Microsoft sign-in and shows the proposed additions for your approval. |
+| **Check again** | Rechecks current access after a permission, consent or registration change. Run a backup afterwards to verify reads. |
 
-Backup logs, **Backup Details** and the restore wizard link here when a missing permission leaves items out or stops a restore. For the permissions each service needs, see [App registration and delegated permissions](/security/permissions/) and [Conditional Access backups](/backups/conditional-access/).
+**Permissions present** means the token carries the permissions. **Verified by the last backup** means the selected types were actually read, with the date and whether it used your sign-in or the Backup Reader. A Backup Reader loss remains visible even when your own backup verifies the same area. A refusal with the permission present may involve an admin role or license; TenuVault says when it cannot tell which. A type the reader leaves out by design needs no fix.
+
+Backup and restore permission status are separate. A restore-only gap says **Backup permissions are present. Restore needs: ...**. A backup still needs to verify read access. **Backup and restore** asks for write permissions; select **Backup** under **Areas and access** to request backup permissions only. Changing the level grants nothing.
+
+When a backup could not read selected types, the report says **The backup on [date] with your sign-in could not read: [types]**. This describes those types, not the result of the whole backup. Reopening Services refreshes the report, and a changed connection clears verification from the previous sign-in while the current report loads.
+
+Storage reports the storage token check separately. A token does not verify the storage account's write access, data role or firewall. A backup proves files can be written. Local storage needs no token; run a backup to verify writes to the selected folder.
+
+Intune's confirmation is enforced when the setting is saved. With Intune off, All tenants, the dashboard's Next Backup tile, tenant summaries in grid and list view, backup history and schedules say that new backups leave out Intune. The schedule and existing backups stay available.
+
+![Intune excluded beside the next scheduled backup](/images/services/dashboard-intune-off-light.png)
+
+Changes since the previous snapshot appear above the service cards. Replaced registrations name the previous client ID and the permissions the replacement lacks. Changes found under an earlier sign-in say when they were found without naming the account. Displaying the changes acknowledges exactly that report; observations arriving afterwards stay unacknowledged.
+
+![Missing permission with all three routes expanded](/images/services/missing-permission-light.png)
+
+See [App registration and delegated permissions](/security/permissions/) and [Conditional Access backups](/backups/conditional-access/).
+
+A completed backup with unread types keeps its result open so you can read the coverage warning and the reason for each type. Close it when you have reviewed the result.
 
 ## Storage and recovery
 
@@ -87,7 +112,7 @@ The backup encryption key is protected by your Windows account or macOS Keychain
 
 After you import a key, the imported key encrypts new backups on this device, and backups made with the previous key stay readable. Save a new bundle after importing keys, so your saved recovery key covers every key on this device.
 
-TenuVault reads the backup inventory of each tenant connected on this device that keeps its backups in the folder, exactly as a backup would. When that inventory holds backups this device cannot read, because another installation made them with a different key or the files are damaged, the card and **All tenants** show **This folder has backups this device cannot read**, with **Import recovery key** and **Choose another folder**. Backups to an affected tenant fail until one of the two is done. See [A folder with backups this device cannot read](/backups/storage/#a-folder-with-backups-this-device-cannot-read).
+TenuVault reads the backup inventory of each tenant connected on this device that keeps its backups in the folder, exactly as a backup would. When that inventory holds backups this device cannot read, because another installation made them with a different key or the files are damaged, the card and **All tenants** show **This folder has backups this device cannot read**, with **Import recovery key** and **Choose another folder** under **Details**. Backups to an affected tenant fail until one of the two is done. See [A folder with backups this device cannot read](/backups/storage/#a-folder-with-backups-this-device-cannot-read).
 
 When local backup files exist or a tenant uses local storage, **Settings** and **Overview** show a recovery key notice if no export is recorded for the current key. Select **Go to Save recovery key** to reach the export action. The notice disappears after you save the key. It does not block local backups. Starting over deletes the backup encryption key from the active app state. Backups on this device become unreadable unless you exported their recovery key, and so do Azure backups that an earlier TenuVault version encrypted with it. Azure backups made by this version stay readable.
 
@@ -97,25 +122,25 @@ Without the recovery key, backups on this device can only be read on this comput
 
 ### Restore write history
 
-When a restore write to Intune ends without a clear answer (for example a timeout or a dropped connection), TenuVault records it and blocks an identical write until you confirm what happened. This history is where you do that.
+When a restore write ends without a clear answer (for example a timeout or a dropped connection), TenuVault records it and blocks an identical write until you confirm what happened. This history is where you do that.
 
 | Control | What it does |
 | --- | --- |
-| **Restore history tenant** | Chooses the tenant whose history is shown. Viewing it needs a current sign-in to that tenant, a license that covers it and Intune management access. |
+| **Restore history tenant** | Chooses the tenant whose history is shown. Viewing it needs a current sign-in to that tenant, a license that covers it and management access to a service the tenant backs up: Intune, or Entra Conditional Access when Intune is off for the tenant. |
 | **Refresh history** | Reloads the list. If it fails, the previous records stay visible with an error. |
 
 Each entry shows the object name, time, state, tenant and the request (method and path). Request payloads and tokens are not stored. Interrupted writes stay blocked across restarts.
 
 | State | Buttons | Use them when |
 | --- | --- | --- |
-| `uncertain` | **Confirm applied** | You checked the target tenant in Intune and the change was made. Enter the object ID in the inline form and choose **Save applied ID**; a retry reuses it instead of repeating the write. |
-| `uncertain` | **Confirm not applied** | You checked in Intune and the change was not made. The next attempt sends the write again. |
+| `uncertain` | **Confirm applied** | You checked the target tenant in the admin center for the affected service and the change was made. Enter the object ID in the inline form and choose **Save applied ID**; a retry reuses it instead of repeating the write. |
+| `uncertain` | **Confirm not applied** | You checked in the admin center for the affected service and the change was not made. The next attempt sends the write again. |
 | `reconciled` | **Correct applied ID** | You entered the wrong object ID earlier. Edit the recorded ID in the inline form and choose **Save applied ID**. The next retry reads and verifies the object before any follow-up writes. |
 | `reconciled` | **Allow a new operation** | You deliberately want to send the same request again, which may create another object. Do not use it while resuming a repair. |
 
 The object ID must be a GUID. Invalid IDs and failed requests show an error in the form. After a failed save, focus returns to the input. **Cancel** or **Escape** closes the form without saving while no save is in progress. Closing the form returns focus to the record's recovery button or, if the entry is gone, to **Refresh history**, including after a successful save.
 
-Always check the target tenant in Intune before you resolve an entry. See [What cannot be restored and restore write history](/restore/limitations/).
+Use the admin center named in the confirmation to check the target tenant before you resolve an entry. See [What cannot be restored and restore write history](/restore/limitations/).
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/settings-storage.webp" aria-label="Open full-size screenshot: settings storage">
@@ -157,7 +182,7 @@ To stop automatic restarts completely, select **Remove background launch** and t
 
 Below the background runner card, the **Backup Reader** card sets up the optional read-only identity that keeps scheduled backups running when a Conditional Access sign-in frequency policy ends your Microsoft session. It is available on Pro and MSP in the installed Windows and macOS apps, per tenant and per computer. When several tenants are connected, a **Tenant** selector appears at the top of the card.
 
-Setup cannot be finished in the app alone: an Entra administrator creates the app registration with a script, and for Azure backups an Azure administrator grants the storage role. The card walks through your half in order (**Set up the Backup Reader**, **Save certificate**, copy or save the setup script and the request for your administrator, enter the application ID, **Verify**) and afterwards shows the application ID, the certificate with the thumbprint Entra ID shows, its expiry, the verified permissions and confidence checks (last read test, storage check and last run), with **Test now**, **Renew certificate**, **Verify again** and **Remove**. The **Setup guide** link at the top of the card opens the full guide in every state. From 30 days before the certificate expires, the card shows a warning.
+Setup cannot be finished in the app alone: an Entra administrator creates the app registration with a script, and for Azure backups an Azure administrator grants the storage role. The card walks through your half in order (**Set up the Backup Reader**, **Save certificate**, copy or save the setup script and the request for your administrator, enter the application ID, **Verify**) and afterwards shows the application ID, the certificate with the thumbprint Entra ID shows, its expiry, the verified permissions and confidence checks (last read test, storage check and last run), with **Test now**, **Renew certificate**, **Verify again** and **Remove**. The **Setup guide** link at the top of the card opens the full guide in every state. From 30 days before the certificate expires, the card shows a warning. When the reader's permissions in Entra ID differ from the ones you verified, the card says what was added or removed and asks you to verify again; scheduled backups keep running with the verified permissions meanwhile.
 
 See [Backup Reader for scheduled backups](/backups/backup-reader/) for who has to do what, the exact permissions, and how these backups differ. For the options that need no application permissions, see [Conditional Access and TenuVault](/security/conditional-access/).
 
@@ -237,10 +262,10 @@ Branded reports are fully white label: they carry no TenuVault name or logo. Wha
 | Part | Settings |
 | --- | --- |
 | **This computer** | **Keep backups for**, **Keep running in the menu bar/tray when I close the window**, **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Download and install updates automatically**, **Get nightly builds**, the appearance and the PDF branding with its logo. Only the preferences you changed are written, so defaults stay defaults. |
-| Each tenant you choose | Which optional services are on in **Services and permissions**, what is backed up, the backup schedule (on or off, daily or weekly, time and weekday) and the [cloud backup](/backups/cloud/) setup record. |
+| Each tenant you choose | Which services are on in **Services and permissions** (Entra ID including its independent Conditional Access switch, and Intune), what is backed up, the backup schedule (on or off, daily or weekly, time and weekday) and the [cloud backup](/backups/cloud/) setup record. |
 | **Include connection details** | Optional. For each tenant, the client ID of its app registration and where its backups are stored (this device, or the Azure storage account with its subscription, resource group and region). Another admin can then connect the tenant from the file. Both are identifiers, not secrets. |
 
-A file never holds sign-ins or tokens, license keys, the recovery key or encryption keys, Backup Reader certificates, proxy passwords, client secrets, logs, journals or history. Permissions are not part of the file either: they belong to the app registration in Entra, and every admin signs in with their own account.
+A file never holds sign-ins or tokens, license keys, the recovery key or encryption keys, Backup Reader certificates, proxy passwords, client secrets, logs, journals or history. Permissions are not part of the file either: they belong to the app registration in Entra, and every admin signs in with their own account. The access level of each service (**Backup only** or **Backup and restore**) and its opt-in areas, such as Groups, are not in the file either; choose them in **Services and permissions** on the other computer.
 
 ### Export settings
 
@@ -261,7 +286,7 @@ A file never holds sign-ins or tokens, license keys, the recovery key or encrypt
 1. Select **Import settings** and open the file.
 2. **Review settings from the file** lists each setting with its current value and the value in the file, under **This computer** and one heading per tenant in the file. Nothing changes yet.
 3. Tick the settings to apply and select **Apply**. The button counts the ticked settings, for example **Apply 4 settings**.
-4. TenuVault shows what was applied and what was not. If you turned on services for a tenant, it checks your sign-in and lists any permissions those services still need, with a link to **Services and permissions**.
+4. TenuVault shows what was applied and what was not. If you turned on services for a tenant, it checks your sign-in and lists any permissions those services still need, with a link to **Services and permissions**. Restore permissions are listed only for a service set to **Backup and restore**.
 
 Settings that would change are ticked at first. These start unticked and carry a warning, because they change how this computer runs: **Start TenuVault in the menu bar/tray when I sign in to this computer**, **Get nightly builds** and **Backup schedule**. When two computers run the same schedule, the tenant is backed up twice. **What is backed up** names each type it starts or stops backing up, and starts unticked when it stops backing up a type. **Download and install updates automatically** starts unticked when it would turn updates back on while this computer is set to get nightly builds. Turning off a service that is on starts unticked as well, because its settings are no longer backed up for that tenant. A shorter **Keep backups for** starts unticked too: it applies to every tenant on this computer, also those not in the file, and the next complete backup of a tenant deletes its backups older than the new period. When a cloud backup setup or PDF branding reads the same on both sides, the row names the fields that change with their old and new values, for example **Changes the logo (replaced)**. A value the file sets that only matches this computer's default is offered as well, so it stays your choice when a later version changes the default. Settings that change on this computer after the review are not applied; import the file again to review them.
 
@@ -334,6 +359,8 @@ Stable installs follow stable by default. Enable **Get nightly builds** to recei
 ## Review scan persistence
 
 Hygiene scan findings and health review finding reconciliation are saved together before returning, reducing repeated encryption and disk writes. A failed batch leaves the previous records intact.
+
+
 
 ### Backup audit access
 

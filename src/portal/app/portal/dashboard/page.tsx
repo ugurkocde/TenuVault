@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { ServiceBackupNotice } from "@desktop/components/ServiceBackupNotice"
+import { useState, useEffect, useMemo, Suspense } from "react"
 import { useRouter } from "next/navigation"
 import { Link } from "react-router-dom"
 import {
@@ -38,11 +39,15 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { bridge } from "@desktop/lib/bridge"
 import { tenantPlanName, tenantLicense, tenantPlan, useLicense, formatDateTime } from "@desktop/lib/license"
 import { PlanBadge } from "@desktop/components/UpgradeNote"
+import { FirstBackupHero, quietLink, scheduleHref, useFirstBackupHero } from "~/components/dashboard/first-backup-hero"
+import { TenantTrialLine } from "@desktop/components/TenantTrial"
 import { TrialOfferCard } from "@desktop/components/TrialOfferCard"
 import type { Tenant } from "~/contexts/TenantContext"
 import { allows, type Plan } from "../../../../shared/plans"
 import { describeSchedule, formatWhen, useSchedules } from "@desktop/lib/schedules"
+import { settingsHref } from "@desktop/lib/settings-section"
 import type { SignedInAccount } from "../../../../shared/ipc"
+import { connectionNeedsMethod, type TenantConnection } from "../../../../shared/tenant-connection"
 
 // Simple time ago formatter to avoid date-fns issues
 function formatDistanceToNow(
@@ -98,6 +103,7 @@ const policyTypeLabels = [
 
 const healthChip = {
   healthy: { tone: "success", label: "Healthy" },
+  needsAccess: { tone: "neutral", label: "Needs access" },
   warning: { tone: "warning", label: "Warning" },
   critical: { tone: "danger", label: "Critical" },
 } as const
@@ -195,6 +201,7 @@ function DashboardContent() {
   const [relativeNow, setRelativeNow] = useState(() => Date.now())
   const [accounts, setAccounts] = useState<SignedInAccount[] | null>(null)
   const [accountsError, setAccountsError] = useState<string | null>(null)
+  const [connection, setConnection] = useState<TenantConnection | null>(null)
   useEffect(() => {
     const interval = window.setInterval(() => setRelativeNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
@@ -207,7 +214,24 @@ function DashboardContent() {
   // The dashboard follows the tenant switcher; before a choice is stored it shows the first tenant.
   const tenant = selectedTenant ?? tenants[0]
   const tenantGuid = tenant?.credentials?.tenantId?.toLowerCase() ?? ""
-  const { schedules, error: schedulesError, reload: reloadSchedules } = useSchedules()
+  useEffect(() => {
+    if (!tenantGuid) { setConnection(null); return }
+    let active = true
+    const load = () => {
+      const fetchConnection = bridge.auth?.connection
+      if (!fetchConnection) return
+      void fetchConnection(tenantGuid).then(
+        (value) => { if (active) setConnection(value) },
+        () => { if (active) setConnection(null) },
+      )
+    }
+    load()
+    const unsubscribe = bridge.auth?.onAccountsChanged?.((changed) => {
+      if (changed.toLowerCase() === tenantGuid) load()
+    })
+    return () => { active = false; unsubscribe?.() }
+  }, [tenantGuid])
+  const { schedules, loading: schedulesLoading, error: schedulesError, reload: reloadSchedules } = useSchedules()
   const { status: licenseStatus } = useLicense()
   const { activeJobs } = useBackupProgress()
   const {
@@ -219,13 +243,20 @@ function DashboardContent() {
     dataUpdatedAt,
   } = useDashboardStats(selectedPeriod, tenant?.id)
 
+  useEffect(() => window.tenuvault?.backups?.onFinished?.(({ tenantId, storageAccountName }) => {
+    if (tenantId.toLowerCase() === tenantGuid && storageAccountName.toLowerCase() === tenant?.resources?.storageAccountName?.toLowerCase()) void refetchStats()
+  }), [tenantGuid, tenant?.resources?.storageAccountName, refetchStats])
+
   // Finished jobs stay in the progress list until dismissed; only unfinished ones are running.
   const tenantJobs = activeJobs.filter((job) => job.tenantId?.toLowerCase() === tenantGuid && !job.isComplete)
   // Every backup count on the tiles comes from this one summary, so the tiles cannot disagree.
   const backupStats = stats
-    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: [...stats.liveRuns, ...tenantJobs.map((job) => job.jobId)] })
+    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: [...(stats.scopedLiveRuns ?? stats.liveRuns.map(runId => ({ tenantId: tenant?.id, runId }))), ...tenantJobs.map((job) => ({ tenantId: tenant?.id, runId: job.jobId }))] })
     : null
   const nowDate = new Date(relativeNow)
+  const historySummary = useMemo(() => stats && backupSummary(stats.backupHistory, stats.failedAttempts, { since: new Date(0), live: stats.scopedLiveRuns }), [stats])
+  const hero = useFirstBackupHero(tenantGuid, stats?.backupsError || stats?.unresolvedBackups ? 0 : historySummary?.successful ?? 0)
+  const earlyRate = !!historySummary && historySummary.finished < 3 && relativeNow - historySummary.firstFinishedAt < 7 * 86400_000
   // Null when no backup finished in the period, or the backups could not be read, which the tile shows as "No data".
   const successRateValue = stats?.backupsError ? null : backupStats?.successRate ?? null
   const recentActivities = stats?.recentActivity ?? []
@@ -240,15 +271,23 @@ function DashboardContent() {
   const account = accounts?.find((a) => a.tenantId === tenantGuid)
   const license = tenantLicense(licenseStatus, tenantGuid)
   const plan = tenantPlan(license)
+  const trial = license?.entitled && license.source === "trial" && !license.trialAcknowledged ? license : null
   const schedule = schedules.find((s) => s.tenantId === tenantGuid)
+  const needsMethod = connectionNeedsMethod(connection)
+  const methodPaused = needsMethod || Boolean(schedule?.pausedReason?.includes("Choose a sign-in method"))
+  const schedulePaused = Boolean(schedule?.enabled && (methodPaused || schedule.pausedReason))
   const latest = stats?.latestBackup ?? null
   const protectedBackup = stats?.latestCompleteBackup ?? null
+  const showHero = hero.visible && !!protectedBackup
+  const scheduleAction = !schedulesLoading && !schedulesError && !schedule?.enabled
+    ? plan === "community" ? "Set up automatic backups" : "Turn on daily backups"
+    : null
   const backupsError = stats?.backupsError ?? null
   const failedBeforeFirstBackup = schedule?.lastStatus === "Failed" && !!backupStats && !backupsError && backupStats.stored === 0
   const unresolvedBackups = stats?.unresolvedBackups ?? 0
   const health =
     stats && stats.tenants.total > 0
-      ? stats.tenants.critical > 0 ? "critical" : stats.tenants.warning > 0 ? "warning" : "healthy"
+      ? stats.tenants.critical > 0 ? "critical" : stats.tenants.warning > 0 ? "warning" : protectedBackup?.needsAccess ? "needsAccess" : "healthy"
       : null
   const isLocal = tenant?.resources?.storageAccountName?.startsWith("tvlocal-") ?? false
 
@@ -273,13 +312,15 @@ function DashboardContent() {
     return <DashboardEmptyState />
   }
 
-  const signInAction = () => router.push("/portal/settings?section=signin")
+  const signInAction = () => router.push(needsMethod && tenantGuid ? settingsHref("signin", `sign-in-${tenantGuid}`) : "/portal/settings?section=signin")
   const policyItems = protectedBackup?.policies
     ? policyTypeLabels.map(([key, label]) => ({ label, value: protectedBackup.policies?.[key] ?? 0 }))
     : null
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8">
+      {showHero && <FirstBackupHero key={tenantGuid} tenantId={tenantGuid} backup={protectedBackup} scheduleAction={scheduleAction} dismiss={hero.dismiss} />}
+      {trial && <TenantTrialLine key={trial.tenantId} tenant={trial} />}
       {/* Header: title and tenant on the left, date and controls on the right */}
       <header className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
@@ -351,10 +392,10 @@ function DashboardContent() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className={cn("grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4", showHero && "lg:grid-cols-4")}>
         {/* Last backup */}
         {statsLoading ? <TileSkeleton className="md:col-span-2" /> : (
-          <Tile className="md:col-span-2" aria-label="Last backup">
+          <Tile className={cn("md:col-span-2", showHero && "lg:max-xl:p-4")} aria-label="Last backup">
             <div className="flex items-start justify-between gap-3">
               <TileIcon icon={Database} />
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -366,8 +407,9 @@ function DashboardContent() {
                     : backupStats.latestStatus === "cancelled" ? <Chip>Cancelled</Chip>
                     : <Chip tone="danger">{backupStats.latestStatus === "incomplete" ? "Incomplete" : "Failed"}</Chip>
                 ) : null}
+                {latest?.coverageIncomplete && <Chip>Coverage incomplete</Chip>}
                 {health && (
-                  <Chip tone={healthChip[health].tone} title="Tenant Health, based on the newest complete successful backup">
+                  <Chip tone={healthChip[health].tone} title="Tenant Health, based on the newest successful backup">
                     Tenant Health: {healthChip[health].label}
                   </Chip>
                 )}
@@ -379,7 +421,7 @@ function DashboardContent() {
                 <BigValue className="mt-1 text-4xl">{formatDistanceToNow(latest.timestamp, { addSuffix: true }, nowDate)}</BigValue>
                 <p className="mt-1 text-sm text-gray-500">
                   {latest.timestamp.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
-                  {latest.policiesBackedUp > 0 && `, ${latest.policiesBackedUp} policies`}
+                  {`, ${latest.policiesBackedUp} policies`}{!!latest.inventoryBackedUp && `, ${latest.inventoryBackedUp} inventory objects`}
                 </p>
               </>
             ) : backupsError ? (
@@ -394,14 +436,16 @@ function DashboardContent() {
               </>
             )}
             <div className="mt-auto flex flex-wrap items-center gap-2 pt-6">
-              {!account && accounts !== null ? (
-                <Button className="bg-blue-600 text-white hover:bg-blue-700" onClick={signInAction}>Sign in</Button>
+              {needsMethod ? (
+                <Button variant={showHero ? "outline" : "default"} className={showHero ? undefined : "bg-blue-600 text-white hover:bg-blue-700"} onClick={signInAction}>Choose a sign-in method</Button>
+              ) : !account && accounts !== null ? (
+                <Button variant={showHero ? "outline" : "default"} className={showHero ? undefined : "bg-blue-600 text-white hover:bg-blue-700"} onClick={signInAction}>Sign in</Button>
               ) : (
-                <Button className="bg-blue-600 text-white hover:bg-blue-700" onClick={() => router.push("/portal/backup")}>
+                <Button variant={showHero ? "outline" : "default"} className={showHero ? undefined : "bg-blue-600 text-white hover:bg-blue-700"} onClick={() => router.push("/portal/backup")}>
                   <Play className="h-4 w-4" /> Run Backup
                 </Button>
               )}
-              <Button onClick={() => router.push("/portal/backup?tab=restore")}>Restore policies</Button>
+              <Button variant={showHero ? "outline" : "default"} onClick={() => router.push("/portal/backup?tab=restore")}>Restore policies</Button>
               {backupStats && backupStats.stored > 0 && (
                 <span className="ml-auto text-sm text-gray-500 tabular-nums">
                   {backupStats.stored} backup{backupStats.stored === 1 ? "" : "s"} in storage
@@ -411,8 +455,13 @@ function DashboardContent() {
           </Tile>
         )}
 
-        {/* Success rate: the dark focal tile */}
-        {statsLoading ? <TileSkeleton /> : (
+        {statsLoading ? <TileSkeleton /> : earlyRate && !backupsError ? (
+          <Tile aria-label="Success Rate" className={showHero ? "lg:max-xl:p-4" : undefined}>
+            <TileIcon icon={Gauge} />
+            <TileLabel className="mt-6">Success Rate</TileLabel>
+            <BigValue className={cn("mt-1", showHero && "lg:max-xl:text-xl")}>Not enough data yet</BigValue>
+          </Tile>
+        ) : (
           <Tile focal aria-label="Success Rate" className="items-center text-center">
             <p className="self-start text-sm text-white/70">Success Rate</p>
             <div className="my-3 text-white">
@@ -432,28 +481,30 @@ function DashboardContent() {
         )}
 
         {/* Automatic backups / next backup */}
-        <Tile aria-label="Next Backup">
+        <Tile aria-label="Next Backup" className={showHero ? "lg:max-xl:p-4" : undefined}>
           <div className="flex items-start justify-between gap-3">
             <TileIcon icon={CalendarClock} />
-            {schedulesError ? <Chip tone="warning">Unknown</Chip> : schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
+            {schedulesLoading ? null : schedulesError ? <Chip tone="warning">Unknown</Chip> : schedulePaused ? <Chip>Paused</Chip> : schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
           </div>
           <TileLabel className="mt-6">Next Backup</TileLabel>
-          {schedulesError ? (
+          <ServiceBackupNotice tenantId={tenantGuid} />
+          {schedulesLoading ? <p className="mt-1 text-sm text-gray-500">Loading schedule</p> : schedulesError ? (
             <>
               <BigValue className="mt-1">Unavailable</BigValue>
               <p className="mt-1 text-sm text-gray-500" title={schedulesError}>Schedules could not be loaded. Refresh the dashboard to try again.</p>
             </>
+          ) : schedulePaused ? (
+            <p className="mt-1 text-sm text-gray-500">
+              {methodPaused ? "Paused until you choose a sign-in method" : schedule?.pausedReason}
+            </p>
           ) : schedule?.enabled ? (
             <>
-              <BigValue className="mt-1">{nextIn ?? "Not scheduled"}</BigValue>
+              <BigValue className={cn("mt-1", showHero && "lg:max-xl:text-xl")}>{nextIn ?? "Not scheduled"}</BigValue>
               <p className="mt-1 text-sm text-gray-500">{describeSchedule(schedule)}</p>
               <p className="text-sm text-gray-500">{formatWhen(schedule.nextRunAt)}</p>
             </>
           ) : (
-            <>
-              <BigValue className="mt-1">No schedules</BigValue>
-              <p className="mt-1 text-sm text-gray-500">Configure backup schedules</p>
-            </>
+            <BigValue className={cn("mt-1", showHero && "lg:max-xl:text-xl")}>No schedule yet</BigValue>
           )}
           {schedule?.lastAttemptAt && (
             <p className={cn("mt-2 text-xs", schedule.lastStatus === "Failed" ? "text-red-700" : "text-gray-500")}>
@@ -464,9 +515,9 @@ function DashboardContent() {
             <p className="mt-2 text-xs text-red-700">Automatic backup failed before a backup was saved.</p>
           )}
           <div className="mt-auto pt-5">
-            <Button variant="outline" size="sm" onClick={() => router.push("/portal/backup?tab=schedule")}>
-              {schedule?.enabled ? "Edit schedule" : "Set up automatic backups"}
-            </Button>
+            {scheduleAction ? <Link className={quietLink} to={scheduleHref}>{scheduleAction}</Link> : !schedulesLoading && (
+              <Button asChild variant="outline" size="sm"><Link to={scheduleHref}>{schedule?.enabled ? "Edit schedule" : "Open schedule"}</Link></Button>
+            )}
           </div>
         </Tile>
 
@@ -481,6 +532,7 @@ function DashboardContent() {
             {protectedBackup ? (
               <>
                 <BigValue className="mt-1 text-5xl">{protectedBackup.policiesBackedUp}</BigValue>
+                {!!protectedBackup.inventoryBackedUp && <p className="mt-1 text-sm text-gray-500">{protectedBackup.inventoryBackedUp} inventory objects backed up separately</p>}
                 <p className="mt-1 text-sm text-gray-500">
                   In the latest complete backup, {protectedBackup.timestamp.toLocaleDateString(undefined, { dateStyle: "medium" })}
                 </p>

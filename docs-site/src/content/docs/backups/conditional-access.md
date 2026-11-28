@@ -1,5 +1,5 @@
 ---
-title: "Conditional Access backups"
+title: "Entra ID: Conditional Access backups"
 description: Back up, restore and detect drift in Entra Conditional Access policies, named locations and authentication strengths, and the permissions each step needs.
 faq:
   - question: "Does TenuVault back up Conditional Access policies?"
@@ -12,7 +12,7 @@ faq:
     answer: "No. Microsoft creates and maintains them, so TenuVault backs them up for drift detection only and never recreates or overwrites them. Change their state or exclusions in Entra."
 ---
 
-TenuVault backs up three Entra Conditional Access object types next to your Intune configuration, restores them, and shows how they changed between backups. It complements Microsoft's own Entra backup, which keeps a short history and does not cover Intune: TenuVault keeps Conditional Access with your Intune backups for as long as your retention allows.
+Conditional Access is an independently selectable Entra ID area. TenuVault backs up three types, restores supported policies and shows changes between backups. It complements Microsoft's own Entra backup, which keeps a short history and does not cover Intune: TenuVault keeps Conditional Access with your Intune backups for as long as your retention allows.
 
 ## What is included
 

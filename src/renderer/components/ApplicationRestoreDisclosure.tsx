@@ -1,0 +1,5 @@
+import { NoticeCard } from "./NoticeCard"
+
+export function ApplicationRestoreDisclosure() {
+  return <NoticeCard summary="Application restore uses a broad permission." details={<p>Applications restore requests Application.ReadWrite.All only after you opt in to the Applications area with Backup and restore access. This lets the signed-in admin's token manage all app registrations and enterprise apps in the tenant, including credentials, limited by the admin's own Entra role. It also allows managing app role assignments exposed by APIs other than Microsoft Graph. Microsoft lists it as the least-privileged delegated permission for <a className="underline" href="https://learn.microsoft.com/en-us/graph/api/application-update?view=graph-rest-1.0" target="_blank" rel="noreferrer">updating an application</a>. TenuVault only writes nonempty displayName and description values, enforced in its own writer. See the <a className="underline" href="https://learn.microsoft.com/en-us/graph/permissions-reference#applicationreadwriteall" target="_blank" rel="noreferrer">Microsoft permission reference</a>.</p>} />
+}

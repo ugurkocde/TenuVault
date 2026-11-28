@@ -21,6 +21,12 @@ import { ingestContent, type ContentEncryption } from "../src/main/app-backup/co
 import { appRestoreAuditItem, restoreAppWithAudit, restoreCapturedApp, type AppRestoreAuditObservation } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
+import { executionMetadata } from "../src/main/api/execution-metadata"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
+import { RESOURCE_SCOPES } from "../src/shared/constants"
+import { ConnectionCapabilities } from "../src/main/auth/connection-capabilities"
+import { START_NOW_REMOVED_REASON, TENUVAULT_CLIENT_ID, type TenantConnection } from "../src/shared/tenant-connection"
+import { resourcePackScopes, tenantPermissionPacks } from "../src/shared/services/permission-packs"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
 
 const tenant = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", target = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", appId = "33333333-3333-3333-3333-333333333333"
@@ -76,6 +82,186 @@ function destination() {
   return { graph, fetcher, calls, get app() { return app }, get wire() { return wire }, loseCreate: () => { failCreateResponse = true }, assign: () => { assigned = true } }
 }
 const options = (d: ReturnType<typeof destination>, signal = new AbortController().signal) => ({ graph: d.graph, fetch: d.fetcher as typeof fetch, signal, progress: vi.fn(), wait: async () => {} })
+
+it.each(["before block", "before block list", "read-only switch", "Intune downgrade before block", "Intune downgrade before block list"])("checks the admitted connection %s", async boundary => {
+  const f = await fixture(), d = destination()
+  const packOptions = { azure: false, audit: false }
+  let packs = tenantPermissionPacks({ intune: { access: "restore" }, entra: { access: "restore" } }, packOptions)
+  let enabled = true
+  let connection: TenantConnection = {
+    version: 1, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, origin: "wizard", createdAt: "", updatedAt: "",
+    graphScopes: resourcePackScopes(packs, "graph"),
+  }
+  const caps = new ConnectionCapabilities(() => connection, () => packs, async () => enabled)
+  const progress = vi.fn((value: import("../src/shared/app-sources/types").AppRestoreProgress) => {
+    if (value.phase !== "uploading") return
+    if (boundary === "before block" || (boundary === "before block list" && value.uploadedBytes > 0)) enabled = false
+    if (boundary === "read-only switch") connection = { ...connection, method: null, clientId: "", needsSignInMethod: true }
+    if (boundary === "Intune downgrade before block" || (boundary === "Intune downgrade before block list" && value.uploadedBytes > 0)) {
+      packs = tenantPermissionPacks({ intune: { access: "backup" }, entra: { access: "restore" } }, packOptions)
+    }
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.hostname.endsWith(".blob.core.windows.net")) return d.fetcher(input, init)
+    return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
+  })
+  await expect(restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+    getGraphToken: async () => "fixture-token", fetch, signal: new AbortController().signal, progress, operationId: randomUUID(),
+    authorizeUpload: () => caps.requireAppRestoreWrite(target, TENUVAULT_CLIENT_ID),
+  })).rejects.toThrow(boundary === "read-only switch" ? START_NOW_REMOVED_REASON : boundary.startsWith("Intune") ? "Review the restore permissions for this service in Settings > Sign-in." : "temporarily unavailable")
+  expect(d.fetcher).toHaveBeenCalledTimes(boundary.endsWith("before block list") ? 1 : 0)
+})
+
+it.each([
+  ["ownApp", appId, "ownApp", tenant, true],
+  ["ownApp", appId, "tenuvaultApp", TENUVAULT_CLIENT_ID, false],
+  ["tenuvaultApp", TENUVAULT_CLIENT_ID, "ownApp", tenant, false],
+] as const)("handles a switch from %s (%s) to %s (%s) between installer blocks", async (method, clientId, nextMethod, nextClient, completes) => {
+  const f = await fixture(snapshot, true), d = destination()
+  const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
+  let connection: TenantConnection = {
+    version: 1, method, clientId, origin: "wizard", createdAt: "", updatedAt: "",
+    graphScopes: resourcePackScopes(packs, "graph"),
+  }
+  const caps = new ConnectionCapabilities(() => connection, () => packs, async () => true)
+  const authorizeRestore = () => caps.requireAppRestoreWrite(target, clientId)
+  const graphClients: string[] = []
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      const response = await d.fetcher(input, init)
+      if (d.fetcher.mock.calls.length === 1) connection = { ...connection, method: nextMethod, clientId: nextClient }
+      return response
+    }
+    graphClients.push(new Headers(init?.headers).get("authorization")!.slice("Bearer ".length))
+    return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
+  })
+  const work = restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+    getGraphToken: async () => {
+      const currentClient = connection.clientId
+      await authorizeRestore()
+      return currentClient
+    },
+    authorizeUpload: authorizeRestore,
+    fetch, signal: new AbortController().signal, progress: vi.fn(), operationId: randomUUID(),
+  })
+  if (completes) {
+    await work
+    expect(d.fetcher.mock.calls.length).toBeGreaterThan(2)
+    expect(graphClients[0]).toBe(clientId)
+    expect(graphClients.at(-1)).toBe(nextClient)
+  } else {
+    await expect(work).rejects.toThrow("sign-in method changed")
+    expect(d.fetcher).toHaveBeenCalledTimes(1)
+    expect(graphClients.every(client => client === clientId)).toBe(true)
+  }
+})
+
+it.each(["during preflight", "during token acquisition", "during bridge availability", "before app creation dispatch", "between uploads"] as const)("stops an installer restore when its source needs a sign-in method %s", async boundary => {
+  const f = await fixture(snapshot, boundary === "between uploads"), d = destination()
+  const own: TenantConnection = { version: 1, method: "ownApp", clientId: appId, origin: "wizard", createdAt: "", updatedAt: "", graphScopes: [] }
+  let sourceConnection = own
+  const switchSource = () => { sourceConnection = { ...own, method: null, clientId: "", needsSignInMethod: true } }
+  const beforeCreation = boundary === "before app creation dispatch"
+  const throughBridge = boundary === "during bridge availability" || beforeCreation
+  const packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
+  const scopes = resourcePackScopes(packs, "graph")
+  const shared: TenantConnection = { ...own, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID, graphScopes: scopes }
+  let availabilityChecks = 0
+  const caps = new ConnectionCapabilities(id => id === tenant ? sourceConnection : throughBridge ? shared : own, () => packs, async () => {
+    if (++availabilityChecks === (beforeCreation ? 4 : 2)) {
+      await Promise.resolve()
+      switchSource()
+    }
+    return true
+  })
+  if (throughBridge) caps.requireIssuedToken(target, TENUVAULT_CLIENT_ID, RESOURCE_SCOPES.graph, "fixture-token", { grantedScopes: scopes })
+  const network = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.hostname.endsWith(".blob.core.windows.net")) {
+      const response = await d.fetcher(input, init)
+      if (boundary === "between uploads" && d.fetcher.mock.calls.length === 1) switchSource()
+      return response
+    }
+    return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
+  })
+  const fetch = throughBridge ? createBridgedFetch({
+    dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: network,
+    authorizeRequest: (url, input, init, tenant) => caps.authorizeRequest(url, input, init, tenant),
+  }) : network
+  const service = new AppSourceService({
+    restoreAuthorization: (source, destination) => caps.appRestoreAuthorization(source, destination),
+    restorePlan: async () => {
+      if (boundary === "during preflight") switchSource()
+      return "pro"
+    },
+    restore: (store, source, settings, destination, name, signal, progress, operationId, authorizeRestore) =>
+      restoreAppWithAudit(store, source, settings, destination, name, {
+        getGraphToken: async () => {
+          if (boundary === "during token acquisition") switchSource()
+          return "fixture-token"
+        },
+        authorizeDispatch: authorizeRestore,
+        authorizeUpload: authorizeRestore ?? (() => caps.requireAppRestoreWrite(destination, own.clientId)),
+        fetch, signal, progress, operationId,
+      }),
+    knownTenant: id => [tenant, target].includes(id), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(),
+    pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(),
+    signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(),
+  })
+  await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))).rejects.toThrow(START_NOW_REMOVED_REASON)
+  if (throughBridge) expect(availabilityChecks).toBe(beforeCreation ? 4 : 2)
+  expect(d.fetcher).toHaveBeenCalledTimes(boundary === "between uploads" ? 1 : 0)
+  if (beforeCreation) {
+    expect(network.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"])
+    sourceConnection = own
+    await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))).resolves.toMatchObject({ sourceId: f.source.id })
+  } else {
+    if (boundary !== "between uploads") expect(network).not.toHaveBeenCalled()
+    expect(d.calls.some(([method, path]) => method === "PATCH" || path.endsWith("/commit"))).toBe(false)
+  }
+})
+
+it.each(["block", "blocklist"])("checks both installer participants before the bridge dispatches the %s upload", async upload => {
+  for (const reason of ["switch", "availability"] as const) {
+    const f = await fixture(), d = destination()
+    const own: TenantConnection = { version: 1, method: "ownApp", clientId: appId, origin: "wizard", createdAt: "", updatedAt: "" }
+    let source: TenantConnection = { ...own, method: "tenuvaultApp", clientId: TENUVAULT_CLIENT_ID }
+    let enabled = true
+    let attempted = false
+    const caps = new ConnectionCapabilities(id => id === tenant ? source : own, undefined, async () => true, () => enabled)
+    caps.requireIssuedToken(target, own.clientId, RESOURCE_SCOPES.graph, "fixture-token")
+    const fetch = createBridgedFetch({
+      dispatch: vi.fn(), getDelegatedToken: vi.fn(),
+      fetch: async (input, init) => {
+        const url = new URL(String(input))
+        if (url.hostname.endsWith(".blob.core.windows.net")) return d.fetcher(input, init)
+        return Response.json(await d.graph(init?.method as "GET" | "POST" | "PATCH", url.href, init?.body ? JSON.parse(String(init.body)) : undefined))
+      },
+      authorizeRequest: (url, input, init, tenant) => {
+        const authorization = caps.authorizeRequest(url, input, init, tenant)
+        if (url.searchParams.get("comp") === upload) {
+          attempted = true
+          queueMicrotask(() => {
+            if (reason === "switch") source = { ...own, method: null, clientId: "", needsSignInMethod: true }
+            else enabled = false
+          })
+        }
+        return authorization
+      },
+    })
+    const authorization = caps.appRestoreAuthorization(tenant, target)
+    await expect(executionMetadata.run({ connections: authorization.connections, appRestoreDestination: target }, () =>
+      restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
+        getGraphToken: async () => "fixture-token", fetch, signal: new AbortController().signal, operationId: randomUUID(), progress: vi.fn(),
+        authorizeDispatch: authorization.authorize, authorizeUpload: authorization.authorize,
+      })), reason).rejects.toThrow(reason === "switch" ? START_NOW_REMOVED_REASON : "temporarily unavailable")
+    expect(attempted).toBe(true)
+    expect(d.fetcher.mock.calls.map(([input]) => new URL(String(input)).searchParams.get("comp"))).toEqual(upload === "blocklist" ? ["block"] : [])
+    expect(d.calls.some(([method, path]) => method === "PATCH" || path.endsWith("/commit"))).toBe(false)
+  }
+})
 
 describe("app restore snapshots", () => {
   it("retains full scripts encrypted, survives key rotation and rejects cross-tenant reads and tampering", async () => {
@@ -294,7 +480,7 @@ it.each(["cancelled", "failed"] as const)("queues one %s preflight outcome witho
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   try {
     const operation = restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
-      operationId, getGraphToken, fetch, signal: controller.signal, progress: vi.fn(),
+      operationId, getGraphToken, authorizeUpload: async () => {}, fetch, signal: controller.signal, progress: vi.fn(),
     })
     await signingIn
     if (status === "cancelled") controller.abort()

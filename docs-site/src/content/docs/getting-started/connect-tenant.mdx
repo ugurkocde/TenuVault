@@ -1,97 +1,113 @@
 ---
 title: "Sign in to your tenant"
-description: Connect your tenant with one Microsoft sign-in, using your own admin account.
+description: Choose how TenuVault signs in and review the backup access for a new tenant.
 ---
 
-You connect a tenant by signing in with your own admin account. TenuVault creates the app registration it signs in through in your tenant, and never asks for a password or a client secret.
+Open **Connect a tenant** and start at **How do you want to connect?**. The same wizard opens on a new installation and when you add another tenant. Previously connected tenants keep their sign-in method and service settings.
+
+| Sign-in method | What it creates in your tenant |
+| --- | --- |
+| **TenuVault app** (recommended) | One enterprise app entry when an administrator approves the requested permissions. |
+| **Your own app registration** | One app registration if you create one. You can also use the setup script or an existing registration. |
+
+If the TenuVault app is temporarily unavailable, choose **Your own app registration**.
+
+## TenuVault app
+
+**TenuVault app** is the recommended option in **How do you want to connect?**. You sign in with Microsoft and approve backup permissions for the services you choose. Restore permissions are requested separately when you first need them.
+
+The tenant keeps its schedules, settings and backup history if you switch between the TenuVault app and your own app registration under **Settings > Sign-in**.
+
+After signing in with any method, open the tenant name or **Connected tenant** on **Check** or **Storage** to confirm the tenant ID. TenuVault also shows the organization name when the sign-in can read it. If Microsoft signed you into another tenant, select **Different tenant?** and sign in to the intended tenant.
 
 ## Open the guided setup
 
-The guided setup, **Set up TenuVault**, is the only way to connect a tenant. TenuVault opens it after you select **Connect your tenant** on the welcome screen, and whenever no tenant is connected. You can also open it at any time:
+Open the guided setup, **Set up TenuVault**, to connect a tenant. TenuVault opens it after you select **Connect your tenant** on the welcome screen, and whenever no tenant is connected. You can also open it at any time:
 
 * From the dashboard, when no tenant is connected: **Set up TenuVault**.
 * From the tenant switcher at the top of the sidebar: **Connect a tenant**.
 * From **Tenants** or the dashboard's **Quick Actions**: **Connect tenant**.
 * From the **All tenants** page: **Connect a tenant**.
 
-The guided setup has four steps: **Connect**, **Sign in**, **Storage** and **First backup**. Use **Previous** to go back a step. While no tenant is connected, the setup has the window to itself: there is no sidebar, only **Free setup call**, **License**, **Share feedback** and **Support** at the top. **Free setup call** opens the [free setup call](/getting-started/#free-setup-call) page in your browser. Once a tenant is connected, the sidebar is back and the setup shows **Back to dashboard**.
+The wizard has four steps: **Connect**, **Check**, **Storage** and **First backup**. Choose a sign-in method under **How do you want to connect?**. Intune is included. On **Check**, turn on **Also back up Entra ID device and access settings** to include the Entra configuration and Conditional Access types listed under **What’s included**. The switch starts off. If any area needs access, you can continue with what your sign-in can read and add access later in **Settings > Services and permissions**.
 
 ### Continue where you left off
 
-TenuVault saves your progress on this computer, in its encrypted app store: the step, the tenant ID, the client ID, the display name, and a sign-in to a tenant that is not saved yet. No token is kept in this record. Your progress survives a restart, so you can close TenuVault while you run the setup script or wait for another administrator. When you come back, TenuVault skips the welcome screen and the setup says **Welcome back. You can continue where you left off**. A saved sign-in is resumed only while it is still signed in on this computer; otherwise you sign in again. The **First backup** step is not resumed.
+TenuVault saves your progress on this computer, in its encrypted app store: the step, the tenant ID, the client ID, the display name, and a sign-in to a tenant that is not saved yet. No token is kept in this record. Your progress survives a restart, so you can close TenuVault while you run the setup script or wait for another administrator. When you come back, TenuVault skips the welcome screen and the setup says **Welcome back. Continue where you left off.**. A saved sign-in is resumed only while it is still signed in on this computer; otherwise you sign in again. The **First backup** step is not resumed.
 
-## Step 1: Connect
+## Set up your own app registration
 
-The **Connect** step, **Connect your tenant**, takes one Microsoft sign-in.
+The **Connect** step, **Create your TenuVault app registration**, takes one Microsoft sign-in.
 
 1. Read the four points on the step. They say what you let in: one app registration that lives in your own tenant, acts only as you, has no secret, and leaves your backups with you. Above the button, the step tells you that Microsoft will ask you to approve Microsoft Graph Command Line Tools, Microsoft's own sign-in app, which TenuVault uses once to create the app registration.
 2. Select **Set up with Microsoft sign-in** and sign in as a Global Administrator, Cloud Application Administrator or Application Administrator. The setup creates an app registration and grants admin consent, which needs one of these roles. TenuVault connects tenants in Microsoft's global cloud only; GCC High, DoD and 21Vianet tenants are not supported. If the tenant blocks Microsoft Graph Command Line Tools, which the setup and the setup script sign in through, TenuVault offers **Create it by hand** instead. See [If something goes wrong](/getting-started/app-registration/#if-something-goes-wrong).
-3. Follow the list under **Setting up your tenant**. If the sign-in has not come back after 3 minutes, TenuVault shows [Still waiting for Microsoft?](#still-waiting-for-microsoft). When it is done, your browser opens once more and signs you in to TenuVault, with nothing to enter. TenuVault skips the **Sign in** step and continues with **Storage**.
+3. Follow the status message in the setup card. If the sign-in has not come back after 3 minutes, TenuVault shows [Still waiting for Microsoft?](#still-waiting-for-microsoft). When it is done, your browser opens once more and signs you in to TenuVault, with nothing to enter. TenuVault skips the **Sign in** step and continues with **Check**.
 
 For what happens in each step, what is created and how to remove it, see [Create the app registration](/getting-started/app-registration/).
 
-Under **Other ways to connect**:
+Under **Can’t sign in as an admin here?**:
 
 | Button | Use it when |
 | --- | --- |
-| **Someone else is the admin? Copy instructions** | You cannot grant admin consent yourself. It copies a ready-to-send message for your Entra administrator. TenuVault keeps your place; when they send back the two lines, select **I already have an app registration** and paste them. |
+| **Copy instructions for my admin** | You cannot grant admin consent yourself. It copies a ready-to-send message for your Entra administrator. TenuVault keeps your place; when they send back the two lines, select **I already have an app registration** and paste them. |
+| **Create it by hand** | You need to create the app registration in the Entra admin center. |
 | **Use the setup script instead** | You want to create the app registration with the [PowerShell script](/getting-started/app-registration/#use-the-setup-script-instead). |
 | **I already have an app registration** | The tenant has an app registration from an earlier setup and you know its two IDs. It opens the **Sign in** step. |
 
-The admins who use TenuVault need an Intune role, for example Intune Administrator.
+The admins who use TenuVault need roles for the services they choose. For Intune, for example, use Intune Administrator.
 
 ### Set up from a file
 
 When another admin already uses TenuVault for the tenant, they can send you a settings file exported with **Include connection details**. See [Import and export](/settings/#import-and-export).
 
-1. On the **Connect** step, select **Set up from a file** and open the file. If it holds several tenants that are not connected yet, choose one under **Which tenant do you want to connect?** If you already signed in to the file's tenant and app registration, TenuVault keeps that sign-in and goes on to **Storage**. If you signed in to another tenant that is not saved yet, that sign-in stays until you select **Use a different tenant or account**.
-2. TenuVault opens the **Sign in** step with the tenant ID, the client ID and the display name filled in. A notice, **From a setup file**, names the tenant, the app registration and the storage account from the file. Use a setup file only from an admin you trust: it decides which app registration you sign in to and where backups are stored.
+1. On the connection method step, select **Another admin sent you a setup file?** and open the file. If it holds several tenants that are not connected yet, choose one under **Which tenant do you want to connect?** If you already signed in to the file's tenant and app registration, TenuVault keeps that sign-in and goes on to **Check**. If you signed in to another tenant that is not saved yet, that sign-in stays until you select **Use a different tenant or account**.
+2. TenuVault opens the **Connect** step with the tenant ID, the client ID and the display name filled in. Choose Entra device and access settings on **Check**. After the first backup, you can review and import the services in the file for future backups. If the file cannot be used, TenuVault explains why on **Connect**. Open **Connection details** under **From a setup file** to see the tenant, the app registration and the storage account from the file. Use a setup file only from an admin you trust: it decides which app registration you sign in to and where backups are stored.
 3. Select **Sign in with Microsoft** and sign in with your own account.
-4. On the **Storage** step, the storage from the file is chosen. For an Azure storage account, select **Check access** to confirm you can use it.
-5. On the **First backup** step, select **Review settings from the file** before you start the backup, and apply the rest of the file, such as services and what is backed up. You choose each setting, as with any import. Then take the first backup from **Backup & Restore**, so it already uses those settings.
+4. On the **Storage** step, the storage from the file is chosen. If the file chooses an Azure storage account, TenuVault checks access automatically.
+5. The first backup starts when you confirm storage. To apply the rest of the setup file to future backups, select **Review settings from the file** and review the settings to import.
 
 The file holds no secret, so the other admin cannot sign in for you, and you get only the access your own account has.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-from-file.webp" aria-label="Open full-size screenshot: set up from a file">
-    <img src="/images/screenshots/setup-from-file.webp" alt="Sign in step filled in from a setup file, with a notice naming the tenant, app registration and storage account" width="2880" height="2000" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/setup-from-file.webp" alt="Sign in step filled in from a setup file, with a notice naming the tenant, app registration and storage account" width="1440" height="900" loading="lazy" decoding="async" />
   </a>
   <figcaption>The Sign in step filled in from a setup file, with a notice naming the tenant, app registration and storage account. Example tenant data. Select the image to view it full size.</figcaption>
 </figure>
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-connect.webp" aria-label="Open full-size screenshot: setup connect">
-    <img src="/images/screenshots/setup-connect.webp" alt="Connect explains what setup creates and offers Microsoft sign-in and alternative setup methods" width="2880" height="2000" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/setup-connect.webp" alt="Connect explains what setup creates and offers Microsoft sign-in and alternative setup methods" width="1440" height="900" loading="lazy" decoding="async" />
   </a>
   <figcaption>Connect explains what setup creates and offers Microsoft sign-in and alternative setup methods. Example tenant data. Select the image to view it full size.</figcaption>
 </figure>
 
-## Step 2: Sign in
+## Sign in with your own app registration
 
-The **Sign in** step is headed **Sign in to your tenant**. After **Set up with Microsoft sign-in** on the **Connect** step you do not use it: TenuVault signs you in by itself and goes on to **Storage**. The tenant takes your organization's name and default domain from Microsoft Entra ID; you can rename it later on the **Tenants** page. If that sign-in fails or you cancel it, this step opens with both IDs filled in and the note **The app registration is ready.**; select **Sign in with Microsoft** to try again.
+The **Sign in** step is headed **Sign in to your tenant**. After **Set up with Microsoft sign-in** on the **Connect** step you do not use it: TenuVault signs you in by itself and goes on to **Check**. The tenant takes your organization's name and default domain from Microsoft Entra ID; you can rename it later on the **Tenants** page. If that sign-in fails or you cancel it, this step opens with both IDs filled in and the note **The app registration is ready.**; select **Sign in with Microsoft** to try again.
 
 If you sign in to a tenant that is already connected to TenuVault, the step says **This tenant is already connected to TenuVault.** with a link to the dashboard, and the tenant is not added a second time.
 
 You use this step yourself when the app registration was created with the setup script, by another administrator, or in an earlier setup:
 
-1. Enter the tenant ID and the client ID. The setup script copies its two closing lines to your clipboard, so when you open this step with both ID fields empty, TenuVault fills them in and shows **Filled in the tenant ID and the client ID from your clipboard.** It never replaces values you typed or that it kept from an earlier visit. If the fields stay empty, paste the two lines the setup script printed into **Paste the script output**: TenuVault fills in **Tenant id or domain** and **Application (client) id** and shows **Filled in the tenant ID and the client ID.** Pasting the whole output into either ID field works too. Or type the values:
+1. Enter the tenant ID and the client ID. The setup script copies its two closing lines to your clipboard, so when you open this step with both ID fields empty, TenuVault fills them in and shows **Filled in the tenant ID and the client ID from your clipboard.** It never replaces values you typed or that it kept from an earlier visit. If the fields stay empty, open **Paste the script output** and paste the two lines the script printed. TenuVault fills in **Tenant id or domain** and **Application (client) id** and shows **Filled in the tenant ID and the client ID.** Pasting the whole output into either ID field works too. Or type the values:
 
    | Field | Enter | Example |
    | --- | --- | --- |
-   | **Tenant id or domain** | Your tenant ID (GUID) or a verified domain of the tenant | `contoso.onmicrosoft.com` |
+   | **Tenant id or domain** | Your tenant ID from **Overview** in the Microsoft Entra admin center, or a verified domain of the tenant | `contoso.onmicrosoft.com` |
    | **Application (client) id** | The client ID printed by the setup script | `00000000-0000-0000-0000-000000000000` |
    | **Display name (optional)** | The name TenuVault shows for this tenant. If you leave it empty, TenuVault uses your organization's name from Microsoft Entra ID. | `Contoso Production` |
 
-2. Select **Sign in with Microsoft**. The button changes to **Waiting for sign-in...** and TenuVault shows **Complete the sign-in in your browser. TenuVault then checks the license for this tenant.**
+2. Select **Sign in with Microsoft**. TenuVault shows **Finish signing in in your browser.** Select **Open the browser again** to reopen the sign-in.
 3. Complete the Microsoft sign-in with your admin account, including MFA if your policies require it.
 
 The sign-in opens in your default browser, on Windows and on macOS. When it finishes, the browser shows **Go back to TenuVault** and TenuVault comes to the front. On Windows, where a window may not put itself in front, its taskbar button flashes instead. You can close the browser tab.
 
-If you abandoned the sign-in in the browser, select **Cancel sign-in** to stop waiting and start again.
+If you abandoned the sign-in in the browser, select **Cancel** to stop waiting and start again.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-signin.webp" aria-label="Open full-size screenshot: setup signin">
-    <img src="/images/screenshots/setup-signin.webp" alt="Use the Sign in step when you already have an app registration" width="2880" height="2000" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/setup-signin.webp" alt="Use the Sign in step when you already have an app registration" width="1440" height="900" loading="lazy" decoding="async" />
   </a>
   <figcaption>Use the Sign in step when you already have an app registration. Example setup with no credentials entered. Select the image to view it full size.</figcaption>
 </figure>
@@ -104,22 +120,22 @@ When a sign-in has waited 3 minutes for the browser to come back, on this step o
 | --- | --- |
 | **Try again** | Stops waiting for the open sign-in and starts the same sign-in again in your default browser. |
 | **Copy sign-in link** | Copies the exact Microsoft sign-in address TenuVault opened, so you can paste it into another browser or browser profile, for example Microsoft Edge signed in to your work profile. Finish the sign-in there and it comes back to TenuVault as usual. The link only works while this sign-in waits; after it ends, TenuVault says **The sign-in link is no longer available.** and you select **Try again** for a new one. |
-| **Copy instructions for your admin** | Copies the same ready-to-send setup message as **Someone else is the admin? Copy instructions**, for an Entra administrator who can create the app registration. |
+| **Copy instructions for your admin** | Copies the same ready-to-send setup message as **Copy instructions for my admin**, for an Entra administrator who can create the app registration. |
 | **Book a free setup call** | Opens the [free setup call](/getting-started/#free-setup-call) page in your browser, where you pick a time for a free 30 minute call. The waiting sign-in is left as it is. |
 
-When a sign-in ends, whether it finished, failed, was cancelled, timed out or was started again, TenuVault stops listening for its answer, so a browser tab finished later signs nothing in. The panel belongs to the browser step only: once Microsoft has answered and TenuVault checks the license, it goes away, and **Try again** no longer stops anything. TenuVault stops waiting after 15 minutes. The first sign-in then shows **The sign-in in the browser was not completed within 15 minutes.** with **Try again** and **Copy instructions for your admin** next to it.
+When a sign-in ends, whether it finished, failed, was cancelled, timed out or was started again, TenuVault stops listening for its answer, so a browser tab finished later signs nothing in. The panel belongs to the browser step only: once Microsoft has answered and TenuVault is completing sign-in, it goes away, and **Try again** no longer stops anything. TenuVault stops waiting after 15 minutes. The first sign-in then shows **The sign-in in the browser was not completed within 15 minutes.** with **Try again** and **Copy instructions for your admin** next to it.
 
 You can use a separate admin account. It does not have to be the account you are signed in to Windows or macOS with. Pick it in the Microsoft account list, choose **Use another account**, or start the sign-in while a browser profile signed in as that admin account is your default.
 
 Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. While TenuVault waits for the sign-in, it notes that Conditional Access needs a browser that passes the device identity, such as Microsoft Edge signed in to your work profile: make it your default browser, cancel and sign in again. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
 
-4. After a successful sign-in, TenuVault checks the license for this tenant and moves to **Storage**, showing **Signed in as &lt;your account&gt;**.
+4. After a successful sign-in, TenuVault shows **Check** with permission coverage for the services you chose. TenuVault continues to **Storage** when access is complete. When only some services or areas are readable, select **Continue with** the services listed. Your full choice stays saved. TenuVault checks the license when you finish setting up the tenant.
 
 ### Signed in, but not saved yet
 
 If you signed in but did not finish the **Storage** step, for example because you went back or restarted TenuVault, the **Sign in** step shows **Signed in as &lt;your account&gt;** with two buttons:
 
-* **Continue**: goes on to **Storage** with this sign-in.
+* **Continue**: goes on to **Check** with this sign-in.
 * **Use a different tenant or account**: signs out of that tenant and shows the sign-in form again. This also frees the free Community plan for another tenant.
 
 ### Form errors
@@ -163,7 +179,7 @@ TenuVault checks that your license covers the tenant when you sign in, and again
 * **TenuVault Community covers one tenant, and it is used for tenant &lt;tenant id&gt;. Add a Pro or MSP license on the License page to use more tenants.**
 * **A TenuVault license is required for this tenant. Add your license key on the License page, or start a free trial.**
 
-If the second check, on **Continue** in the **Storage** step, fails, setup returns to **Sign in** with the tenant ID and client ID kept. It explains that TenuVault signed you out of this tenant and that you can sign in again once the license covers it, and offers **I have a license key**. When the tenant has already used its trial, it offers **Buy Pro** and **Enter a Pro license key** instead. When Community already covers another tenant, the dialog **Community covers one tenant** explains the limit instead.
+If the second check, on **Start first backup** in the **Storage** step, fails, setup returns to **Sign in** with the tenant ID and client ID kept. It explains that TenuVault signed you out of this tenant and that you can sign in again once the license covers it, and offers **I have a license key**. When the tenant has already used its trial, it offers **Buy Pro** and **Enter a Pro license key** instead. When Community already covers another tenant, the dialog **Community covers one tenant** explains the limit instead.
 
 See [Activate and manage your license](/licensing/manage/) for all license messages. To add more tenants and switch between them, see [Manage tenants](/tenants/).
 
@@ -174,3 +190,25 @@ TenuVault keeps your sign-in in a token cache encrypted with Windows data protec
 ## Next step
 
 [Choose where backups are stored](/getting-started/choose-storage/).
+
+## Follow your service choice
+
+Setup asks for backup access only. You can add restore permissions when you first need them. Manage optional areas and access levels later under **Settings > Services and permissions**.
+
+Your own app registration routes use the same permissions for the chosen services:
+
+* **Set up with Microsoft sign-in** creates the registration with backup access for your chosen services. Before Microsoft opens, TenuVault explains that Microsoft Graph Command Line Tools gets broader setup-only access, Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All, to create the registration and grant consent. Its sign-in stays in memory and is dropped when setup ends. A second sign-in follows through TenuVault with the chosen permissions.
+* **Use the setup script instead** shows the generated command, with your choice of `-Services` and `-RestoreAccess None`. Save the script and run the displayed command.
+* **Create it by hand** shows the permission list for your choice next to the manual guide. Use that list when adding delegated API permissions.
+* **Copy instructions for my admin** includes the same chosen command and permission list in the message for your administrator.
+* **I already have an app registration** opens the ID form. After sign-in TenuVault checks the chosen permissions in the Microsoft Graph token, without reading or changing the registration.
+
+## Check access and choose storage
+
+**Check** names the services you can back up and shows how many areas are readable when a service has partial access. Select **Continue** or **Continue with** the services listed. The first backup reads the available policies and settings, including accessible areas of partly readable services. Your role and service license can still affect what the backup reads.
+
+Expand **Details** for area names, instructions for your sign-in method, and **Check again**. Permission names are under **Show permission names**. If none of your chosen services can be read, follow the access instructions on **Check** before continuing.
+
+Your chosen services stay enabled. A service with no readable areas shows **Needs access** in the sidebar and under **Settings > Services and permissions**. Backups skip settings the current sign-in cannot read and include them in the coverage report.
+
+Continue to **Storage**. Eligible plans can choose **This device, encrypted** or [Azure storage](/getting-started/choose-storage/). Open **Plan details** to see your tenant's plan. If it shows a new trial, you can choose to receive email tips and an end-of-trial reminder there. The address is sent only when you select **Email me setup tips and a reminder before the trial ends**. Select **Start first backup** to confirm storage and begin the backup.

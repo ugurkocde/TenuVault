@@ -21,10 +21,17 @@ if (-not $RunbookPath) {
 $script:calls = [System.Collections.Generic.List[object]]::new()
 $script:failGraphToken = $false
 $script:failDetail = $false
+$script:timeoutDetail = $false
+$script:secondListPage = $null
+$script:listResponses = @{}
+$script:privateDetail = $false
+$script:relationshipStatus = $null
 $script:failReportList = $false
 $script:failCompliance = $false
 $script:maskOma = $false
 $script:failAuditReceipt = $false
+$expansions = Get-Content (Join-Path $PSScriptRoot "expanded-assignments.json") -Raw | ConvertFrom-Json -AsHashtable
+$script:baselineAssignments = ConvertTo-Json -InputObject $expansions.assignments -Compress -Depth 5
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -41,20 +48,45 @@ function Invoke-TvHttp {
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
     if ($script:failAuditReceipt -and $Uri -like "*/tenuvault-backup-results/audit-receipts/*") { throw [TvHttpError]::new(403, "Audit receipt denied") }
     $text = '{"value":[]}'
+    $graphPrefix = "https://graph.microsoft.com"
+    if ($Uri.StartsWith($graphPrefix)) {
+        $endpoint = $Uri.Substring($graphPrefix.Length)
+        if ($script:relationshipStatus -and $endpoint -eq "/beta/deviceManagement/deviceConfigurations/cfg-1/assignments") {
+            throw [TvHttpError]::new($script:relationshipStatus, "Relationship read refused")
+        }
+        if ($script:listResponses.Contains($endpoint)) {
+            $text = ConvertTo-Json -InputObject $script:listResponses[$endpoint] -Compress -Depth 16
+            return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
+        }
+    }
     if ($Uri -like "*/tenuvault-backup-results?*comp=list*") {
         $text = "<EnumerationResults><Blobs /><NextMarker /></EnumerationResults>"
     } elseif (($Uri -like "*/tenuvault-backup-results/audit-*/*" -or $Uri -like "*/intune-backups/cloud-backup-status-*") -and $Method -eq "Get") {
         throw [TvHttpError]::new(404, "HTTP 404")
+    } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/settings") {
+        $text = '{"deviceComplianceCheckinThresholdDays":0,"isScheduledActionEnabled":true,"secureByDefault":false,"enhancedJailBreak":false}'
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
+        if ($script:privateDetail) { $text = '{"value":[{"id":"cfg-1","displayName":"Private Ada admin+lab@example.test"}]}' }
+        if ($null -ne $script:secondListPage) {
+            $text = '{"value":[],"@odata.nextLink":"https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?page=2"}'
+        }
+    } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?page=2") {
+        $text = $script:secondListPage
     } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeviceIdentities") {
         # A list-only type: the entry is the snapshot, with status fields and secrets left out.
         $text = '{"value":[{"id":"ap-1","serialNumber":"SN-0001","manufacturer":"Contoso","model":"Laptop 7","groupTag":"Sales","displayName":null,"userPrincipalName":"","lastContactedDateTime":"2026-11-01T10:00:00Z","enrollmentState":"enrolled","deviceAccountPassword":"secret","productKey":"PK-1","managedDeviceId":"md-1"}]}'
     } elseif ($Uri -like "*getOmaSettingPlainTextValue*") {
         throw [TvHttpError]::new(403, "No access to plaintext")
+    } elseif ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1/assignments") {
+        $text = '{"value":[]}'
+    } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-2*") {
+        $text = '{"id":"cfg-2","displayName":"Second policy","assignments":[]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
+        if ($script:privateDetail) { throw [TvHttpError]::new(400, "HTTP 400 for Private Ada guest_example.test#EXT#@tenant.onmicrosoft.com") }
+        if ($script:timeoutDetail) { throw [TimeoutException]::new("Detail call timed out for admin+lab@example.test") }
         if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
-        $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
+        $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":' + $script:baselineAssignments + '}'
         if ($script:maskOma -and $Uri -match "/cfg-1(?:\?|$)") {
             $text = '{"id":"cfg-1","displayName":"Baseline Wi-Fi","omaSettings":[{"@odata.type":"#microsoft.graph.omaSettingString","isEncrypted":true,"value":"****","secretReferenceValueId":"sample"}],"assignments":[]}'
         }
@@ -64,6 +96,8 @@ function Invoke-TvHttp {
 
 # 1. A successful run.
 $output = @(Invoke-TvBackup)
+$baselineCalls = $script:calls.ToArray()
+$baselineManifestWrite = $baselineCalls | Where-Object { $_.method -eq "Put" -and $_.uri -like "*/metadata.json" }
 Write-Output (@{ calls = @($script:calls.ToArray()); output = $output } | ConvertTo-Json -Compress -Depth 5)
 
 # 2. The Graph token fails: the run still records its status and leaves a note.
@@ -140,3 +174,66 @@ $errorText = $null
 $output = [System.Collections.Generic.List[string]]::new()
 try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+# 10. A detail read times out. 11 through 15. Lists with malformed or empty final pages.
+# Compare the actual manifests from each capture.
+$script:failAuditReceipt = $false
+[Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
+$before = ConvertFrom-TvJson $baselineManifestWrite.body
+$older = @{ Name = "older"; Metadata = $before }
+$scenarios = @(foreach ($page in @($null, '{}', '{"value":null}', '{"value":{"id":"cfg-2"}}', '{"value":[],"@odata.nextLink":false}', '{"value":[]}')) {
+    @{ Page = $page; Timeout = $null -eq $page; Responses = @{} }
+})
+$parity = Get-Content (Join-Path $PSScriptRoot "list-pages.json") -Raw | ConvertFrom-Json -AsHashtable
+$scenarios += @($parity | ForEach-Object { @{ Responses = $_.responses } })
+$scenarios += @{ PrivateDetail = $true; Responses = @{} }
+$scenarios += @(foreach ($case in $expansions.cases) {
+    $responses = @{}
+    if ($case.Contains("list")) {
+        $responses["/beta/deviceManagement/deviceConfigurations"] = @{ value = $case.list }
+    }
+    if ($case.Contains("detail")) {
+        $responses['/beta/deviceManagement/deviceConfigurations/cfg-1?$expand=assignments'] = $case.detail
+    } elseif ($case.Contains("assignments") -or $case.relationshipPages -or $case.relationshipStatus) {
+        $detail = @{ id = "cfg-1"; displayName = "Baseline Wi-Fi" }
+        if ($case.Contains("assignments")) { $detail.assignments = $case.assignments }
+        $responses['/beta/deviceManagement/deviceConfigurations/cfg-1?$expand=assignments'] = $detail
+    }
+    $relationship = "/beta/deviceManagement/deviceConfigurations/cfg-1/assignments"
+    for ($index = 0; $index -lt $case.relationshipPages.Count; $index++) {
+        $page = @{ value = @(foreach ($assignment in $case.relationshipPages[$index]) {
+            if ($null -eq $assignment) { $null } else { $expansions.assignments[$assignment] }
+        }) }
+        if ($index + 1 -lt $case.relationshipPages.Count) { $page["@odata.nextLink"] = "https://graph.microsoft.com${relationship}?page=$($index + 2)" }
+        $key = if ($index -eq 0) { $relationship } else { "${relationship}?page=$($index + 1)" }
+        $responses[$key] = $page
+    }
+    @{ Responses = $responses; RelationshipStatus = $case.relationshipStatus }
+})
+$roleDetails = Get-Content (Join-Path $PSScriptRoot "role-details.json") -Raw | ConvertFrom-Json -AsHashtable
+$scenarios += @{ Name = "role-details"; Responses = $roleDetails }
+foreach ($scenario in $scenarios) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:timeoutDetail = $scenario.Timeout
+    $script:secondListPage = $scenario.Page
+    $script:listResponses = $scenario.Responses
+    $script:privateDetail = $scenario.PrivateDetail
+    $script:relationshipStatus = $scenario.RelationshipStatus
+    $output = [System.Collections.Generic.List[string]]::new()
+    $errorText = $null
+    try { Invoke-TvBackup 2>&1 | ForEach-Object { $output.Add([string]$_) } } catch { $errorText = $_.Exception.Message }
+    $newerWrite = $script:calls | Where-Object { $_.method -eq "Put" -and $_.uri -like "*/metadata.json" }
+    $newer = @{ Name = "newer"; Metadata = ConvertFrom-TvJson $newerWrite.body }
+    $compared = Get-TvBackupDrifts -Older $older -Newer $newer -Types (Get-TvTypes) -ReadItem {
+        param($backup, $file)
+        $root = if ($backup -eq "older") { $baselineManifestWrite.uri } else { $newerWrite.uri }
+        $escapedFile = ($file.Split('/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+        $uri = $root -replace 'metadata.json$', $escapedFile
+        $reads = if ($backup -eq "older") { $baselineCalls } else { $script:calls }
+        $write = $reads | Where-Object { $_.method -eq "Put" -and $_.uri -eq $uri }
+        if ($write) { return ConvertFrom-TvJson $write.body }
+        return $null
+    }
+    Write-Output (@{ scenario = $scenario.Name; calls = @($script:calls.ToArray()); output = $output.ToArray(); error = $errorText; compared = $compared } | ConvertTo-Json -Compress -Depth 10)
+}

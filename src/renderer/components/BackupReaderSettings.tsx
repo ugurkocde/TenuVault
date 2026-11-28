@@ -7,7 +7,8 @@ import { useTenants } from "~/contexts/TenantContext"
 import { useConfirm } from "~/components/ConfirmDialog"
 import readerScript from "../../../resources/New-TenuVaultBackupReader.ps1?raw"
 import type { BackupReaderState } from "../../shared/ipc"
-import { READER_CA_GUIDE_URL, READER_GUIDE_URL, readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView } from "../lib/backup-reader-view"
+import { BACKUP_SERVICES } from "../../shared/services/presentation"
+import { excludedSummary, READER_CA_GUIDE_URL, READER_GUIDE_URL, readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView } from "../lib/backup-reader-view"
 import { isGuid } from "../../shared/security"
 import { bridge } from "../lib/bridge"
 import { showFeaturePlanError } from "../lib/plan-dialog"
@@ -108,8 +109,13 @@ export function BackupReaderSettings() {
   }
 
   if (!tenants.length) return null
-  const { reader, verified, waiting, daysLeft, expiry, command, excluded, storageAccountName, canAct } = readerView(state)
+  const { reader, verified, waiting, daysLeft, expiry, command, excluded, roleChange, storageAccountName, canAct } = readerView(state)
   const disabled = !canAct || !!busy
+  const configured = state?.services ?? []
+  const names = BACKUP_SERVICES.flatMap(({ id, label }) => {
+    if (configured.includes(id)) return [label]
+    return id === "entra" && configured.includes("conditionalAccess") ? ["Entra ID (Conditional Access only)"] : []
+  })
 
   return (
     <Card>
@@ -125,8 +131,10 @@ export function BackupReaderSettings() {
         </div>
         <CardDescription>
           Optional. Keeps scheduled backups running when Conditional Access sign-in frequency ends your session. A separate
-          read-only app registration with a certificate on this computer reads Intune for scheduled backups only. Manual
+          read-only app registration with a certificate on this computer reads the selected tenant’s configured services for scheduled backups only. Manual
           backups, restores and every other change keep using your own sign-in.
+          {names.length > 0 && <> This tenant backs up {new Intl.ListFormat("en", { type: "conjunction" }).format(names)}.</>}
+          {state?.services?.length === 0 && <> No services are configured for this tenant.</>}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5 px-7 pb-7 text-sm text-gray-700">
@@ -135,7 +143,10 @@ export function BackupReaderSettings() {
         {tenants.length > 1 && (
           <div className="flex items-center gap-3">
             <label htmlFor={ids.tenant}>Tenant</label>
-            <select id={ids.tenant} disabled={!!busy} className="h-10 rounded-full border border-gray-300 bg-white px-4" value={tenantId} onChange={(event) => setTenantId(event.target.value)}>
+            <select id={ids.tenant} disabled={!!busy} className="h-10 rounded-full border border-gray-300 bg-white px-4" value={tenantId} onChange={(event) => {
+              setState(null)
+              setTenantId(event.target.value)
+            }}>
               {tenants.map((tenant) => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
             </select>
           </div>
@@ -159,7 +170,7 @@ export function BackupReaderSettings() {
               Conditional Access change: see <button type="button" className="underline" onClick={() => void bridge.app.openExternal(READER_CA_GUIDE_URL)}>Conditional Access and TenuVault</button>.
             </p>
             <p>
-              What it can do: read all Intune configuration of the tenant, including script contents, and write new backups.
+              What it can do: read configuration for the services and areas you give it access to, and write new backup files.
               What it cannot do: change Intune, delete backups, or read encrypted OMA-URI values in plain text (scheduled
               backups keep those masked; a manual backup captures them).
             </p>
@@ -183,13 +194,14 @@ export function BackupReaderSettings() {
               <dt className="self-start text-gray-500">Permissions</dt>
               <dd className="flex flex-wrap gap-1">{reader.verifiedRoles?.map((role) => <span key={role} className="rounded-full bg-secondary px-2 py-0.5 font-mono">{role.replace("DeviceManagement", "").replace(".Read.All", "")}</span>)}</dd>
             </dl>
-            {excluded.length > 0 && <p className="text-xs">Scheduled backups leave out {excluded.join(" and ")}; manual backups include them.</p>}
+            {excluded.length > 0 && <p className="text-xs">Scheduled backups leave out {excludedSummary(excluded)}; manual backups include them.</p>}
+            {roleChange && <ReaderGuidance message={roleChange} tone="warning" />}
             <div className="space-y-1 border-t border-gray-100 pt-2">
               <p className="text-xs font-medium text-gray-500">Confidence checks</p>
               <ul className="space-y-1 text-xs">
                 <CheckLine state="ok">Certificate and permissions accepted by Microsoft{reader.verifiedAt ? `, last verified ${day(reader.verifiedAt)}` : ""}</CheckLine>
                 <CheckLine state={reader.lastTest ? (reader.lastTest.graph ? "ok" : "fail") : "unknown"}>
-                  Intune read test{reader.lastTest ? `, ${day(reader.lastTest.at)}` : ": not run yet. Use Test now so tonight is not the first proof."}
+                  Read test{reader.lastTest ? `, ${day(reader.lastTest.at)}` : ": not run yet. Use Test now so tonight is not the first proof."}
                 </CheckLine>
                 <CheckLine state={reader.lastTest?.storage === null || reader.lastTest?.storage === undefined ? (storageAccountName ? "unknown" : "ok") : reader.lastTest.storage ? "ok" : "fail"}>
                   {storageAccountName ? `Azure backup container in ${storageAccountName}` : "Backups stay on this device, so no Azure storage check is needed"}

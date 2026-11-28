@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { deploymentReferenceLabel, remediationTitle } from "../src/renderer/features/cis-remediation/CisRemediationHistory"
 import { clearCisCatalogs, rememberCisCatalog } from "../src/renderer/lib/cis-catalog-cache"
 import { levelCheckCounts, levelCheckSummary, type CisLevelReadiness } from "../src/shared/frameworks/cis-readiness"
+
+vi.mock("@desktop/lib/bridge", () => ({ bridge: {} }))
 
 const TENANT_ID = "11111111-1111-1111-1111-111111111111"
 

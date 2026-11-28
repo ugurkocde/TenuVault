@@ -1,0 +1,18 @@
+---
+title: Restore Entra ID configuration
+description: Review the available Entra ID restores and the safeguards that apply.
+---
+
+## Coverage
+
+Restore supported [Conditional Access policies, named locations and authentication strengths](/backups/conditional-access/#how-restores-stay-safe) through the Conditional Access area. Device registration and enrollment, authentication methods and contexts, terms of use, group lifecycle policies, ownerless group policy and Entra device inventory are available for backup and comparison.
+
+## Groups
+
+Directory restore for Entra ID groups is included in TenuVault Pro and MSP. Enable **Groups** and review its restore permissions in **Settings > Services and permissions**. Start in the **Restore** tab of a backup and use **Review directory restore** beside an eligible group. Review each proposed change and confirm it individually. Supported changes cover eligible cloud security group metadata and ordinary user membership or ownership. Removing an existing relationship requires an explicit choice in the review. If a plan ends while a saved directory page remains, read-only confirmation and discard stay available in **Saved directory restores**.
+
+The connected admin and registration must have the required access. TenuVault checks protected identities and requires a resolved target before sending an update. Privileged relationships and device restore are unavailable.
+
+## Verify the result
+
+See **Settings > Storage and recovery** for restore history and identity restore safety. A failed check before a request permits a fresh preview. An unanswered write requires read-back before retry. Review the saved outcome and the per-item state before starting another restore.

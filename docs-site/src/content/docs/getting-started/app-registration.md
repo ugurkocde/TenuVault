@@ -3,7 +3,7 @@ title: "Create the app registration"
 description: Create the app registration TenuVault signs in with.
 ---
 
-TenuVault signs in through an app registration that lives in your own tenant. TenuVault creates it for you: in **Set up TenuVault**, the **Connect** step has one button, **Set up with Microsoft sign-in**. You sign in once in your browser, and TenuVault creates the app registration, grants admin consent and signs you in. There is no script to run and no ID to copy.
+This setup uses an app registration that lives in your own tenant. TenuVault creates it for you: in **Set up TenuVault**, the **Connect** step has one button, **Set up with Microsoft sign-in**. You sign in once in your browser, and TenuVault creates the app registration, grants admin consent and signs you in. There is no script to run and no ID to copy.
 
 You do this once per tenant. Every admin who uses TenuVault in that tenant signs in through the same app registration.
 
@@ -13,17 +13,17 @@ If someone else is the administrator who can grant consent, or you prefer to rea
 
 You need an account with **Global Administrator**, **Cloud Application Administrator** or **Application Administrator**, because the setup creates an app registration and grants tenant-wide admin consent. A Privileged Role Administrator can grant the consent, but can create the app registration only when users in the tenant may register applications, so the setup does not count on that role. TenuVault connects tenants in Microsoft's global cloud only; tenants in GCC High, DoD or Microsoft Azure operated by 21Vianet are not supported.
 
-1. On the **Connect** step, **Connect your tenant**, select **Set up with Microsoft sign-in**.
+1. On the **Connect** step, **Create your TenuVault app registration**, select **Set up with Microsoft sign-in**.
 2. Your browser opens. Choose your admin account. Microsoft asks you to approve **Microsoft Graph Command Line Tools** with two permissions, `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. This is Microsoft's own sign-in app, the one Microsoft Graph PowerShell also signs in through. TenuVault uses it once, to create the app registration and grant consent. These two permissions are not permissions of the TenuVault app registration. If Microsoft also shows **Consent on behalf of your organization**, leave it unticked; the setup does not need it.
-3. TenuVault shows what it is doing under **Setting up your tenant**:
-   * **Create the app registration**: the app registration **TenuVault Desktop**, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a TenuVault app registration from an earlier setup, TenuVault uses that one and the list says **Use the app registration this tenant already has**, followed by **Check its admin consent**.
+3. The setup card shows the current action.
+   * **Create the app registration**: the app registration **TenuVault Desktop**, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a TenuVault app registration from an earlier setup, TenuVault uses that one and the card says **Use the app registration this tenant already has**, followed by **Check its admin consent**.
    * **Grant admin consent**: tenant-wide consent for the [delegated permissions](#delegated-permissions) below, and nothing else.
-   * **Wait until Microsoft accepts sign-ins to it**: Microsoft needs a few seconds before a new app registration can be used.
+   * **Microsoft may take up to 90 seconds before your browser opens again.** The registration needs time before it can be used.
 4. When Microsoft accepts sign-ins to the app registration, your browser opens once more and signs you in to TenuVault through it. There is nothing to enter this time. TenuVault continues with the **Storage** step: [Choose where backups are stored](/getting-started/choose-storage/).
 
 **Cancel** works in every phase of the setup. Nothing is created before you are signed in. If you cancel while TenuVault creates the app registration or grants consent, it removes the app registration it created. If you cancel while it waits for Microsoft to accept sign-ins, the app registration is complete and stays in your tenant: TenuVault says so, and the next setup uses it.
 
-Expand **What the setup does** on the Connect step to read these steps and the permissions before you start. It also has the optional field **Tenant ID or domain (optional)**, for guest and partner admins who set up a tenant other than their own. Leave it empty to use the tenant of the account you sign in with.
+Expand **What the setup does** to read the steps and permissions. Open **Different tenant?** to enter a tenant ID or domain when setting up a tenant other than your own. Leave it empty to use the tenant of the account you sign in with.
 
 ### What TenuVault does with the setup sign-in
 
@@ -37,13 +37,18 @@ TenuVault does not create a second app registration when the tenant already has 
 * Its name starts with `TenuVault` and it carries the internal note that starts with `Used by the TenuVault desktop app`.
 * It is single tenant and has the redirect URI `http://localhost` for mobile and desktop applications.
 * It is still the plain desktop registration TenuVault makes: no client secret, no certificate, and no web or single-page application redirect URI.
-* It has an enterprise application, and that already has tenant-wide admin consent for at least one of TenuVault's Intune permissions on Microsoft Graph.
+* It has an enterprise application, and that already has tenant-wide admin consent for TenuVault's work on Microsoft Graph. One of these counts:
+  * Intune: consent for at least one of the Intune permissions in the [default set](#delegated-permissions) below. Every setup that includes Intune asks for one of them.
+  * Entra ID: consent for more than half of the permissions that backing up the service asks for. The areas you turn on separately are not counted.
+  * Conditional Access: consent for everything a setup for Conditional Access alone asks for, which is `User.Read`, `Organization.Read.All` and `Policy.Read.All` together.
+
+  Consent for a single permission of Entra ID, for `Policy.Read.All` without the other two, or for the two permissions every sign-in has (`User.Read` and `Organization.Read.All`) does not count, because administrators grant such permissions to many apps.
 
 The last point is what TenuVault relies on. A name and a note can be set by anyone who may create app registrations, which in many tenants is every member. Tenant-wide admin consent can only come from an administrator, so it shows that an administrator trusted this app registration before. An app registration that does not meet every point is left exactly as it is, and TenuVault creates its own next to it.
 
 TenuVault changes nothing in an app registration it did not create: it adds no permission, grants no consent and removes nothing. It gives consent only to the one it creates. The **Sign in** step names the app registration it uses. If that one has no tenant-wide admin consent for some of the [default permissions](#delegated-permissions), the step lists them and waits for you instead of signing in by itself. What needs those permissions does not work until an administrator adds them and grants consent under **Entra admin center** > **App registrations** > the app registration > **API permissions**. You can sign in without them.
 
-If several match, TenuVault uses the one whose tenant-wide admin consent covers the most of TenuVault's permissions, and among equals the oldest. One whose enterprise application has sign-in turned off is passed over while another one matches. The **Sign in** step then says how many there are and waits for you as well. Select **Sign in with Microsoft** to use the one it names. To use a different one, select **Previous**, then **I already have an app registration**, and enter its client ID.
+If several match, TenuVault uses the one whose tenant-wide admin consent covers the most of TenuVault's permissions, and among equals the oldest. One whose enterprise application has sign-in turned off is passed over while another one matches. The **Sign in** step then says how many there are and waits for you as well. Select **Sign in with Microsoft** to use the one it names. To use a different one, select **Back**, then **I already have an app registration**, and enter its client ID.
 
 This matters for licensing: an organization license is tied to the app registration it was shared from, so signing in through a second app registration would leave the tenant on Community. See [Manage your license](/licensing/manage/#community-although-the-tenant-has-an-organization-license).
 
@@ -53,14 +58,14 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 
 ### If something goes wrong
 
-* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Other ways to connect**: **Someone else is the admin? Copy instructions** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault says that you declined it and offers **Try again** or **Someone else is the admin? Copy instructions**. If Microsoft refuses your approval, TenuVault names the roles that can give it. Nothing is created in any of these cases, and TenuVault stops waiting by itself after 15 minutes. After 3 minutes without an answer, TenuVault shows **Still waiting for Microsoft?** with **Try again**, **Copy sign-in link**, **Copy instructions for your admin** and **Book a free setup call**; see [Still waiting for Microsoft?](/getting-started/connect-tenant/#still-waiting-for-microsoft).
+* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Can’t sign in as an admin here?**: **Copy instructions for my admin** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault says that you declined it and offers **Try again** or **Copy instructions for my admin**. If Microsoft refuses your approval, TenuVault names the roles that can give it. Nothing is created in any of these cases, and TenuVault stops waiting by itself after 15 minutes. After 3 minutes without an answer, TenuVault shows **Still waiting for Microsoft?** with **Try again**, **Copy sign-in link**, **Copy instructions for your admin** and **Book a free setup call**; see [Still waiting for Microsoft?](/getting-started/connect-tenant/#still-waiting-for-microsoft).
 * If the tenant blocks **Microsoft Graph Command Line Tools** for your account, for example by turning its sign-in off, limiting it to assigned users or with a Conditional Access policy, the setup cannot sign in. The setup script signs in through the same app, so it is blocked too. TenuVault says so and offers **Create it by hand**: [create the app registration manually](#create-the-app-registration-manually), then select **I already have an app registration** and enter its two IDs. When Microsoft shows its own error page instead, nothing comes back to TenuVault; select **Cancel** and take the same route.
 * If your account may sign in but lacks a role that can create app registrations or grant admin consent, the setup stops with a message that names the roles. If it had already created the app registration, it removes it again first.
 * If a step fails after TenuVault created the app registration, TenuVault removes it again and tells you why. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center. An app registration that existed before is never deleted.
 * If the last sign-in fails or you cancel it, the **Sign in** step opens with the tenant ID and the client ID filled in. Select **Sign in with Microsoft** to try again. Nothing is created twice.
 * If Microsoft takes longer than a minute and a half to accept sign-ins to the new app registration, the browser does not open again. The **Sign in** step says so. Wait a moment, then select **Sign in with Microsoft**.
 * If the browser says that Microsoft cannot find the application, Microsoft has not finished publishing the new app registration. Wait a minute, select **Cancel sign-in** in TenuVault and sign in again.
-* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
+* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing, whichever services you chose and whichever service that app registration was made for. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
 
 When the setup stops with an error, the message also offers **Stuck here? Book a free setup call**, which opens the [free setup call](/getting-started/#free-setup-call) page in your browser.
 
@@ -72,7 +77,7 @@ Delete **TenuVault Desktop** under **Entra admin center** > **App registrations*
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-connect.webp" aria-label="Open full-size screenshot: setup connect">
-    <img src="/images/screenshots/setup-connect.webp" alt="The built-in connection screen explains the app registration before you start Microsoft sign-in" width="2880" height="2000" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/setup-connect.webp" alt="The built-in connection screen explains the app registration before you start Microsoft sign-in" width="1440" height="900" loading="lazy" decoding="async" />
   </a>
   <figcaption>The built-in connection screen explains the app registration before you start Microsoft sign-in. Example tenant data. Select the image to view it full size.</figcaption>
 </figure>
@@ -90,8 +95,9 @@ Delete **TenuVault Desktop** under **Entra admin center** > **App registrations*
 | Enterprise application | Hidden from users' My Apps portal |
 | Sign-in restriction | Optional, with the script: only members of one group can sign in (`-AllowedGroupId`) |
 | Group read | Delegated `GroupMember.Read.All`, included by default |
+| Services | Optional, with the script: request the permissions of other services (`-Services`, `-RestoreAccess`, `-Areas`). Without them, the permissions below |
 
-Because the app is a public client with delegated permissions, every call runs as the signed-in admin. MFA, Conditional Access and your Intune role apply, and changes are attributed to that admin in the Entra and Intune audit logs.
+Because the app is a public client with delegated permissions, every call runs as the signed-in admin. MFA, Conditional Access and your roles for the selected services apply, and changes are attributed to that admin in the Entra and Intune audit logs.
 
 This page is only about the app registration you sign in with. It never gets application permissions or a credential. The optional [Backup Reader](/backups/backup-reader/) for scheduled backups under strict Conditional Access is a second, separate app registration with its own setup script and its own page; do not add its permissions or certificate to this one.
 
@@ -118,6 +124,8 @@ The table above is the default permission set. For an older registration, follow
 
 The `-IncludeConditionalAccessRestore` switch adds `Policy.ReadWrite.ConditionalAccess` for [Conditional Access restores](/backups/conditional-access/). Conditional Access backups use the default `Policy.Read.All`.
 
+With `-Services` the script requests the permissions of the services you name in place of the default set, for example Entra ID. [App registration and delegated permissions](/security/permissions/#entra-id-permission-packs) lists them per service and area. With `-RestoreAccess Entra`, Roles and PIM review uses delegated `Application.Read.All` and `User.Read.All` to identify protected apps and resolve principals. Roles and PIM writes are unavailable.
+
 ## Use the setup script instead
 
 The script creates the same app registration from PowerShell and prints the two values you paste into TenuVault: the tenant ID and the client ID. Use it when another administrator grants the consent, when you want to read what runs first, or when you need one of its options, such as limiting sign-in to a group.
@@ -130,7 +138,7 @@ Before you run it:
 * A browser on the same computer, which the script opens for the sign-in. In a remote shell without a browser, use `-UseDeviceCode` instead; Conditional Access often blocks device code flow.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
 
-On the **Connect** step, under **Other ways to connect**, select **Use the setup script instead**. The card **Create the app registration** is a numbered checklist:
+On the **Connect** step, under **Can’t sign in as an admin here?**, select **Use the setup script instead**. The card **Create the app registration** is a numbered checklist:
 
 1. **Save the setup script.** Select **Save setup script** and choose a folder in the save dialog. By default it is saved to your Documents folder as `New-TenuVaultDesktopApp.ps1`. TenuVault saves the copy of the script it ships with. **Copy script** copies it instead; paste it into a text editor and save it as `New-TenuVaultDesktopApp.ps1`.
 2. **Run it in PowerShell.** The card shows the exact command, with a copy button. After you saved the script, the command first changes to the folder you chose (`cd`) and then runs the script. If PowerShell refuses to run it, the card suggests `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first; see [Execution policy](#execution-policy).
@@ -143,15 +151,15 @@ The buttons under the checklist:
 
 | Button | What it does |
 | --- | --- |
-| **Someone else is the admin? Copy instructions** | Copies a ready-to-send message for your Entra administrator: what TenuVault is, who can run the script, the script download link, the command, the `-AllowedGroupId` option, the permissions it grants and the two values to send back. TenuVault keeps your place, so you can close it and continue when they reply. |
+| **Copy instructions for my admin** | Copies a ready-to-send message for your Entra administrator: what TenuVault is, who can run the script, the script download link, the command, the `-AllowedGroupId` option, the permissions it grants and the two values to send back. TenuVault keeps your place, so you can close it and continue when they reply. |
 | **Create it by hand instead** | Opens [Create the app registration manually](#create-the-app-registration-manually) on this page. |
 | **Setup guide** | Opens this page. |
 
-Select **Next: sign in** under the card when you have the two values. If the app registration already exists, for example from an earlier setup, select **I already have an app registration** instead. Both open [Sign in to your tenant](/getting-started/connect-tenant/#step-2-sign-in).
+Select **Next: sign in** under the card when you have the two values. If the app registration already exists, for example from an earlier setup, select **I already have an app registration** instead. Both open [Sign in to your tenant](/getting-started/connect-tenant/#sign-in-with-your-own-app-registration).
 
 ## Get the script without TenuVault
 
-[Download `New-TenuVaultDesktopApp.ps1`](/downloads/New-TenuVaultDesktopApp.ps1) and save it to a folder of your choice. If someone else creates the app registration for you, send them this link, or use **Someone else is the admin? Copy instructions** in TenuVault.
+[Download `New-TenuVaultDesktopApp.ps1`](/downloads/New-TenuVaultDesktopApp.ps1) and save it to a folder of your choice. If someone else creates the app registration for you, send them this link, or use **Copy instructions for my admin** in TenuVault.
 
 ## Run the script
 
@@ -172,6 +180,12 @@ Select **Next: sign in** under the card when you have the two values. If the app
 
    ```powershell
    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -DisplayName "TenuVault Desktop" -AllowedGroupId 00000000-0000-0000-0000-000000000000
+   ```
+
+   To request the permissions of other services, name them. This asks for Intune with restore access, as always, and for Entra ID to back up:
+
+   ```powershell
+   ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -Services Entra,Intune -RestoreAccess Intune
    ```
 
 3. Sign in with your admin account in the browser the script opens. It asks you to choose an account, so a browser that is already signed in with another account does not pick that one.
@@ -205,6 +219,9 @@ If an app registration with the same name already exists, the script prints a no
 | `-TenantId` | No | Tenant ID or domain to create the app registration in. Defaults to the tenant of the account you sign in with. |
 | `-DisplayName` | No | Name of the app registration. Default: `TenuVault Desktop`. |
 | `-AllowedGroupId` | No | Object ID of a security group. When set, user assignment is required on the enterprise application and only members of this group can sign in to TenuVault. |
+| `-Services` | No | The services the app registration can back up: `Entra` and `Intune`. Use `ConditionalAccess` to select the independent Conditional Access area of Entra ID. Default: `Intune` and `ConditionalAccess`, which is the permission set in the table above. Each service brings its own read permissions, and a service you leave out brings none. The script refuses an empty list, such as `-Services @()`; leave the parameter out to get the default. |
+| `-RestoreAccess` | No | The services TenuVault may also restore, which adds their write permissions. Default: `Intune`, when Intune is one of the services. When you pass it, name every service that gets write permissions, or `None` to request read permissions only. |
+| `-Areas` | No | Areas of Entra ID that are backed up only on request: `Groups` and `UsersAndDevices`. Groups and device inventory hold personal data. Needs `Entra` in `-Services`. The script refuses an empty list; leave the parameter out to back up none of these areas. |
 | `-IncludeGroupRead` | No | Deprecated switch accepted for compatibility. New registrations already include delegated `GroupMember.Read.All`. |
 | `-UseDeviceCode` | No | Switch. Signs in with a device code instead of opening a browser on this computer, for remote shells without a browser. Conditional Access often blocks device code flow, so only use it when the browser sign-in is not possible. |
 
@@ -246,7 +263,7 @@ Do not add a client secret or a certificate.
 ### 3. Add the delegated permissions
 
 1. Open **API permissions** > **Add a permission**.
-2. Select **Microsoft Graph** > **Delegated permissions** and add the nine Graph permissions listed in [Delegated permissions](#delegated-permissions). `User.Read` is usually already present.
+2. Select **Microsoft Graph** > **Delegated permissions** and add the ten Graph permissions listed in [Delegated permissions](#delegated-permissions). `User.Read` is usually already present.
 3. Select **Add a permission** again. Under **Microsoft APIs** (or **APIs my organization uses**), choose **Azure Service Management** > **Delegated permissions** > `user_impersonation`.
 4. Repeat for **Azure Storage** > **Delegated permissions** > `user_impersonation`.
 5. Select **Grant admin consent for &lt;your tenant&gt;** and confirm. Every permission should show **Granted**.
@@ -268,3 +285,40 @@ Assigning a group to an enterprise application requires Microsoft Entra ID P1 or
 ## Next step
 
 [Sign in to your tenant](/getting-started/connect-tenant/) with the two values the script printed.
+
+The browser opens for the tenant of your Microsoft account. To set up another tenant as a guest administrator, select **Different tenant?** and enter the tenant GUID or a verified domain before starting.
+
+## Permissions for a service choice
+
+Intune is included during setup. On **Check**, turn on **Also back up Entra ID device and access settings** to see any missing Entra and Conditional Access permissions. If you are preparing a registration in advance, this script requests access to all three backup packs:
+
+```powershell
+./New-TenuVaultDesktopApp.ps1 -Services Intune,ConditionalAccess,Entra -RestoreAccess None
+```
+
+Use the permission list shown in TenuVault when following the manual guide. The handoff message also contains this list and the generated command. Do not use the Intune default list for an Entra-only registration. Existing registrations are left unchanged by quick setup; missing chosen permissions are reported after sign-in.
+
+
+## Add a service, an area or restore access
+
+When your first restore needs more access, the restore page lists the missing permissions for your registration. You can also open **Settings > Services and permissions** to turn on a service or opt-in area, or choose **Backup and restore** under **Areas and access** where restore is available. These choices describe the permissions to request; they grant no access by themselves.
+
+Expand **Add the missing permissions**. You can use **Add in the app**, **Azure CLI commands**, **Registration in Entra**, or **Text for your administrator**. All routes name the exact missing permissions. The Entra portal's Grant admin consent action can also approve other pending permissions, so review them first.
+
+Microsoft Graph replaces permission lists and consent scopes as a whole and offers no documented conditional update for these resources. A change by someone else in the same second can be lost. The app reads the exact value again immediately before each write to make this unlikely. Avoid simultaneous edits in Entra or another application. See the [permission safety details](/security/permissions/).
+
+For **Add in the app**:
+
+1. Use the account connected to this tenant, with an active **Application Administrator**, **Cloud Application Administrator**, **Privileged Role Administrator** or **Global Administrator** role. Your tenant's consent policy may require a higher role. Read the setup-only access explanation, then select **Sign in to preview**. Microsoft Graph Command Line Tools requests `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`, as in quick setup. That privileged access is kept only for this flow.
+2. Review the registration name, tenant and client ID, **Permissions to declare**, and **Scopes to add to tenant-wide consent**. The flow uses only the exact registration your tenant is connected with. Select **Add approved permissions** to approve that difference. The preview expires after ten minutes.
+3. The app reads the registration and consent again before writing. **Changed since the preview** stops the next write and shows the current declarations and consent. The result says whether declarations had already been saved before the consent check stopped. Review the current state and close the dialog, then start a new preview.
+4. Read the result. It lists the verified declaration and consent additions separately. **Permissions partly added** also lists missing or unverified permissions. If another change is observed after a write, the result stays partial and asks you to check in Entra, even when the requested additions are present. No rollback is attempted. An unanswered write may already have been applied; the app reads back before reporting and does not resend it automatically. Start a fresh preview to reconcile before retrying.
+5. The app refreshes the tenant token and checks connection health. Close the dialog and select **Check again**, then run a backup to verify access. If the token needs an interactive sign-in, use **Settings > Sign in**. The Backup Reader needs its own permissions for scheduled backups and is not changed here.
+
+![Review the exact permission additions before approving them](/images/add-permissions/preview-light.png)
+
+![A partial result names what was verified and what remains missing](/images/add-permissions/partial-result-light.png)
+
+The in-app route refuses a registration that is not a single-tenant public client with only root-path `http://localhost` or `http://127.0.0.1` redirects (with or without a port), has credentials (including federated credentials or credentials on its enterprise application), lacks tenant-wide consent for the connected scopes, or has individual Graph consent. A missing administrator role is shown as a refusal from Microsoft. Close the dialog to use the other routes or ask your administrator to review the registration. Quick setup still never changes a registration it did not create.
+
+Consent is checked against the delegated permissions in your connected access token, including after the final refresh. If those permissions cannot be read or the token is app-only, sign in again with a delegated account. Case-only differences in scope names or registration GUIDs do not count as a change since the preview. Existing consented scope names keep their spelling.

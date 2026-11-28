@@ -1,3 +1,4 @@
+import { RestoreTargetAccess } from "../components/RestoreAccess"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Loader2, Undo2, XCircle } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -29,7 +30,7 @@ import {
   type SyncTargetOption,
 } from "../features/sync/api"
 import { awaitingReview, discardable, excludedReason, needsSecretAck, OUTCOME_CHIP, plural, policyKey, policyStatus, readiness, relativeTime, runOutcome, type ReviewState } from "../features/sync/model"
-import { card, ChooseSettings, ChooseTargets, ReviewStep, Stepper, type SelectedPolicy } from "../features/sync/SyncSteps"
+import { card, ChooseSettings, ChooseTargets, COPY_TARGET_PLAN_NOTE, ReviewStep, Stepper, type SelectedPolicy } from "../features/sync/SyncSteps"
 import { resultEntries, SyncResult } from "../features/sync/SyncResult"
 
 const LEAD = "Copy settings from one tenant to others, one way, when you start it. Every target is reviewed and can be rolled back."
@@ -63,7 +64,7 @@ export default function SyncPage() {
             "Pick policies in one tenant and copy them to another, for example from a lab tenant to production.",
             "Every target is reviewed against its live state before anything is written, with a backup first unless you skip it.",
             "The next copy updates the policies it created, so nothing is duplicated. Copy to Tenants never runs on its own.",
-            "Pro copies between the two tenants of your license, or between two tenants that each run a Pro trial. Copying to more tenants is part of MSP.",
+            COPY_TARGET_PLAN_NOTE,
           ]}
         />
       ) : (
@@ -104,13 +105,24 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   // sync, rollback or new start, so a chip never shows a state from before a change.
   const policies = useQuery({ queryKey: ["sync", "policies", sourceId, folder], queryFn: () => syncPolicies(source, folder), refetchOnWindowFocus: true })
   const options = useQuery({ queryKey: ["sync", "targets", sourceId], queryFn: () => syncTargets(source) })
-  const eligible = (options.data?.targets ?? []).filter((option) => option.eligible).map((option) => option.tenantId).slice(0, 25)
-  // A run may name more than one target only on MSP; otherwise every eligible target (several
-  // when the source and more than one other tenant run a Pro trial) is read on its own.
+  const eligibleOptions = (options.data?.targets ?? []).filter((option) => option.eligible)
+  const eligible = eligibleOptions.map((option) => option.tenantId)
+  // A request may name several targets only when the source and every named target are on MSP.
+  // MSP targets of an MSP source are read together, at most 25 per request (the route's limit);
+  // every other eligible target is read on its own.
   const multiple = options.data?.multiple === true
+  const batched = multiple ? eligibleOptions.filter((option) => option.multiple).map((option) => option.tenantId) : []
+  const single = eligible.filter((id) => !batched.includes(id))
   const status = useQuery({
-    queryKey: ["sync", "status", sourceId, eligible.join(), multiple],
-    queryFn: async () => multiple ? syncStatus(source, eligible) : { targets: (await Promise.all(eligible.map((id) => syncStatus(source, [id]).catch((error: unknown) => ({ targets: [{ targetTenantId: id, links: [], error: error instanceof Error ? error.message : String(error) }] }))))).flatMap((answer) => answer.targets) },
+    queryKey: ["sync", "status", sourceId, eligible.join(), batched.join()],
+    queryFn: async () => {
+      const failed = (ids: string[]) => (error: unknown) => ({ targets: ids.map((id) => ({ targetTenantId: id, links: [], error: error instanceof Error ? error.message : String(error) })) })
+      const answers = await Promise.all([
+        ...Array.from({ length: Math.ceil(batched.length / 25) }, (_, index) => batched.slice(index * 25, index * 25 + 25)).map((ids) => syncStatus(source, ids).catch(failed(ids))),
+        ...single.map((id) => syncStatus(source, [id]).catch(failed([id]))),
+      ])
+      return { targets: answers.flatMap((answer) => answer.targets) }
+    },
     enabled: eligible.length > 0,
     staleTime: 10_000,
     refetchOnWindowFocus: true,
@@ -417,6 +429,12 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           planning={planning}
         />
       )}
+
+      {step === 3 && targets.flatMap(id => {
+        const target = tenantOf(id)
+        return target?.credentials ? [<RestoreTargetAccess key={id} credentials={target.credentials} name={target.name}
+          folders={Object.values(chosen).map(policy => policy.folder)} />] : []
+      })}
 
       {step === 3 && (
         <ReviewStep
