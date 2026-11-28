@@ -368,7 +368,7 @@ async function bootstrap(): Promise<void> {
       if (!resource) throw new Error("This Microsoft resource has no TenuVault permission pack.")
       const selected = resourcePackScopes(currentPacks(tenant), resource)
       const scopes = resource === "graph" ? selected.filter(scope => connection.graphScopes?.includes(scope)) : selected
-      if (!scopes.length) throw new Error("Review the permission packs in Sign-in and access.")
+      if (!scopes.length) throw new Error("Review the permissions in Settings > Sign-in.")
       return resourceScopes(resource, scopes)
     },
     authorizeConnection: (tenant, client, scope) => capabilities.requireConnection(tenant, client, scope),
@@ -2160,7 +2160,7 @@ async function bootstrap(): Promise<void> {
     fetch: bridgedFetch,
     connection: async tenantId => {
       connectedTenant(tenantId)
-      if (connections.get(tenantId)?.method === "tenuvaultApp") throw new Error("Review the TenuVault app packs in Sign-in and access.")
+      if (connections.get(tenantId)?.method === "tenuvaultApp") throw new Error("Review the TenuVault app permissions in Settings > Sign-in.")
       capabilities.requireWrite([tenantId])
       const account = accounts.get(tenantId.toLowerCase())
       const profile = tenantProfile(tenantId)

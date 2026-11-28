@@ -181,7 +181,7 @@ describe("Intune policy set restore permission", () => {
   const readOnly = tokenWith("DeviceManagementConfiguration.Read.All DeviceManagementApps.ReadWrite.All")
 
   it.each([
-    [TENUVAULT_CLIENT_ID, "Review the restore permission pack for this service in Sign-in and access."],
+    [TENUVAULT_CLIENT_ID, "Review the restore permissions for this service in Settings > Sign-in."],
     [credentials.appId, "Add it to your app registration. Services and permissions shows how to add it."],
   ])("gives connection-specific reasons in the item list and live preview for %s", async (appId, message) => {
     const seen = world(policySets, {}, readOnly)
@@ -230,7 +230,7 @@ describe("restore permission guidance", () => {
   })
 
   it.each([
-    ["TenuVault app", TENUVAULT_CLIENT_ID, "This restore needs Group.ReadWrite.All. Review the restore permission pack for this service in Sign-in and access."],
+    ["TenuVault app", TENUVAULT_CLIENT_ID, "This restore needs Group.ReadWrite.All. Review the restore permissions for this service in Settings > Sign-in."],
     ["your own app registration", credentials.appId, "This restore needs Group.ReadWrite.All. Add it to your app registration. Services and permissions shows how to add it."],
   ])("explains the directory restore blocker for %s", (_method, clientId, blocker) => {
     expect(directoryPermissionBlocker("opaque-token", ["Group.ReadWrite.All"], clientId, ["Group.Read.All"])).toBe(blocker)

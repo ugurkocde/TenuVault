@@ -44,7 +44,7 @@ function connectedFlow(original: { accessToken: string; scopes: string[] }, refr
 }
 it("directs shared sign-in to its own consent flow before acquiring any setup token", async () => {
   const { flow, writes, auth, signIn } = connectedFlow({ accessToken: token({ scp: "User.Read" }), scopes: [] }, undefined, "tenuvaultApp")
-  await expect(flow.preview(tenant, ["Policy.Read.All"])).rejects.toThrow("Review the TenuVault app packs")
+  await expect(flow.preview(tenant, ["Policy.Read.All"])).rejects.toThrow("Review the TenuVault app permissions in Settings > Sign-in.")
   expect(auth.getAccessToken).not.toHaveBeenCalled()
   expect(signIn).not.toHaveBeenCalled()
   expect(writes).toEqual([])

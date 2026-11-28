@@ -526,7 +526,7 @@ export default function OnboardingPage() {
         return
       }
       if ("error" in outcome) {
-        setPublicError(outcome.error.message.replace(/(?:permission )?\bpacks?\b/gi, "permissions").replace(" in Sign-in and access.", "."))
+        setPublicError(outcome.error.message.replace(/(?:permission )?\bpacks?\b/gi, "permissions").replace(" in Settings > Sign-in.", "."))
       } else signedInShared(outcome.result)
     } catch {
       if (mounted.current && startedIn === currentAttempt.current) setPublicError("Could not finish signing in. Try again.")

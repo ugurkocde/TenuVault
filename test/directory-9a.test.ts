@@ -160,7 +160,7 @@ it.each([
   for (const kind of (await io.review(step)).approvals) approveDirectory(step, run, kind)
   const result = io.write(step, step.desired, step.targetId, vi.fn(), run)
   if (allowed) await expect(result).resolves.toEqual({ id: base.id })
-  else await expect(result).rejects.toThrow("restore permission pack")
+  else await expect(result).rejects.toThrow("Review the restore permissions for this service in Settings > Sign-in.")
   expect(network.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(allowed ? 1 : 0)
 }))
 

@@ -566,16 +566,16 @@ describe("TenuVault app capabilities", () => {
       authorization?.beforeDispatch?.()
     }
     const broad = { tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: graphScopes.join(" ") + " DeviceManagementConfiguration.ReadWrite.All Application.ReadWrite.All" }
-    await expect(send(broad)).rejects.toThrow("restore permission pack")
+    await expect(send(broad)).rejects.toThrow("Review the restore permissions for this service in Settings > Sign-in.")
 
     packs = tenantPermissionPacks({ intune: { access: "restore" } }, { azure: false, audit: false })
-    await expect(send(broad)).rejects.toThrow("restore permission pack")
+    await expect(send(broad)).rejects.toThrow("Review the restore permissions for this service in Settings > Sign-in.")
     graphScopes = resourcePackScopes(packs, "graph")
-    await expect(send(broad)).rejects.toThrow("restore permission pack")
+    await expect(send(broad)).rejects.toThrow("Review the restore permissions for this service in Settings > Sign-in.")
     const allowed = { ...broad, scp: graphScopes.join(" ") }
     await expect(send(allowed)).resolves.toBeUndefined()
-    await expect(send(allowed, "identity/conditionalAccess/policies")).rejects.toThrow("restore permission pack")
-    await expect(send(allowed, "applications")).rejects.toThrow("restore permission pack")
+    await expect(send(allowed, "identity/conditionalAccess/policies")).rejects.toThrow("Review the restore permissions for this service in Settings > Sign-in.")
+    await expect(send(allowed, "applications")).rejects.toThrow("Review the restore permissions for this service in Settings > Sign-in.")
     await expect(send({ ...allowed, azp: OWN })).rejects.toThrow("method changed")
     enabled = false
     await expect(send(allowed)).rejects.toThrow("temporarily unavailable")
@@ -689,9 +689,9 @@ describe("TenuVault app capabilities", () => {
       const headers = { authorization: `Bearer ${jwt({ tid: TENANT, azp: TENUVAULT_CLIENT_ID, scp: [...scopes, "User.DeleteRestore.All"].join(" ") })}` }
       const send = () => cap.authorizeRequest(url, url, { method: "POST", headers }, TENANT)
         .then(authorization => authorization?.beforeDispatch?.())
-      await expect(send()).rejects.toThrow("restore permission pack")
+      await expect(send()).rejects.toThrow("Review the restore permissions for this service in Settings > Sign-in.")
       const checked = executionMetadata.run({ directoryRecycle: { type, path: url.pathname } }, send)
-      if (type === "user") await expect(checked).rejects.toThrow("restore permission pack")
+      if (type === "user") await expect(checked).rejects.toThrow("Review the restore permissions for this service in Settings > Sign-in.")
       else await expect(checked).resolves.toBeUndefined()
     },
   )

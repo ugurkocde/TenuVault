@@ -19,7 +19,7 @@ import type { TenantConnection } from "../../shared/tenant-connection"
 import { executionMetadata } from "../api/execution-metadata"
 import type { RequestAuthorization } from "../api/fetch-bridge"
 
-const PACK_REQUIRED = "Approve the restore permission pack for this service in Sign-in and access."
+const PACK_REQUIRED = "Review the restore permissions for this service in Settings > Sign-in."
 const CONNECTION_CHANGED = "This tenant's sign-in method changed. Reload the tenant and try again."
 const TOKEN_UNVERIFIED = "TenuVault could not verify the tenant and app in this access token. Sign in again."
 const NEEDS_SIGN_IN_METHOD = `${START_NOW_REMOVED_REASON} Choose a sign-in method.`

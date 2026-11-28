@@ -109,7 +109,7 @@ it.each(["before block", "before block list", "read-only switch", "Intune downgr
   await expect(restoreAppWithAudit(f.store, f.source, snapshot, target, "Restored", {
     getGraphToken: async () => "fixture-token", fetch, signal: new AbortController().signal, progress, operationId: randomUUID(),
     authorizeUpload: () => caps.requireAppRestoreWrite(target, TENUVAULT_CLIENT_ID),
-  })).rejects.toThrow(boundary === "read-only switch" ? START_NOW_REMOVED_REASON : boundary.startsWith("Intune") ? "Approve the restore permission pack" : "temporarily unavailable")
+  })).rejects.toThrow(boundary === "read-only switch" ? START_NOW_REMOVED_REASON : boundary.startsWith("Intune") ? "Review the restore permissions for this service in Settings > Sign-in." : "temporarily unavailable")
   expect(d.fetcher).toHaveBeenCalledTimes(boundary.endsWith("before block list") ? 1 : 0)
 })
 

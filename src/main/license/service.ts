@@ -1446,7 +1446,7 @@ export class LicenseService {
       await this.refreshCurrent(tenant, share)
       if (share && this.state?.activations[tenant]?.shareNeedsSignIn) {
         if (isPublicClient(this.clientId(tenant))) {
-          throw new Error("To start sharing, sign in with your own app registration in Settings, under Sign-in and access. If this key already shares with the tenant, sign in again and retry.")
+          throw new Error("To start sharing, sign in with your own app registration in Settings > Sign-in. If this key already shares with the tenant, sign in again and retry.")
         }
         throw new Error("Sign in to this tenant again to share the license with it.")
       }

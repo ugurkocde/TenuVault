@@ -303,7 +303,7 @@ Backups that only skip types for missing access count as successful and still sh
 
 - Directory restore opt-in adds only the admitted operation scopes and the read scopes needed for protection. Backup, Backup Reader provisioning, allowlist and renewal remain unchanged. Account state, recycle recovery, invitations, licenses, Microsoft 365 groups, dynamic rules, privileged groups and nested principals remain blocked. Recreated identities get new IDs and need reference review; recreated users need sign-in setup in Entra.
 
-- Directory restore is ungated in 0.6 pending the owner's plan decision before release.
+- Directory restore for eligible Entra ID groups requires Pro or MSP.
 
 - Settings, Storage and recovery now saves designated recovery account IDs per tenant and shows guarded restore results, saved reference reports and read-back reconciliation. Guarded history has no manual outcome reset. Protected identity resolution includes group members, group owners and PIM eligibility; incomplete safety reads block a future identity write.
 

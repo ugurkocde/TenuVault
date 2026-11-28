@@ -81,7 +81,7 @@ Things to know:
 
 * Sharing is on by default for Pro licenses and off by default for MSP licenses, since an MSP's customer tenants are usually not its own.
 * Only the machine that holds the key can change sharing.
-* To share a key with a tenant for the first time, sign in using your own app registration in **Settings > Sign-in and access**.
+* To share a key with a tenant for the first time, sign in using your own app registration in **Settings > Sign-in**.
 * To turn sharing on, TenuVault needs a recent sign-in to the tenant as proof. If it shows **Sign in to this tenant again to share the license with it.**, sign in to the tenant again and retry.
 * A different app registration does not inherit the share. To control who can use the registration you shared from, restrict sign-in to a group. See [App registration and delegated permissions](/security/permissions/#restrict-sign-in-to-a-group).
 * Each admin's machine counts as one of the tenant's 5 installations.

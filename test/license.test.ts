@@ -1399,6 +1399,9 @@ describe("LicenseService organization licenses", () => {
     expect(calls.at(-1)!.body).not.toHaveProperty("idToken")
     expect(service({ idTokenValue: null }).status([TENANT]).tenants[0]).toMatchObject({ shared: true, shareNeedsSignIn: true })
     await expect(service({ idTokenValue: null }).setShared(TENANT, true)).rejects.toThrow("Sign in to this tenant again")
+    const markup = renderLicensePage(service({ idTokenValue: null }).status([TENANT]))
+    expect(markup).toContain("Settings &gt; Sign-in</a>")
+    expect(markup).not.toContain("Sign-in and access")
     // Stopping needs no sign-in and sends no token.
     await service({ idTokenValue: null }).setShared(TENANT, false)
     expect(calls.at(-1)!.body).toMatchObject({ shareWithTenant: false })

@@ -284,7 +284,7 @@ export function checksRestorePermission(folder: string): boolean {
 }
 
 export function restoreAccessGuidance(clientId?: string): string {
-  if (isTenuVaultApp(clientId)) return "Review the restore permission pack for this service in Sign-in and access."
+  if (isTenuVaultApp(clientId)) return "Review the restore permissions for this service in Settings > Sign-in."
   if (!clientId) return `Review the restore permissions for this service. ${SERVICES_PAGE} shows how to add them.`
   return `Add it to your app registration. ${SERVICES_PAGE} shows how to add it.`
 }
